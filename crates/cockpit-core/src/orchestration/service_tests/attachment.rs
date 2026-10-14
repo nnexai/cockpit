@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn staged_private_credential_requires_publication_and_registration_before_semantic_authority() {
+fn staged_private_credential_requires_publication_then_allows_credential_only_authority() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let (_, worker, mut actor) = fixture.working(&root);
@@ -12,12 +12,6 @@ fn staged_private_credential_requires_publication_and_registration_before_semant
     assert_code(fixture.apply(&actor, action.clone()), "job_unauthorized");
     assert_eq!(fixture.state_bytes(), before);
     fixture.seed_state(|state| state.credentials.push(record));
-    let published = fixture.state_bytes();
-    assert_code(fixture.apply(&actor, action.clone()), "job_unauthorized");
-    assert_eq!(fixture.state_bytes(), published);
-    fixture.apply(&actor, OrchestrationAction::RunRegister {
-        operation_id: caller_auth(&actor).credential_id.clone(),
-    }).unwrap();
     fixture.apply(&actor, action).unwrap();
     assert_eq!(fixture.run(&worker).stage, RunStage::Working);
 }
@@ -71,7 +65,6 @@ fn run_resume_identical_replay_preserves_protected_writer_and_changed_payload_co
     let action = OrchestrationAction::RunResume {
         run_id: worker.clone(), operation_id: id(),
         expected_attachment_epoch: Some(original.attachment.as_ref().unwrap().epoch),
-        mode: ResumeMode::ReattachOrRestart, decision_id: None,
     };
     let mut receiver = fixture.service.subscribe();
     let first = fixture.operator(action.clone());
@@ -108,14 +101,12 @@ fn run_resume_identical_replay_preserves_protected_writer_and_changed_payload_co
     assert_eq!(fixture.state_bytes(), before);
     assert_eq!(fixture.state().revision, revision);
     assert!(!receiver.has_changed().unwrap());
-    for field in 0..4 {
+    for field in 0..2 {
         let mut changed = action.clone();
-        let OrchestrationAction::RunResume { run_id, expected_attachment_epoch, mode, decision_id, .. } = &mut changed else { unreachable!() };
+        let OrchestrationAction::RunResume { run_id, expected_attachment_epoch, .. } = &mut changed else { unreachable!() };
         match field {
             0 => *expected_attachment_epoch = Some(original.attachment.as_ref().unwrap().epoch + 1),
-            1 => *mode = ResumeMode::ReplaceExisting,
-            2 => *decision_id = Some(id()),
-            3 => *run_id = other_root.clone(),
+            1 => *run_id = other_root.clone(),
             _ => unreachable!(),
         }
         assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), changed), "operation_conflict");
@@ -372,7 +363,6 @@ fn physical_resume_preserves_current_writer_until_current_conversation_registrat
     let replay = fixture.operator(OrchestrationAction::RunResume {
         run_id: worker.clone(), operation_id: blocked.operation_id,
         expected_attachment_epoch: Some(observed.epoch),
-        mode: ResumeMode::ReattachOrRestart, decision_id: None,
     });
     let OrchestrationActionResult::RunResumed { resume: replay } = replay.result else { unreachable!() };
     assert!(replay.duplicate);
@@ -382,7 +372,7 @@ fn physical_resume_preserves_current_writer_until_current_conversation_registrat
 }
 
 #[test]
-fn physical_start_observation_without_registered_conversation_does_not_reuse_a_root() {
+fn physical_start_observation_reuses_credential_bound_root_without_conversation_metadata() {
     for staged in [false, true] {
         let fixture = Fixture::new();
         let root = fixture.root();
@@ -413,18 +403,26 @@ fn physical_start_observation_without_registered_conversation_does_not_reuse_a_r
             }).unwrap();
         let OrchestrationActionResult::SupervisorStarted { start } = response.result else { unreachable!() };
         assert_eq!(start.root_id, root);
-        assert_eq!(start.outcome, SupervisorStartOutcome::Resuming);
         let current = fixture.run(&root);
-        assert_eq!(current.resume.as_ref().unwrap().phase, ResumePhase::Blocked);
-        assert_eq!(current.resume.as_ref().unwrap().cause.as_ref().unwrap().code, "run_unregistered");
-        assert_eq!(current.resume.as_ref().unwrap().cause.as_ref().unwrap().class, ResumeCauseClass::Recover);
+        if staged {
+            assert_eq!(start.outcome, SupervisorStartOutcome::Reused);
+            assert!(current.resume.is_none());
+            assert!(fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&root));
+            assert_eq!(current.attachment.as_ref().unwrap().state, observed.state);
+        } else {
+            assert_eq!(start.outcome, SupervisorStartOutcome::Resuming);
+            let resume = current.resume.as_ref().unwrap();
+            assert_eq!(resume.phase, ResumePhase::Blocked);
+            assert_eq!(resume.cause.as_ref().unwrap().code, "run_unregistered");
+            assert_eq!(resume.cause.as_ref().unwrap().class, ResumeCauseClass::Recover);
+            assert_eq!(current.attachment.as_ref().unwrap().state, AttachmentState::Disconnected);
+            assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&root));
+        }
         let attachment = current.attachment.as_ref().unwrap();
-        assert_eq!(attachment.state, AttachmentState::Disconnected);
         assert_eq!(attachment.epoch, observed.epoch);
         assert_eq!(attachment.process, observed.process);
         assert_eq!(serde_json::to_value(current.dispatch).unwrap(), serde_json::to_value(original.dispatch).unwrap());
         assert_eq!(fixture.state().runs.len(), 1);
-        assert!(!fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&root));
     }
 }
 
@@ -611,7 +609,7 @@ fn resume_join_replays_current_owner_and_settles_old_receipt_before_later_resume
 }
 
 #[test]
-fn worker_can_resume_own_job_and_replace_never_stops_a_same_boot_writer() {
+fn worker_resume_of_own_job_blocks_without_stopping_same_boot_writer() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let (_, worker, actor) = fixture.working(&root);
@@ -619,27 +617,6 @@ fn worker_can_resume_own_job_and_replace_never_stops_a_same_boot_writer() {
     let response = fixture.apply(&actor, action).unwrap();
     let OrchestrationActionResult::RunResumed { resume } = response.result else { unreachable!() };
     assert_eq!(resume.resume.phase, ResumePhase::Blocked);
-    // A decision is specific to this observed protected incarnation.
-    let response = fixture.service.advance_resume_observed(&worker, &resume.resume.operation_id,
-        &ResolvedMutationInput {
-            observation_cause: Some(ResumeCause {
-                code: "living_writer".into(), message: "Current writer is alive".into(),
-                class: ResumeCauseClass::Decision,
-            }), ..ResolvedMutationInput::default()
-        }).unwrap();
-    let original = fixture.run(&worker);
-    let decision = response.resume.decision_id.unwrap();
-    let response = fixture.apply(&actor, OrchestrationAction::RunResume {
-        run_id: worker.clone(), operation_id: id(),
-        expected_attachment_epoch: original.attachment.as_ref().map(|attachment| attachment.epoch),
-        mode: ResumeMode::ReplaceExisting, decision_id: Some(decision),
-    }).unwrap();
-    let OrchestrationActionResult::RunResumed { resume } = response.result else { unreachable!() };
-    assert_eq!(resume.resume.phase, ResumePhase::Blocked);
-    assert_eq!(resume.resume.cause.as_ref().unwrap().code, "same_boot_replacement_unsupported");
-    let current = fixture.run(&worker);
-    assert_review_fields_only(&original, &current);
-    assert_ne!(current.attachment.as_ref().unwrap().state, AttachmentState::Quiescing);
     let state = fixture.state();
     let operation = state.operations.iter().find(|record| record.operation_id == resume.resume.operation_id).unwrap();
     assert!(operation.result.is_none());
@@ -973,9 +950,12 @@ fn root_recovery_runtime(run: &Run, shell: &NativeShellIdentity) -> RootRecovery
     RootRecoveryHerdr {
         runtime: herdr::RuntimeView {
             endpoint_identity: "fresh-root-endpoint".into(), boot_id: Some("fresh-herdr-boot".into()),
+            peer_process: None,
+            focused_workspace_id: None,
             workspaces: vec![herdr::RuntimeWorkspace { workspace_id: location.workspace_id.clone(), label: "Root Space".into(),
                 cwd: run.setup.as_ref().unwrap().checkout_path.clone() }],
             panes: vec![herdr::RuntimePane {
+                cwd: None,
                 workspace_id: location.workspace_id.clone(), workspace_label: "Root Space".into(),
                 tab_id: "fresh-root-tab".into(), tab_label: location.launch_tag.clone(), pane_id: "fresh-root-pane".into(),
                 terminal_id: location.terminal_id.clone(), native_session_id: location.native_session_id.clone(),
@@ -1485,4 +1465,34 @@ async fn restored_root_checkout_and_setup_receipt_changes_invalidate_recovery_be
         assert!(matches!(failure.code.as_str(), "root_main_exit_unproven" | "consumer_activity_unproven"), "{failure:?}");
         assert_eq!(fixture.state_bytes(), before, "A stale checkout/receipt proof cannot revoke or reserve");
     }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn credential_only_root_recovers_from_exact_native_exit_without_chat_identity() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let mut main = RootRecoveryPty::new();
+    let shell = RootRecoveryPty::new();
+    root_recovery_binding(&fixture, &root, main.shell.process.clone(), shell.shell.clone());
+    fixture.seed_state(|state| {
+        state.runs.iter_mut().find(|run| run.run_id == root).unwrap()
+            .attachment.as_mut().unwrap().conversation = None;
+        for credential in state.credentials.iter_mut().filter(|credential| credential.run_id == root) {
+            credential.conversation = None;
+        }
+    });
+    let original = fixture.run(&root);
+    main.finish();
+    let runtime = root_recovery_runtime(&original, &shell.shell);
+    let input = fixture.service.observe_root_resume(&runtime, &original).await;
+    assert!(input.root_main_recovery.is_some());
+    let resumed = apply_root_recovery(&fixture, &root, &input);
+    assert_eq!(resumed.resume.phase, ResumePhase::Launching);
+    let replacement = fixture.run(&root);
+    assert_eq!(replacement.attachment.as_ref().unwrap().epoch,
+        original.attachment.as_ref().unwrap().epoch + 1);
+    assert!(replacement.attachment.as_ref().unwrap().conversation.is_none());
+    assert!(crate::process_identity::same_machine_process_running(&shell.shell.process,
+        original.attachment.as_ref().unwrap().machine_id.as_deref()).unwrap_or(false));
 }

@@ -20,10 +20,11 @@ fs2.workspace = true
 cap-std.workspace = true
 cap-fs-ext.workspace = true
 nix.workspace = true
-rustix.workspace = true
+rustix = { workspace = true, features = ["time"] }
 base64.workspace = true
 percent-encoding.workspace = true
 parking_lot.workspace = true
+notify = "8.2"
 html5ever = "=0.35.0"
 markup5ever_rcdom = "=0.35.0"
 pulldown-cmark = { version = "0.13", default-features = false }

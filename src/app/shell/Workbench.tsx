@@ -25,7 +25,7 @@ export function Workbench(props: WorkbenchProps) {
   const actions = useWorkbenchActions(props, runtime);
   const input = useWorkbenchInput(props, runtime, actions);
   const { ctx, tabLayout, mutations, onFocus } = props;
-  const { shell, popup, spaces, allTabs, selectedTab, confirmedSpaceId, customPrefixes, libraryOpen, notesOpen, browserOpen, browserReason, spaceGit, gitActions, gitBlocked, widgets, widgetsPending, viewerSources, limits, openSupervisor, runGitAction, setRecoveryOpen, closeNotes, openNotes, showWidgets, setLibraryAddOpen, openLibrary, setLimitsOpen, commandNotice, lifecycleError, leave } = runtime;
+  const { shell, popup, spaces, allTabs, selectedTab, confirmedSpaceId, customPrefixes, libraryOpen, notesOpen, overviewOpen, openOverview, closeOverview, liaison, browserOpen, browserReason, spaceGit, gitActions, gitBlocked, widgets, widgetsPending, viewerSources, limits, runGitAction, setRecoveryOpen, closeNotes, openNotes, showWidgets, setLibraryAddOpen, openLibrary, setLimitsOpen, commandNotice, lifecycleError, leave } = runtime;
   const target = byId(spaces, confirmedSpaceId);
   const status = target ? spaceGit.get(target.id) : undefined;
   const goToWidget = (widget: WidgetSummary) => {
@@ -41,11 +41,12 @@ export function Workbench(props: WorkbenchProps) {
   const commandActions = buildCommands({
     herdr: { commands: shell?.commands ?? [], prefixes: customPrefixes, reason: input.customCommandReason, popupOpen: Boolean(popup) },
     view: runtime, libraryOpen, notesOpen, browser: { open: browserOpen, reason: browserReason },
+    liaison: { actionLabel: liaison.actionLabel, startAvailable: liaison.startAvailable, overviewAvailable: liaison.tasks.some(task => !task.task.checked), overviewOpen },
     git: { target, status, pending: gitActions.forStatus(status), blocked: gitBlocked },
     widgets: { pending: widgetsPending, dockTabId: tabLayout?.viewers.widget ? tabLayout.tabId : null, list: widgets.widgets(ctx.sessionId) },
     viewerSources, local: limits.absent ? {} : { "subscription-limits": () => setLimitsOpen(true) },
     run: {
-      herdr: input.runHerdrCommand, prefix: input.runCommand, supervisor: openSupervisor, git: runGitAction,
+      herdr: input.runHerdrCommand, prefix: input.runCommand, supervisor: () => { void liaison.start(); }, overview: () => { if (!overviewOpen) openOverview(); else { closeOverview(); if (props.selection.paneId !== liaison.paneId && liaison.startAvailable) void liaison.start(); } }, git: runGitAction,
       recovery: () => setRecoveryOpen(true), toggleNotes: notesOpen ? closeNotes : openNotes, openBrowser: actions.openBrowser,
       closeBrowser: () => { if (selectedTab) actions.perform(closeBrowserLeaf(ctx, selectedTab.id)); },
       retryBrowserCleanup: () => actions.perform(retryBrowserCleanup(ctx)), showWidgets,

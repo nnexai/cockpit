@@ -2,35 +2,20 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type { LibraryCommand } from "../context/ContextViewer";
 
-export type Workarea = { kind: "terminal" } | { kind: "library"; command: LibraryCommand | null } | { kind: "notes" } | { kind: "supervisor" };
-export type SupervisorStartIntent = "reuse_or_resume" | "another";
-export type SupervisorSurface = { modal: boolean; startSessionId: string | null; startToken: number; startIntent?: SupervisorStartIntent };
-export type WorkareaState = { view: Workarea; supervisor: SupervisorSurface | null };
+export type Workarea = { kind: "terminal" } | { kind: "library"; command: LibraryCommand | null } | { kind: "notes" } | { kind: "overview" };
+export type WorkareaState = { view: Workarea };
 export interface WorkareaController extends WorkareaState {
   attachFocusSuppressed: boolean;
   setAttachFocusSuppressed(value: boolean): void;
   openLibrary(command?: { kind: "refresh" } | { kind: "tokens" } | { kind: "open"; itemId: string }): void;
-  closeLibrary(): void; openSupervisor(startIntent?: SupervisorStartIntent): void; closeSupervisor(): void;
+  closeLibrary(): void; openOverview(): void; closeOverview(): void;
   openNotes(): void; closeNotes(): void; leave(mode: "focus" | "keep"): void;
   exitForPaneCommand(execute: () => void): void; captureLibraryInvoker(invoker: HTMLElement | null): void;
-  setSupervisorModal(modal: boolean): void;
 }
-export type WorkareaAction =
-  | { type: "show"; view: Exclude<Workarea, { kind: "supervisor" }> }
-  | { type: "supervisor/open"; startIntent?: SupervisorStartIntent; sessionId: string | null }
-  | { type: "supervisor/modal"; modal: boolean }
-  | { type: "session/reset" };
-export const initialWorkareaState: WorkareaState = { view: { kind: "terminal" }, supervisor: null };
-export function workareaReducer(state: WorkareaState, action: WorkareaAction): WorkareaState {
-  switch (action.type) {
-    case "show": return { ...state, view: action.view };
-    case "supervisor/open": {
-      const surface = state.supervisor ?? { modal: false, startSessionId: null, startToken: 0 };
-      return { view: { kind: "supervisor" }, supervisor: action.startIntent ? { ...surface, startSessionId: action.sessionId, startToken: surface.startToken + 1, startIntent: action.startIntent } : { ...surface, startSessionId: null, startIntent: undefined } };
-    }
-    case "supervisor/modal": return state.supervisor ? { ...state, supervisor: { ...state.supervisor, modal: action.modal } } : state;
-    case "session/reset": return state.supervisor ? { ...state, supervisor: { ...state.supervisor, startSessionId: null, startToken: 0, startIntent: undefined } } : state;
-  }
+export type WorkareaAction = { type: "show"; view: Workarea } | { type: "session/reset" };
+export const initialWorkareaState: WorkareaState = { view: { kind: "terminal" } };
+export function workareaReducer(_state: WorkareaState, action: WorkareaAction): WorkareaState {
+  return action.type === "show" ? { view: action.view } : initialWorkareaState;
 }
 export function useWorkarea(sessionId: string | null, selectedPaneId: string | null): WorkareaController {
   const [workarea, dispatch] = useReducer(workareaReducer, initialWorkareaState);
@@ -69,11 +54,11 @@ export function useWorkarea(sessionId: string | null, selectedPaneId: string | n
       requestAnimationFrame(() => focusDocument(60));
     }
   }, []);
-  const openSupervisor = useCallback((startIntent?: SupervisorStartIntent) => {
+  const openOverview = useCallback(() => {
     setAttachFocusSuppressed(true);
-    dispatch({ type: "supervisor/open", startIntent, sessionId });
-  }, [sessionId]);
-  const closeSupervisor = useCallback(() => { dispatch({ type: "show", view: { kind: "terminal" } }); setAttachFocusSuppressed(false); }, []);
+    dispatch({ type: "show", view: { kind: "overview" } });
+  }, []);
+  const closeOverview = useCallback(() => { dispatch({ type: "show", view: { kind: "terminal" } }); setAttachFocusSuppressed(false); }, []);
   const closeNotes = useCallback(() => { dispatch({ type: "show", view: { kind: "terminal" } }); setAttachFocusSuppressed(true); }, []);
   const openNotes = useCallback(() => { setAttachFocusSuppressed(true); dispatch({ type: "show", view: { kind: "notes" } }); }, []);
   const leave = (mode: "focus" | "keep") => { dispatch({ type: "show", view: { kind: "terminal" } }); if (mode === "focus") setAttachFocusSuppressed(false); };
@@ -84,6 +69,5 @@ export function useWorkarea(sessionId: string | null, selectedPaneId: string | n
     requestAnimationFrame(() => window.setTimeout(execute, 0));
   };
   const captureLibraryInvoker = (invoker: HTMLElement | null) => { librarySidebarInvoker.current = invoker?.closest(".sidebar") ? invoker : null; };
-  const setSupervisorModal = useCallback((modal: boolean) => dispatch({ type: "supervisor/modal", modal }), []);
-  return { ...workarea, attachFocusSuppressed, setAttachFocusSuppressed, openLibrary, closeLibrary, openSupervisor, closeSupervisor, openNotes, closeNotes, leave, exitForPaneCommand, captureLibraryInvoker, setSupervisorModal };
+  return { ...workarea, attachFocusSuppressed, setAttachFocusSuppressed, openLibrary, closeLibrary, openOverview, closeOverview, openNotes, closeNotes, leave, exitForPaneCommand, captureLibraryInvoker };
 }

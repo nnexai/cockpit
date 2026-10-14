@@ -1,5 +1,7 @@
 import { TabCanvas } from "../layout/TabCanvas";
 import { LeafHost } from "../layout/LeafHost";
+import { TaskRail } from "../supervisor/SupervisorTasks";
+import "../supervisor/supervisor.css";
 import type { LayoutAction, TabLayoutState } from "../layout/tabLayoutStore";
 import type { Leaf } from "../layout/splitTree";
 import type { Rect } from "../layout/solveLayout";
@@ -23,18 +25,20 @@ export function WorkbenchCanvas(props: WorkbenchContentProps) {
     const pending = selected && state.focusPending !== null;
     const focusError = selected ? state.focusError : null;
     return <LeafHost ctx={ctx} tab={hostTab} leaf={leaf} rect={rect} pane={pane} selected={selected}
-      widgetInputBlocked={modalOpen || !active} widgetLive={state.sync === "live"} widgetLocation={`${spaces.find(space => space.id === hostTab.spaceId)?.label ?? "Space"} · ${allTabs.find(tab => tab.id === hostTab.tabId)?.label ?? "tab"}`}
+      taskRail={leaf.kind === "terminal" && props.liaison.paneId === leaf.id ? <TaskRail tasks={props.liaison.tasks} waiting={props.liaison.waiting} status={props.liaison.status} onOverview={props.openOverview} /> : undefined}
+      terminalTitle={leaf.kind === "terminal" && props.liaison.paneId === leaf.id && pane?.title === props.liaison.root?.attachment?.location?.launch_tag ? "Liaison" : undefined}
+      widgetInputBlocked={modalOpen || !active || props.overviewOpen} widgetLive={state.sync === "live"} widgetLocation={`${spaces.find(space => space.id === hostTab.spaceId)?.label ?? "Space"} · ${allTabs.find(tab => tab.id === hostTab.tabId)?.label ?? "tab"}`}
       onWidgetAgent={(paneId, tabId, spaceId) => { if (state.sync === "live") onFocus({ kind: "pane", target_id: paneId }, { paneId, tabId, spaceId }); }}
-      browserInputActive={browserInputActive && active && !modalOpen && state.sync === "live"} browserLiveInputEnabled={active && !modalOpen && state.sync === "live"} focusStatus={pending ? "pending" : focusError ? "error" : null} focusError={focusError?.message}
+      browserInputActive={browserInputActive && active && !props.overviewOpen && !modalOpen && state.sync === "live"} browserLiveInputEnabled={active && !props.overviewOpen && !modalOpen && state.sync === "live"} focusStatus={pending ? "pending" : focusError ? "error" : null} focusError={focusError?.message}
       closeDisabled={mutationBusy}
       onSelect={() => selectLeaf(leaf.id)}
       onZoom={() => { selectLeaf(leaf.id); zoom(leaf.id); }} onClose={() => { selectLeaf(leaf.id); closeLeaf(leaf.id); }} onRetryFocus={onRetry}
       onMenu={event => { selectLeaf(leaf.id); openContext(event, { kind: "pane", id: leaf.id }); }}
       terminal={pane ? {
-        client, request: { session_id: state.sessionId!, pane_id: pane.id }, selected, presented: selected,
-        controlAllowed: selected && !browserInputActive && !modalOpen && state.sync === "live" && snapshot?.focused_pane_id === pane.id && !state.focusPending && !state.focusError,
+        client, request: { session_id: state.sessionId!, pane_id: pane.id }, selected, presented: selected && !props.overviewOpen,
+        controlAllowed: selected && !props.overviewOpen && !browserInputActive && !modalOpen && state.sync === "live" && snapshot?.focused_pane_id === pane.id && !state.focusPending && !state.focusError,
         controlPending: pending, focusEpoch: state.epoch, focusToken: state.focusToken, terminalMouseInput,
-        deferAttachment: state.sync !== "live" && !(state.sync === "loading" && attachedPaneIds.current.has(pane.id)), focusOnAttach: active && !attachFocusSuppressed,
+        deferAttachment: state.sync !== "live" && !(state.sync === "loading" && attachedPaneIds.current.has(pane.id)), focusOnAttach: active && !props.overviewOpen && !attachFocusSuppressed,
         onRequestControl: () => selectLeaf(pane.id), onSelect: () => selectLeaf(pane.id), onPrepared: () => {
           onPanePrepared(pane.id);
           if (active && switching && pane.id === hostTab.focusedPaneId) setPaintedTab(hostTab);
@@ -45,8 +49,8 @@ export function WorkbenchCanvas(props: WorkbenchContentProps) {
         },
       } : null} />;
   };
-  return <div ref={canvasRef} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: "relative", flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
+  return <div ref={canvasRef} aria-hidden={props.overviewOpen || undefined} inert={props.overviewOpen} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: props.overviewOpen ? "absolute" : "relative", inset: props.overviewOpen ? 0 : undefined, visibility: props.overviewOpen ? "hidden" : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
     onContextMenu={event => { const pane = (event.target as HTMLElement).closest<HTMLElement>("[data-leaf-id]"); if (pane?.dataset.leafId) { selectLeaf(pane.dataset.leafId); openContext(event, { kind: "pane", id: pane.dataset.leafId }); } }}>
-    {canvasTabs.length ? canvasTabs.map(hostTab => <div key={hostTab.tabId} style={{ position: switching ? "absolute" : "relative", inset: switching ? 0 : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", visibility: switching && hostTab.tabId === tabLayout?.tabId ? "hidden" : "visible", pointerEvents: hostTab.tabId !== tabLayout?.tabId ? "none" : undefined }} inert={hostTab.tabId !== tabLayout?.tabId}><TabCanvas tab={hostTab} area={area} inputBlocked={Boolean(popup || popupPending)} renderLeaf={(leaf, rect) => renderLeaf(hostTab, leaf, rect)} dispatch={dispatchCanvas} registerTransient={registerTransient} announce={setPrefixHint} /></div>) : <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div>}
+    {canvasTabs.length ? canvasTabs.map(hostTab => <div key={hostTab.tabId} style={{ position: switching ? "absolute" : "relative", inset: switching ? 0 : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", visibility: props.overviewOpen || switching && hostTab.tabId === tabLayout?.tabId ? "hidden" : "visible", pointerEvents: props.overviewOpen || hostTab.tabId !== tabLayout?.tabId ? "none" : undefined }} inert={props.overviewOpen || hostTab.tabId !== tabLayout?.tabId}><TabCanvas tab={hostTab} area={area} inputBlocked={Boolean(popup || popupPending || props.overviewOpen)} renderLeaf={(leaf, rect) => renderLeaf(hostTab, leaf, rect)} dispatch={dispatchCanvas} registerTransient={registerTransient} announce={setPrefixHint} /></div>) : <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div>}
   </div>;
 }

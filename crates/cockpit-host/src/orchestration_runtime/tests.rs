@@ -95,6 +95,8 @@ fn observed() -> RuntimeView {
     RuntimeView {
         endpoint_identity: "endpoint".into(),
         boot_id: None,
+        peer_process: None,
+        focused_workspace_id: None,
         workspaces: vec![],
         panes: vec![RuntimePane {
             workspace_id: "space".into(),
@@ -102,6 +104,7 @@ fn observed() -> RuntimeView {
             tab_id: "tab".into(),
             tab_label: "tag".into(),
             pane_id: "pane".into(),
+            cwd: None,
             terminal_id: Some("terminal".into()),
             native_session_id: None,
             native_session_file: None,
@@ -175,6 +178,7 @@ fn runtime_constructor_accepts_generic_configuration_without_extension_or_launch
         resume_args: Some(vec!["resume".into(), "{session_id}".into()]),
         inbox_prompt_hints: false,
         routes: Vec::new(),
+        ..Default::default()
     };
     let sources = Arc::new(cockpit_core::sources::SourceService::new(&configuration, Vec::new()).unwrap());
     let library = Arc::new(LibraryService::new(configuration.clone(), sources));
@@ -326,7 +330,6 @@ fn resume_request(run: &Run) -> OrchestrationMutationRequest {
         action: OrchestrationAction::RunResume {
             operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
             expected_attachment_epoch: run.attachment.as_ref().map(|a| a.epoch),
-            mode: ResumeMode::ReattachOrRestart, decision_id: None,
         },
     }
 }
@@ -589,7 +592,7 @@ async fn resume_live_root_reattaches_restored_endpoint_with_current_authenticate
     let auth = read_job_auth(&path).unwrap();
     let conversation = ConversationIdentity { harness: "test-harness".into(), session_id: "opaque/chat:one".into() };
     let agent = AgentCaller {
-        auth, conversation: conversation.clone(), assignment_generation: None,
+        auth, conversation: Some(conversation.clone()), assignment_generation: None,
         endpoint_identity: location.endpoint_identity.clone(),
         session_id: location.session_id.clone(), workspace_id: location.workspace_id.clone(),
         tab_id: location.tab_id.clone(), pane_id: location.pane_id.clone(), boot_id: location.boot_id.clone(),
@@ -603,7 +606,7 @@ async fn resume_live_root_reattaches_restored_endpoint_with_current_authenticate
     }, &ResolvedMutationInput::default()).unwrap();
     assert!(matches!(registration.result, OrchestrationActionResult::RunRegistered {
         conversation: registered, assignment_generation: None, duplicate: false, ..
-    } if registered == conversation));
+    } if registered == Some(conversation)));
     let run = fixture.service.run_for_review("fixture", &run_id).unwrap();
     assert!(fixture.service.recorded_runs_with_bindings("fixture").unwrap().2.contains_key(&run_id));
     let restored = process.herdr(true);
@@ -1147,7 +1150,7 @@ async fn operator_adopt_resolves_exact_pane_with_generic_harness_without_process
     let path = fixture.service.job_adoption_credential_file(&actor, "fixture", &run_id, &location).unwrap();
     let caller = cockpit_core::orchestration::AgentCaller {
         auth: cockpit_core::orchestration::read_job_auth(&path).unwrap(),
-        conversation: ConversationIdentity { harness: "test-harness".into(), session_id: "opaque/session:without-pid".into() },
+        conversation: Some(ConversationIdentity { harness: "test-harness".into(), session_id: "opaque/session:without-pid".into() }),
         assignment_generation: None,
         endpoint_identity: location.endpoint_identity.clone(), session_id: location.session_id.clone(),
         workspace_id: location.workspace_id.clone(), tab_id: location.tab_id.clone(),
@@ -1170,7 +1173,7 @@ async fn operator_adopt_resolves_exact_pane_with_generic_harness_without_process
     } if conversation == caller.conversation));
     let registered = fixture.service.run_for_review("fixture", &run_id).unwrap();
     let attachment = registered.attachment.as_ref().unwrap();
-    assert_eq!(attachment.conversation.as_ref(), Some(&caller.conversation));
+    assert_eq!(attachment.conversation.as_ref(), caller.conversation.as_ref());
     assert!(attachment.process.is_none());
     assert!(attachment.shell.is_none());
     assert!(attachment.machine_id.is_none());
@@ -1424,4 +1427,21 @@ async fn resume_restored_root_terminal_id_requires_retained_physical_checkout_an
             cockpit_core::process_identity::machine_id().as_deref()).unwrap(),
             "The restored borrowed shell grants liaison launch authority, never cleanup authority");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn private_cli_routing_freezes_named_executables_before_worker_cwd_changes() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new();
+    let cli = fixture.root.join("cockpit-cli");
+    fs::write(&cli, "#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = std::env::join_paths([&fixture.root]).unwrap();
+    assert_eq!(resolve_literal_cli_path(Path::new("cockpit-cli"), Some(&path)).unwrap(), cli);
+    assert_eq!(resolve_literal_cli_path(&cli, None).unwrap(), cli);
+    assert_eq!(resolve_literal_cli_path(Path::new("absent-cli"), Some(&path)).unwrap_err().code,
+        "cockpit_cli_unavailable");
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(resolve_literal_cli_path(&cli, Some(&path)).unwrap_err().code, "cockpit_cli_unavailable");
 }

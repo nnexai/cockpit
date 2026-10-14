@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 use parking_lot::Mutex;
 use cockpit_protocol::orchestration::*;
-use super::{herdr::*, retire::{retire_run, ObservationBackoff}, retirement, *};
+use super::{herdr::*, retire::retire_run, retirement, *};
 
 struct Fixture { root: PathBuf, service: Arc<OrchestrationService>, run: Run }
 impl Fixture {
@@ -42,12 +42,13 @@ impl Fixture {
             state: AttachmentState::Connected, location: None, conversation: None,
             launch_mode: Some(AttachmentLaunchMode::ShellAgent),
             process: None, shell: None, machine_id: crate::process_identity::machine_id(),
+            process_scope: None,
             launch_attempt: 1, updated_at: now(),
         });
         run.attachment.as_mut().unwrap().location = Some(RunLocation {
             endpoint_identity: "endpoint".into(), session_id: "fixture".into(), workspace_id: "space".into(),
             tab_id: "tab".into(), pane_id: "pane".into(), terminal_id: Some("terminal".into()),
-            launch_tag: "tag".into(), boot_id: None, native_session_id: None,
+            launch_tag: "tag".into(), boot_id: legacy_test_boot(), peer_process: test_peer(), native_session_id: None,
         });
         run.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
             harness: "omp".into(), session_id: "conversation".into(),
@@ -89,8 +90,50 @@ impl Fixture {
     fn change(&self, f: impl FnOnce(&mut Run)) {
         change_run(&self.service, &self.run.run_id, f);
     }
-    async fn step(&self, herdr: &FakeHerdr, backoff: &ObservationBackoff) -> Result<(), InspectionError> {
-        retire_run(&self.service, herdr, backoff, &self.run).await
+    fn replacement(&mut self) {
+        self.change(pin_direct);
+        let locked = self.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let index = run_index(&state, &self.run.run_id).unwrap();
+        let root_id = id();
+        let task_id = id();
+        let successor_id = id();
+        let operation_id = id();
+        let run = &mut state.runs[index];
+        run.root_id = root_id.clone();
+        run.parent_run_id = Some(root_id.clone());
+        run.task_id = Some(task_id.clone());
+        run.assignment_generation = Some(1);
+        run.close_reason = Some(CloseReason::Superseded);
+        run.result = None;
+        run.source_output = None;
+        run.retirement = retirement::retirement_for_replacement(run, ReplacementRetirementAuthority {
+            operation_id: operation_id.clone(), previous_run_id: run.run_id.clone(),
+            previous_generation: 1, replacement_run_id: successor_id.clone(),
+        }, &now());
+        let old_id = run.run_id.clone();
+        let mut root = new_run(&root_id, "fixture", RunKind::Supervisor, "root".into(), &root_id, None, None, 1);
+        root.stage = RunStage::Active;
+        let mut successor = new_run(&successor_id, "fixture", RunKind::Worker, "successor".into(),
+            &root_id, Some(root_id.clone()), Some(task_id.clone()), 2);
+        successor.assignment_generation = Some(2);
+        state.runs.push(root);
+        state.runs.push(successor);
+        state.task_ownership.push(TaskOwnership { root_id: root_id.clone(), task_id, generation: 2, owner: None, schedule: None });
+        state.operations.push(super::store::DurableOperationRecord { operation_id: operation_id.clone(),
+            actor_run_id: Some(root_id.clone()), principal_key: "root".into(), root_id,
+            kind: super::store::DurableOperationKind::WorkerReplace, request_digest: "committed root replacement".into(),
+            run_id: Some(successor_id.clone()), resume_operation_id: None,
+            result: Some(OrchestrationActionResult::WorkerReplaced { start: WorkerStartResult {
+                operation_id, run_id: successor_id, attempt: 2, duplicate: false },
+                previous_run_id: old_id, assignment_generation: 2,
+                placement: ReplacementPlacement::IsolatedDirectory { directory: "/isolated/successor".into() } }),
+            effect_receipts: Vec::new(), created_at: now(), updated_at: now() });
+        self.run = state.runs[index].clone();
+        locked.save(&mut state).unwrap();
+    }
+    async fn step(&self, herdr: &FakeHerdr) -> Result<(), InspectionError> {
+        retire_run(&self.service, herdr, &self.run).await
     }
 }
 impl Drop for Fixture { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.root); } }
@@ -121,12 +164,21 @@ fn old() -> String {
     (time::OffsetDateTime::now_utc() - time::Duration::hours(1))
         .format(&time::format_description::well_known::Rfc3339).unwrap()
 }
+fn test_peer() -> Option<NativeProcessIdentity> {
+    let pid = std::process::id() as i32;
+    Some(NativeProcessIdentity { pid: pid as u32, start_ticks: crate::process_identity::start_identity(pid)?,
+        kernel_boot_id: Some(crate::process_identity::kernel_boot_id()?) })
+}
+fn legacy_test_boot() -> Option<String> {
+    if test_peer().is_some() { None } else { Some("legacy-test-herdr-boot".into()) }
+}
 fn runtime(agent: bool) -> RuntimeView {
-    RuntimeView { endpoint_identity: "endpoint".into(), boot_id: None, workspaces: vec![],
+    RuntimeView { endpoint_identity: "endpoint".into(), boot_id: legacy_test_boot(), peer_process: test_peer(), focused_workspace_id: None, workspaces: vec![],
         panes: vec![RuntimePane { workspace_id: "space".into(), workspace_label: "Space".into(),
             tab_id: "tab".into(), tab_label: "tag".into(), pane_id: "pane".into(),
             terminal_id: Some("terminal".into()), native_session_id: None,
             native_session_file: None,
+            cwd: None,
             agent_name: agent.then(|| "tag".into()), agent_kind: agent.then(|| "omp".into()),
             launch_pending: false, agent_status: agent.then(|| "idle".into()), state_changed_at: None }], }
 }
@@ -212,8 +264,8 @@ async fn original_shell_keeps_final_owned_pane_and_history() {
     let f = Fixture::new(waiting());
     let original = f.current();
     let h = FakeHerdr::new(&f, vec![runtime(false)]);
-    let b = ObservationBackoff::default();
-    f.step(&h, &b).await.unwrap();
+    
+    f.step(&h).await.unwrap();
     let retained = f.current();
     assert!(matches!(retained.retirement.as_ref().unwrap().state,
         RetirementState::Retained { reason: RetainReason::UserActivity, .. }));
@@ -223,7 +275,7 @@ async fn original_shell_keeps_final_owned_pane_and_history() {
     assert_eq!(retained.stage, RunStage::Closed);
     assert_eq!(h.closes(), 0);
     let bytes = std::fs::read(f.service.base().join("state.json")).unwrap();
-    f.step(&h, &b).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(std::fs::read(f.service.base().join("state.json")).unwrap(), bytes);
     assert_eq!(h.closes(), 0);
 }
@@ -238,7 +290,7 @@ async fn siblings_in_other_tabs_survive_but_shared_tab_and_contamination_are_ret
         sibling.tab_id = if shared { "tab" } else { "user-tab" }.into();
         view.panes.push(sibling.clone());
         let h = FakeHerdr::new(&f, vec![view]);
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        f.step(&h).await.unwrap();
         assert_eq!(h.closes(), 0);
         assert!(matches!(f.current().retirement.unwrap().state,
             RetirementState::Retained { reason, .. }
@@ -255,7 +307,7 @@ async fn siblings_in_other_tabs_survive_but_shared_tab_and_contamination_are_ret
             _ => contaminated.panes[0].launch_pending = true,
         }
         let h = FakeHerdr::new(&f, vec![contaminated]);
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        f.step(&h).await.unwrap();
         assert_eq!(h.closes(), 0);
         assert!(matches!(f.current().retirement.unwrap().state,
             RetirementState::Retained { .. }));
@@ -268,7 +320,7 @@ async fn foreground_process_never_authorizes_terminal_cancellation() {
     f.change(pin_direct);
     let h = FakeHerdr::new(&f, vec![runtime(false)]);
     h.script.lock().info.foreground_pgid = Some(999);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.closes(), 0);
     assert!(matches!(f.current().retirement.unwrap().state,
         RetirementState::Retained { reason: RetainReason::ForegroundProcess, .. }));
@@ -280,7 +332,7 @@ async fn interrupted_close_observation_never_resends_the_historical_effect() {
         let f = Fixture::new(RetirementState::CloseIntent { at: now() });
         let original = f.current();
         let h = FakeHerdr::new(&f, vec![if seen { runtime(false) } else { absent() }]);
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        f.step(&h).await.unwrap();
         let current = f.current();
         if seen {
             assert!(matches!(current.retirement.unwrap().state,
@@ -291,7 +343,7 @@ async fn interrupted_close_observation_never_resends_the_historical_effect() {
         }
         assert_eq!(serde_json::to_value(&current.attachment).unwrap(), serde_json::to_value(&original.attachment).unwrap());
         assert_eq!(serde_json::to_value(&current.result).unwrap(), serde_json::to_value(&original.result).unwrap());
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        f.step(&h).await.unwrap();
         assert_eq!(h.closes(), 0);
     }
 }
@@ -301,27 +353,32 @@ async fn recovered_close_intent_performs_one_read_only_reclassification() {
     for seen in [0, 1, 2] {
         let f = Fixture::new(RetirementState::CloseIntent { at: now() });
         let h = FakeHerdr::new(&f, match seen { 0 => vec![absent()], 1 => vec![runtime(false)], _ => vec![] });
-        let backoff = ObservationBackoff::default();
-        f.step(&h, &backoff).await.unwrap();
-        f.step(&h, &backoff).await.unwrap();
-        assert_eq!(h.closes(), 0); assert_eq!(h.runtime_calls(), 1);
+        
+        f.step(&h).await.unwrap();
+        f.step(&h).await.unwrap();
+        assert_eq!(h.closes(), 0);
+        assert_eq!(h.runtime_calls(), if seen == 0 { 1 } else { 2 });
         assert!(retirement::terminal(&f.current().retirement.unwrap().state));
     }
 }
 
 #[tokio::test]
-async fn unavailable_reads_are_bounded_and_eventually_visible() {
-    assert!(retirement::OBSERVATION_RETRY_SECS >= 30);
+async fn unavailable_observation_is_concrete_and_retries_on_next_event_without_expiry() {
     let f = Fixture::new(waiting());
     let h = FakeHerdr::new(&f, vec![]);
-    let b = ObservationBackoff::default();
-    for _ in 0..1000 { f.step(&h, &b).await.unwrap(); }
-    assert_eq!(h.runtime_calls(), 1);
+    f.step(&h).await.unwrap();
+    let before = std::fs::read(f.service.base().join("state.json")).unwrap();
+    f.step(&h).await.unwrap();
+    assert_eq!(h.runtime_calls(), 2);
     assert_eq!(h.closes(), 0);
-    f.change(|r| r.retirement.as_mut().unwrap().created_at = old());
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    assert_eq!(std::fs::read(f.service.base().join("state.json")).unwrap(), before);
     assert!(matches!(f.current().retirement.unwrap().state,
         RetirementState::Retained { reason: RetainReason::ObservationUnavailable, .. }));
+    f.change(|r| r.retirement.as_mut().unwrap().created_at = old());
+    h.script.lock().runtimes = vec![absent()].into_iter().map(Ok).collect();
+    f.step(&h).await.unwrap();
+    assert!(matches!(f.current().retirement.unwrap().state,
+        RetirementState::Retired { terminal: TerminalOutcome::AlreadyAbsent, .. }));
 }
 
 
@@ -334,7 +391,7 @@ async fn open_descendant_runs_block_close_after_read_only_observation() {
     let locked = f.service.store.lock().unwrap();
     let mut state = locked.read().unwrap(); state.runs.push(child); locked.save(&mut state).unwrap(); drop(locked);
     let h = FakeHerdr::new(&f, vec![runtime(true)]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.runtime_calls(), 1); assert_eq!(h.closes(), 0);
     assert!(matches!(f.current().retirement.unwrap().state,
         RetirementState::Waiting { blockers } if blockers.contains(&RetirementBlocker::OpenDescendantRuns)));
@@ -349,19 +406,19 @@ async fn lease_and_durable_identity_change_fence_retirement_observation() {
     h.script.lock().runtime_hook = Some((1, Box::new(move || {
         change_run(&svc, &id, |r| r.attachment.as_mut().unwrap().epoch += 1);
     })));
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     let retained = f.current().retirement.unwrap();
     assert!(matches!(retained.state,
         RetirementState::Retained { reason: RetainReason::IdentityChanged, .. }));
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(f.current().retirement.unwrap(), retained);
     assert_eq!(h.closes(), 0);
     let f = Fixture::new(waiting());
     let h = FakeHerdr::new(&f, vec![runtime(false)]);
     let lease = f.service.execution_lease(&f.run.run_id).unwrap().unwrap();
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.runtime_calls(), 0); assert_eq!(h.closes(), 0); drop(lease);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.closes(), 0);
     assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Retained { .. }));
 }
@@ -371,10 +428,10 @@ async fn lease_and_durable_identity_change_fence_retirement_observation() {
 async fn failed_close_verification_stays_unknown_across_owner_restart() {
     let f = Fixture::new(RetirementState::CloseIntent { at: now() });
     let h = FakeHerdr::new(&f, vec![]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert!(matches!(f.current().retirement.unwrap().state,
         RetirementState::Unknown { phase: RetirementPhase::TerminalClose, .. }));
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.closes(), 0);
 }
 
@@ -387,14 +444,14 @@ async fn identity_change_and_replaced_retirement_queue_hint_are_fenced() {
     h.script.lock().runtime_hook = Some((1, Box::new(move || {
         change_run(&svc, &id, |r| r.attachment.as_mut().unwrap().epoch += 1);
     })));
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert!(matches!(f.current().retirement.unwrap().state,
         RetirementState::Retained { reason: RetainReason::IdentityChanged, .. }));
     assert_eq!(h.closes(), 0);
     let f = Fixture::new(waiting());
     f.change(|r| r.retirement.as_mut().unwrap().retirement_id = uuid::Uuid::new_v4().to_string());
     let h = FakeHerdr::new(&f, vec![]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.runtime_calls(), 0); assert_eq!(h.closes(), 0);
 }
 
@@ -413,7 +470,7 @@ async fn newly_running_descendant_during_close_preflight_cannot_be_closed() {
         child.stage = RunStage::Working; state.runs.push(child);
         locked.save(&mut state).unwrap();
     })));
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Waiting { .. }));
     assert_eq!(h.closes(), 0);
 }
@@ -428,7 +485,7 @@ async fn missing_or_changed_shell_fingerprint_never_authorizes_close() {
         if missing { changed.shell_identity = None; }
         else { changed.shell_identity.as_mut().unwrap().argv_digest = "b".repeat(64); }
         h.script.lock().infos = vec![changed].into();
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        f.step(&h).await.unwrap();
         assert_eq!(h.closes(), 0);
         assert!(matches!(f.current().retirement.unwrap().state,
             RetirementState::Retained { reason: RetainReason::ForegroundProcess, .. }));
@@ -490,7 +547,7 @@ async fn real_same_pid_exec_sleep_and_exec_bash_are_not_the_original_launch_shel
             h.script.lock().infos = if boundary == 1 { vec![info(fresh)] }
                 else { vec![info(baseline), info(fresh)] }.into();
             let original = f.current();
-            let result = f.step(&h, &ObservationBackoff::default()).await;
+            let result = f.step(&h).await;
             child.kill().await.unwrap(); child.wait().await.unwrap();
             result.unwrap();
             assert_eq!(h.closes(), 0);
@@ -542,7 +599,7 @@ async fn original_shell_builtin_work_is_preserved() {
     let h = FakeHerdr::new(&f, vec![view.clone(), view, after]);
     h.script.lock().info = PaneProcessInfo { pane_id: "pane".into(), shell_pid: Some(pid),
         foreground_pgid: Some(pid), processes: vec![(pid, "bash".into())], shell_identity: Some(fresh) };
-    let result = f.step(&h, &ObservationBackoff::default()).await;
+    let result = f.step(&h).await;
     child.kill().await.unwrap(); child.wait().await.unwrap();
     result.unwrap();
     assert_eq!(h.closes(), 0);
@@ -558,7 +615,7 @@ async fn unknown_close_reconciles_later_absence_without_resending_close() {
         at: old(), phase: RetirementPhase::TerminalClose, detail: "close outcome unknown".into(),
     });
     let h = FakeHerdr::new(&f, vec![absent()]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert!(matches!(f.current().retirement.unwrap().state,
         RetirementState::Retired { terminal: TerminalOutcome::AbsentAfterUncertainClose, .. }));
     assert_eq!(h.runtime_calls(), 1);
@@ -580,7 +637,7 @@ async fn historical_unknown_close_retains_pinned_identity_across_attachment_refr
         attachment.location.as_mut().unwrap().pane_id = "replacement-pane".into();
     });
     let h = FakeHerdr::new(&f, vec![absent()]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     let current = f.current();
     let receipt = current.retirement.unwrap();
     assert_eq!(receipt.identity.unwrap(), pinned);
@@ -611,7 +668,7 @@ async fn exited_main_never_authorizes_close_without_live_process_proof() {
             processes: vec![(process().pid, "exited agent".into())], shell_identity: Some(shell),
         };
     }
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.closes(), 0);
     assert!(matches!(f.current().retirement.unwrap().state,
         RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable, stopped: true, .. }));
@@ -619,7 +676,7 @@ async fn exited_main_never_authorizes_close_without_live_process_proof() {
     assert_eq!(serde_json::to_value(current.attachment).unwrap(), serde_json::to_value(original.attachment).unwrap());
     assert_eq!(serde_json::to_value(current.result).unwrap(), serde_json::to_value(original.result).unwrap());
     assert_eq!(current.checkout_claim_id, original.checkout_claim_id);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.closes(), 0);
 }
 
@@ -634,7 +691,7 @@ async fn registered_chat_without_process_proof_retains_its_physical_pane() {
     });
     let original = f.current();
     let h = FakeHerdr::new(&f, vec![runtime(false)]);
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.closes(), 0);
     assert!(matches!(f.current().retirement.unwrap().state,
         RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable, stopped: false, .. }));
@@ -686,8 +743,8 @@ async fn accepted_alive_idle_worker_closes_only_exact_owned_pane_once_and_preser
                 let current = svc.run_for_review("fixture", &run_id).unwrap();
                 assert!(matches!(current.retirement.unwrap().state, RetirementState::CloseIntent { .. }));
             })));
-            let backoff = ObservationBackoff::default();
-            f.step(&h, &backoff).await.unwrap();
+            
+            f.step(&h).await.unwrap();
             let current = f.current();
             let record = current.retirement.as_ref().unwrap();
             assert_eq!(record.retirement_id, recorded.retirement_id);
@@ -701,7 +758,7 @@ async fn accepted_alive_idle_worker_closes_only_exact_owned_pane_once_and_preser
             assert_eq!(serde_json::to_value(&current.result).unwrap(), serde_json::to_value(&original.result).unwrap());
             assert_eq!(current.checkout_claim_id, original.checkout_claim_id);
             assert_eq!(current.stage, RunStage::Closed);
-            f.step(&h, &ObservationBackoff::default()).await.unwrap();
+            f.step(&h).await.unwrap();
             assert_eq!(h.closes(), 1);
         }
     }
@@ -723,14 +780,14 @@ async fn busy_pending_and_unclassified_workers_wait_without_repetitive_writes_th
         let h = FakeHerdr::new(&f, vec![view, runtime(true), runtime(true), absent()]);
         h.script.lock().allow_close = true;
         let before = std::fs::read(f.service.base().join("state.json")).unwrap();
-        let backoff = ObservationBackoff::default();
-        for _ in 0..1000 { f.step(&h, &backoff).await.unwrap(); }
+        
+        f.step(&h).await.unwrap();
         assert_eq!(f.current().retirement.unwrap().state, waiting());
         assert_eq!(h.runtime_calls(), 1);
         assert_eq!(h.closes(), 0);
         assert_eq!(std::fs::read(f.service.base().join("state.json")).unwrap(), before);
-        // A fresh observation window stands in for the existing 30-second expiry.
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        // The next pane event observes idle immediately, without a 30s delay.
+        f.step(&h).await.unwrap();
         assert_eq!(h.closes(), 1);
         assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Retired { .. }));
     }
@@ -744,16 +801,19 @@ async fn final_busy_or_unavailable_preflight_withdraws_only_unsubmitted_intent()
         let mut busy = runtime(true);
         busy.panes[0].agent_status = Some("working".into());
         let h = FakeHerdr::new(&f, if unavailable { vec![runtime(true)] } else { vec![runtime(true), busy] });
-        let backoff = ObservationBackoff::default();
-        f.step(&h, &backoff).await.unwrap();
+        
+        f.step(&h).await.unwrap();
         assert_eq!(h.closes(), 0);
         assert_eq!(f.current().retirement.unwrap().state, waiting());
+        f.step(&h).await.unwrap();
+        assert!(matches!(f.current().retirement.unwrap().state,
+            RetirementState::Retained { reason: RetainReason::ObservationUnavailable, .. }));
         let saved = std::fs::read(f.service.base().join("state.json")).unwrap();
-        for _ in 0..1000 { f.step(&h, &backoff).await.unwrap(); }
+        f.step(&h).await.unwrap();
         assert_eq!(std::fs::read(f.service.base().join("state.json")).unwrap(), saved);
         h.script.lock().runtimes = vec![runtime(true), runtime(true), absent()].into_iter().map(Ok).collect();
         h.script.lock().allow_close = true;
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        f.step(&h).await.unwrap();
         assert_eq!(h.closes(), 1);
     }
 }
@@ -787,7 +847,7 @@ async fn live_preflight_rejects_all_location_process_and_conversation_replacemen
             let h = FakeHerdr::new(&f, if boundary == 1 { vec![bad] } else { vec![runtime(true), bad] });
             let original_info = h.script.lock().info.clone();
             h.script.lock().infos = if boundary == 1 { vec![info] } else { vec![original_info, info] }.into();
-            f.step(&h, &ObservationBackoff::default()).await.unwrap();
+            f.step(&h).await.unwrap();
             assert_eq!(h.closes(), 0, "replacement {changed} at boundary {boundary}");
             assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Retained { .. }));
         }
@@ -812,7 +872,7 @@ async fn accepted_result_and_run_identity_cas_fence_the_new_close_effect() {
                     _ => run.close_reason = Some(CloseReason::Cancelled),
                 });
             })));
-            f.step(&h, &ObservationBackoff::default()).await.unwrap();
+            f.step(&h).await.unwrap();
             assert_eq!(h.closes(), 0);
             assert!(matches!(f.current().retirement.unwrap().state,
                 RetirementState::Retained { reason: RetainReason::IdentityChanged, .. }));
@@ -827,14 +887,14 @@ async fn live_close_requires_fresh_absence_and_failed_or_unknown_effects_never_r
         f.change(pin_direct);
         let h = FakeHerdr::new(&f, vec![runtime(true), runtime(true), runtime(true), absent()]);
         { let mut s = h.script.lock(); s.allow_close = true; s.close_error = error; }
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        f.step(&h).await.unwrap();
         assert_eq!(h.closes(), 1);
         let state = f.current().retirement.unwrap().state;
         if error == Some("confirmation_required") {
             assert!(matches!(state, RetirementState::Retained { reason: RetainReason::HerdrRefused, stopped: false, .. }));
         } else {
             assert!(matches!(state, RetirementState::Unknown { .. }));
-            f.step(&h, &ObservationBackoff::default()).await.unwrap();
+            f.step(&h).await.unwrap();
             assert!(matches!(f.current().retirement.unwrap().state,
                 RetirementState::Retired { terminal: TerminalOutcome::AbsentAfterUncertainClose, .. }));
         }
@@ -857,7 +917,7 @@ async fn descendant_created_at_final_preflight_defers_without_submitting_close()
         state.runs.push(child);
         locked.save(&mut state).unwrap();
     })));
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.closes(), 0);
     assert_eq!(f.current().retirement.unwrap().state,
         RetirementState::Waiting { blockers: vec![RetirementBlocker::OpenDescendantRuns] });
@@ -872,10 +932,10 @@ async fn changed_accepted_receipt_during_observation_cannot_persist_a_new_close_
     h.script.lock().runtime_hook = Some((1, Box::new(move || {
         change_run(&svc, &run_id, |run| {
             run.result.as_mut().unwrap().message_id = "new-result".into();
-            run.retirement.as_mut().unwrap().result_message_id = "new-result".into();
+            run.retirement.as_mut().unwrap().result_message_id = Some("new-result".into());
         });
     })));
-    assert_eq!(f.step(&h, &ObservationBackoff::default()).await.unwrap_err().code, "retirement_state_changed");
+    assert_eq!(f.step(&h).await.unwrap_err().code, "retirement_state_changed");
     assert_eq!(h.closes(), 0);
     assert_eq!(f.current().retirement.unwrap().state, waiting());
 }
@@ -901,7 +961,7 @@ async fn old_process_retention_reopens_only_with_fresh_unchanged_accepted_worker
         }
         let before = std::fs::read(f.service.base().join("state.json")).unwrap();
         let h = FakeHerdr::new(&f, vec![view]);
-        f.step(&h, &ObservationBackoff::default()).await.unwrap();
+        f.step(&h).await.unwrap();
         assert_eq!(h.closes(), 0);
         assert_eq!(std::fs::read(f.service.base().join("state.json")).unwrap(), before);
     }
@@ -913,13 +973,13 @@ async fn failed_post_close_snapshot_is_unknown_and_owner_restart_never_replays()
     f.change(pin_direct);
     let h = FakeHerdr::new(&f, vec![runtime(true), runtime(true)]);
     h.script.lock().allow_close = true;
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.closes(), 1);
     assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Unknown { .. }));
     h.script.lock().runtimes = vec![runtime(true), absent()].into_iter().map(Ok).collect();
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert!(matches!(f.current().retirement.unwrap().state, RetirementState::Unknown { .. }));
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert!(matches!(f.current().retirement.unwrap().state,
         RetirementState::Retired { terminal: TerminalOutcome::AbsentAfterUncertainClose, .. }));
     assert_eq!(h.closes(), 1);
@@ -934,8 +994,80 @@ async fn native_metadata_and_registered_chat_are_not_required_for_exact_idle_pan
     });
     let h = FakeHerdr::new(&f, vec![runtime(true), runtime(true), absent()]);
     h.script.lock().allow_close = true;
-    f.step(&h, &ObservationBackoff::default()).await.unwrap();
+    f.step(&h).await.unwrap();
     assert_eq!(h.closes(), 1);
     assert!(matches!(f.current().retirement.unwrap().state,
         RetirementState::Retired { terminal: TerminalOutcome::ClosedByCockpit, .. }));
+}
+
+#[tokio::test]
+async fn root_replacement_retires_exact_idle_old_pane_without_result_or_file_deletion() {
+    let mut fixture = Fixture::new(waiting());
+    fixture.replacement();
+    std::fs::write(fixture.root.join("dirty-old-output"), "preserved old work\n").unwrap();
+    let herdr = FakeHerdr::new(&fixture, vec![runtime(true), runtime(true), absent()]);
+    herdr.script.lock().allow_close = true;
+    fixture.step(&herdr).await.unwrap();
+    assert_eq!(herdr.closes(), 1);
+    let run = fixture.current();
+    assert!(run.result.is_none());
+    assert_eq!(run.close_reason, Some(CloseReason::Superseded));
+    assert!(matches!(run.retirement.unwrap().state, RetirementState::Retired { terminal: TerminalOutcome::ClosedByCockpit, .. }));
+    assert_eq!(std::fs::read_to_string(fixture.root.join("dirty-old-output")).unwrap(), "preserved old work\n");
+    fixture.step(&herdr).await.unwrap();
+    assert_eq!(herdr.closes(), 1);
+}
+
+#[tokio::test]
+async fn replacement_busy_and_wrong_authority_do_not_close_until_the_exact_idle_event() {
+    let mut fixture = Fixture::new(waiting());
+    fixture.replacement();
+    let mut busy = runtime(true);
+    busy.panes[0].agent_status = Some("working".into());
+    let herdr = FakeHerdr::new(&fixture, vec![busy, runtime(true), runtime(true), absent()]);
+    herdr.script.lock().allow_close = true;
+    fixture.step(&herdr).await.unwrap();
+    assert_eq!(herdr.closes(), 0);
+    assert!(matches!(fixture.current().retirement.unwrap().state, RetirementState::Waiting { .. }));
+    fixture.step(&herdr).await.unwrap();
+    assert_eq!(herdr.closes(), 1);
+    let mut invalid = Fixture::new(waiting());
+    invalid.replacement();
+    invalid.change(|run| run.retirement.as_mut().unwrap().replacement.as_mut().unwrap().previous_generation = 99);
+    let herdr = FakeHerdr::new(&invalid, vec![runtime(true)]);
+    herdr.script.lock().allow_close = true;
+    invalid.step(&herdr).await.unwrap();
+    assert_eq!(herdr.closes(), 0);
+    assert_eq!(herdr.runtime_calls(), 0);
+    assert!(matches!(invalid.current().retirement.unwrap().state, RetirementState::Retained { reason: RetainReason::IdentityChanged, .. }));
+}
+
+#[tokio::test]
+async fn replacement_resource_admissions_are_actionable_waits_without_queue_discard_or_pane_close() {
+    for admission in [ResourceRequestState::Held, ResourceRequestState::Queued] {
+        let mut fixture = Fixture::new(waiting());
+        fixture.replacement();
+        let attachment = fixture.current().attachment.unwrap();
+        {
+            let locked = fixture.service.store.lock().unwrap();
+            let mut state = locked.read().unwrap();
+            state.resource_requests.push(ResourceRequestRecord { request_id: id(), sequence: 1,
+                resource_key: "shared-build".into(), source_identity: ResourceSourceIdentity {
+                    checkout_key: "old-checkout".into(), source_commit: "a".repeat(40), source_tree: "b".repeat(40),
+                    input_configuration: "input".into(), toolchain_fingerprint: "toolchain".into(),
+                }, holder: AttachmentReference { run_id: fixture.run.run_id.clone(),
+                    attachment_id: attachment.attachment_id, attachment_epoch: attachment.epoch },
+                state: admission, build_processes: Vec::new(), machine_id: "machine".into(),
+                blocked_reason: None, updated_at: now() });
+            locked.save(&mut state).unwrap();
+        }
+        let herdr = FakeHerdr::new(&fixture, vec![runtime(true)]);
+        herdr.script.lock().allow_close = true;
+        fixture.step(&herdr).await.unwrap();
+        assert_eq!(herdr.closes(), 0);
+        assert!(matches!(fixture.current().retirement.unwrap().state,
+            RetirementState::Waiting { blockers } if blockers.contains(&RetirementBlocker::ResourceAdmissions)));
+        let state = fixture.service.store.lock().unwrap().read().unwrap();
+        assert_eq!(state.resource_requests[0].state, admission);
+    }
 }

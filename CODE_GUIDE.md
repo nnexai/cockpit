@@ -13,7 +13,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Recovery and sidebar state | `src/app/shell/useSessionRecovery.ts`; `src/app/shell/useSidebarState.ts`; `src/app/shell/useWorkbenchUI.ts` |
 | Workbench state/actions/input | `src/app/shell/useWorkbenchState.ts`; `src/app/shell/useWorkbenchActions.ts`; `src/app/shell/useWorkbenchInput.ts` |
 | Workarea and canvas | `src/app/shell/useWorkarea.ts`; `src/app/shell/WorkbenchCanvas.tsx`; `src/app/shell/model.ts` |
-| Viewer/widget/supervisor shell coordination | `src/app/shell/useViewerSources.ts`; `src/app/shell/useWidgetWindowState.ts`; `src/app/shell/useSupervisorNavigation.ts` |
+| Viewer/widget/liaison shell coordination | `src/app/shell/useViewerSources.ts`; `src/app/shell/useWidgetWindowState.ts`; `src/app/shell/useLiaisonNavigation.ts` |
 | Commands and tab strip | `src/app/shell/commands.ts`; `src/app/shell/CommandOverlay.tsx`; `src/app/shell/TabStrip.tsx` |
 | Shell menus | `src/app/shell/ContextMenu.tsx`; `src/app/shell/ResourceContextMenu.tsx` |
 | Shell dialogs/recovery | `src/app/shell/PaneDialogOverlay.tsx`; `src/app/shell/SessionDialogOverlay.tsx`; `src/app/shell/RecoveryPanel.tsx` |
@@ -83,33 +83,26 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 
 | Change | Current owner |
 | --- | --- |
-| Supervisor facade/drafts/layout | `src/app/supervisor/SupervisorView.tsx`; `src/app/supervisor/useSupervisorDrafts.ts`; `src/app/supervisor/useSupervisorLayout.ts` |
-| Supervisor live subscription | `src/app/supervisor/useSupervisor.ts` |
-| Supervisor detail/start/archive hooks | `src/app/supervisor/useDetailFocus.ts`; `src/app/supervisor/useStartAgentFlow.ts`; `src/app/supervisor/useArchiveCounts.ts` |
-| Supervisor model/state/types | `src/app/supervisor/supervisorViewModel.ts`; `src/app/supervisor/supervisorViewState.ts`; `src/app/supervisor/supervisorViewTypes.ts` |
-| Supervisor workarea/surface | `src/app/supervisor/supervisorViewWorkarea.tsx`; `src/app/supervisor/supervisorViewSurface.tsx` |
-| Supervisor attention/details | `src/app/supervisor/supervisorViewAttention.tsx`; `src/app/supervisor/supervisorViewDetails.tsx` |
-| Supervisor layout/source actions | `src/app/supervisor/supervisorViewLayoutEffects.ts`; `src/app/supervisor/supervisorViewSourceActions.ts` |
-| Task source form/preview | `src/app/supervisor/taskSourceForm.tsx`; `src/app/supervisor/taskSourcePreview.tsx` |
-| Tasks/Graph/Dependencies | `src/app/supervisor/SupervisorTasks.tsx`; `src/app/supervisor/SupervisorGraph.tsx`; `src/app/supervisor/SupervisorDependencies.tsx` |
-| Checklist facade/focus/mutations | `src/app/supervisor/SupervisorSteps.tsx`; `src/app/supervisor/useStepFocus.ts`; `src/app/supervisor/useStepMutation.ts` |
-| Checklist recovery/text/tree | `src/app/supervisor/useStepRecovery.ts`; `src/app/supervisor/useStepText.ts`; `src/app/supervisor/useStepTree.ts` |
-| Checklist rendering | `src/app/supervisor/stepRecoveryView.tsx`; `src/app/supervisor/stepRowTree.tsx`; `src/app/supervisor/stepTextEditor.tsx` |
-| Checklist interaction/types | `src/app/supervisor/stepViewTypes.ts`; `src/app/supervisor/stepInteractions.ts`; `src/app/supervisor/stepConfirmation.tsx` |
-| Checklist menus | `src/app/supervisor/stepMenu.tsx` |
-| Actions/dialogs/activity | `src/app/supervisor/SupervisorActions.tsx`; `src/app/supervisor/SupervisorDialogs.tsx`; `src/app/supervisor/SupervisorActivity.tsx` |
-| Attention/splitter | `src/app/supervisor/SupervisorAttention.tsx`; `src/app/supervisor/attention.ts`; `src/app/supervisor/PanelSplitter.tsx` |
-| Dependency and graph geometry | `src/app/supervisor/dependencies.ts`; `src/app/supervisor/dependencyLayout.ts`; `src/app/supervisor/graphLayout.ts` |
-| Topology/navigation/retirement | `src/app/supervisor/topology.ts`; `src/app/supervisor/boardNavigation.ts`; `src/app/supervisor/retirementView.ts` |
-| Local reveal versus terminal control | `src/app/supervisor/reveal.ts` |
+| Liaison project-root lookup/start/reuse/resume/focus | `src/app/supervisor/useLiaison.ts`; `src/app/shell/useLiaisonNavigation.ts` |
+| Scoped notification observer and start/resume actions | `src/app/supervisor/useSupervisor.ts` |
+| Optional fullscreen Overview and conversation return | `src/app/supervisor/SupervisorView.tsx`; `src/app/shell/useWorkarea.ts` |
+| Compact terminal task rail and read-only board | `src/app/supervisor/SupervisorTasks.tsx`; `src/app/layout/LeafHost.tsx`; `src/app/layout/TerminalLeaf.tsx` |
+| Task prerequisite graph and geometry | `src/app/supervisor/SupervisorGraph.tsx`; `src/app/supervisor/dependencies.ts`; `src/app/supervisor/dependencyLayout.ts` |
+| Rail/overview presentation | `src/app/supervisor/supervisor.css` |
 
 ### Core services and persistent owners
 
 | Change | Current owner |
 | --- | --- |
 | Configuration roots/limits | `crates/cockpit-core/src/config.rs`; `crates/cockpit-core/src/config/roots.rs`; `crates/cockpit-core/src/config/limits.rs` |
-| Project facade/defaults/plan | `crates/cockpit-core/src/projects/mod.rs`; `crates/cockpit-core/src/projects/defaults.rs`; `crates/cockpit-core/src/projects/plan.rs` |
+| Project facade/defaults/plan / unique automatic orchestration branches | `crates/cockpit-core/src/projects/mod.rs`; `crates/cockpit-core/src/projects/defaults.rs`; `crates/cockpit-core/src/projects/plan.rs` (`plan_orchestration`, shared private `plan_impl`; ordinary `plan` unchanged) |
 | Project execute/reconcile/teardown | `crates/cockpit-core/src/projects/execute.rs`; `crates/cockpit-core/src/projects/reconcile.rs`; `crates/cockpit-core/src/projects/teardown.rs` |
+| Accepted Git integration identity bridge | `crates/cockpit-core/src/project_teardown.rs` (`integrated_owned_head`); canonical source/target project keys bridge through recorded Git common-dir to exact owned raw repository/common-dir keys |
+| Response-bound owned Space absence / foreign Git census | `crates/cockpit-core/src/projects/teardown.rs` (`inspect_owned_resource`, `SpaceIncarnation`, `captured_space_incarnation`, `fresh_owned_space_absence`, `response_bound_snapshot`, `current_physical_snapshot`); adapter `project_snapshot_at_endpoint`; snapshot/location `peer_process`, immutable retirement `herdr_peer` reuse `NativeProcessIdentity` |
+| Adjacent immutable-retirement cleanup fence | `crates/cockpit-core/src/projects/teardown.rs` (`validate_cleanup_incarnation`); `orchestration/retirement.rs` (`server_fence`); empty AttemptDirectory inspection and adjacent rmdir require fresh exact original Retired identity, never newer attachment/scope backfill |
+| Orchestration filesystem-only preparation / exact moved-Space binding | `crates/cockpit-core/src/projects/prepare.rs` (`prepare_owned_checkout`, `prepare_directory`, `bind_moved_space`); existing `StoredOperation`/`OwnedCheckoutJournal`; explicit primary `LibraryService` dependency |
+| Proved-exit worker existing-checkout resume binding | `crates/cockpit-core/src/projects/resume.rs` (`bind_resumed_space`); new move/epoch operation in existing journal, immutable previous-owned/borrowed-None lineage, original FS/checkout metadata preserved |
+| Private Directory attempt preparation | `crates/cockpit-core/src/projects/attempts.rs` (`prepare_owned_attempt_directory`); existing operation/creation journal, exact four-field `OwnedAttemptDirectoryIdentity`; primary `LibraryService`, no Git/source copies |
 | Project store and repository discovery | `crates/cockpit-core/src/project_store.rs`; `crates/cockpit-core/src/repository_cache.rs`; `crates/cockpit-core/src/repositories.rs` |
 | Viewer/context/index | `crates/cockpit-core/src/viewer.rs`; `crates/cockpit-core/src/context.rs`; `crates/cockpit-core/src/file_index_cache.rs` |
 | Context media/search | `crates/cockpit-core/src/context_media.rs`; `crates/cockpit-core/src/context_search.rs` |
@@ -163,19 +156,32 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Service/caller identity | `crates/cockpit-core/src/orchestration.rs`; `crates/cockpit-core/src/orchestration/caller.rs`; `crates/cockpit-core/src/orchestration/agent.rs` |
 | Canonical tasks/store/assignment | `crates/cockpit-core/src/orchestration/tasks_md.rs`; `crates/cockpit-core/src/orchestration/store.rs`; `crates/cockpit-core/src/orchestration/assignments.rs` |
 | Prerequisites/checklist parsing | `crates/cockpit-core/src/orchestration/dependencies.rs`; `crates/cockpit-core/src/orchestration/steps.rs`; `crates/cockpit-core/src/orchestration/steps/parser.rs` |
+| Direct prerequisite accepted references / input binding | `crates/cockpit-core/src/orchestration/dependency_inputs.rs` (`accepted_dependency_run_ids`); CLI `cli_orchestration/mod.rs`/`output.rs` (`task inputs` compact projection) |
 | Checklist marker layout and operation planning | `crates/cockpit-core/src/orchestration/steps/layout.rs`; `crates/cockpit-core/src/orchestration/steps/planning.rs` |
 | Action dispatcher/mutation facade/tasks/runs | `crates/cockpit-core/src/orchestration/mutate/mod.rs`; `crates/cockpit-core/src/orchestration/mutate/tasks.rs`; `crates/cockpit-core/src/orchestration/mutate/runs.rs` |
-| Conversation registration/fenced unassign | `crates/cockpit-core/src/orchestration/mutate/ownership.rs` |
+| Atomic activation/unassign/replacement generation fencing | `crates/cockpit-core/src/orchestration/mutate/ownership.rs`; `crates/cockpit-core/src/orchestration/mutate/runs.rs` |
+| Durable schedules and locked attempt creation | `crates/cockpit-core/src/orchestration/mutate/runs.rs` (`create_attempt`, `schedule_candidates`, `scheduled_start`, `worker_replace`) |
 | Role credentials/same-worker scope | `crates/cockpit-core/src/orchestration/credentials.rs`; `crates/cockpit-core/src/orchestration/scope_intents.rs`; `crates/cockpit-core/src/orchestration/mutate/tasks.rs` |
 | Source acceptance/integration/send-back | `crates/cockpit-core/src/orchestration/mutate/intents.rs`; `crates/cockpit-core/src/orchestration/mutate/integration.rs`; `crates/cockpit-core/src/orchestration/mutate/grants.rs` (send-back) |
-| Dispatcher/Herdr/escalation | `crates/cockpit-core/src/orchestration/dispatch.rs`; `crates/cockpit-core/src/orchestration/herdr.rs`; `crates/cockpit-core/src/orchestration/escalation.rs` |
+| Scheduler/placement/input-aware dispatch/Herdr/escalation | `crates/cockpit-core/src/orchestration/dispatch.rs` (`resolve_schedule_target`, `render_run_bootstrap`); `crates/cockpit-core/src/orchestration/herdr.rs`; `crates/cockpit-core/src/orchestration/escalation.rs`; exact close capability guard in `crates/cockpit-herdr/src/cli/orchestration.rs` |
 | Messages/inbox/reports | `crates/cockpit-core/src/orchestration/messages.rs`; `crates/cockpit-core/src/orchestration/messages/inbox.rs`; `crates/cockpit-core/src/orchestration/messages/report.rs` |
 | Ownership projection/routing | `crates/cockpit-core/src/orchestration/projection.rs`; `crates/cockpit-core/src/orchestration/routing.rs` |
-| Cleanup/resources/terminal effects | `crates/cockpit-core/src/orchestration/cleanup.rs`; `crates/cockpit-core/src/orchestration/fixture_resources.rs`; `crates/cockpit-core/src/orchestration/resource_queue.rs`; `crates/cockpit-core/src/orchestration/retire.rs` |
-| Runtime owner and Herdr launch | `crates/cockpit-host/src/orchestration_runtime.rs`; `crates/cockpit-herdr/src/cli/orchestration.rs` |
+| Event-driven cleanup/capture/ref watches/blockers | `crates/cockpit-core/src/orchestration/cleanup.rs` (`capture_owned_resources(projects, herdr)`, `cleanup_queue`, `cleanup_ref_watch_paths`, `cleanup_owned_resources`); shared service `watch_cleanup_refs` |
+| Accepted integration reconciliation | `crates/cockpit-core/src/orchestration/mutate/integration.rs` (`reconcile_accepted_integrations`); actual passed-check `IntegrationRecord` path retained |
+| Retirement/resource safety | `crates/cockpit-core/src/orchestration/retire.rs` (`retirement_queue`, `retire_run`); `retirement.rs`; `fixture_resources.rs`; unchanged `resource_queue.rs` |
+| Runtime owner/Herdr event waiting and literal launch | `crates/cockpit-host/src/orchestration_runtime.rs`; `crates/cockpit-herdr/src/cli/orchestration.rs` |
+| Harness-neutral owned process scope/helper | `crates/cockpit-core/src/process_scope.rs` (`scope_launch`, `capture`, `observe`, `stop_exact`); `crates/cockpit-host/src/bin/cockpit/contain.rs`; registration in `bin/cockpit.rs` |
+| Per-incarnation placement-gated agent execution | `crates/cockpit-host/src/bin/cockpit/agent_exec.rs`; core `process_scope/latch.rs` (`agent_launch`, pure `latch_ready`, `latch_startup` / `ScopeStartup`, `release_latch`, reexported by `process_scope`); protocol `AgentLaunchReceipt` (`latch`, `nonce`, `latch_device`, `latch_inode`) |
+| Scope receipt/seal/release proof | protocol `orchestration.rs` (`OwnedProcessScope`, `ScopeKind`, `attachment.process_scope`), `projects.rs` (`ScopeMode`); core `orchestration/store.rs`, `claims.rs`, `project_identity.rs`; dispatch `scope_unit`/TabReceipt capture |
+| Proved-exit worker epoch/consumer cutover | `crates/cockpit-core/src/orchestration/claims.rs` (`revoke_and_reserve_replacement`); one validated CAS discharges only the exact exited incarnation's active consumer reference, preserves foreign consumers/resource identity/history; RootMainRecovery grants no consumer discharge |
+| Directory attempt identity / typed replacement | protocol `orchestration.rs` (`OwnedAttemptDirectoryIdentity`: `creation_operation_id`, `root`, `device`, `inode`; `OwnedAttemptDirectory`, `IsolatedDirectory`); core `ReplacementSource` (`GitHead`, `Directory`), immutable existing project operation/creation journal |
+| Accepted-worker sealed scope cleanup / completion fences | `crates/cockpit-core/src/orchestration/cleanup/scopes.rs` (`cleanup_worker_scopes`, `stop_output_proven`, `stop_output_preflight`, `canonical_stop_eligible`, private `seal_scope_release`/`release_scope_claim`); `project_identity.rs` (`checkout_consumers_clear`) |
+| Service-issued owned-Git consumer proof | `crates/cockpit-core/src/orchestration/cleanup.rs` (`OwnedConsumerProof`, private `owned_consumer_proof` / `validate_consumer_release`); `crates/cockpit-core/src/projects/teardown.rs` and `crates/cockpit-core/src/project_teardown.rs` validate fresh proof at inspection/adjacent apply |
+| Replacement retirement authority | protocol `RetirementTrigger::Replacement`, `ReplacementRetirementAuthority`, optional Result/task-revision pins; core `orchestration/retirement.rs`, `retire.rs`, `cleanup/scopes.rs` |
+| Optional embedded per-launch OMP hook | `integrations/omp-hook/cockpit-hook.ts`; `crates/cockpit-core/src/orchestration/omp_hook.rs` (`materialize`) |
 | Orchestration contract tests | `crates/cockpit-core/src/orchestration/service_tests.rs` (shared fixture); `crates/cockpit-core/src/orchestration/service_tests/` (domain suites); core `orchestration/{dispatch,messages,credentials,cleanup}/tests.rs`; `crates/cockpit-host/src/orchestration_runtime/tests.rs` |
 | Agent CLI facade/args/caller | `crates/cockpit-host/src/cli_orchestration/mod.rs`; `crates/cockpit-host/src/cli_orchestration/args.rs`; `crates/cockpit-host/src/cli_orchestration/caller.rs` |
-| Agent CLI context/wait/output | `crates/cockpit-host/src/cli_orchestration/context.rs`; `crates/cockpit-host/src/cli_orchestration/wait.rs`; `crates/cockpit-host/src/cli_orchestration/output.rs` |
+| Agent CLI activation/replacement/internal inbox capture | `crates/cockpit-host/src/cli_orchestration/context.rs` (`replacement_action`); `wait.rs` (`inbox_next`); `output.rs` (`capture`) |
 | CLI binary/Notes/skills | `crates/cockpit-host/src/bin/cockpit.rs`; `crates/cockpit-host/src/bin/cockpit/notes.rs`; `crates/cockpit-host/src/bin/cockpit/skills.rs` |
 | CLI endpoint resolution/portable guides | `crates/cockpit-host/src/bin/cockpit/endpoint.rs`; `integrations/agent-skills/` |
 | Receipt-owned native installer | `scripts/install-native.py` |
@@ -264,15 +270,25 @@ Four stream methods remain transport-local: `subscribeSession`, `openTerminal`, 
 
 ### Supervisor tasks, execution and messages
 
-Agent CLI → issued capability plus resumable `{harness, session_id}` conversation and pinned assignment generation → `Actor::Agent` → current core caller/ownership authorization → canonical Markdown/store mutation → derived snapshot/inbox → shared host operation → frontend decoder → Supervisor hooks. Browser/native operator requests retain their own operator origin. Process labels, pane presence and focus do not grant semantic authority; physical effects separately require fresh endpoint/location/process evidence.
+Agent CLI → private active attempt credential plus run/root/attachment epoch and pinned task generation → `Actor::Agent` → current caller/ownership authorization → canonical Markdown/store mutation → notifications/snapshot/inbox → shared host operation → frontend decoder. Supplied actual conversation metadata is recorded/revalidated, but ordinary coordination does not require an identity-hunt turn. Process labels, pane presence and focus grant no semantic authority; physical effects require their separate fresh proofs.
 
-`cockpit-cli run context` registers an unbound capability and returns run/root/role/conversation/generation/inbox counts; explicit `run register --operation-id UUID` uses the same current ownership checks. Root-authorized WorkerStart fences task/document revisions and permits one pending worker claim. Eligible worker registration atomically claims the vacant generation; launch acknowledgement is not ownership. Every worker mutation and replay validates the current owner and credential's pinned generation under the commit lock. Only the active owning supervisor may `task unassign TASK --operation-id UUID --expected-assignment-generation N`; operator UI durably requests that fenced action instead of assigning/unassigning directly. It revokes semantic authority but preserves reports/history and physical claims.
+`run context` claims pending generations. Schedules survive root credential/attachment rotation via immutable receipt/exact root/current binding checks. Atomic replacement preserves old work/claims and uses typed GitHead isolated worktree or Directory private no-copy attempt with original project/context. Same-checkout reuse requires precise reboot or exact drained scope plus registered consumer proof/fresh Herdr inventory. Directory outputs remain retained: acceptance/NotApplicable never permits recursive deletion, and only an accepted retired drained EMPTY private attempt directory can be removed after durable output publication/move.
 
-Initialized is diagnostic only. A Working scope change uses dual CAS and one durable instruction to the same current worker; self-refinement does not send mail. A succeeded Result ties SourceOutput to its exact result ID and current canonical task revision. Acceptance, target Integration and per-resource Cleanup remain independent. [DECISIONS](DECISIONS.md) owns role/conversation authority, dependencies, operation/effect journals, reattachment and held-unknown cleanup limits. [supervisor-surfaces](docs/supervisor-surfaces.md) maps operator surfaces.
+Input-aware scheduling freezes the base SHA and requires same-repository accepted Code output containment, either original head/commits or exact validated Integrated target/mapping with passed target checks. Missing input stays queued with deduplicated `dependency_input_not_materialized`; Git-ref wakes persist after old resource removal. Publication rechecks accepted Result/task/source/integration/candidate identities. Cross-repository/conceptual/manual/no-source edges differ. NonCode references stay read-only/retained without inferred publication, copies or deletion; no second task store/checkpoint table or per-stage approval is added.
 
-`crates/cockpit-host/src/cli_orchestration/wait.rs` bounds idle runtime reobservation at three seconds; core durable waits use notifications/one-second cross-process polls. Mounted `src/app/supervisor/useSupervisor.ts` uses a five-second wait then refreshes runtime; mutations refresh immediately. These are bounds, not latency or CPU claims. Baseline delivery is `inbox wait --after N --timeout 300`, `inbox list --after N --json`, durable capture, then explicit `inbox ack --through N`. ACK confirms capture of an already Read prefix, never an Answer or ownership change; Answers name the current NeedsInput question ID. Default-off counts-only prompt hints use supported identity-checked `agent.prompt` text-plus-Enter submission, defer busy/unready targets and retain uncertain effects without raw-key fallback or blind replay. Opt-in does not promise unknown-draft safety.
+For ExistingSpace/Open, preserve the candidate target/HEAD: fresh post-setup clean HEAD/input proof reserves `base_commit`, then immediate pre-latch-release reinspection and Domain release CAS fence that SHA/current accepted inputs.
 
-Start reuses/reattaches the existing root before a new launch; Another is explicit. Literal harness command/argv and optional whole-argument `{session_id}` resume configuration live in [configuration](docs/configuration.md#supervisor-launch-and-conversation-identity); there is no mandatory extension or native-child control path. Launch inherits generic Cockpit capability/context environment, setting harness kind but never manufacturing a conversation ID. Unknown same-boot consumers and old checkout claims remain protected after unassignment; this navigation is not authorization to manipulate a persistent session or its drafts/processes. Incompatible orchestration schemas are rejected without migration or discarding bytes.
+`task inputs TASK --json` or worker `task inputs --self --json` reads direct prerequisites/current scope and valid accepted Result/source references from existing stores. Invalid/missing prerequisites retain diagnostics rather than guessed accepted data; artifact references are untrusted, with no path/hash inference or automatic publication.
+
+Checklist stages and canonical prerequisites define work boundaries, not per-step model approvals. Working scope changes use dual CAS and one same-worker instruction. A succeeded Result ties SourceOutput to the exact Result ID and current canonical revision; source acceptance, target Integration and Cleanup remain independent. Cleanup reevaluates relevant state/pane/ref events, preserves unsafe resources and sends deduplicated blockers to the liaison. Adapted integration still uses actual target passed-check evidence.
+
+Harness-neutral DirectProcess launch → optional `process_scope` wrapper → exact membership/InvocationID/cgroup receipt. `scope_launch` receives `kind: &RunKind` for worker/root naming; descriptions grant no identity. Cleanup seals/journals before narrowly eligible exact accepted-worker scope stop. Fresh drain, registered descendant/resource proof and Herdr checkout-consumer inventory support release, then clean integrated no-force Git cleanup. Old/uncontained runs retain reboot-based proof; no retrofit/arbitrary scope stop. D-Bus services, Docker and self-migration can escape and need separate registered consumer proof; this is not a sandbox.
+
+Idle waits register notifications before reads and coalesce/resync without a full-snapshot tick. Extension-free/hook-disabled `inbox next --wait 600 --deliverable --json` waits/pulls/fsyncs/captures without an ACK model turn. An effective materialized hook marks `COCKPIT_INBOX_HOOK=1` and owns that consumer; do not add manual long waits/capture. Its public busy `sendUserMessage` uses safe-boundary `deliverAs: "steer"` without aborting tools, killing writers or submitting drafts. Queue/capture proves neither a question Answer nor model processing/first-response latency.
+
+The optional OMP hook spawns registration/wait CLI children in a new POSIX session/process group (`detached: true`) with ignored stdin and captured output, while retaining inherited owned-cgroup membership. Exact AbortSignal cancellation and no `unref` keep lifecycle ownership; detached waiters do not become terminal foreground consumers or grant writer-exit proof. A live foreground/cgroup smoke, not the option alone, establishes the affected runtime behavior.
+
+Start reuses/reattaches the project root. Literal harness configuration, whole-argument `{prompt}`, `{hook_path}` and optional `{session_id}` resume rules live in [configuration](docs/configuration.md#supervisor-launch-and-attempt-authority). Launch acknowledgement, observed physical readiness, credential activation and first model response are distinct. The real liaison terminal owns conversation; its compact rail and optional fullscreen board/prerequisite graph are observational. Unknown effects and old consumers remain protected; this navigation grants no persistent-session repair authority. Additive schema-4 metadata needs no converter; incompatible schemas preserve their bytes on rejection.
 
 ### Library follow refresh, sources and token storage
 
@@ -355,11 +371,11 @@ These are verification recipes, not exercised results. Select affected checks an
 | Herdr schema/receipts | Supported-schema adapter fixtures and real split/move receipts |
 | Herdr command/popup | Live advertised invocation, program input/closure, unchanged split geometry, disconnected recovery and DOM focus return |
 | Project setup/recovery | Ownership, idempotency and uncertain outcomes |
-| Canonical tasks | Exact-byte description/metadata/checklist CAS, graph satisfaction, safe overflow, current-conversation/generation authority, stale and same-conversation ABA rejection, dual-CAS same-worker scope instruction and source acceptance fences |
-| Dispatch/owner restart | Disposable real worker source workflow, literal harness launch/resume, issued role capability, atomic registration/claim, fenced supervisor-only unassign, replay admission, reattach-first Start, explicit Another and no duplicate writer |
-| Supervisor transports/CLI | Operator requests versus root assignment authority, non-OMP explicit conversation identity, worker pinned generation, physical versus semantic proof and cross-host durable revisions |
-| Supervisor UI | Graph/provenance/accepted context, mixed/subtree checks, external-source/overflow diagnostics, scoped drafts/unknown outcomes, delayed saved-row focus without navigation theft, local reveal versus identity-fenced terminal control; see `docs/supervisor-surfaces.md` |
-| Harness/install/inbox | Baseline wait/pull/durable capture/explicit ACK, optional default-off counts-only prompt submission, busy/unknown deferral without replay, receipt-owned installer protections, ordinary offline tools and independent unchanged OMP quota |
+| Canonical tasks | Exact-byte Markdown CAS, dependencies/checklist stages, safe overflow, current credential/generation authority, stale/ABA rejection and current-scope source acceptance |
+| Scheduling/replacement/owner recovery | Disposable dependency release and bounded parallelism, atomic credential claim, generation-fenced replacement while an old writer works, isolated committed-base placement, old dirty work/claims retained and liaison reattachment |
+| Supervisor transports/CLI | Root-only schedule/replace authority, optional actual conversation metadata, extension-free credential commands and internal inbox capture, physical versus semantic proof and durable revisions |
+| Supervisor UI | Real liaison terminal with hidden-empty compact rail; optional fullscreen board/prerequisite graph, Conversation/Escape return, root waiting hint and no dead operational forms; see `docs/supervisor-surfaces.md` |
+| Harness/install/inbox | Literal initial prompt and optional per-launch hook, wait/pull/internal capture, unknown delivery without replay, separate launch/model timestamps, installer protections, ordinary offline tools and unchanged OMP quota |
 | Notes | Real Markdown/CAS, sibling bytes, concurrent/external edits, orphans, boot-scoped attach and disposable browser/native drag/comment/draft recovery |
 | Notes transports/CLI | Standalone CLI without Herdr, Origin rejection, equivalent DTOs, custom-root copied recipes and real native IPC |
 | CLI/skills | Nested help/interpretation, standalone CLI with disposable HOME/project, collision/refusal/concurrent installer behavior |

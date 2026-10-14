@@ -81,7 +81,7 @@ pub(crate) struct AssignmentIntent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum DurableOperationKind { SupervisorStart, RunResume, RunAttach, RunRegister, TaskUnassign, WorkerStart, TaskScopeUpdate, IntegrationRecord, Report, MessageSend, ResourceRequest, ResourceRegister, CleanupFinish }
+pub(crate) enum DurableOperationKind { SupervisorStart, RunResume, RunAttach, RunRegister, TaskUnassign, WorkerStart, TaskScopeUpdate, IntegrationRecord, Report, MessageSend, ResourceRequest, ResourceRegister, CleanupFinish, TaskSchedule, TaskScheduleCancel, WorkerReplace, ScopeRelease }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DurableOperationRecord {
@@ -104,7 +104,12 @@ pub(crate) enum DurableEffectReceipt {
     Launch { attachment_id: String, attachment_epoch: u64, dispatch: cockpit_protocol::orchestration::DispatchState },
     Setup { setup: cockpit_protocol::orchestration::SetupSummary },
     Stop { retirement: cockpit_protocol::orchestration::RunRetirement },
+    ScopeRelease { unit: String, invocation_id: String, claim_id: String, outcome: ScopeReleaseOutcome },
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ScopeReleaseOutcome { Intent, Stopped, Drained, Released, Unknown }
 
 impl Default for OrchestrationState {
     fn default() -> Self {
@@ -295,6 +300,35 @@ impl LockedStore<'_> {
     pub(crate) fn state_dir(&self) -> &Dir { self.store.store.state_dir() }
     pub(crate) fn exact_bytes(&self) -> Result<Vec<u8>, InspectionError> {
         crate::project_store::read_bytes_bounded(self.state_dir(), "state.json", MAX_STATE_BYTES as u64)
+    }
+    /// A wait cursor never deserializes messages, reports or task payloads.
+    pub(crate) fn wait_revision(&self) -> Result<u64, InspectionError> {
+        let header = match self.state_dir().symlink_metadata("state.json") {
+            Ok(_) => serde_json::from_slice::<StateHeader>(&self.exact_bytes()?)
+                .map_err(|error| InspectionError::new("state_corrupt", error.to_string()))?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => StateHeader { schema: SCHEMA, revision: 0 },
+            Err(error) => return Err(io_error("orchestration_state_read", error)),
+        };
+        if header.schema != SCHEMA {
+            return Err(InspectionError::new("orchestration_state_incompatible", "Orchestration state uses an incompatible schema"));
+        }
+        super::safe_counter(header.revision)?;
+        Ok(header.revision)
+    }
+    pub(crate) fn inbox_cursor(&self) -> Result<(u64, Vec<super::messages::InboxMessage>), InspectionError> {
+        #[derive(Deserialize)]
+        struct InboxState {
+            schema: u32,
+            revision: u64,
+            messages: Vec<super::messages::InboxMessage>,
+        }
+        let state: InboxState = serde_json::from_slice(&self.exact_bytes()?)
+            .map_err(|error| InspectionError::new("state_corrupt", error.to_string()))?;
+        if state.schema != SCHEMA {
+            return Err(InspectionError::new("orchestration_state_incompatible", "Orchestration state uses an incompatible schema"));
+        }
+        super::safe_counter(state.revision)?;
+        Ok((state.revision, state.messages))
     }
     pub(crate) fn read(&self) -> Result<OrchestrationState, InspectionError> {
         let mut source_schema = SCHEMA;

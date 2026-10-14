@@ -13,7 +13,7 @@ impl Fixture {
         let path = std::env::temp_dir().join(format!("cockpit-retirement-{}", id()));
         let store = OrchestrationStore::open(&path).unwrap();
         let (revision, _) = watch::channel(0);
-        let service = OrchestrationService { store, revision, launch_config: Default::default() };
+        let service = OrchestrationService { store, revision, notifications: std::sync::Mutex::new(None), launch_config: Default::default() };
         let locked = service.store.lock().unwrap();
         let mut state = locked.read().unwrap();
         let mut root = new_run(ROOT, SESSION, RunKind::Supervisor, "root".into(), ROOT, None, None, 1);
@@ -45,10 +45,10 @@ impl Fixture {
         claims::reserve_claim(&mut state, &checkout, &holder, &id()).unwrap();
         state.credentials.push(credential);
         state.task_ownership.push(TaskOwnership {
-            root_id: ROOT.into(), task_id: task.task_id.clone(), generation: 1,
+            root_id: ROOT.into(), task_id: task.task_id.clone(), generation: 1, schedule: None,
             owner: Some(TaskOwner {
                 run_id: state.runs[1].run_id.clone(),
-                conversation: conversation(), claim_operation_id: id(),
+                conversation: Some(conversation()), claim_operation_id: id(),
             }),
         });
         locked.save(&mut state).unwrap();
@@ -98,12 +98,16 @@ fn worker() -> Run {
         state: AttachmentState::Connected, location: None, conversation: Some(conversation()),
         launch_mode: Some(AttachmentLaunchMode::ShellAgent),
         process: None, shell: None, machine_id: Some("test-machine".into()), launch_attempt: 3,
+        process_scope: None,
         updated_at: AT.into(),
     });
     run.dispatch = Some(DispatchState { launch_tag: Some("owned-launch".into()), endpoint_identity: Some("endpoint".into()),
+        scope_unit: None, pre_move_scope: None, latch: None, latch_state: None, source_location: None,
+        move_operation_id: None, staging_workspace_id: None,
         recovery: None, agent_started: true, step: DispatchStep::Launched, launch_attempt: 3, error: None, updated_at: AT.into() });
     run.attachment.as_mut().unwrap().location = Some(RunLocation { boot_id: Some("herdr-boot".into()), terminal_id: Some("terminal".into()),
         native_session_id: Some("native".into()), endpoint_identity: "endpoint".into(), session_id: SESSION.into(),
+        peer_process: None,
         workspace_id: "space".into(), tab_id: "tab".into(), pane_id: "pane".into(), launch_tag: "owned-launch".into() });
     run.attachment.as_mut().unwrap().process = Some(NativeProcessIdentity { pid: 123, start_ticks: 456, kernel_boot_id: Some("kernel".into()) });
     run.attachment.as_mut().unwrap().shell = Some(shell_identity());
@@ -121,17 +125,18 @@ fn conversation() -> ConversationIdentity {
     ConversationIdentity { harness: "omp".into(), session_id: "retirement-chat".into() }
 }
 fn caller(auth: JobAuth) -> AgentCaller {
-    AgentCaller { auth, conversation: conversation(), assignment_generation: Some(1),
+    AgentCaller { auth, conversation: Some(conversation()), assignment_generation: Some(1),
         endpoint_identity: "endpoint".into(), session_id: SESSION.into(), workspace_id: "space".into(),
         tab_id: "tab".into(), pane_id: "pane".into(), boot_id: Some("herdr-boot".into()), terminal_id: Some("terminal".into()),
         native_session_id: Some("native".into()), actual_agent_kind: Some(NativeAgentKind::Omp),
         process: worker().attachment.unwrap().process }
 }
 fn runtime() -> RuntimeView {
-    RuntimeView { endpoint_identity: "endpoint".into(), boot_id: Some("herdr-boot".into()), workspaces: vec![], panes: vec![RuntimePane {
+    RuntimeView { endpoint_identity: "endpoint".into(), boot_id: Some("herdr-boot".into()), peer_process: None, focused_workspace_id: None, workspaces: vec![], panes: vec![RuntimePane {
         workspace_id: "space".into(), workspace_label: "Space".into(), tab_id: "tab".into(), tab_label: "owned-launch".into(),
         pane_id: "pane".into(), terminal_id: Some("terminal".into()), native_session_id: None, agent_name: None,
         native_session_file: None,
+        cwd: None,
         agent_kind: None, launch_pending: false, agent_status: None, state_changed_at: None,
     }] }
 }
@@ -170,13 +175,29 @@ fn acceptance_commits_exact_receipt_revision_and_launch_identity() {
     assert_eq!(run.stage, RunStage::Closed);
     assert_eq!(run.close_reason, Some(CloseReason::Accepted));
     let r = run.retirement.unwrap();
-    assert_eq!(r.result_message_id, "reviewed-result");
-    assert_eq!(r.task_revision, fixture.task.task_revision);
+    assert_eq!(r.result_message_id.as_deref(), Some("reviewed-result"));
+    assert_eq!(r.task_revision.as_deref(), Some(fixture.task.task_revision.as_str()));
     assert_eq!(r.trigger, RetirementTrigger::Accept);
     assert_eq!(r.identity.unwrap(), identity());
     assert_eq!(fixture.service.retirement_queue().unwrap().len(), 1);
     assert!(run.annotations.iter().any(|a| matches!(a.by, ActorRef::Dispatcher)));
     assert!(fixture.service.store.lock().unwrap().tasks(ROOT).unwrap().task(&fixture.task.task_id).unwrap().checked);
+}
+
+#[test]
+fn acceptance_stops_durable_schedule_without_discarding_attempt_or_owner() {
+    let fixture = Fixture::new();
+    fixture.edit(|state| state.task_ownership[0].schedule = Some(TaskSchedule {
+        operation_id: id(), principal_key: "root".into(), target: None,
+        brief: "scheduled contract".into(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
+        label: None, scheduled_at: now(),
+    }));
+    fixture.accept();
+    let state = fixture.state();
+    assert!(state.task_ownership[0].schedule.is_none());
+    assert_eq!(state.task_ownership[0].generation, 1);
+    assert_eq!(state.task_ownership[0].owner.as_ref().unwrap().run_id, fixture.run().run_id);
+    assert!(state.runs.iter().any(|run| run.run_id == fixture.run().run_id && run.result.is_some()));
 }
 
 #[test]
@@ -240,8 +261,8 @@ fn recovery_is_idempotent_and_preserves_exact_result_and_revision() {
         fixture.service.recover_intents().unwrap();
         let r = fixture.run().retirement.unwrap();
         assert_eq!(r.trigger, RetirementTrigger::AcceptRecovery);
-        assert_eq!(r.result_message_id, "reviewed-result");
-        assert_eq!(r.task_revision, fixture.task.task_revision);
+        assert_eq!(r.result_message_id.as_deref(), Some("reviewed-result"));
+        assert_eq!(r.task_revision.as_deref(), Some(fixture.task.task_revision.as_str()));
         let revision = fixture.state().revision;
         fixture.service.recover_intents().unwrap();
         assert_eq!(fixture.state().revision, revision);
@@ -286,7 +307,7 @@ fn operator_resolution_uses_current_revision_but_not_a_different_result() {
         OrchestrationAction::IntentResolve { intent_id: fresh_intent.intent_id, apply: true }).unwrap();
     let r = fixture.run().retirement.unwrap();
     assert_eq!(r.trigger, RetirementTrigger::OperatorConflictResolution);
-    assert_eq!(r.task_revision, current.task_revision);
+    assert_eq!(r.task_revision.as_deref(), Some(current.task_revision.as_str()));
     for missing_result in [false, true] {
         let fixture = Fixture::new(); let intent = fixture.intent();
         if missing_result {
@@ -394,8 +415,10 @@ fn unknown_attention_is_visible_for_closed_runs_and_retention_is_not_recovery() 
                 diagnostics: Vec::new(),
                 tasks: document.tasks.iter().cloned().map(|task| TaskView {
                     task,
-                    lane: TaskLane::Queued,
+                    lane: TaskLane::Ready,
                     current_run_id: None,
+                    scheduled: false,
+                    attempt: None,
                     dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: Vec::new(), problems: Vec::new() },
                 }).collect(),
             }
@@ -497,7 +520,7 @@ fn terminal_preflight_fails_closed_on_every_identity_and_shell_mismatch() {
             9 => { info.processes.clear(); RetainReason::ForegroundProcess },
             10 => { info.processes.push((22, "background".into())); RetainReason::ForegroundProcess },
             11 => { info.shell_identity.as_mut().unwrap().process.start_ticks += 1; RetainReason::ForegroundProcess },
-            _ => { runtime.boot_id = None; RetainReason::IdentityChanged },
+            _ => { runtime.boot_id = None; RetainReason::IdentityIncomplete },
         };
         assert_eq!(classify_terminal(&identity, &runtime, &info), Err(TerminalDecision::Retain(reason)));
     }
@@ -506,7 +529,6 @@ fn terminal_preflight_fails_closed_on_every_identity_and_shell_mismatch() {
     assert_eq!(classify_terminal(&identity, &moved, &original), Err(TerminalDecision::Retain(RetainReason::PaneMoved)));
     moved.panes.clear();
     assert_eq!(classify_terminal(&identity, &moved, &original), Err(TerminalDecision::Absent));
-    assert!(OBSERVATION_RETRY_SECS >= 30);
 }
 
 #[test]
@@ -688,7 +710,7 @@ fn reobservation_and_unsubmitted_intent_require_exact_saved_record_and_identity(
                 0 => {},
                 1 => fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().retirement_id = id()),
                 2 => fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().state = RetirementState::CloseIntent { at: now() }),
-                3 => fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().task_revision = "different".into()),
+                3 => fixture.edit(|s| s.runs[1].retirement.as_mut().unwrap().task_revision = Some("different".into())),
                 _ => fixture.edit(|s| s.runs[1].attachment.as_mut().unwrap().epoch += 1),
             }
             let before = fixture.state();
@@ -720,4 +742,91 @@ fn reobservation_and_unsubmitted_intent_require_exact_saved_record_and_identity(
         assert!(fixture.service.retirement_queue().unwrap().is_empty());
         assert!(fixture.service.retirement_waiting(&run.run_id, run.retirement.as_ref().unwrap(), vec![]).is_err());
     }
+}
+
+#[test]
+fn replacement_retirement_uses_durable_root_authority_without_inventing_result_pins() {
+    let mut previous = worker();
+    previous.stage = RunStage::Closed;
+    previous.close_reason = Some(CloseReason::Superseded);
+    previous.task_id = Some(id());
+    previous.result = None;
+    previous.source_output = None;
+    previous.attachment.as_mut().unwrap().launch_mode = Some(AttachmentLaunchMode::DirectProcess);
+    let successor_id = id();
+    let operation_id = id();
+    let authority = ReplacementRetirementAuthority { operation_id: operation_id.clone(),
+        previous_run_id: previous.run_id.clone(), previous_generation: 1, replacement_run_id: successor_id.clone() };
+    let record = retirement_for_replacement(&previous, authority, AT).unwrap();
+    assert_eq!(record.trigger, RetirementTrigger::Replacement);
+    assert!(record.result_message_id.is_none() && record.task_revision.is_none());
+    assert!(matches!(record.state, RetirementState::Waiting { .. }));
+    previous.retirement = Some(record.clone());
+    let mut successor = new_run(&successor_id, SESSION, RunKind::Worker, "successor".into(),
+        ROOT, Some(ROOT.into()), previous.task_id.clone(), 8);
+    successor.assignment_generation = Some(2);
+    let mut state = OrchestrationState { runs: vec![previous.clone(), successor],
+        task_ownership: vec![TaskOwnership { root_id: ROOT.into(), task_id: previous.task_id.clone().unwrap(),
+            generation: 2, owner: None, schedule: None }], ..Default::default() };
+    state.operations.push(super::store::DurableOperationRecord { operation_id: operation_id.clone(),
+        actor_run_id: Some(ROOT.into()), principal_key: "root".into(), root_id: ROOT.into(),
+        kind: super::store::DurableOperationKind::WorkerReplace, request_digest: "trusted committed replacement".into(),
+        run_id: Some(successor_id.clone()), resume_operation_id: None,
+        result: Some(OrchestrationActionResult::WorkerReplaced { start: WorkerStartResult {
+            operation_id, run_id: successor_id, attempt: 8, duplicate: false },
+            previous_run_id: previous.run_id.clone(), assignment_generation: 2,
+            placement: ReplacementPlacement::IsolatedWorktree { base_commit: "a".repeat(40) } }),
+        effect_receipts: Vec::new(), created_at: AT.into(), updated_at: AT.into() });
+    assert!(authority_matches(&state, &previous, &record));
+    for corrupt in 0..5 {
+        let mut changed = record.clone();
+        match corrupt {
+            0 => changed.replacement.as_mut().unwrap().operation_id = id(),
+            1 => changed.replacement.as_mut().unwrap().previous_generation = 2,
+            2 => changed.replacement.as_mut().unwrap().replacement_run_id = id(),
+            3 => changed.result_message_id = Some("not a replacement Result".into()),
+            _ => changed.task_revision = Some("not a replacement task revision".into()),
+        }
+        assert!(!authority_matches(&state, &previous, &changed), "invalid authority {corrupt}");
+    }
+    state.task_ownership[0].generation = 1;
+    assert!(!authority_matches(&state, &previous, &record));
+}
+
+#[test]
+fn same_fd_peer_fence_handles_real_bootless_shape_without_none_or_conflicting_proof() {
+    let mut identity = identity();
+    identity.herdr_boot_id = None;
+    let peer = NativeProcessIdentity { pid: 700, start_ticks: 800,
+        kernel_boot_id: Some("12345678-1234-4234-8234-123456789abc".into()) };
+    identity.herdr_peer = Some(peer.clone());
+    let mut view = runtime();
+    view.boot_id = None;
+    view.peer_process = Some(peer);
+    assert!(server_fence(&identity, &view).is_ok());
+    view.peer_process.as_mut().unwrap().start_ticks += 1;
+    assert_eq!(server_fence(&identity, &view), Err(RetainReason::IdentityChanged));
+    view.peer_process = identity.herdr_peer.clone();
+    identity.herdr_boot_id = Some("legacy-one".into());
+    view.boot_id = Some("legacy-two".into());
+    assert_eq!(server_fence(&identity, &view), Err(RetainReason::IdentityChanged));
+    identity.herdr_boot_id = None;
+    view.boot_id = None;
+    identity.herdr_peer = None;
+    view.peer_process = None;
+    assert_eq!(server_fence(&identity, &view), Err(RetainReason::IdentityIncomplete));
+    let no_proof = classify_close(&identity, Some(Ok(())), Some(&view));
+    assert!(matches!(no_proof, RetirementState::Unknown { .. }), "an ACK and absent/unknown peer cannot prove closure");
+}
+
+#[test]
+fn old_serialized_accepted_retirement_strings_remain_some_without_replacement_authority() {
+    let record = retirement_for_accepted(&worker(), RetirementTrigger::Accept, "revision", AT).unwrap();
+    let mut value = serde_json::to_value(&record).unwrap();
+    value.as_object_mut().unwrap().remove("replacement");
+    assert_eq!(value["result_message_id"], "reviewed-result");
+    let restored: RunRetirement = serde_json::from_value(value).unwrap();
+    assert_eq!(restored.result_message_id.as_deref(), Some("reviewed-result"));
+    assert_eq!(restored.task_revision.as_deref(), Some("revision"));
+    assert!(restored.replacement.is_none() && record_shape(&restored));
 }

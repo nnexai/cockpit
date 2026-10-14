@@ -71,6 +71,25 @@ impl ProjectService {
         session: &str,
         request: &WorkspaceSetupRequest,
     ) -> Result<WorkspaceSetupPlan, InspectionError> {
+        self.plan_impl(session, request, None).await
+    }
+
+    /// Keep user branch derivation, but isolate each automatically named owned actor attempt.
+    pub async fn plan_orchestration(
+        &self,
+        session: &str,
+        request: &WorkspaceSetupRequest,
+        owned_branch_suffix: &str,
+    ) -> Result<WorkspaceSetupPlan, InspectionError> {
+        self.plan_impl(session, request, Some(owned_branch_suffix)).await
+    }
+
+    async fn plan_impl(
+        &self,
+        session: &str,
+        request: &WorkspaceSetupRequest,
+        owned_branch_suffix: Option<&str>,
+    ) -> Result<WorkspaceSetupPlan, InspectionError> {
         validate_session(session)?;
         validate_setup_request(request)?;
         self.prune_expired_plans();
@@ -122,6 +141,22 @@ impl ProjectService {
                 .await?
             }
         };
+        if let Some(suffix) = owned_branch_suffix
+            && matches!(request, WorkspaceSetupRequest::Create { branch: None, .. })
+            && checkout.ownership == WorkspaceCheckoutOwnership::OwnedWorktree
+        {
+            validate_text(suffix, "owned_branch_suffix", 128)?;
+            let branch = checkout.branch.as_ref().ok_or_else(|| InspectionError::new(
+                "invalid_project_request", "owned actor setup has no derived branch",
+            ))?;
+            let branch = format!("{branch}-{suffix}");
+            validate_text(&branch, "branch", 256)?;
+            catalog.validate_branch(checkout.repository.as_ref().expect("owned worktree has repository"), &branch).await?;
+            if matches!(request, WorkspaceSetupRequest::Create { label: None, task_name: None, .. }) {
+                checkout.label = branch.clone();
+            }
+            checkout.branch = Some(branch);
+        }
         let endpoint_identity = self.plan_endpoint_identity(session, &checkout).await?;
         plan_effects(&mut checkout);
         let plan = WorkspaceSetupPlan {
@@ -734,7 +769,7 @@ fn directory_label(path: &str) -> String {
         .to_owned()
 }
 
-fn bounded_path(value: &str, root: &Path, field: &str) -> Result<String, InspectionError> {
+pub(super) fn bounded_path(value: &str, root: &Path, field: &str) -> Result<String, InspectionError> {
     validate_text(value, field, 4096)?;
     let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
     let path = Path::new(value);

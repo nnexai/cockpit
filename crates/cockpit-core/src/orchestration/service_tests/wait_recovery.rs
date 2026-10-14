@@ -2,10 +2,136 @@ use super::*;
 
 fn wait_request(fixture: &Fixture, timeout_ms: u32) -> OrchestrationWaitRequest {
     OrchestrationWaitRequest {
+        root_id: None,
         after_revision: fixture.state().revision,
         after_tasks_token: fixture.service.store.tasks_token().unwrap(),
         timeout_ms,
     }
+}
+
+fn root_wait_request(fixture: &Fixture, root_id: &str, timeout_ms: u32) -> OrchestrationWaitRequest {
+    let snapshot = fixture.service.snapshot_saved(&OrchestrationSnapshotRequest {
+        session_id: SESSION.into(), root_id: Some(root_id.into()),
+    }).unwrap();
+    OrchestrationWaitRequest {
+        root_id: Some(root_id.into()), after_revision: snapshot.revision,
+        after_tasks_token: snapshot.tasks_token, timeout_ms,
+    }
+}
+
+#[tokio::test]
+async fn cleanup_ref_watch_delivers_external_packed_and_loose_ref_replacements() {
+    for relative in ["packed-refs", "refs/heads/main"] {
+        let fixture = Fixture::new();
+        fixture.root();
+        let common = fixture.root.join("git-common");
+        std::fs::create_dir_all(common.join("refs/heads")).unwrap();
+        let path = common.join(relative);
+        std::fs::write(&path, "old ref").unwrap();
+        let revision = fixture.state().revision;
+        let mut changes = fixture.service.changes().unwrap();
+        fixture.service.watch_cleanup_refs(&[common]).unwrap();
+        let replacement = path.with_extension("lock");
+        std::fs::write(&replacement, "new ref").unwrap();
+        std::fs::rename(replacement, &path).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), changes.changed()).await.unwrap().unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "new ref");
+        assert_eq!(fixture.state().revision, revision, "External ref wake must not mutate orchestration state");
+        fixture.service.watch_cleanup_refs(&[]).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn cleanup_attempt_output_watch_wakes_when_published_entry_moves() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let attempt = fixture.service.base().join("attempts").join(&root);
+    std::fs::create_dir_all(&attempt).unwrap();
+    let output = attempt.join("published-output.txt");
+    std::fs::write(&output, "preserved output").unwrap();
+    let revision = fixture.state().revision;
+    let mut changes = fixture.service.changes().unwrap();
+    // Attempt entry watches must be installed even without Git resources.
+    fixture.service.watch_cleanup_refs(&[]).unwrap();
+    let published = fixture.root.join("published-output.txt");
+    std::fs::rename(output, &published).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), changes.changed()).await.unwrap().unwrap();
+    assert_eq!(std::fs::read_dir(attempt).unwrap().count(), 0);
+    assert_eq!(std::fs::read_to_string(published).unwrap(), "preserved output");
+    assert_eq!(fixture.state().revision, revision, "Output entry wake must not mutate orchestration state");
+}
+
+#[tokio::test(start_paused = true)]
+async fn wait_unchanged_root_document_uses_snapshot_scope_and_full_deadline() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    fixture.create_task(&root, "Existing root document");
+    let request = root_wait_request(&fixture, &root, 50);
+    assert_ne!(request.after_tasks_token, fixture.service.store.tasks_token().unwrap());
+    let started = tokio::time::Instant::now();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(49)).await;
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    tokio::time::advance(Duration::from_millis(1)).await;
+    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    assert!(!response.changed);
+    assert_eq!(response.tasks_token, request.after_tasks_token);
+    assert_eq!(tokio::time::Instant::now() - started, Duration::from_millis(50));
+}
+
+#[tokio::test]
+async fn wait_scoped_root_ignores_unrelated_external_markdown_edit() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let other = fixture.root();
+    fixture.create_task(&root, "Selected document");
+    fixture.create_task(&other, "Unrelated document");
+    let request = root_wait_request(&fixture, &root, 1_000);
+    let mut events = fixture.service.changes().unwrap();
+    let mut waiting = Box::pin(fixture.service.wait(&request));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    let path = fixture.service.base().join("tasks").join(format!("{other}.md"));
+    let text = std::fs::read_to_string(&path).unwrap().replace("Unrelated document", "Externally edited unrelated document");
+    std::fs::write(path, text).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), events.changed()).await.unwrap().unwrap();
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    let response = waiting.await.unwrap();
+    assert!(!response.changed);
+    assert_eq!(response.revision, request.after_revision);
+    assert_eq!(response.tasks_token, request.after_tasks_token);
+}
+
+#[tokio::test(start_paused = true)]
+async fn durable_inbox_wait_wakes_on_message_without_reading_or_acknowledging_body() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let actor = fixture.root_actor(&root);
+    let Actor::Agent(caller) = &actor else { unreachable!() };
+    let after = fixture.state().messages.iter().filter(|message| message.to_run_id == root)
+        .map(|message| message.seq).max().unwrap_or(0);
+    let started = tokio::time::Instant::now();
+    let mut waiting = Box::pin(fixture.service.wait_inbox(caller, after, Duration::from_secs(30)));
+    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
+    let message_id = id();
+    fixture.operator(OrchestrationAction::MessageSend {
+        message_id: message_id.clone(), to_run_id: root.clone(), kind: MessageKind::Instruction,
+        text: "PRIVATE MESSAGE BODY".into(), in_reply_to: None,
+        original_task_revision: None, original_claim_id: None,
+    });
+    let counts = match poll_wait_once(waiting.as_mut()).await {
+        std::task::Poll::Ready(result) => result.unwrap(),
+        std::task::Poll::Pending => panic!("Relevant durable message did not wake inbox"),
+    };
+    assert!(counts.pending);
+    assert_eq!(counts.through_seq, after + 1);
+    assert_eq!(counts.counts.len(), 1);
+    assert_eq!(counts.counts[0].kind, MessageKind::Instruction);
+    let envelope = serde_json::to_value(counts).unwrap();
+    assert_eq!(envelope.as_object().unwrap().len(), 4);
+    assert!(!envelope.to_string().contains("PRIVATE"));
+    assert_eq!(fixture.state().messages.iter().find(|message| message.message_id == message_id).unwrap().stage, DeliveryStage::Stored);
+    assert_eq!(tokio::time::Instant::now(), started);
 }
 
 // Polling once establishes a deterministic pending-read barrier without letting
@@ -38,6 +164,7 @@ async fn wait_already_changed_revision_or_tasks_token_returns_at_zero_timeout() 
             ..before
         },
         OrchestrationWaitRequest {
+            root_id: None,
             after_revision: current.after_revision,
             after_tasks_token: "older-task-token".into(),
             timeout_ms: 0,
@@ -90,7 +217,7 @@ async fn wait_watched_task_change_wakes_without_advancing_time() {
     );
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn wait_external_service_revision_is_visible_within_wait_budget() {
     let fixture = Fixture::new();
     fixture.root();
@@ -122,10 +249,9 @@ async fn wait_external_service_revision_is_visible_within_wait_budget() {
     );
     let committed = fixture.state_bytes();
     assert_ne!(committed, before, "external machine mutation must persist a revision");
-    // This service has no notification from the external writer.
-    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
-    tokio::time::advance(Duration::from_millis(1_000)).await;
-    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    // The writer is a different service/process notification domain. Only the
+    // directory watcher can deliver this edge before the caller's deadline.
+    let response = tokio::time::timeout(Duration::from_secs(1), waiting).await.unwrap().unwrap();
     assert!(response.changed);
     assert_eq!(response.revision, fixture.state().revision);
     assert!(response.revision > request.after_revision);
@@ -140,12 +266,12 @@ async fn wait_external_service_revision_is_visible_within_wait_budget() {
     assert_eq!(fixture.state_bytes(), committed, "wait must not write machine state");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn wait_external_markdown_replacement_delivers_task_without_revision_change() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let task = fixture.create_task(&root, "Original task title");
-    let request = wait_request(&fixture, 3_000);
+    let request = root_wait_request(&fixture, &root, 3_000);
     let mut waiting = Box::pin(fixture.service.wait(&request));
     assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
 
@@ -157,14 +283,11 @@ async fn wait_external_markdown_replacement_delivers_task_without_revision_chang
     std::fs::write(&replacement, updated).unwrap();
     std::fs::rename(&replacement, &path).unwrap();
     assert_eq!(fixture.state().revision, request.after_revision);
-    assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
-
-    tokio::time::advance(Duration::from_millis(1_500)).await;
-    let response = completed_wait(poll_wait_once(waiting.as_mut()).await);
+    let response = tokio::time::timeout(Duration::from_secs(1), waiting).await.unwrap().unwrap();
     assert!(response.changed);
     assert_eq!(response.revision, request.after_revision);
     assert_ne!(response.tasks_token, request.after_tasks_token);
-    assert_eq!(response.tasks_token, fixture.service.store.tasks_token().unwrap());
+    assert_eq!(response.tasks_token, fixture.service.store.tasks_token_for_root(&root).unwrap());
     assert_eq!(
         fixture.task(&root, &task.task_id).title,
         "Externally revised task title"

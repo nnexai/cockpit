@@ -3,6 +3,8 @@ use super::*;
 use super::mutate::resume;
 use super::store::DurableOperationKind;
 use crate::projects::ProjectService;
+mod scopes;
+mod attempt_directory;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CleanupEvaluation {
@@ -19,6 +21,91 @@ pub struct CleanupEffectOutcome {
     pub evidence: Option<String>,
     pub reason: Option<CleanupReason>,
     pub effects: Vec<CleanupEffectReceipt>,
+}
+
+/// Opaque service-issued authority, not a wire receipt or an empty-list promise.
+/// It borrows the exact evaluated resource/run and revalidates the private
+/// release CAS plus physical scope drain each time an adapter consumes it.
+pub struct OwnedConsumerProof<'a> {
+    service: &'a OrchestrationService,
+    resource: &'a OwnedResourceRecord,
+    run: &'a Run,
+    claim_revision: u64,
+}
+
+impl OwnedConsumerProof<'_> {
+    pub(crate) async fn validate(&self, resource: &OwnedResourceRecord, run: &Run) -> Result<(), InspectionError> {
+        let refusal = || error("consumer_proof_missing", "Exact service-issued released checkout authority is absent or changed");
+        if resource.resource_id != self.resource.resource_id || resource.identity != self.resource.identity
+            || resource.creation_operation_id != self.resource.creation_operation_id || resource.run_id != self.run.run_id
+            || resource.kind != self.resource.kind || resource.ownership != self.resource.ownership
+            || resource.authority != self.resource.authority
+            || resource.root_id != self.run.root_id || run.run_id != self.run.run_id
+            || !consumer_run_matches(run, self.run) || run.checkout != self.run.checkout
+            || run.retirement != self.run.retirement || !resource.consumers.is_empty() { return Err(refusal()); }
+        self.service.validate_consumer_release(self.resource, self.run, self.claim_revision)?;
+        let scope = self.run.attachment.as_ref().and_then(|attachment| attachment.process_scope.as_ref()).ok_or_else(refusal)?;
+        let observation = crate::process_scope::observe(scope).await?;
+        if observation.scope != *scope || !matches!(observation.state, crate::process_scope::ScopeState::Drained) {
+            return Err(error("consumer_scope_populated", "Fresh exact owned scope has not proved every contained descendant drained"));
+        }
+        self.service.validate_consumer_release(self.resource, self.run, self.claim_revision)
+    }
+}
+
+fn consumer_run_matches(current: &Run, expected: &Run) -> bool {
+    current.run_id == expected.run_id && current.root_id == expected.root_id && current.kind == expected.kind
+        && current.stage == expected.stage && current.close_reason == expected.close_reason
+        && current.attempt == expected.attempt && current.assignment_generation == expected.assignment_generation
+        && current.cleanup_policy == expected.cleanup_policy && current.checkout == expected.checkout
+        && current.checkout_claim_id == expected.checkout_claim_id && current.integration == expected.integration
+        && current.source_output == expected.source_output && current.retirement == expected.retirement
+        && current.setup.as_ref().map(|setup| (&setup.operation_id, &setup.checkout_path))
+            == expected.setup.as_ref().map(|setup| (&setup.operation_id, &setup.checkout_path))
+        && current.attachment.as_ref().map(|attachment| (&attachment.attachment_id, attachment.epoch, attachment.state,
+            attachment.launch_mode, &attachment.process, &attachment.shell, &attachment.machine_id, &attachment.process_scope, attachment.launch_attempt))
+            == expected.attachment.as_ref().map(|attachment| (&attachment.attachment_id, attachment.epoch, attachment.state,
+                attachment.launch_mode, &attachment.process, &attachment.shell, &attachment.machine_id, &attachment.process_scope, attachment.launch_attempt))
+}
+
+fn released_consumer_revision(state: &OrchestrationState, resource: &OwnedResourceRecord, expected: &Run) -> Option<u64> {
+    use super::store::{DurableEffectReceipt, ScopeReleaseOutcome};
+    let run = state.runs.iter().find(|run| run.run_id == expected.run_id)?;
+    let registered = state.owned_resources.iter().find(|registered| registered.resource_id == resource.resource_id)?;
+    let (OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity }) = &resource.identity else { return None };
+    if !consumer_run_matches(run, expected) || run.kind != RunKind::Worker || run.stage != RunStage::Closed
+        || run.close_reason != Some(CloseReason::Accepted) || run.cleanup_policy != Some(WorkerCleanupPolicy::OwnedWhenSafe)
+        || registered.identity != resource.identity || registered.creation_operation_id != resource.creation_operation_id
+        || registered.run_id != run.run_id || registered.root_id != run.root_id
+        || registered.kind != resource.kind || resource.kind != kind(&resource.identity)
+        || registered.ownership != ResourceOwnership::Owned || registered.authority != CleanupAuthority::OwnedWhenSafe
+        || resource.ownership != ResourceOwnership::Owned || resource.authority != CleanupAuthority::OwnedWhenSafe
+        || resource.creation_operation_id.as_deref() != Some(identity.creation_operation_id.as_str())
+        || run.setup.as_ref().and_then(|setup| setup.operation_id.as_deref()) != Some(identity.creation_operation_id.as_str())
+        || !resource.consumers.is_empty() || registered.consumers.iter().any(|consumer| OrchestrationService::consumer_unresolved(state, consumer))
+        || OrchestrationService::known_writers_active(state, registered)
+        || !retirement::blockers(state, run).is_empty() { return None; }
+    let retirement = run.retirement.as_ref()?;
+    if !matches!(retirement.state, RetirementState::Retired { .. })
+        || !retirement::authority_matches(state, run, retirement) { return None; }
+    let attachment = run.attachment.as_ref().filter(|attachment| attachment.state == AttachmentState::Revoked)?;
+    let scope = attachment.process_scope.as_ref()?;
+    let checkout = run.checkout.as_ref()?;
+    if checkout.key != identity.checkout_key || checkout.path != identity.checkout_path
+        || checkout.directory_identity.device != identity.checkout_device || checkout.directory_identity.inode != identity.checkout_inode
+        || checkout.git.as_ref().is_none_or(|git| git.common_dir != identity.common_dir)
+        || attachment.process.as_ref() != Some(&scope.member) { return None; }
+    let claim = state.checkout_claims.iter().find(|claim| Some(claim.claim_id.as_str()) == run.checkout_claim_id.as_deref()
+        && claim.state == claims::ClaimState::Released && claim.holder.is_none() && &claim.checkout == checkout)?;
+    let operation_id = claim.transition_operation_id.as_ref()?;
+    let released = state.operations.iter().any(|operation| &operation.operation_id == operation_id
+        && operation.kind == DurableOperationKind::ScopeRelease && operation.run_id.as_deref() == Some(run.run_id.as_str())
+        && operation.root_id == run.root_id && operation.actor_run_id.is_none()
+        && operation.principal_key.strip_prefix("dispatcher-scope:") == Some(run.run_id.as_str())
+        && operation.effect_receipts.iter().any(|receipt| matches!(receipt, DurableEffectReceipt::ScopeRelease {
+            unit, invocation_id, claim_id, outcome: ScopeReleaseOutcome::Released,
+        } if unit == &scope.unit && invocation_id == &scope.invocation_id && claim_id == &claim.claim_id)));
+    released.then_some(claim.revision)
 }
 
 /// A registration proof is made by the creation adapter, never deserialized
@@ -50,6 +137,7 @@ fn kind(identity: &OwnedResourceIdentity) -> OwnedResourceKind {
         OwnedResourceIdentity::Space { .. } => OwnedResourceKind::Space,
         OwnedResourceIdentity::Scratch { .. } => OwnedResourceKind::Scratch,
         OwnedResourceIdentity::FixtureSet { .. } => OwnedResourceKind::FixtureSet,
+        OwnedResourceIdentity::AttemptDirectory { .. } => OwnedResourceKind::AttemptDirectory,
     }
 }
 
@@ -60,6 +148,7 @@ fn creation_operation(identity: &OwnedResourceIdentity) -> &str {
         OwnedResourceIdentity::Space { identity } => &identity.creation_operation_id,
         OwnedResourceIdentity::Scratch { identity } => &identity.creation_operation_id,
         OwnedResourceIdentity::FixtureSet { identity } => &identity.creation_operation_id,
+        OwnedResourceIdentity::AttemptDirectory { identity } => &identity.creation_operation_id,
     }
 }
 
@@ -77,6 +166,8 @@ fn same_resource(left: &OwnedResourceIdentity, right: &OwnedResourceIdentity) ->
             a.machine_id == b.machine_id && a.device == b.device && a.inode == b.inode,
         (OwnedResourceIdentity::FixtureSet { identity: a }, OwnedResourceIdentity::FixtureSet { identity: b }) =>
             a.filesystem.machine_id == b.filesystem.machine_id && a.filesystem.device == b.filesystem.device && a.filesystem.inode == b.filesystem.inode,
+        (OwnedResourceIdentity::AttemptDirectory { identity: a }, OwnedResourceIdentity::AttemptDirectory { identity: b }) =>
+            a.root == b.root && a.device == b.device && a.inode == b.inode,
         _ => false,
     }
 }
@@ -277,7 +368,100 @@ pub(crate) fn restoration_summary(state: &OrchestrationState, session_id: &str) 
     RestorationSummary { reattached, total_attachments, cleanup_pending }
 }
 
+/// Returns only event-relevant cleanup candidates; attempts/resources are never
+/// grouped by canonical task, so superseded output cannot inherit successor proof.
+fn cleanup_candidates(state: &OrchestrationState) -> Vec<OwnedResourceRecord> {
+    state.owned_resources.iter().filter(|resource| resource.cleanup.state != CleanupState::Removed
+        && state.runs.iter().any(|run| run.run_id == resource.run_id && run.stage == RunStage::Closed))
+        .cloned().collect()
+}
+
+fn setup_resources_captured(resources: &[OwnedResourceRecord], run: &Run) -> bool {
+    let Some(setup) = &run.setup else { return false };
+    let raw = setup.operation_id.as_deref().is_some_and(|operation|
+        resources.iter().any(|resource| resource.run_id == run.run_id
+            && resource.creation_operation_id.as_deref() == Some(operation)));
+    let Some(workspace_id) = setup.workspace_id.as_deref() else { return raw };
+    let bound = resources.iter().any(|resource| resource.run_id == run.run_id
+        && matches!(&resource.identity, OwnedResourceIdentity::Space { identity }
+            if identity.workspace_id == workspace_id && identity.session_id == run.session_id
+                && identity.checkout_path == setup.checkout_path
+                && run.dispatch.as_ref().and_then(|dispatch| dispatch.move_operation_id.as_ref())
+                    .is_none_or(|operation| operation == &identity.creation_operation_id)));
+    let borrowed_space_only = setup.operation_id.is_none()
+        && run.dispatch.as_ref().and_then(|dispatch| dispatch.move_operation_id.as_ref()).is_some()
+        && run.checkout.as_ref().is_some_and(|checkout| checkout.path == setup.checkout_path);
+    bound && (raw || borrowed_space_only || matches!(setup.ownership,
+        Some(cockpit_protocol::projects::WorkspaceCheckoutOwnership::BorrowedDirectory)))
+}
+
+fn attempt_directory_released(state: &OrchestrationState, run: &Run) -> bool {
+    run.stage == RunStage::Closed && run.close_reason == Some(CloseReason::Accepted)
+        && run.result.as_ref().is_some_and(|result| result.outcome == Some(ReportOutcome::Succeeded))
+        && run.retirement.as_ref().is_some_and(|record| matches!(record.state, RetirementState::Retired { .. })
+            && retirement::identity_matches(run, record))
+        && state.checkout_claims.iter().any(|claim| Some(claim.claim_id.as_str()) == run.checkout_claim_id.as_deref()
+            && claim.state == claims::ClaimState::Released && run.checkout.as_ref() == Some(&claim.checkout))
+}
+
 impl OrchestrationService {
+    fn owned_consumer_proof<'a>(&'a self, resource: &'a OwnedResourceRecord, run: &'a Run) -> Result<Option<OwnedConsumerProof<'a>>, InspectionError> {
+        let locked = self.store.lock()?;
+        let state = locked.read()?;
+        Ok(released_consumer_revision(&state, resource, run).map(|claim_revision|
+            OwnedConsumerProof { service: self, resource, run, claim_revision }))
+    }
+
+    fn validate_consumer_release(&self, resource: &OwnedResourceRecord, run: &Run, claim_revision: u64) -> Result<(), InspectionError> {
+        let locked = self.store.lock()?;
+        let state = locked.read()?;
+        if released_consumer_revision(&state, resource, run) != Some(claim_revision) {
+            return Err(error("consumer_proof_missing", "Exact released claim revision, holder epoch, creation identity or owned scope journal is no longer current"));
+        }
+        Ok(())
+    }
+
+    /// The scheduler evaluates this queue on acceptance, closure, pane/owner and
+    /// relevant Git-ref events. No lease or elapsed time grants cleanup authority.
+    pub fn cleanup_queue(&self) -> Result<Vec<OwnedResourceRecord>, InspectionError> {
+        Ok(cleanup_candidates(&self.store.lock()?.read()?))
+    }
+
+    /// Git common directories to register before reading/evaluating the queue.
+    /// Removed resources are omitted so the shared notification owner can unwatch.
+    pub fn cleanup_ref_watch_paths(&self) -> Result<Vec<std::path::PathBuf>, InspectionError> {
+        let state = self.store.lock()?.read()?;
+        let mut paths = std::collections::BTreeSet::new();
+        for resource in state.owned_resources.iter().filter(|resource|
+            resource.cleanup.state != CleanupState::Removed
+                && state.runs.iter().any(|run| run.run_id == resource.run_id && run.stage == RunStage::Closed)) {
+            if let OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } = &resource.identity {
+                if !identity.common_dir.is_empty() { paths.insert(std::path::PathBuf::from(&identity.common_dir)); }
+            }
+        }
+        for run in state.runs.iter().filter(|run| run.stage == RunStage::Closed
+            && run.close_reason == Some(CloseReason::Accepted) && run.integration == Integration::Pending) {
+            for related in state.runs.iter().filter(|related| related.root_id == run.root_id
+                && related.session_id == run.session_id) {
+                if let Some(git) = related.checkout.as_ref().and_then(|checkout| checkout.git.as_ref()) {
+                    paths.insert(std::path::PathBuf::from(&git.common_dir));
+                }
+            }
+        }
+        // Pending schedules still need integration/input wakes after predecessor
+        // resources have been removed. Project identity survives private root cwd.
+        let scheduled_roots: std::collections::BTreeSet<_> = state.task_ownership.iter()
+            .filter(|ownership| ownership.schedule.is_some()).map(|ownership| ownership.root_id.as_str()).collect();
+        for run in state.runs.iter().filter(|run| scheduled_roots.contains(run.root_id.as_str())) {
+            if let Some(ProjectSource::Git { common_dir }) = run.project.as_ref().map(|project| &project.source) {
+                if !common_dir.is_empty() && !paths.contains(std::path::Path::new(common_dir)) {
+                    paths.insert(std::path::PathBuf::from(common_dir));
+                }
+            }
+        }
+        Ok(paths.into_iter().collect())
+    }
+
     pub fn cleanup_job_run(&self, caller: &AgentCaller, request: &CleanupFinish) -> Result<Run, InspectionError> {
         let state = self.store.lock()?.read()?;
         let job = credentials::validate_cleanup_job_auth(&state, &caller.auth)?;
@@ -319,9 +503,15 @@ impl OrchestrationService {
         match &request.resource {
             OwnedResourceIdentity::FixtureSet { .. } | OwnedResourceIdentity::Scratch { .. } =>
                 super::fixture_resources::validate_registration(&request.resource, &run).await?,
-            OwnedResourceIdentity::Worktree { .. } | OwnedResourceIdentity::Branch { .. } | OwnedResourceIdentity::Space { .. } => {
+            OwnedResourceIdentity::Worktree { .. } | OwnedResourceIdentity::Branch { .. } | OwnedResourceIdentity::AttemptDirectory { .. } => {
                 if run.setup.as_ref().and_then(|s| s.operation_id.as_deref()) != Some(creation_operation(&request.resource)) {
                     return Err(error("resource_creation_conflict", "Resource was not created by this run setup"));
+                }
+                projects.validate_owned_resource(&request.resource).await?;
+            }
+            OwnedResourceIdentity::Space { .. } => {
+                if !projects.owned_resources_for_run(&run).await?.iter().any(|identity| identity == &request.resource) {
+                    return Err(error("resource_creation_conflict", "Space is not associated with this exact run's setup creation receipt"));
                 }
                 projects.validate_owned_resource(&request.resource).await?;
             }
@@ -335,25 +525,72 @@ impl OrchestrationService {
             attempt: run.attempt, setup_operation_id: run.setup.and_then(|s| s.operation_id), identity: request.resource.clone() })
     }
 
+    fn terminal_capture_identity(state: &OrchestrationState, run: &Run) -> Option<RetirementIdentity> {
+        if run.stage == RunStage::Closed {
+            // Closure pins the actual retirement receipt; never recapture a
+            // mutable attachment or retrofit an already captured launch.
+            let record = run.retirement.as_ref()?;
+            return retirement::authority_matches(state, run, record)
+                .then(|| record.identity.clone()).flatten();
+        }
+        // Starting may still be the latch wrapper, with the same PID/start
+        // that will later exec the harness. It is not its creation fingerprint.
+        if !has_current_binding(state, run) { return None; }
+        let identity = retirement::identity_for(run)?;
+        let shell = identity.shell.as_ref()?;
+        let pid = i32::try_from(shell.process.pid).ok()?;
+        if crate::process_identity::executable_identity(pid, shell.process.start_ticks).ok().as_ref() != Some(shell) {
+            return None;
+        }
+        Some(identity)
+    }
+
+    async fn terminal_capture_observed(herdr: &dyn super::herdr::OrchestrationHerdr,
+        run: &Run, identity: &RetirementIdentity) -> bool {
+        let Ok(runtime) = herdr.runtime(&identity.session_id).await else { return false };
+        if retirement::server_fence(identity, &runtime).is_err() { return false; }
+        let same_terminal = runtime.panes.iter().filter(|pane|
+            pane.terminal_id.as_deref() == Some(identity.terminal_id.as_str())).count();
+        let Some(pane) = runtime.panes.iter().find(|pane| pane.pane_id == identity.pane_id) else {
+            // Only the existing immutable closure pin can join fresh absence.
+            return run.stage == RunStage::Closed && same_terminal == 0;
+        };
+        if run.stage == RunStage::Closed || same_terminal != 1
+            || pane.terminal_id.as_deref() != Some(identity.terminal_id.as_str())
+            || pane.workspace_id != identity.workspace_id || pane.tab_id != identity.tab_id
+            || pane.tab_label != identity.launch_tag
+            || pane.agent_kind.as_ref().is_some_and(|kind| kind != &run.launch_config.harness_kind)
+            || pane.native_session_id.as_ref().zip(identity.conversation.as_ref())
+                .is_some_and(|(native, conversation)| native != &conversation.session_id) {
+            return false;
+        }
+        let (Some(process), Some(shell)) = (&identity.process, &identity.shell) else { return false };
+        if identity.launch_mode != Some(AttachmentLaunchMode::DirectProcess) || shell.process != *process { return false; }
+        let Ok(info) = herdr.pane_process_info(&identity.session_id, &identity.endpoint_identity, &identity.pane_id).await
+            else { return false };
+        // Capture does not authorize retirement: foreground children, active
+        // work and shared surfaces remain protected by the separate close gates.
+        info.pane_id == identity.pane_id && info.shell_pid == Some(process.pid)
+            && info.shell_identity.as_ref() == Some(shell)
+            && info.processes.iter().any(|(pid, _)| *pid == process.pid)
+    }
+
     /// Startup/reconnect capture reads original creation receipts, never adopts
     /// a path merely because it currently exists. The same proof is one record.
-    pub async fn capture_owned_resources(&self, projects: &ProjectService) -> Result<(), InspectionError> {
+    pub async fn capture_owned_resources(&self, projects: &ProjectService,
+        herdr: &dyn super::herdr::OrchestrationHerdr) -> Result<(), InspectionError> {
         let saved = self.store.lock()?.read()?;
         for run in saved.runs.iter().filter(|run| run.kind == RunKind::Worker) {
             let setup_operation = run.setup.as_ref().and_then(|s| s.operation_id.as_deref());
-            let captured = setup_operation.is_some_and(|operation| saved.owned_resources.iter().any(|resource|
-                resource.run_id == run.run_id && resource.creation_operation_id.as_deref() == Some(operation)));
-            let (mut identities, limitation) = if captured || setup_operation.is_none() {
+            let move_operation = run.dispatch.as_ref().and_then(|dispatch| dispatch.move_operation_id.as_ref());
+            let captured = setup_resources_captured(&saved.owned_resources, run);
+            let (mut identities, limitation) = if captured || (setup_operation.is_none() && move_operation.is_none()) {
                 (Vec::new(), false)
             } else {
-                let (identities, failed) = match projects.owned_resources_for_run(run).await {
-                    Ok(identities) => (identities, false),
-                    Err(_) => (Vec::new(), true),
-                };
-                let limitation = failed || match projects.owned_creation_limitation_for_run(run).await {
-                    Ok(limitation) => limitation.is_some(),
-                    Err(_) => true,
-                };
+                // Association/transport failures are not missing Git pins.
+                // Only the original creation receipt can attest that limitation.
+                let identities = projects.owned_resources_for_run(run).await?;
+                let limitation = projects.owned_creation_limitation_for_run(run).await?.is_some();
                 (identities, limitation)
             };
             let terminal_captured = run.attachment.as_ref().is_some_and(|attachment| saved.owned_resources.iter().any(|resource|
@@ -361,8 +598,10 @@ impl OrchestrationService {
                     if resource.run_id == run.run_id && identity.attachment_id.as_deref() == Some(attachment.attachment_id.as_str())
                         && identity.attachment_epoch == Some(attachment.epoch))));
             if !terminal_captured {
-                if let Some(identity) = retirement::identity_for(run) {
-                    identities.push(OwnedResourceIdentity::WorkerTerminal { identity });
+                if let Some(identity) = Self::terminal_capture_identity(&saved, run) {
+                    if Self::terminal_capture_observed(herdr, run, &identity).await {
+                        identities.push(OwnedResourceIdentity::WorkerTerminal { identity });
+                    }
                 }
             }
             if identities.is_empty() && !limitation { continue; }
@@ -370,10 +609,17 @@ impl OrchestrationService {
             let mut state = locked.read()?;
             let index = run_index(&state, &run.run_id)?;
             let fresh = &state.runs[index];
-            if fresh.attempt != run.attempt || fresh.setup.as_ref().and_then(|s| s.operation_id.as_ref()) != run.setup.as_ref().and_then(|s| s.operation_id.as_ref()) { continue; }
+            if fresh.attempt != run.attempt || fresh.setup.as_ref().and_then(|s| s.operation_id.as_ref()) != run.setup.as_ref().and_then(|s| s.operation_id.as_ref())
+                || fresh.setup.as_ref().and_then(|s| s.workspace_id.as_ref()) != run.setup.as_ref().and_then(|s| s.workspace_id.as_ref())
+                || fresh.dispatch.as_ref().and_then(|dispatch| dispatch.move_operation_id.as_ref()) != run.dispatch.as_ref().and_then(|dispatch| dispatch.move_operation_id.as_ref())
+                || fresh.attachment.as_ref().map(|attachment| (&attachment.attachment_id, attachment.epoch))
+                    != run.attachment.as_ref().map(|attachment| (&attachment.attachment_id, attachment.epoch)) { continue; }
             let before = state.owned_resources.len();
             let mut conflict = false;
             for identity in identities {
+                if let OwnedResourceIdentity::WorkerTerminal { identity: terminal } = &identity {
+                    if Self::terminal_capture_identity(&state, fresh).as_ref() != Some(terminal) { continue; }
+                }
                 let conflicts = state.owned_resources.iter().any(|resource| same_resource(&resource.identity, &identity)
                     && (resource.identity != identity || resource.run_id != fresh.run_id || resource.root_id != fresh.root_id));
                 if conflicts {
@@ -403,6 +649,8 @@ impl OrchestrationService {
 
     fn record_unknown_git(resources: &mut Vec<OwnedResourceRecord>, run: &Run) -> Result<(), InspectionError> {
         let Some(setup) = run.setup.as_ref().filter(|s| s.operation_id.is_some() && !s.checkout_path.is_empty()) else { return Ok(()) };
+        if !matches!(run.project.as_ref().map(|project| &project.source), Some(ProjectSource::Git { .. }))
+            && run.checkout.as_ref().is_none_or(|checkout| checkout.git.is_none()) { return Ok(()) }
         let identity = OwnedGitIdentity {
             creation_operation_id: setup.operation_id.as_ref().expect("filtered operation").clone(),
             machine_id: String::new(), repository_key: String::new(), repository_root: String::new(),
@@ -455,6 +703,7 @@ impl OrchestrationService {
         let (path, device, inode) = match &resource.identity {
             OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } =>
                 (&identity.checkout_path, &identity.checkout_device, &identity.checkout_inode),
+            OwnedResourceIdentity::AttemptDirectory { identity } => (&identity.root, &identity.device, &identity.inode),
             _ => return false,
         };
         let overlaps = |checkout: &CheckoutIdentity|
@@ -470,7 +719,8 @@ impl OrchestrationService {
     /// Called by the existing owner scheduler; each resource is independently
     /// evaluated. A missing Space is not consulted for Git-only removal.
     pub async fn cleanup_owned_resources(&self, projects: &ProjectService) -> Result<(), InspectionError> {
-        let queue = self.store.lock()?.read()?.owned_resources;
+        self.reconcile_accepted_integrations().await?;
+        let queue = self.cleanup_queue()?;
         for queued in queue {
             if queued.cleanup.state == CleanupState::Removed { continue; }
             let Some(_lease) = self.execution_lease(&queued.run_id)? else { continue };
@@ -480,7 +730,7 @@ impl OrchestrationService {
                     self.record_constituent_receipts(&queued, receipts)?;
                 }
             }
-            let (resource, run, blocked, drained) = {
+            let (resource, run, blocked, drained, directory_released) = {
                 let state = self.store.lock()?.read()?;
                 let Some(resource) = state.owned_resources.iter().find(|r| r.resource_id == queued.resource_id) else { continue };
                 let run = &state.runs[run_index(&state, &resource.run_id)?];
@@ -489,7 +739,8 @@ impl OrchestrationService {
                 observed.consumers = Self::consumers_unresolved(&state, resource);
                 let writers = Self::known_writers_active(&state, resource);
                 let drained = run.attachment.as_ref().is_some_and(|a| Self::writer_quiescent(&state, run, &a.attachment_id, a.epoch));
-                (observed, run.clone(), !blocked.is_empty() || writers, drained)
+                let directory_released = resource.kind != OwnedResourceKind::AttemptDirectory || attempt_directory_released(&state, run);
+                (observed, run.clone(), !blocked.is_empty() || writers, drained, directory_released)
             };
             let evaluation = if resource.ownership == ResourceOwnership::Unknown {
                 CleanupEvaluation::Unknown(resource.cleanup.reason.clone().unwrap_or_else(|| reason(CleanupReasonClass::Authority, "ownership_unproven", "Unknown creation authority protects this resource")))
@@ -499,21 +750,65 @@ impl OrchestrationService {
                 terminal_evaluation(&resource, &run)
             } else if run.stage != RunStage::Closed {
                 CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumers_active", "Run or descendant consumers are still active"))
+            } else if run.close_reason == Some(CloseReason::Superseded) && resource.kind == OwnedResourceKind::Space {
+                match projects.inspect_owned_resource(&resource, &run, None).await {
+                    Ok(CleanupEvaluation::Absent) => CleanupEvaluation::Absent,
+                    _ => CleanupEvaluation::Kept(reason(CleanupReasonClass::UserWork, "superseded_space_preserved",
+                        "No explicit Space teardown is authorized for replaced work; only fresh exact-incarnation absence can settle its bookkeeping")),
+                }
+            } else if run.close_reason == Some(CloseReason::Superseded)
+                && resource.kind != OwnedResourceKind::WorkerTerminal {
+                if !drained {
+                    if let Some(why) = resource.cleanup.reason.as_ref().filter(|why|
+                        why.code == "containment_unproven" || why.code == "checkout_consumer_present" || why.code.starts_with("scope_")) {
+                        CleanupEvaluation::Kept(why.clone())
+                    } else {
+                        CleanupEvaluation::Kept(reason(CleanupReasonClass::UserWork, "superseded_work_preserved",
+                            "Superseded attempt output and writer claims remain separate from its successor; preserve all old files and review this attempt independently"))
+                    }
+                } else {
+                    CleanupEvaluation::Kept(reason(CleanupReasonClass::UserWork, "superseded_work_preserved",
+                        "Superseded scope is drained, but all old work and outputs remain retained independently of its successor"))
+                }
+            } else if resource.kind == OwnedResourceKind::AttemptDirectory && run.close_reason != Some(CloseReason::Accepted) {
+                CleanupEvaluation::Kept(reason(CleanupReasonClass::UserWork, "attempt_unaccepted",
+                    "Superseded, cancelled and failed private attempt directories and their outputs are retained"))
+            } else if resource.kind == OwnedResourceKind::AttemptDirectory && !directory_released {
+                if let Some(why) = resource.cleanup.reason.as_ref().filter(|why|
+                    why.code == "containment_unproven" || why.code == "checkout_consumer_present" || why.code.starts_with("scope_")) {
+                    CleanupEvaluation::Kept(why.clone())
+                } else {
+                    CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumer_drain_unproven",
+                        "Private attempt removal requires its exact checkout claim to be Released with consumer-exit proof and its own pane retired"))
+                }
             } else if matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch)
                 && !(matches!(run.integration, Integration::Integrated { .. })
                     || matches!((&run.integration, &run.source_output), (Integration::NotApplicable { .. }, Some(SourceOutput::NonCode { .. })))) {
-                CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "integration_pending", "Accepted source output must be integrated before Git removal"))
+                CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "integration_pending",
+                    "Record IntegrationRecord for this exact accepted Result and target commit with required passed target checks; source checks or Git containment alone are not target-check proof"))
+            } else if !drained && resource.cleanup.reason.as_ref().is_some_and(|why|
+                why.code == "containment_unproven" || why.code == "checkout_consumer_present" || why.code.starts_with("scope_")) {
+                CleanupEvaluation::Kept(resource.cleanup.reason.clone().expect("classified scope hold"))
             } else if blocked {
                 CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumers_active", "Known descendant or checkout writer consumers remain protected"))
-            } else if matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch | OwnedResourceKind::Scratch)
+            } else if matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch | OwnedResourceKind::Scratch | OwnedResourceKind::AttemptDirectory)
                 && (!resource.consumers.is_empty() || !drained) {
                 CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumer_drain_unproven", "Known consumers have not supplied a proven sealed drain"))
             } else {
                 let inspection = match resource.kind {
                     OwnedResourceKind::FixtureSet | OwnedResourceKind::Scratch => super::fixture_resources::inspect_owned_resource(&resource, &run).await,
-                    _ => projects.inspect_owned_resource(&resource, &run).await,
+                    OwnedResourceKind::AttemptDirectory => match projects.validate_cleanup_incarnation(&run).await {
+                        Ok(()) => attempt_directory::inspect(self.base(), &resource, &run),
+                        Err(why) => Err(why),
+                    },
+                    _ => {
+                        let proof = self.owned_consumer_proof(&resource, &run)?;
+                        projects.inspect_owned_resource(&resource, &run, proof.as_ref()).await
+                    },
                 };
-                inspection.unwrap_or_else(|_| CleanupEvaluation::Unknown(reason(CleanupReasonClass::Transient, "inspection_unavailable", "Actual resource outcome could not be inspected")))
+                inspection.unwrap_or_else(|why| if resource.kind == OwnedResourceKind::AttemptDirectory {
+                    CleanupEvaluation::Unknown(reason(CleanupReasonClass::Authority, &why.code, why.message))
+                } else { CleanupEvaluation::Unknown(reason(CleanupReasonClass::Transient, "inspection_unavailable", "Actual resource outcome could not be inspected")) })
             };
             let uncertain = resource.cleanup.effects.iter().any(|e| matches!(e.state, CleanupEffectState::Intent | CleanupEffectState::Unknown));
             // The supported fixture adapter's Ready result identifies untouched
@@ -531,11 +826,20 @@ impl OrchestrationService {
             let Some(intent) = intent else { continue };
             let outcome = match resource.kind {
                 OwnedResourceKind::FixtureSet | OwnedResourceKind::Scratch => super::fixture_resources::apply_owned_resource(&intent, &run).await,
-                _ => projects.apply_owned_resource(&intent, &run).await,
+                OwnedResourceKind::AttemptDirectory => match projects.validate_cleanup_incarnation(&run).await {
+                    Ok(()) => attempt_directory::apply(self.base(), &intent, &run),
+                    Err(why) => Ok(CleanupEffectOutcome { state: CleanupEffectState::Refused, evidence: None,
+                        reason: Some(reason(CleanupReasonClass::Authority, &why.code, why.message)), effects: Vec::new() }),
+                },
+                _ => {
+                    let proof = self.owned_consumer_proof(&intent, &run)?;
+                    projects.apply_owned_resource(&intent, &run, proof.as_ref()).await
+                },
             }.unwrap_or_else(|_| CleanupEffectOutcome { state: CleanupEffectState::Unknown, evidence: None,
                 reason: Some(reason(CleanupReasonClass::Transient, "effect_outcome_unknown", "Effect did not return a confirmed outcome")), effects: Vec::new() });
             self.finish_cleanup_effect(&intent, outcome)?;
         }
+        self.report_cleanup_holds()?;
         Ok(())
     }
 
@@ -575,6 +879,8 @@ impl OrchestrationService {
         if run.stage != RunStage::Closed || run.attempt != observed.attempt || run.integration != observed.integration
             || run.attachment.as_ref().map(|a| (&a.attachment_id, a.epoch)) != observed.attachment.as_ref().map(|a| (&a.attachment_id, a.epoch))
             || !retirement::blockers(&state, run).is_empty() { return Ok(None) }
+        if run.close_reason == Some(CloseReason::Superseded) { return Ok(None); }
+        if expected.kind == OwnedResourceKind::AttemptDirectory && !attempt_directory_released(&state, run) { return Ok(None); }
         let registered = state.owned_resources.iter().find(|r| r.resource_id == expected.resource_id)
             .ok_or_else(|| error("resource_not_found", "Registered cleanup resource disappeared"))?;
         let unresolved = Self::consumers_unresolved(&state, registered);
@@ -582,7 +888,7 @@ impl OrchestrationService {
         if unresolved != expected.consumers { return Ok(None) }
         if registered.kind != OwnedResourceKind::FixtureSet
             && registered.cleanup.effects.iter().any(|e| matches!(e.state, CleanupEffectState::Intent | CleanupEffectState::Unknown)) { return Ok(None) }
-        if matches!(registered.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch | OwnedResourceKind::Scratch)
+        if matches!(registered.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch | OwnedResourceKind::Scratch | OwnedResourceKind::AttemptDirectory)
             && (!unresolved.is_empty() || run.attachment.as_ref().is_none_or(|a| !Self::writer_quiescent(&state, run, &a.attachment_id, a.epoch))) { return Ok(None) }
         if matches!(registered.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch)
             && !(matches!(run.integration, Integration::Integrated { .. })
@@ -638,6 +944,8 @@ impl OrchestrationService {
         receipt.updated_at = at.clone();
         resource.cleanup.state = match receipt.state {
             CleanupEffectState::Applied | CleanupEffectState::Absent => CleanupState::Removed,
+            CleanupEffectState::Refused if resource.kind == OwnedResourceKind::AttemptDirectory
+                && outcome.reason.as_ref().is_some_and(|why| why.code == "outputs_kept") => CleanupState::Kept,
             CleanupEffectState::Refused => CleanupState::Waiting,
             CleanupEffectState::Intent | CleanupEffectState::Unknown => CleanupState::Unknown,
         };
@@ -656,6 +964,66 @@ impl OrchestrationService {
         let revision = locked.save(&mut state)?;
         self.revision.send_replace(revision);
         Ok(())
+    }
+
+    /// Publish a concrete boundary once per resource/cause. Durable inbox IDs
+    /// survive owner restart; acknowledgement does not cause another reminder.
+    fn report_cleanup_holds(&self) -> Result<(), InspectionError> {
+        let locked = self.store.lock()?;
+        let mut state = locked.read()?;
+        let before = state.messages.len();
+        let holds: Vec<_> = state.owned_resources.iter().filter_map(|resource| {
+            if resource.cleanup.state == CleanupState::Removed
+                || !state.runs.iter().any(|run| run.run_id == resource.run_id && run.stage == RunStage::Closed) { return None; }
+            let why = resource.cleanup.reason.as_ref()?;
+            if !matches!(resource.cleanup.state, CleanupState::Waiting | CleanupState::WaitingIntegration
+                | CleanupState::Kept | CleanupState::Unknown | CleanupState::Stalled) { return None; }
+            let root = state.runs.iter().find(|root| root.run_id == resource.root_id && root.parent_run_id.is_none())?;
+            if root.stage == RunStage::Closed { return None; }
+            // Dedup the cause before rendering diagnostics; owner/pane wakes must
+            // not copy resource receipts or rebuild already delivered boundaries.
+            let message_id = format!("cleanup:{}:{}", resource.resource_id, why.code);
+            if state.messages.iter().any(|message| matches!(message.from, ActorRef::Dispatcher)
+                && message.message_id == message_id) { return None; }
+            let action = cleanup_hold_action(&why.code);
+            let text = format!("Cleanup held for attempt {} ({:?}, resource {}): {} [{}]. {}",
+                resource.run_id, resource.kind, resource.resource_id, why.message, why.code, action);
+            Some((resource.root_id.clone(), message_id, text))
+        }).collect();
+        for (root_id, message_id, text) in holds {
+            messages::append(&mut state, messages::AppendMessage {
+                from: ActorRef::Dispatcher, to_run_id: &root_id, message_id: &message_id,
+                kind: MessageKind::Observation, text: &text, in_reply_to: None,
+                report: None, stale: false, escalated_from: None,
+            })?;
+        }
+        if state.messages.len() != before {
+            let revision = locked.save(&mut state)?;
+            self.revision.send_replace(revision);
+        }
+        Ok(())
+    }
+}
+
+fn cleanup_hold_action(code: &str) -> &'static str {
+    match code {
+        "integration_pending" => "Integrate and record exact target checks through IntegrationRecord; cleanup reevaluates on the resulting event.",
+        "terminal_observation_unavailable" => "Restore the exact runtime observation connection; the next connection/pane event reevaluates automatically without resubmitting an uncertain effect.",
+        "containment_unproven" => "Preserve this exact claim until its owned scope and fresh pane inventory prove drain; old uncontained launches are not retrofitted. Do not substitute PID absence or another scope.",
+        "scope_dirty_checkout" | "scope_unaccepted_commits" => "Review and integrate the remaining output separately or retain it; neither the process scope nor checkout is stopped/discarded while this work is protected.",
+        "scope_resource_admission" => "Finish and release the exact holder's build/resource request with actual build-process exit proof; never remove its queue entry or steal the grant.",
+        "terminal_resource_admissions" => "Finish and release the exact old holder's Held/Queued resource request with process-exit proof; replacement pane retirement will reevaluate on that event.",
+        "scope_replacement_authority_unproven" => "Reconcile the committed root WorkerReplace operation and old assignment generation; no acceptance Result or new attachment may stand in for this old scope's retirement authority.",
+        "checkout_consumer_present" => "The exact old scope is drained; leave foreign panes and writers untouched, and release the sealed claim only after their checkout use is proven clear.",
+        "outputs_kept" => "Publish or move these unique outputs to the Library or project; entry-removal events reevaluate empty-only private directory cleanup. Never discard the output tree.",
+        "attempt_unaccepted" => "Salvage or retain this old attempt's outputs separately; cancellation, failure or replacement does not authorize deleting them.",
+        "consumers_active" | "consumer_drain_unproven" => "Preserve this checkout and claims until independent producer/consumer exit proof is available; root PID or pane absence is not proof.",
+        "terminal_retirement_pending" => "Wait for this exact owned harness to become idle; a fresh pane event reevaluates retirement automatically.",
+        "terminal_outcome_unknown" | "effect_outcome_unknown" => "Inspect the exact uncertain effect/resource; do not resubmit an unknown close or deletion.",
+        "ownership_unproven" | "creation_identity_unavailable" | "creation_provenance_conflict" | "terminal_identity_changed" =>
+            "Preserve this borrowed, unknown or changed resource; do not adopt it or substitute another identity.",
+        "superseded_work_preserved" => "Review the old attempt separately; never discard its dirty/unmerged output or release its claims because the successor finished.",
+        _ => "Inspect the named attempt/resource and resolve this concrete guard; cleanup finish reevaluates existing authority without bypassing it.",
     }
 }
 
@@ -693,8 +1061,15 @@ fn terminal_evaluation(resource: &OwnedResourceRecord, run: &Run) -> CleanupEval
     }
     match &retirement.state {
         RetirementState::Retired { .. } => CleanupEvaluation::Absent,
-        RetirementState::Retained { .. } => CleanupEvaluation::Kept(reason(CleanupReasonClass::UserWork, "terminal_retained", "Existing retirement guards retained the terminal")),
+        RetirementState::Retained { reason: RetainReason::ObservationUnavailable, .. } =>
+            CleanupEvaluation::Waiting(reason(CleanupReasonClass::Transient, "terminal_observation_unavailable",
+                "Fresh endpoint/pane/process evidence is unavailable; preserved terminal will be reobserved on reconnection or the next physical event")),
+        RetirementState::Retained { reason: retained, .. } => CleanupEvaluation::Kept(reason(CleanupReasonClass::UserWork,
+            &format!("terminal_retained_{retained:?}"), format!("Exact terminal retirement guard refused closure: {retained:?}; preserve its physical identity and user work"))),
         RetirementState::Unknown { .. } => CleanupEvaluation::Unknown(reason(CleanupReasonClass::Reconcilable, "terminal_outcome_unknown", "Actual terminal retirement remains unconfirmed")),
+        RetirementState::Waiting { blockers } if blockers.contains(&RetirementBlocker::ResourceAdmissions) =>
+            CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "terminal_resource_admissions",
+                "Exact replaced-worker pane remains protected while its Held/Queued resource admission is unresolved")),
         _ => CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "terminal_retirement_pending", "Existing guarded retirement is still pending")),
     }
 }

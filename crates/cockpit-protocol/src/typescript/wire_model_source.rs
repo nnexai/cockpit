@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use syn::{
     Attribute, Data, DeriveInput, Expr, Fields, Item, Token, Variant,
@@ -50,31 +50,25 @@ pub(super) fn inputs(file: &syn::File) -> Result<BTreeMap<String, DeriveInput>, 
 // Resolve its expressions from the source rather than duplicating launch defaults.
 pub(super) fn orchestration_defaults(
     file: &syn::File,
-) -> Result<(serde_json::Value, serde_json::Value), String> {
+) -> Result<serde_json::Value, String> {
     use serde_json::{Map, Value};
 
-    let fail = || "OrchestrationConfiguration: unsupported literal Default or default_harness".to_owned();
-    let mut functions = file.items.iter().filter_map(|item| match item {
-        Item::Fn(item) if item.sig.ident == "default_harness" => Some(item),
-        _ => None,
-    });
-    let function = functions.next().ok_or_else(fail)?;
-    if functions.next().is_some() || !function.sig.inputs.is_empty() {
-        return Err(fail());
-    }
-    let [syn::Stmt::Expr(Expr::MethodCall(convert), None)] = function.block.stmts.as_slice() else {
+    let fail = || "OrchestrationConfiguration: unsupported grounded Default expression".to_owned();
+    let inputs = inputs(file)?;
+    let configuration = inputs.get("OrchestrationConfiguration").ok_or_else(fail)?;
+    let Data::Struct(data) = &configuration.data else {
         return Err(fail());
     };
-    let Expr::Lit(literal) = convert.receiver.as_ref() else {
+    let Fields::Named(fields) = &data.fields else {
         return Err(fail());
     };
-    let syn::Lit::Str(harness) = &literal.lit else {
+    let expected = fields.named.iter().map(|field| {
+        field.ident.as_ref().map(ToString::to_string).ok_or_else(fail)
+    }).collect::<Result<BTreeSet<_>, _>>()?;
+    let container = super::container(configuration, "OrchestrationConfiguration")?;
+    let serde_derive_internals::ast::Data::Struct(_, source_fields) = &container.data else {
         return Err(fail());
     };
-    if convert.method != "into" || !convert.args.is_empty() || convert.turbofish.is_some() {
-        return Err(fail());
-    }
-    let harness = Value::String(harness.value());
     let mut implementations = file.items.iter().filter_map(|item| match item {
         Item::Impl(item)
             if matches!(item.self_ty.as_ref(), syn::Type::Path(path)
@@ -106,33 +100,129 @@ pub(super) fn orchestration_defaults(
         let syn::Member::Named(name) = &field.member else {
             return Err(fail());
         };
-        let value = match &field.expr {
-            Expr::Call(call)
-                if call.args.is_empty() && expr_path(&call.func, &["default_harness"]) =>
-            {
-                harness.clone()
+        let source_field = source_fields.iter().find(|field| field.member == syn::Member::Named(name.clone()))
+            .ok_or_else(fail)?;
+        if let serde_derive_internals::attr::Default::Path(path) = source_field.attrs.default() {
+            let Expr::Call(call) = &field.expr else { return Err(fail()); };
+            let Expr::Path(function) = call.func.as_ref() else { return Err(fail()); };
+            let same_function = function.qself.is_none() && path.qself.is_none()
+                && function.path.get_ident().zip(path.path.get_ident())
+                    .is_some_and(|(called, configured)| called == configured);
+            if !same_function || !call.args.is_empty() {
+                return Err(fail());
             }
-            Expr::Call(call)
-                if call.args.is_empty() && expr_path(&call.func, &["Vec", "new"]) =>
-            {
-                Value::Array(Vec::new())
-            }
-            Expr::Path(path) if path.path.is_ident("None") => Value::Null,
-            Expr::Lit(literal) => match &literal.lit {
-                syn::Lit::Bool(value) => Value::Bool(value.value),
-                _ => return Err(fail()),
-            },
-            _ => return Err(fail()),
-        };
+        }
+        let value = literal_default_expr(file, &inputs, &field.expr, &mut BTreeSet::new())?;
         if values.insert(name.to_string(), value).is_some() {
             return Err(fail());
         }
     }
-    let expected = ["command", "extra_args", "harness_kind", "inbox_prompt_hints", "resume_args", "routes"];
-    if values.len() != expected.len() || expected.iter().any(|name| !values.contains_key(*name)) {
+    if values.len() != expected.len() || expected.iter().any(|name| !values.contains_key(name)) {
         return Err(fail());
     }
-    Ok((Value::Object(values), harness))
+    Ok(Value::Object(values))
+}
+
+fn literal_default_function(
+    file: &syn::File,
+    inputs: &BTreeMap<String, DeriveInput>,
+    name: &str,
+    visiting: &mut BTreeSet<String>,
+) -> Result<serde_json::Value, String> {
+    let fail = || format!("OrchestrationConfiguration: unsupported literal default function {name}");
+    if !matches!(name, "default_harness" | "default_max_parallel") || !visiting.insert(name.to_owned()) {
+        return Err(fail());
+    }
+    let mut functions = file.items.iter().filter_map(|item| match item {
+        Item::Fn(item) if item.sig.ident == name => Some(item),
+        _ => None,
+    });
+    let function = functions.next().ok_or_else(fail)?;
+    if functions.next().is_some() || !function.sig.inputs.is_empty()
+        || !function.sig.generics.params.is_empty() || function.sig.asyncness.is_some()
+        || function.sig.unsafety.is_some() || function.sig.variadic.is_some()
+    {
+        return Err(fail());
+    }
+    let [syn::Stmt::Expr(expr, None)] = function.block.stmts.as_slice() else {
+        return Err(fail());
+    };
+    let value = literal_default_expr(file, inputs, expr, visiting)?;
+    let syn::ReturnType::Type(_, output) = &function.sig.output else {
+        return Err(fail());
+    };
+    let ty = wire_ty(output, name)?;
+    let supported = match (&ty, &value) {
+        (super::WireTy::Str, serde_json::Value::String(_)) => true,
+        (super::WireTy::Int { min, max }, serde_json::Value::Number(number)) => {
+            number.as_i64().is_some_and(|value| value >= *min && value <= *max)
+        }
+        _ => false,
+    };
+    if !supported {
+        return Err(fail());
+    }
+    visiting.remove(name);
+    Ok(value)
+}
+
+fn literal_default_expr(
+    file: &syn::File,
+    inputs: &BTreeMap<String, DeriveInput>,
+    expr: &Expr,
+    visiting: &mut BTreeSet<String>,
+) -> Result<serde_json::Value, String> {
+    use serde_derive_internals::{ast, attr};
+    use serde_json::Value;
+    let fail = || "OrchestrationConfiguration: unsupported grounded Default expression".to_owned();
+    match expr {
+        Expr::Call(call) if call.args.is_empty() && expr_path(&call.func, &["Vec", "new"]) => {
+            Ok(Value::Array(Vec::new()))
+        }
+        Expr::Call(call) if call.args.is_empty() => {
+            let Expr::Path(path) = call.func.as_ref() else { return Err(fail()); };
+            if path.qself.is_some() || path.path.leading_colon.is_some() {
+                return Err(fail());
+            }
+            let name = path.path.get_ident().ok_or_else(fail)?.to_string();
+            literal_default_function(file, inputs, &name, visiting)
+        }
+        Expr::Path(path) if path.path.is_ident("None") => Ok(Value::Null),
+        Expr::Path(path) if path.qself.is_none() && path.path.leading_colon.is_none()
+            && path.path.segments.len() == 2
+            && path.path.segments.iter().all(|segment| segment.arguments.is_empty()) =>
+        {
+            let mut segments = path.path.segments.iter();
+            let name = segments.next().ok_or_else(fail)?.ident.to_string();
+            let variant = &segments.next().ok_or_else(fail)?.ident;
+            let input = inputs.get(&name).ok_or_else(fail)?;
+            let container = super::container(input, &name)?;
+            super::validate_container(&container, &name)?;
+            let ast::Data::Enum(variants) = &container.data else { return Err(fail()); };
+            if !matches!(container.attrs.tag(), attr::TagType::External) {
+                return Err(fail());
+            }
+            let variant = variants.iter().find(|item| item.ident == *variant).ok_or_else(fail)?;
+            if !matches!(variant.style, ast::Style::Unit) {
+                return Err(fail());
+            }
+            super::validate_variant(variant, &name)?;
+            Ok(Value::String(variant.attrs.name().deserialize_name().to_owned()))
+        }
+        Expr::Lit(literal) => match &literal.lit {
+            syn::Lit::Bool(value) => Ok(Value::Bool(value.value)),
+            syn::Lit::Int(value) => value.base10_parse::<u64>().map(Value::from).map_err(|_| fail()),
+            _ => Err(fail()),
+        },
+        Expr::MethodCall(convert) if convert.method == "into" && convert.args.is_empty()
+            && convert.turbofish.is_none() =>
+        {
+            let Expr::Lit(literal) = convert.receiver.as_ref() else { return Err(fail()); };
+            let syn::Lit::Str(value) = &literal.lit else { return Err(fail()); };
+            Ok(Value::String(value.value()))
+        }
+        _ => Err(fail()),
+    }
 }
 
 // Registered expansion only; never evaluate arbitrary macros or maintain their variants here.

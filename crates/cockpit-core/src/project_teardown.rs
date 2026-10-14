@@ -51,7 +51,18 @@ pub(crate) fn validate_creation_receipt(
                 }
             }
             OwnedResourceIdentity::Space { identity } => {
-                if identity.creation_operation_id != receipt.operation_id
+                let creation_operation = match receipt.moved_space.as_ref() {
+                    Some(binding) if binding.operation_id == receipt.operation_id
+                        && binding.workspace_id == identity.workspace_id
+                        && binding.endpoint_identity == identity.endpoint_identity
+                        && operation.tab_id.as_deref() == Some(binding.tab_id.as_str())
+                        && operation.pane_id.as_deref() == Some(binding.pane_id.as_str())
+                        && !binding.terminal_id.is_empty()
+                        && !binding.move_operation_id.is_empty() => &binding.move_operation_id,
+                    Some(_) => return Err(conflict()),
+                    None => &receipt.operation_id,
+                };
+                if identity.creation_operation_id != *creation_operation
                     || operation.workspace_id.as_deref() != Some(identity.workspace_id.as_str())
                     || identity.session_id != operation.session_id
                     || identity.session_id != operation.plan.session_id
@@ -61,6 +72,21 @@ pub(crate) fn validate_creation_receipt(
                     return Err(conflict());
                 }
                 4
+            }
+            OwnedResourceIdentity::AttemptDirectory { identity } => {
+                let mut owned = operation.owned_resources.iter().filter(|r| r.kind == "attempt_directory");
+                let owned = match (owned.next(), owned.next()) {
+                    (Some(owned), None) if owned.created_by_operation => owned,
+                    _ => return Err(conflict()),
+                };
+                if operation.plan.ownership != WorkspaceCheckoutOwnership::OwnedAttemptDirectory
+                    || operation.plan.mode != cockpit_protocol::projects::WorkspaceSetupMode::Open
+                    || identity.creation_operation_id != receipt.operation_id
+                    || identity.root != operation.plan.checkout_path || owned.path != identity.root
+                    || identity.device.is_empty() || identity.inode.is_empty()
+                    || operation.plan.repository.is_some() || operation.plan.branch.is_some() || operation.plan.base.is_some()
+                { return Err(conflict()); }
+                8
             }
             _ => return Err(conflict()),
         };
@@ -74,23 +100,29 @@ pub(crate) fn validate_creation_receipt(
         OwnedResourceIdentity::Branch { identity } => Some(identity), _ => None,
     });
     if branch.is_some() && branch != worktree { return Err(conflict()); }
+    if receipt.moved_space.is_some() && kinds & 4 == 0 { return Err(conflict()); }
+    if operation.plan.ownership == WorkspaceCheckoutOwnership::OwnedAttemptDirectory && kinds & 8 == 0 {
+        return Err(conflict());
+    }
     Ok(())
 }
 pub(crate) fn owned_run_identity(
     resource: &cockpit_protocol::orchestration::OwnedResourceRecord,
     run: &cockpit_protocol::orchestration::Run,
+    setup_operation_id: Option<&str>,
 ) -> Result<(), InspectionError> {
     use cockpit_protocol::orchestration::{CleanupAuthority, OwnedResourceIdentity, ResourceOwnership};
     let operation_id = match &resource.identity {
         OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } => &identity.creation_operation_id,
         OwnedResourceIdentity::Space { identity } => &identity.creation_operation_id,
+        OwnedResourceIdentity::AttemptDirectory { identity } => &identity.creation_operation_id,
         _ => return Err(InspectionError::new("unsupported_resource", "not a project resource")),
     };
     if resource.run_id != run.run_id || resource.root_id != run.root_id
         || resource.ownership != ResourceOwnership::Owned
         || resource.authority != CleanupAuthority::OwnedWhenSafe
         || resource.creation_operation_id.as_deref() != Some(operation_id.as_str())
-        || run.setup.as_ref().and_then(|s| s.operation_id.as_deref()) != Some(operation_id.as_str())
+        || run.setup.as_ref().and_then(|s| s.operation_id.as_deref()) != setup_operation_id
     {
         return Err(InspectionError::new("ownership_unproven", "cleanup requires the exact owned creating run and standing authority"));
     }
@@ -101,7 +133,7 @@ pub(crate) fn integrated_owned_head<'a>(
     identity: &'a cockpit_protocol::orchestration::OwnedGitIdentity,
     run: &'a cockpit_protocol::orchestration::Run,
 ) -> Result<&'a str, InspectionError> {
-    use cockpit_protocol::orchestration::{CloseReason, Integration, IntegrationMethod, RunStage, SourceOutput};
+    use cockpit_protocol::orchestration::{CloseReason, Integration, IntegrationMethod, ProjectSource, RunStage, SourceOutput};
     if let (Integration::NotApplicable { result_message_id, .. }, Some(source @ SourceOutput::NonCode {
         result_message_id: source_result, ..
     })) = (&run.integration, &run.source_output) {
@@ -125,9 +157,16 @@ pub(crate) fn integrated_owned_head<'a>(
         result_message_id, task_revision, .. } = source else {
         return Err(InspectionError::new("integration_unverified", "Git cleanup needs a validated code integration record"));
     };
+    // Source Results use the canonical project key; the owned creation journal
+    // uses Herdr's raw repository/common-directory key. Join both contracts
+    // through the recorded Git project, never compare a hash to a pathname.
+    let repository_matches = run.project.as_ref().is_some_and(|project|
+        repository_key == &project.key
+            && matches!(&project.source, ProjectSource::Git { common_dir }
+                if common_dir == &identity.common_dir && common_dir == &identity.repository_key));
     if run.stage != RunStage::Closed || run.close_reason != Some(CloseReason::Accepted)
         || verified_at.is_empty()
-        || repository_key != &identity.repository_key || target_repository_key != repository_key
+        || !repository_matches || target_repository_key != repository_key
         || checkout_key != &identity.checkout_key
         || run.source_output.as_ref() != Some(source)
         || run.result.as_ref().map(|r| r.message_id.as_str()) != Some(result_message_id.as_str())
@@ -143,16 +182,19 @@ pub(crate) fn integrated_owned_head<'a>(
     Ok(head_commit)
 }
 
-pub(crate) fn owned_consumers_quiescent(
+pub(crate) async fn owned_consumers_quiescent(
     resource: &cockpit_protocol::orchestration::OwnedResourceRecord,
+    run: &cockpit_protocol::orchestration::Run,
+    proof: Option<&crate::orchestration::cleanup::OwnedConsumerProof<'_>>,
 ) -> Result<(), InspectionError> {
     if !resource.consumers.is_empty() {
         return Err(InspectionError::new("resource_consumers", "registered consumers still retain this resource"));
     }
-    Err(InspectionError::new(
+    let proof = proof.ok_or_else(|| InspectionError::new(
         "consumer_proof_missing",
-        "exhaustive consumer quiescence is unavailable; unassignment and process disappearance are not stop proof",
-    ))
+        "exact service-issued released claim and owned scope authority is required; empty consumer lists and PID absence are not proof",
+    ))?;
+    proof.validate(resource, run).await
 }
 
 
@@ -587,7 +629,7 @@ mod tests {
             operation_id: "operation".into(), resources: vec![
                 OwnedResourceIdentity::Worktree { identity: identity.clone() },
                 OwnedResourceIdentity::Branch { identity: branch },
-            ], git_capture_error: None,
+            ], git_capture_error: None, moved_space: None,
         };
         assert!(validate_creation_receipt(&receipt, &operation(true)).is_err());
         receipt.resources = vec![OwnedResourceIdentity::Worktree { identity }];
@@ -601,8 +643,10 @@ mod tests {
     fn accepted_git_cleanup_checks_code_mapping_and_noncode_exemption() {
         use cockpit_protocol::orchestration::{Integration, IntegrationMethod, IntegrationMapping, Run, SourceOutput};
         let identity = git_identity();
+        // Canonical cockpit:project:git:v1 key for the fixture common directory.
+        let canonical_project_key = "f8e39957618599aa4b40a126448ac682c466262c530b1a22c8400c22464990bf".to_owned();
         let source = SourceOutput::Code {
-            repository_key: identity.repository_key.clone(), checkout_key: identity.checkout_key.clone(),
+            repository_key: canonical_project_key.clone(), checkout_key: identity.checkout_key.clone(),
             base_commit: identity.creation_tip.clone(), head_commit: "b".repeat(40), commits: vec!["b".repeat(40)],
             task_revision: "task-revision".into(), result_message_id: "result".into(), focused_checks: vec![],
         };
@@ -614,7 +658,9 @@ mod tests {
             "stage":"closed","close_reason":"accepted","dispatch":null,"target":null,"setup":null,
             "cleanup_policy":null,"last_report":null,"result":{"message_id":"result","kind":"result","outcome":"succeeded",
                 "summary":"accepted","plan":null,"source_output":source,"at":"0"},
-            "source_output":source,"integration":{"state":"pending"},"annotations":[],"project":null,
+            "source_output":source,"integration":{"state":"pending"},"annotations":[],
+            "project":{"key":canonical_project_key,"source":{"kind":"git","common_dir":identity.common_dir},
+                "repository_id":null,"source_workspace_id":null},
             "checkout":null,"attachment":null,"checkout_claim_id":null,"resume":null,"retirement":null,
             "created_at":"0","updated_at":"0"
         })).expect("closed accepted run");
@@ -622,7 +668,7 @@ mod tests {
         run.integration = Integration::Integrated {
             operation_id:"integration".into(), accepted_result_message_id:"result".into(),
             accepted_task_revision:"task-revision".into(), source:source.clone(),
-            target_repository_key:identity.repository_key.clone(), target_ref:"refs/heads/main".into(),
+            target_repository_key:canonical_project_key.clone(), target_ref:"refs/heads/main".into(),
             target_commit:"c".repeat(40), method:IntegrationMethod::RecordedAdaptation,
             mappings:vec![], checks:vec![], integrator_run_id:"integrator".into(), verified_at:"verified".into(),
         };
@@ -634,6 +680,32 @@ mod tests {
             });
         }
         assert_eq!(integrated_owned_head(&identity, &run).unwrap(), "b".repeat(40));
+        assert_ne!(canonical_project_key, identity.repository_key, "canonical project hash is not the raw Git key");
+        let mut wrong_source_key = run.clone();
+        if let Integration::Integrated { source: SourceOutput::Code { repository_key, .. }, .. } = &mut wrong_source_key.integration {
+            *repository_key = identity.repository_key.clone();
+        }
+        if let Integration::Integrated { target_repository_key, source, .. } = &mut wrong_source_key.integration {
+            *target_repository_key = identity.repository_key.clone();
+            wrong_source_key.source_output = Some(source.clone());
+            wrong_source_key.result.as_mut().unwrap().source_output = Some(source.clone());
+        }
+        assert!(integrated_owned_head(&identity, &wrong_source_key).is_err());
+        let mut wrong_target_key = run.clone();
+        if let Integration::Integrated { target_repository_key, .. } = &mut wrong_target_key.integration {
+            *target_repository_key = identity.repository_key.clone();
+        }
+        assert!(integrated_owned_head(&identity, &wrong_target_key).is_err());
+        let mut wrong_project_key = run.clone();
+        wrong_project_key.project.as_mut().unwrap().key = "e".repeat(64);
+        assert!(integrated_owned_head(&identity, &wrong_project_key).is_err());
+        let mut wrong_common_dir = run.clone();
+        wrong_common_dir.project.as_mut().unwrap().source = cockpit_protocol::orchestration::ProjectSource::Git {
+            common_dir: "/foreign/.git".into() };
+        assert!(integrated_owned_head(&identity, &wrong_common_dir).is_err());
+        let mut wrong_raw_key = identity.clone();
+        wrong_raw_key.repository_key = "/foreign/.git".into();
+        assert!(integrated_owned_head(&wrong_raw_key, &run).is_err());
         if let Integration::Integrated { verified_at, .. } = &mut run.integration { verified_at.clear(); }
         assert!(integrated_owned_head(&identity, &run).is_err());
         // The exemption does not apply to code output.

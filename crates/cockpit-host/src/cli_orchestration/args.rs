@@ -4,7 +4,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use cockpit_protocol::{
     orchestration::{
         DispatchTarget, MessageKind, OrchestrationAction, ReportKind, ReportOutcome,
-        TaskStepScope, WorkerCleanupPolicy, ResumeMode, SupervisorStartMode,
+        TaskStepScope, WorkerCleanupPolicy, SupervisorStartMode,
     },
     projects::{WorkspaceRecoveryAction, WorkspaceSetupRequest},
 };
@@ -62,19 +62,6 @@ pub(super) enum ProtocolCommand {
     },
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub(super) enum ResumeModeArg {
-    ReattachOrRestart,
-    ReplaceExisting,
-}
-impl From<ResumeModeArg> for ResumeMode {
-    fn from(mode: ResumeModeArg) -> Self {
-        match mode {
-            ResumeModeArg::ReattachOrRestart => Self::ReattachOrRestart,
-            ResumeModeArg::ReplaceExisting => Self::ReplaceExisting,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub(super) enum StartModeArg {
@@ -144,9 +131,13 @@ impl From<StepScopeArg> for TaskStepScope {
 pub(super) struct StepTaskArgs {
     /// Canonical task UUID from task list.
     pub(super) task: String,
-    /// Exact task_revision from task show, including prose, metadata and all steps.
+    /// Optional exact task revision; otherwise captured internally before one core CAS.
     #[arg(long)]
-    pub(super) revision: String,
+    pub(super) revision: Option<String>,
+}
+
+fn revision_fence(revision: Option<String>) -> Result<String, CliError> {
+    revision.ok_or_else(|| CliError::usage("Task mutation needs an internally resolved canonical revision"))
 }
 
 #[derive(Debug, Subcommand)]
@@ -156,7 +147,46 @@ pub(super) enum TaskCommand {
     /// Read description, read-only body, diagnostics, step IDs/offsets, relationships and revision.
     Show {
         /// Canonical task UUID from task list.
+        #[arg(required_unless_present = "self_task", conflicts_with = "self_task")]
+        task: Option<String>,
+        /// Read the task assigned to this credentialed worker.
+        #[arg(long = "self")]
+        self_task: bool,
+    },
+    /// Read direct prerequisite scope and valid accepted Result/source references; no publication or mutation.
+    Inputs {
+        /// Canonical task UUID; omission selects the caller's assigned task.
+        #[arg(conflicts_with = "self_task")]
+        task: Option<String>,
+        #[arg(long = "self")]
+        self_task: bool,
+    },
+    /// Authorize autonomous execution once dependencies and a parallel slot permit it.
+    Schedule {
         task: String,
+        #[arg(long)]
+        operation_id: Option<String>,
+        /// Optional exact task/document fences; omitted fences use the current canonical scope.
+        #[arg(long)]
+        task_revision: Option<String>,
+        #[arg(long)]
+        doc_revision: Option<String>,
+        #[command(flatten)]
+        launch: LaunchArgs,
+    },
+    /// Stop future scheduling; does not cancel or stop an existing attempt.
+    ScheduleCancel {
+        task: String,
+        #[arg(long)]
+        operation_id: Option<String>,
+    },
+    /// Replace the current or pending attempt with internal generation/run fencing.
+    Restart {
+        task: String,
+        #[arg(long)]
+        operation_id: Option<String>,
+        #[arg(long)]
+        reason: String,
     },
     /// Revoke a task assignment without stopping its physical worker or releasing resources.
     Unassign {
@@ -271,9 +301,10 @@ needs source_revision from task show SOURCE --json (task.task_revision)."
     },
     /// Set checked state explicitly; subtree scope updates every descendant atomically.
     #[command(
-        after_long_help = "Read task show TASK --json and use its exact task.task_revision and step ID.
-leaf requires a step without children; subtree sets the step and every
-descendant atomically. Checking a checklist is not supervisor acceptance."
+        after_long_help = "Use the stable task/step IDs from task show --self --json.
+The CLI captures the current task revision internally; --revision preserves an
+explicit fence. leaf requires no children; subtree updates every descendant.
+Checklist completion is not supervisor acceptance."
     )]
     StepSetChecked {
         #[command(flatten)]
@@ -319,6 +350,15 @@ descendant atomically. Checking a checklist is not supervisor acceptance."
 }
 
 impl TaskCommand {
+    pub(super) fn step_args(&mut self) -> Option<&mut StepTaskArgs> {
+        match self {
+            Self::DependenciesSet { task, .. } | Self::StepAdd { task, .. }
+                | Self::StepRename { task, .. } | Self::StepSetChecked { task, .. }
+                | Self::StepMove { task, .. } | Self::StepRemove { task, .. } => Some(task),
+            _ => None,
+        }
+    }
+
     pub(super) fn action(self, root_id: String) -> Result<OrchestrationAction, CliError> {
         Ok(match self {
             Self::Unassign { task, operation_id, expected_assignment_generation } =>
@@ -385,7 +425,7 @@ impl TaskCommand {
             } => OrchestrationAction::TaskDependenciesSet {
                 root_id,
                 task_id: task.task,
-                expected_task_revision: task.revision,
+                expected_task_revision: revision_fence(task.revision)?,
                 expected_doc_revision: doc_revision,
                 depends_on,
             },
@@ -398,7 +438,7 @@ impl TaskCommand {
             } => OrchestrationAction::TaskStepAdd {
                 root_id,
                 task_id: task.task,
-                expected_task_revision: task.revision,
+                expected_task_revision: revision_fence(task.revision)?,
                 step_id,
                 parent_step_id,
                 before_step_id,
@@ -411,7 +451,7 @@ impl TaskCommand {
             } => OrchestrationAction::TaskStepRename {
                 root_id,
                 task_id: task.task,
-                expected_task_revision: task.revision,
+                expected_task_revision: revision_fence(task.revision)?,
                 step_id,
                 title,
             },
@@ -423,7 +463,7 @@ impl TaskCommand {
             } => OrchestrationAction::TaskStepSetChecked {
                 root_id,
                 task_id: task.task,
-                expected_task_revision: task.revision,
+                expected_task_revision: revision_fence(task.revision)?,
                 step_id,
                 checked,
                 scope: scope.into(),
@@ -436,7 +476,7 @@ impl TaskCommand {
             } => OrchestrationAction::TaskStepMove {
                 root_id,
                 task_id: task.task,
-                expected_task_revision: task.revision,
+                expected_task_revision: revision_fence(task.revision)?,
                 step_id,
                 parent_step_id,
                 before_step_id,
@@ -444,14 +484,17 @@ impl TaskCommand {
             Self::StepRemove { task, step_id } => OrchestrationAction::TaskStepRemove {
                 root_id,
                 task_id: task.task,
-                expected_task_revision: task.revision,
+                expected_task_revision: revision_fence(task.revision)?,
                 step_id,
+            },
+            Self::ScheduleCancel { task, operation_id } => OrchestrationAction::TaskScheduleCancel {
+                root_id, task_id: task, operation_id: submission_id(operation_id, "Operation")?,
             },
             Self::AssignIds { doc_revision } => OrchestrationAction::TasksAssignIds {
                 root_id,
                 expected_doc_revision: doc_revision,
             },
-            Self::List | Self::Show { .. } => {
+            Self::List | Self::Show { .. } | Self::Inputs { .. } | Self::Schedule { .. } | Self::Restart { .. } => {
                 return Err(CliError::usage(
                     "read-only task command has no mutation action",
                 ));
@@ -517,117 +560,132 @@ impl From<CleanupPolicyArg> for WorkerCleanupPolicy {
 }
 
 #[derive(Debug, Args)]
-#[group(skip)]
-#[command(group(clap::ArgGroup::new("target").required(true).multiple(false).args(["repository", "path", "space", "space_worktree"])))]
 pub(super) struct WorkerStartArgs {
-    /// Stable caller-chosen operation UUID; exact retries reuse it and the complete payload.
+    /// Stable operation UUID; generated and printed when omitted. Retain it after uncertainty.
     #[arg(long)]
-    pub(super) operation_id: String,
-    /// Exact canonical task revision from task show TASK --json.
+    pub(super) operation_id: Option<String>,
+    /// Optional exact task revision; otherwise read internally before the single CAS submission.
     #[arg(long)]
-    pub(super) task_revision: String,
-    /// Exact root document revision from task list --json.
+    pub(super) task_revision: Option<String>,
+    /// Optional exact document revision; otherwise read internally before submission.
     #[arg(long)]
-    pub(super) doc_revision: String,
-    /// Standing cleanup authority for resources proven owned by this start.
-    #[arg(long, value_enum)]
-    pub(super) cleanup_policy: CleanupPolicyArg,
-    /// Canonical task UUID from task list; starting does not create the task.
+    pub(super) doc_revision: Option<String>,
     #[arg(long)]
     pub(super) task: String,
-    /// Explicit catalog repository ID; never selected from cwd or current Space.
+    #[command(flatten)]
+    pub(super) launch: LaunchArgs,
+}
+
+#[derive(Debug, Args)]
+#[group(skip)]
+#[command(group(clap::ArgGroup::new("target").multiple(false).args(["repository", "path", "space", "space_worktree"])))]
+pub(super) struct LaunchArgs {
+    /// Standing authority only for resources proven owned by this launch.
+    #[arg(long, value_enum, default_value = "owned-when-safe")]
+    pub(super) cleanup_policy: CleanupPolicyArg,
     #[arg(long)]
     pub(super) repository: Option<String>,
-    /// Open a directory as a borrowed checkout instead of creating a worktree.
     #[arg(long)]
     pub(super) path: Option<String>,
-    /// Launch in an existing Herdr workspace without workspace setup.
     #[arg(long)]
     pub(super) space: Option<String>,
-    /// Create an owned linked worktree from this explicit project Space's repository.
+    /// Create an isolated owned worktree from the source Space.
     #[arg(long)]
     pub(super) space_worktree: Option<String>,
-    /// New worker branch for repository setup or a Space-linked worktree.
-    #[arg(long, conflicts_with_all = ["path", "space"])]
+    #[arg(long, conflicts_with_all = ["path", "space"], requires = "target")]
     pub(super) branch: Option<String>,
-    /// Base ref; Space worktrees default to the source checkout's current HEAD.
-    #[arg(long, conflicts_with_all = ["path", "space"])]
+    #[arg(long, conflicts_with_all = ["path", "space"], requires = "target")]
     pub(super) base: Option<String>,
-    /// Explicit checkout destination for --repository setup.
-    #[arg(long, requires = "repository", conflicts_with_all = ["path", "space", "space_worktree"])]
+    #[arg(long, requires = "repository")]
     pub(super) checkout_path: Option<String>,
-    /// Primary artifact URL attached to --repository setup.
-    #[arg(long, requires = "repository", conflicts_with_all = ["path", "space", "space_worktree"])]
+    #[arg(long, requires = "repository")]
     pub(super) artifact: Option<String>,
-    /// Additional artifact URL for --repository setup; may be repeated.
-    #[arg(long, requires = "repository", conflicts_with_all = ["path", "space", "space_worktree"])]
+    #[arg(long, requires = "repository")]
     pub(super) linked_artifact: Vec<String>,
-    /// Task name for repository/path workspace setup.
-    #[arg(long, conflicts_with_all = ["space", "space_worktree"])]
+    #[arg(long, conflicts_with_all = ["space", "space_worktree"], requires = "target")]
     pub(super) task_name: Option<String>,
-    /// Worker scope and implementation instructions; no separate permission gate.
-    #[arg(long, required_unless_present = "brief", conflicts_with = "brief")]
+    /// Additional instructions only; canonical task prose is not copied into a new task store.
+    #[arg(long, conflicts_with = "brief")]
     pub(super) brief_file: Option<PathBuf>,
-    /// Literal worker instructions (at most 16 KiB).
-    #[arg(long, required_unless_present = "brief_file")]
+    #[arg(long)]
     pub(super) brief: Option<String>,
-    /// Human-readable worker label; not a routing or authority selector.
     #[arg(long)]
     pub(super) label: Option<String>,
 }
-impl WorkerStartArgs {
-    pub(super) fn action(self, root_id: String) -> Result<OrchestrationAction, CliError> {
+
+pub(super) struct LaunchInput {
+    pub(super) target: Option<DispatchTarget>,
+    pub(super) brief: String,
+    pub(super) cleanup_policy: WorkerCleanupPolicy,
+    pub(super) label: Option<String>,
+}
+
+impl LaunchArgs {
+    pub(super) fn read(self) -> Result<LaunchInput, CliError> {
         let brief = match self.brief {
             Some(brief) => bounded(brief)?,
-            None => read_input(self.brief_file, false)?
-                .ok_or_else(|| CliError::usage("--brief or --brief-file is required"))?,
+            None => read_input(self.brief_file, false)?.unwrap_or_default(),
         };
         let target = match (self.repository, self.path, self.space, self.space_worktree) {
-            (Some(repository_id), None, None, None) => DispatchTarget::Setup {
+            (Some(repository_id), None, None, None) => Some(DispatchTarget::Setup {
                 request: WorkspaceSetupRequest::Create {
-                    repository_id,
-                    branch: self.branch,
-                    base_ref: self.base,
-                    checkout_path: self.checkout_path,
-                    label: self.label.clone(),
-                    task_name: self.task_name,
-                    artifact_url: self.artifact,
-                    linked_artifact_urls: self.linked_artifact,
-                    focus: false,
+                    repository_id, branch: self.branch, base_ref: self.base,
+                    checkout_path: self.checkout_path, label: self.label.clone(),
+                    task_name: self.task_name, artifact_url: self.artifact,
+                    linked_artifact_urls: self.linked_artifact, focus: false,
                 },
-            },
-            (None, Some(path), None, None) => DispatchTarget::Setup {
+            }),
+            (None, Some(path), None, None) => Some(DispatchTarget::Setup {
                 request: WorkspaceSetupRequest::Open {
-                    path,
-                    label: self.label.clone(),
-                    task_name: self.task_name,
-                    focus: false,
+                    path, label: self.label.clone(), task_name: self.task_name, focus: false,
                 },
-            },
-            (None, None, Some(workspace_id), None) => {
-                DispatchTarget::ExistingSpace { workspace_id }
-            }
-            (None, None, None, Some(workspace_id)) => DispatchTarget::SpaceWorktree {
-                workspace_id,
-                branch: self.branch,
-                base_ref: self.base,
-            },
-            _ => {
-                return Err(CliError::usage(
-                    "worker-start requires exactly one of --repository, --path, --space, --space-worktree",
-                ));
-            }
+            }),
+            (None, None, Some(workspace_id), None) => Some(DispatchTarget::ExistingSpace { workspace_id }),
+            (None, None, None, Some(workspace_id)) => Some(DispatchTarget::SpaceWorktree {
+                workspace_id, branch: self.branch, base_ref: self.base,
+            }),
+            (None, None, None, None) => None,
+            _ => return Err(CliError::usage("Choose exactly one project placement")),
         };
+        Ok(LaunchInput { target, brief, cleanup_policy: self.cleanup_policy.into(), label: self.label })
+    }
+}
+
+pub(super) fn submission_id(id: Option<String>, kind: &str) -> Result<String, CliError> {
+    let id = id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    eprintln!("{kind} ID: {id}");
+    Ok(id)
+}
+
+pub(super) fn check_outcome(input: String) -> Result<cockpit_protocol::orchestration::CheckOutcome, CliError> {
+    use cockpit_protocol::orchestration::{CheckOutcome, CheckStatus};
+    let input = bounded(input)?;
+    let parts: Vec<_> = input.splitn(4, "::").collect();
+    if parts.len() < 3 || parts[0].trim().is_empty() || parts[1].trim().is_empty() {
+        return Err(CliError::usage("--check requires contract::command::passed|failed|not_run[::limitation]"));
+    }
+    let outcome = match parts[2] {
+        "passed" => CheckStatus::Passed,
+        "failed" => CheckStatus::Failed,
+        "not_run" => CheckStatus::NotRun,
+        _ => return Err(CliError::usage("Check outcome must be passed, failed or not_run")),
+    };
+    Ok(CheckOutcome { contract: parts[0].into(), command_or_scenario: parts[1].into(),
+        outcome, evidence: None, limitation: parts.get(3).map(|text| (*text).into()) })
+}
+
+impl WorkerStartArgs {
+    pub(super) fn action(self, root_id: String) -> Result<OrchestrationAction, CliError> {
+        let launch = self.launch.read()?;
+        let task_revision = self.task_revision.ok_or_else(|| CliError::usage("WorkerStart needs an internally resolved task revision"))?;
+        let doc_revision = self.doc_revision.ok_or_else(|| CliError::usage("WorkerStart needs an internally resolved document revision"))?;
+        let target = launch.target.ok_or_else(|| CliError::usage("worker-start requires explicit project placement; task schedule defaults to an owned worktree"))?;
+        let operation_id = submission_id(self.operation_id, "Operation")?;
+        eprintln!("Task revision: {task_revision}\nDocument revision: {doc_revision}");
         Ok(OrchestrationAction::WorkerStart {
-            operation_id: self.operation_id,
-            root_id,
-            task_id: self.task,
-            expected_task_revision: self.task_revision,
-            expected_doc_revision: self.doc_revision,
-            label: self.label,
-            target,
-            brief,
-            cleanup_policy: self.cleanup_policy.into(),
+            operation_id, root_id, task_id: self.task,
+            expected_task_revision: task_revision, expected_doc_revision: doc_revision,
+            target, brief: launch.brief, cleanup_policy: launch.cleanup_policy, label: launch.label,
         })
     }
 }
@@ -667,25 +725,60 @@ pub(super) enum RunCommand {
         #[arg(long)]
         expected_project_key: Option<String>,
     },
-    /// Reconcile the durable run; replacement requires fresh owner-produced exit proof.
+    /// Reconcile attachment state without replacing a live writer.
     Resume {
         run: String,
         #[arg(long)]
         operation_id: String,
-        #[arg(long, value_enum)]
-        mode: ResumeModeArg,
         #[arg(long)]
         expected_attachment_epoch: Option<u64>,
-        #[arg(long)]
-        decision_id: Option<String>,
     },
-    /// Register this actual conversation with the issued run capability.
+    /// Explicit low-level registration; ordinary credentialed calls register implicitly.
     Register {
         #[arg(long)]
         operation_id: String,
     },
     /// Register if unbound and read role, conversation, assignment and inbox counts.
     Context,
+    /// Read canonical task scope and the short launch bootstrap.
+    Brief,
+    /// Resolve the root's exact current human question after receiving the actual chat answer.
+    Answer {
+        #[arg(long)]
+        message_id: Option<String>,
+        /// Exact unresolved root NeedsInput message ID.
+        #[arg(long = "in-reply-to")]
+        question: String,
+        /// The actual human answer; not a synthetic progress/acceptance receipt.
+        #[arg(long)]
+        text: String,
+    },
+    /// Replace this descendant's current attempt; inspect and fence internally.
+    WorkerReplace {
+        run: String,
+        #[arg(long)]
+        operation_id: Option<String>,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Complete a worker task with actual source commits and supplied check evidence; never closes the liaison.
+    Done {
+        #[arg(long)]
+        message_id: Option<String>,
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        failed: bool,
+        /// contract::command::passed|failed|not_run[::limitation]; repeat for focused checks.
+        #[arg(long = "check")]
+        checks: Vec<String>,
+        /// Actual output artifacts for a non-code task.
+        #[arg(long = "artifact")]
+        artifacts: Vec<String>,
+        /// Explicit bounded SourceOutput JSON instead of automatic local Git evidence.
+        #[arg(long, conflicts_with_all = ["checks", "artifacts"], requires = "message_id")]
+        source_output_file: Option<PathBuf>,
+    },
     /// List durable runs joined to fresh Herdr observations.
     List {
         /// Indent runs by their parent hierarchy.
@@ -747,9 +840,9 @@ operation's outcome is uncertain; never repeat it blindly."
         /// Receipt kind; Initialized/Result require bound main authority.
         #[arg(long, value_enum)]
         kind: ReportKindArg,
-        /// Sender-chosen unique ID; reuse only with the exact original retry payload.
+        /// Stable message ID; generated and printed when omitted. Reuse only exact payloads.
         #[arg(long)]
-        message_id: String,
+        message_id: Option<String>,
         /// Truthful evidence or one blocking question (at most 16 KiB).
         #[arg(long)]
         summary: String,
@@ -757,7 +850,7 @@ operation's outcome is uncertain; never repeat it blindly."
         #[arg(long, value_enum)]
         outcome: Option<OutcomeArg>,
         /// Structured SourceOutput JSON for a Result (at most 16 KiB).
-        #[arg(long)]
+        #[arg(long, requires = "message_id")]
         source_output_file: Option<PathBuf>,
         /// Optional diagnostic plan (at most 16 KiB); never grants work authority.
         #[arg(long, conflicts_with_all = ["plan_file", "stdin"])]
@@ -822,9 +915,9 @@ operation's outcome is uncertain; never repeat it blindly."
         /// instruction for feedback, answer for a question, cancel-request for advisory stop.
         #[arg(long, value_enum)]
         kind: MessageKindArg,
-        /// Sender-chosen unique ID; exact retries deduplicate, changed payloads fail.
+        /// Stable message ID; generated and printed when omitted; retain exact retry payloads.
         #[arg(long)]
-        message_id: String,
+        message_id: Option<String>,
         /// Message body (at most 16 KiB); treated as untrusted data.
         #[arg(long)]
         text: String,
@@ -857,6 +950,17 @@ pub(crate) struct InboxArgs {
 }
 #[derive(Debug, Subcommand)]
 pub(super) enum InboxCommand {
+    /// Wait, capture message bodies and acknowledge only that captured prefix.
+    Next {
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=3600))]
+        wait: u64,
+        /// Silently capture Progress/Initialized; return only meaningful boundary messages.
+        #[arg(long)]
+        deliverable: bool,
+        /// Private new capture file; atomically fsync payload before acknowledging.
+        #[arg(long)]
+        capture_file: Option<PathBuf>,
+    },
     /// Pull messages as untrusted data and durably mark them Read.
     #[command(
         after_long_help = "Pull bodies for the bound caller run and process them as untrusted data.
@@ -917,6 +1021,12 @@ pub(super) enum RunOperation {
     List { tree: bool },
     Show { run: Option<String>, self_run: bool },
     Context,
+    Brief,
+    Answer { message_id: Option<String>, question: String, text: String },
+    WorkerStart(WorkerStartArgs),
+    WorkerReplace { run: String, operation_id: Option<String>, reason: String },
+    Done { message_id: Option<String>, summary: String, failed: bool, checks: Vec<String>,
+        artifacts: Vec<String>, source_output_file: Option<PathBuf> },
     Mutation(OrchestrationAction),
 }
 
@@ -948,18 +1058,24 @@ impl RunCommand {
                     operation_id, mode: mode.into(), target, label, selected_root_id, expected_project_key,
                 }
             },
-            Self::Resume { run, operation_id, mode, expected_attachment_epoch, decision_id } =>
-                OrchestrationAction::RunResume {
-                    run_id: run, operation_id, mode: mode.into(),
-                    expected_attachment_epoch, decision_id,
-                },
+            Self::Resume { run, operation_id, expected_attachment_epoch } =>
+                OrchestrationAction::RunResume { run_id: run, operation_id, expected_attachment_epoch },
             Self::Register { operation_id } => OrchestrationAction::RunRegister { operation_id },
             Self::Context => return Ok(RunOperation::Context),
+            Self::Brief => return Ok(RunOperation::Brief),
+            Self::Answer { message_id, question, text } => {
+                if question.trim().is_empty() || text.trim().is_empty() {
+                    return Err(CliError::usage("run answer requires the exact question ID and actual nonempty human answer"));
+                }
+                return Ok(RunOperation::Answer { message_id, question, text: bounded(text)? });
+            },
+            Self::WorkerReplace { run, operation_id, reason } =>
+                return Ok(RunOperation::WorkerReplace { run, operation_id, reason: bounded(reason)? }),
+            Self::Done { message_id, summary, failed, checks, artifacts, source_output_file } =>
+                return Ok(RunOperation::Done { message_id, summary: bounded(summary)?, failed, checks, artifacts, source_output_file }),
             Self::List { tree } => return Ok(RunOperation::List { tree }),
             Self::Show { run, self_run } => return Ok(RunOperation::Show { run, self_run }),
-            Self::WorkerStart(args) => args.action(
-                common.root.clone().ok_or_else(|| CliError::usage("worker-start requires --root"))?,
-            )?,
+            Self::WorkerStart(args) => return Ok(RunOperation::WorkerStart(args)),
             Self::Accept { run, task_revision } => OrchestrationAction::Accept {
                 run_id: run,
                 expected_task_revision: task_revision,
@@ -988,7 +1104,7 @@ impl RunCommand {
                 original_task_revision,
                 original_claim_id,
             } => common.report_action(
-                kind, message_id, summary, outcome, source_output_file, plan, plan_file, stdin, to,
+                kind, submission_id(message_id, "Message")?, summary, outcome, source_output_file, plan, plan_file, stdin, to,
                 original_task_revision, original_claim_id,
             )?,
             Self::IntegrationRecord { record_file } => OrchestrationAction::IntegrationRecord {
@@ -1018,7 +1134,7 @@ impl RunCommand {
                 original_task_revision,
                 original_claim_id,
             } => OrchestrationAction::MessageSend {
-                message_id,
+                message_id: submission_id(message_id, "Message")?,
                 to_run_id: run,
                 kind: match kind {
                     MessageKindArg::Instruction => MessageKind::Instruction,

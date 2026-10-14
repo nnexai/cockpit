@@ -77,6 +77,12 @@ pub(crate) fn validate_report_output(
         return Ok(());
     }
     let run = &state.runs[index];
+    if matches!(run.kind, RunKind::Supervisor | RunKind::Adopted) && run.stage == RunStage::Active
+        && run.parent_run_id.is_none() && run.root_id == run.run_id {
+        return if source_output.is_none() { Ok(()) } else {
+            Err(error("invalid_source_output", "Root diagnostic Results cannot claim worker completion source output"))
+        };
+    }
     if run.kind != RunKind::Worker || run.task_id.as_deref().is_none_or(|task_id|
         projection::current_task_run(state, &run.root_id, task_id)
             .is_none_or(|current| current.run_id != run.run_id)) {
@@ -261,6 +267,99 @@ impl OrchestrationService {
         Ok(Some(OutputFacts { request_digest: resume::request_digest(&request.action, &request.session_id)?, run_id: run.run_id,
             source_checkout: checkout.clone(), source_claim_id: claim.claim_id.clone(), source_claim_revision: claim.revision,
             source_holder: claim.holder.clone().expect("verified holder"), target_checkout: target, integration }))
+    }
+}
+
+/// Reuse only a previously verified *target* check receipt at the exact target
+/// ref/commit. Source checks describe required contracts, never passed target proof.
+fn automatic_record(run: &Run, receipt: &Integration) -> Option<IntegrationRecord> {
+    let source = run.source_output.as_ref()?;
+    let SourceOutput::Code { repository_key, .. } = source else { return None };
+    let Integration::Integrated { target_repository_key, target_ref, target_commit,
+        checks: target_checks, integrator_run_id, verified_at, .. } = receipt else { return None };
+    let required: BTreeSet<_> = checks(source).iter().map(|check| check.contract.as_str()).collect();
+    let performed: BTreeSet<_> = target_checks.iter().map(|check| check.contract.as_str()).collect();
+    if required.is_empty() || !required.is_subset(&performed) || verified_at.is_empty()
+        || target_repository_key != repository_key || target_checks.is_empty()
+        || target_checks.iter().any(|check| check.outcome != CheckStatus::Passed
+            || check.limitation.as_deref().is_some_and(|limitation| !limitation.trim().is_empty())) {
+        return None;
+    }
+    let (result_message_id, task_revision) = output_identity(source);
+    let operation_id = Uuid::new_v5(&Uuid::NAMESPACE_OID,
+        format!("cleanup-integration:{}:{}:{target_ref}:{target_commit}", run.run_id, result_message_id).as_bytes()).to_string();
+    Some(IntegrationRecord { operation_id: operation_id.clone(), run_id: run.run_id.clone(),
+        expected_result_message_id: result_message_id.into(), expected_task_revision: task_revision.into(),
+        integration: Integration::Integrated {
+            operation_id, accepted_result_message_id: result_message_id.into(),
+            accepted_task_revision: task_revision.into(), source: source.clone(),
+            target_repository_key: target_repository_key.clone(), target_ref: target_ref.clone(),
+            target_commit: target_commit.clone(), method: IntegrationMethod::Ancestor,
+            mappings: Vec::new(), checks: target_checks.clone(), integrator_run_id: integrator_run_id.clone(),
+            verified_at: String::new(),
+        },
+    })
+}
+
+impl OrchestrationService {
+    /// Owner-only event reconciliation. No checks are executed or invented, and
+    /// absent target attestations leave integration pending for the liaison.
+    pub(in crate::orchestration) async fn reconcile_accepted_integrations(&self) -> Result<(), InspectionError> {
+        let saved = self.store.lock()?.read()?;
+        for run in saved.runs.iter().filter(|run| run.kind == RunKind::Worker
+            && run.stage == RunStage::Closed && run.close_reason == Some(CloseReason::Accepted)
+            && run.integration == Integration::Pending
+            && run.result.as_ref().is_some_and(|result| result.outcome == Some(ReportOutcome::Succeeded))) {
+            let Some(source) = run.source_output.as_ref() else { continue };
+            let Some(checkout) = run.checkout.as_ref() else { continue };
+            let Ok(claim) = claim_for(&saved, run) else { continue };
+            if verify_source(run, source).await.is_err() { continue; }
+            for checked_run in saved.runs.iter().filter(|checked| checked.root_id == run.root_id
+                && checked.session_id == run.session_id) {
+                let Some(record) = automatic_record(run, &checked_run.integration) else { continue };
+                let Integration::Integrated { target_repository_key, .. } = &record.integration else { unreachable!() };
+                let Some(target_run) = saved.runs.iter().find(|target| target.root_id == run.root_id
+                    && target.session_id == run.session_id
+                    && target.project.as_ref().is_some_and(|project| project.key == *target_repository_key)
+                    && target.checkout.as_ref().is_some_and(|target| target.git.is_some()
+                        && target.key != checkout.key)) else { continue };
+                let target = target_run.checkout.as_ref().expect("filtered checkout");
+                let Ok(integrated @ Integration::Integrated { .. }) =
+                    verify_integration(&record, source, checkout, target).await else { continue };
+                let locked = self.store.lock()?;
+                let mut state = locked.read()?;
+                let index = run_index(&state, &run.run_id)?;
+                let current = &state.runs[index];
+                let task_id = match current.task_id.as_deref() { Some(task_id) => task_id, None => continue };
+                if current.stage != RunStage::Closed || current.close_reason != Some(CloseReason::Accepted)
+                    || current.integration != Integration::Pending || current.source_output != run.source_output
+                    || current.checkout != run.checkout || current.assignment_generation != run.assignment_generation
+                    || current.result.as_ref().is_none_or(|result| result.outcome != Some(ReportOutcome::Succeeded)
+                        || result.message_id != record.expected_result_message_id)
+                    || require_source_identity(current, &record.expected_result_message_id, &record.expected_task_revision).is_err()
+                    || projection::current_task_run(&state, &run.root_id, task_id).is_none_or(|attempt| attempt.run_id != run.run_id)
+                    || state.runs.iter().find(|checked| checked.run_id == checked_run.run_id)
+                        .is_none_or(|checked| checked.integration != checked_run.integration)
+                    || state.runs.iter().find(|actual| actual.run_id == target_run.run_id)
+                        .is_none_or(|actual| actual.checkout.as_ref() != Some(target)) { continue; }
+                let Ok(current_claim) = claim_for(&state, current) else { continue };
+                if current_claim.claim_id != claim.claim_id || current_claim.revision != claim.revision
+                    || current_claim.holder != claim.holder { continue; }
+                let document = locked.tasks(&run.root_id)?;
+                if !document.task(task_id)?.checked
+                    || !document.checked_matches_revision(task_id, &record.expected_task_revision)? { continue; }
+                project_identity::revalidate_checkout(checkout)?;
+                project_identity::revalidate_checkout(target)?;
+                state.runs[index].integration = integrated;
+                state.runs[index].updated_at = now();
+                state.runs[index].annotations.push(Annotation { at: now(), by: ActorRef::Dispatcher,
+                    text: format!("Exact Git containment verified using existing passed target checks from attempt {} at its recorded target commit.", checked_run.run_id) });
+                let revision = locked.save(&mut state)?;
+                self.revision.send_replace(revision);
+                break;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -561,8 +660,8 @@ mod tests {
             task_revision: "updated canonical scope".into(), artifacts: vec!["actual analysis result".into()],
             focused_checks: Vec::new() };
         let mut state = OrchestrationState { runs: vec![run], task_ownership: vec![TaskOwnership {
-            root_id: "root".into(), task_id: "task".into(), generation: 1,
-            owner: Some(TaskOwner { run_id: "worker".into(), conversation, claim_operation_id: id() }),
+            root_id: "root".into(), task_id: "task".into(), generation: 1, schedule: None,
+            owner: Some(TaskOwner { run_id: "worker".into(), conversation: Some(conversation), claim_operation_id: id() }),
         }], ..Default::default() };
         let mut action = OrchestrationAction::Report { message_id: "current-result".into(),
             kind: ReportKind::Result, outcome: Some(ReportOutcome::Succeeded), summary: "Updated scope completed".into(),
@@ -644,5 +743,43 @@ mod tests {
         let mut wrong_baseline = run;
         wrong_baseline.setup.as_mut().unwrap().base_commit = Some(later_head);
         assert!(verify_source(&wrong_baseline, &case.source).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn automatic_containment_requires_existing_exact_target_check_receipt() {
+        let case = GitCase::new(false).await;
+        let mut run = new_run("accepted", "session", RunKind::Worker, "worker".into(),
+            "root", Some("root".into()), Some("task".into()), 1);
+        run.source_output = Some(case.source.clone());
+        assert!(automatic_record(&run, &Integration::Pending).is_none(),
+            "passed source checks never manufacture a target receipt");
+        let mut receipt = case.record(IntegrationMethod::PatchEquivalent, CheckStatus::Passed).integration;
+        if let Integration::Integrated { verified_at, .. } = &mut receipt { *verified_at = now(); }
+        let candidate = automatic_record(&run, &receipt).unwrap();
+        assert!(verify_integration(&candidate, &case.source, &case.source_checkout,
+            &case.target_checkout).await.is_err(), "patch equivalence is not ordinary ancestry");
+        git(&case.target_path, &["merge", "--no-ff", "worker", "-m", "contain accepted head"]);
+        let commit = git(&case.target_path, &["rev-parse", "HEAD"]).trim().to_owned();
+        if let Integration::Integrated { target_commit, checks, .. } = &mut receipt {
+            *target_commit = commit.clone();
+            checks[0].evidence = Some(format!("Actual target scenario passed at {commit}"));
+        }
+        let candidate = automatic_record(&run, &receipt).unwrap();
+        let verified = verify_integration(&candidate, &case.source, &case.source_checkout,
+            &case.target_checkout).await.unwrap();
+        assert!(matches!(verified, Integration::Integrated { method: IntegrationMethod::Ancestor, .. }));
+        for status in [CheckStatus::Failed, CheckStatus::NotRun] {
+            let mut not_passed = receipt.clone();
+            if let Integration::Integrated { checks, .. } = &mut not_passed { checks[0].outcome = status; }
+            assert!(automatic_record(&run, &not_passed).is_none());
+        }
+        let mut wrong_contract = receipt.clone();
+        if let Integration::Integrated { checks, .. } = &mut wrong_contract {
+            checks[0].contract = "unrelated".into();
+        }
+        assert!(automatic_record(&run, &wrong_contract).is_none());
+        git(&case.target_path, &["commit", "--allow-empty", "-m", "target changed after checks"]);
+        assert!(verify_integration(&candidate, &case.source, &case.source_checkout,
+            &case.target_checkout).await.is_err(), "checks cannot follow a moving ref");
     }
 }

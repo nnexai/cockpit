@@ -68,6 +68,7 @@ fn run(kind: RunKind, root_id: Option<&str>) -> Run {
             shell: None,
             machine_id: None,
             launch_attempt: 1,
+            process_scope: None,
             launch_mode: None,
             updated_at: super::super::now(),
         }),
@@ -120,9 +121,10 @@ impl Fixture {
             generation: worker.assignment_generation.unwrap(),
             owner: Some(TaskOwner {
                 run_id: worker.run_id.clone(),
-                conversation: worker.attachment.as_ref().unwrap().conversation.clone().unwrap(),
+                conversation: Some(worker.attachment.as_ref().unwrap().conversation.clone().unwrap()),
                 claim_operation_id: worker_record.credential_id.clone(),
             }),
+            schedule: None,
         }];
         state.runs = vec![root, worker];
         state.credentials = vec![root_record, worker_record];
@@ -134,7 +136,7 @@ impl Fixture {
         let run = &self.state.runs[index];
         super::super::AgentCaller {
             auth: if index == 0 { self.root_auth.clone() } else { self.worker_auth.clone() },
-            conversation: run.attachment.as_ref().unwrap().conversation.clone().unwrap(),
+            conversation: Some(run.attachment.as_ref().unwrap().conversation.clone().unwrap()),
             assignment_generation: run.assignment_generation,
             endpoint_identity: String::new(),
             session_id: String::new(),
@@ -525,16 +527,16 @@ fn credential_generation_must_match_auth_record_and_run() {
 }
 
 #[test]
-fn caller_authority_requires_current_owner_conversation_and_generation_not_process_evidence() {
+fn caller_authority_requires_current_owner_generation_and_rejects_conflicting_actual_conversation() {
     let fixture = Fixture::new();
     let caller = fixture.caller(1);
     assert!(validate_caller(&fixture.state, &caller).is_ok());
     assert!(validate_caller(&fixture.state, &fixture.caller(0)).is_ok());
     let mut wrong = caller.clone();
-    wrong.conversation.session_id = "different-opaque-session".into();
+    wrong.conversation.as_mut().unwrap().session_id = "different-opaque-session".into();
     assert!(validate_caller(&fixture.state, &wrong).is_err());
     wrong = caller.clone();
-    wrong.conversation.harness = "different-harness".into();
+    wrong.conversation.as_mut().unwrap().harness = "different-harness".into();
     assert!(validate_caller(&fixture.state, &wrong).is_err());
     for generation in [None, Some(0), Some(2)] {
         wrong = caller.clone();
@@ -551,19 +553,19 @@ fn caller_authority_requires_current_owner_conversation_and_generation_not_proce
     state.task_ownership[0].owner.as_mut().unwrap().run_id = Uuid::new_v4().to_string();
     assert!(validate_caller(&state, &caller).is_err());
     state = fixture.state.clone();
-    state.task_ownership[0].owner.as_mut().unwrap().conversation.session_id = "reassigned".into();
+    state.task_ownership[0].owner.as_mut().unwrap().conversation.as_mut().unwrap().session_id = "reassigned".into();
     assert!(validate_caller(&state, &caller).is_err());
     state = fixture.state.clone();
     state.task_ownership.clear();
     assert!(validate_caller(&state, &caller).is_err());
     state = fixture.state.clone();
     state.runs[1].attachment.as_mut().unwrap().conversation = None;
-    assert!(validate_caller(&state, &caller).is_err());
+    assert!(validate_caller(&state, &caller).is_ok());
     state = fixture.state.clone();
     state.credentials[1].conversation = None;
-    assert!(validate_caller(&state, &caller).is_err());
+    assert!(validate_caller(&state, &caller).is_ok());
     state.credentials[1].conversation = Some(ConversationIdentity {
-        harness: caller.conversation.harness.clone(),
+        harness: caller.conversation.as_ref().unwrap().harness.clone(),
         session_id: "other-credential-conversation".into(),
     });
     assert!(validate_caller(&state, &caller).is_err());
@@ -604,8 +606,8 @@ fn new_capability_does_not_inherit_an_existing_attachment_conversation() {
         let mut state = fixture.state.clone();
         state.credentials[index] = record;
         assert!(state.runs[index].attachment.as_ref().unwrap().conversation.is_some());
-        assert!(validate_caller(&state, &caller).is_err());
-        state.credentials[index].conversation = Some(caller.conversation.clone());
+        assert!(validate_caller(&state, &caller).is_ok(), "Issued current authority does not require actual conversation metadata");
+        state.credentials[index].conversation = caller.conversation.clone();
         assert!(validate_caller(&state, &caller).is_ok());
     }
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { WorkspaceOperationStep } from "../protocol/generated/v1";
 import { parseProjectConfiguration, parseWorkspaceOperation, parseWorkspaceSetupRequest, parseWorkspaceDefaults } from "./projectProtocol";
 import { parseWorkspaceTeardownPreview, parseWorkspaceTeardownExecuteRequest } from "./projectTeardownProtocol";
 
@@ -82,7 +83,7 @@ const plan = {
   warnings: [],
 };
 
-function operation(step: "context_preparing" | "context_ready") {
+function operation(step: WorkspaceOperationStep) {
   return {
     operation_id: "operation-1",
     generation: 1,
@@ -103,9 +104,15 @@ function operation(step: "context_preparing" | "context_ready") {
 }
 
 describe("workspace operation protocol", () => {
-  it("accepts the generated Context preparation checkpoints", () => {
-    expect(parseWorkspaceOperation(operation("context_preparing")).step).toBe("context_preparing");
-    expect(parseWorkspaceOperation(operation("context_ready")).step).toBe("context_ready");
+  it("decodes preparation and moved-space checkpoints while rejecting future steps", () => {
+    for (const step of ["context_preparing", "context_ready", "checkout_prepared", "space_bound"] as const) {
+      expect(parseWorkspaceOperation(operation(step)).step).toBe(step);
+    }
+    expect(() => parseWorkspaceOperation({ ...operation("space_bound"), step: "future_step" })).toThrow();
+    const prepared = operation("checkout_prepared");
+    expect(parseWorkspaceOperation({ ...prepared, plan: { ...prepared.plan, ownership: "owned_attempt_directory" } })
+      .plan.ownership).toBe("owned_attempt_directory");
+    expect(() => parseWorkspaceOperation({ ...prepared, plan: { ...prepared.plan, ownership: "future_ownership" } })).toThrow();
   });
 });
 

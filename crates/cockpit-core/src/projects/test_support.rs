@@ -34,6 +34,8 @@ pub(super) struct NestedDirectoryAdapter {
     pub(super) repository: std::sync::OnceLock<RepositoryCandidate>,
     pub(super) inventory: parking_lot::Mutex<Option<ProjectInventory>>,
     pub(super) selection_available: AtomicBool,
+    pub(super) snapshot: parking_lot::Mutex<Option<SessionSnapshotResponse>>,
+    pub(super) bound_snapshot: parking_lot::Mutex<Option<crate::project_adapter::ProjectSnapshot>>,
 }
 
 pub(super) fn unused<T>() -> Result<T, InspectionError> {
@@ -63,6 +65,9 @@ impl HerdrAdapter for NestedDirectoryAdapter {
     ) -> Result<SessionSnapshotResponse, InspectionError> {
         if !self.selection_available.load(Ordering::SeqCst) {
             return Err(InspectionError::new("disconnected", "fixture unavailable"));
+        }
+        if let Some(snapshot) = self.snapshot.lock().clone() {
+            return Ok(snapshot);
         }
         Ok(SessionSnapshotResponse {
             session_id: session.into(),
@@ -121,6 +126,16 @@ impl HerdrAdapter for NestedDirectoryAdapter {
 impl ProjectHerdrAdapter for NestedDirectoryAdapter {
     async fn project_endpoint_identity(&self, _: &str) -> Result<String, InspectionError> {
         Ok("endpoint".to_owned())
+    }
+
+    async fn project_snapshot_at_endpoint(&self, session: &str, _: &str) -> Result<crate::project_adapter::ProjectSnapshot, InspectionError> {
+        let observed = self.bound_snapshot.lock().clone().ok_or_else(|| InspectionError::new(
+            "test_adapter_unused", "response-bound snapshot fixture was not supplied",
+        ))?;
+        if observed.snapshot.session_id != session {
+            return Err(InspectionError::new("stale_identity", "response-bound fixture belongs to another session"));
+        }
+        Ok(observed)
     }
 
     async fn project_inventory(

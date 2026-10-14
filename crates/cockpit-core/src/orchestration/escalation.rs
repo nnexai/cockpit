@@ -50,8 +50,29 @@ fn dispatcher_message(message: &Message, root: &str) -> bool {
         && message.to_run_id == root
 }
 
+/// A placement receipt or latch-write intent is physical uncertainty, not an
+/// ordinary harness-observation timeout. An occupant cannot prove these effects.
+fn placement_boundary(run: &Run) -> Option<&'static str> {
+    let dispatch = run.dispatch.as_ref()?;
+    if matches!(dispatch.step, DispatchStep::MoveIntent | DispatchStep::MoveUnknown) {
+        Some("move_unresolved")
+    } else if matches!(dispatch.latch_state, Some(AgentLatchState::ReleaseIntent | AgentLatchState::Unknown)) {
+        Some("latch_unresolved")
+    } else {
+        None
+    }
+}
+
 fn next_steps(run: &Run) -> (&'static str, &'static [&'static str], Option<&'static str>) {
     let dispatch = run.dispatch.as_ref().expect("dispatch");
+    if let Some(boundary) = placement_boundary(run) {
+        let reason = if boundary == "move_unresolved" {
+            "The recorded terminal move has no exact outcome receipt. Preserve the staging and destination resources; inspect the recorded source terminal and move operation. Do not replay the move or release the launch latch. Use an isolated replacement only if the current attempt cannot be safely proven."
+        } else {
+            "The launch latch release has no exact outcome receipt. The agent may already be running. Preserve its terminal, checkout and claims; inspect the recorded release intent. Do not resend the latch write or restart in the same checkout. Use an isolated replacement if the current attempt cannot be safely proven."
+        };
+        return ("unknown", &["show", "worker_replace"], Some(reason));
+    }
     let error_code = dispatch.error.as_ref().map(|error| EscalationErrorCode::from(error.code.as_str()));
     if matches!(error_code,
         Some(EscalationErrorCode::OwnedLaunchTabUnsafe
@@ -96,7 +117,9 @@ fn append_failure(state: &mut OrchestrationState, index: usize, unresolved: bool
     let dispatch = run.dispatch.as_ref().expect("dispatch");
     let prefix = format!("dispatch-failure:{}:", incarnation(run));
     let code = dispatch.error.as_ref().map(|error| error.code.as_str()).unwrap_or("dispatch_uncertain");
-    let (key, semantic) = if unresolved {
+    let (key, semantic) = if let Some(boundary) = placement_boundary(run) {
+        (format!("{prefix}{boundary}"), None)
+    } else if unresolved {
         (format!("{prefix}launch_unresolved"), None)
     } else {
         let step = serde_json::to_value(dispatch.step).expect("serializable step");
@@ -114,14 +137,20 @@ fn append_failure(state: &mut OrchestrationState, index: usize, unresolved: bool
     let detail = dispatch.error.as_ref().map(|error| error.message.as_str()).unwrap_or("Dispatch outcome requires inspection");
     let mut end = detail.len().min(1024);
     while !detail.is_char_boundary(end) { end -= 1; }
-    let text = serde_json::json!({
+    let mut body = serde_json::json!({
         "event": "dispatch_failure", "run_id": run.run_id, "task_id": run.task_id,
         "run_attempt": run.attempt, "launch_attempt": dispatch.launch_attempt,
         "stage": run.stage, "step": dispatch.step, "agent_started": dispatch.agent_started,
         "error": {"code": code, "message": &detail[..end]},
         "automatic": if unresolved { "exhausted" } else { "none" },
         "effect": effect, "next": next, "operator_reason": operator_reason,
-    }).to_string();
+    });
+    if placement_boundary(run).is_some() {
+        body["move_operation_id"] = serde_json::json!(dispatch.move_operation_id);
+        body["source_location"] = serde_json::json!(dispatch.source_location);
+        body["latch_state"] = serde_json::json!(dispatch.latch_state);
+    }
+    let text = body.to_string();
     let root = run.root_id.clone();
     messages::append(state, messages::AppendMessage { from: ActorRef::Dispatcher,
     to_run_id: &root,
@@ -137,6 +166,11 @@ fn append_failure(state: &mut OrchestrationState, index: usize, unresolved: bool
 /// Called in the same locked transaction as the dispatch failure transition.
 pub(super) fn failure(state: &mut OrchestrationState, index: usize) -> Result<bool, InspectionError> {
     let run = &state.runs[index];
+    if eligible(run) && run.dispatch.as_ref().is_some_and(|dispatch| {
+        dispatch.step == DispatchStep::MoveUnknown || dispatch.latch_state == Some(AgentLatchState::Unknown)
+    }) {
+        return append_failure(state, index, false);
+    }
     if super::dispatch::recovery_close_pending(run)
         || (run.dispatch.as_ref().is_some_and(|d| d.step == DispatchStep::LaunchUnknown)
             && super::dispatch::automatic_recovery_available(run))
@@ -217,11 +251,12 @@ pub(super) fn unresolved_launches(state: &mut OrchestrationState, session_id: &s
     let mut machine_id = None;
     for index in 0..state.runs.len() {
         let run = &state.runs[index];
-        if super::dispatch::automatic_recovery_available(run) { continue; }
+        let physical_boundary = placement_boundary(run).is_some();
+        if !physical_boundary && super::dispatch::automatic_recovery_available(run) { continue; }
         if run.session_id != session_id || !eligible(run) || run.dispatch.as_ref().is_none_or(|dispatch| {
-            dispatch.step != DispatchStep::LaunchUnknown || dispatch.agent_started
+            (!physical_boundary && (dispatch.step != DispatchStep::LaunchUnknown || dispatch.agent_started))
                 || parse_time(&dispatch.updated_at).is_none_or(|entered| (now - entered).whole_milliseconds() < i128::from(settle_ms))
-        }) || freshly_proven(run, runtime, &mut kernel_boot_id, &mut machine_id) { continue; }
+        }) || (!physical_boundary && freshly_proven(run, runtime, &mut kernel_boot_id, &mut machine_id)) { continue; }
         changed |= append_failure(state, index, true)?;
     }
     Ok(changed)

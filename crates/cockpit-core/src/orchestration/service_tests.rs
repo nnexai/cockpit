@@ -29,6 +29,7 @@ impl Fixture {
                 resume_args: Some(vec!["resume".into(), "{session_id}".into()]),
                 inbox_prompt_hints: false,
                 routes: Vec::new(),
+                ..Default::default()
             },
             limits: cockpit_protocol::projects::ProjectLimits {
                 catalog_depth: 1,
@@ -166,7 +167,7 @@ impl Fixture {
             action: OrchestrationAction::RunAttach {
                 operation_id: id(), attachment_id: caller.auth.attachment_id.clone(),
                 expected_attachment_epoch: caller.auth.attachment_epoch,
-                conversation: caller.conversation.clone(),
+                conversation: caller.conversation.clone().unwrap(),
             },
         }, &ResolvedMutationInput {
             attachment_observation: Some(attachment), ..ResolvedMutationInput::default()
@@ -179,7 +180,6 @@ impl Fixture {
                 session_id: SESSION.into(), expected_revision: Some(self.state().revision),
                 action: OrchestrationAction::RunResume {
                     run_id: run_id.into(), operation_id: id(), expected_attachment_epoch: Some(observed.epoch),
-                    mode: ResumeMode::ReattachOrRestart, decision_id: None,
                 },
             }, &ResolvedMutationInput {
                 attachment_observation: Some(observed), ..ResolvedMutationInput::default()
@@ -192,7 +192,6 @@ impl Fixture {
         OrchestrationAction::RunResume {
             run_id: run_id.into(), operation_id: id(),
             expected_attachment_epoch: self.run(run_id).attachment.as_ref().map(|attachment| attachment.epoch),
-            mode: ResumeMode::ReattachOrRestart, decision_id: None,
         }
     }
 
@@ -214,13 +213,13 @@ impl Fixture {
                 .or_else(|| attachment.shell.as_ref().map(|shell| &shell.process))
                 .unwrap().kernel_boot_id.clone().unwrap(),
             observed_kernel_boot_id: "kernel-two".into(), all_consumers_absent: true,
+            basis: claims::ExitBasis::Reboot,
         };
         self.service.mutate_resolved(actor, OrchestrationMutationRequest {
             session_id: SESSION.into(),
             expected_revision: matches!(actor, Actor::Operator(_)).then(|| self.state().revision),
             action: OrchestrationAction::RunResume {
                 run_id: run_id.into(), operation_id: id(), expected_attachment_epoch: Some(attachment.epoch),
-                mode: ResumeMode::ReattachOrRestart, decision_id: None,
             },
         }, &ResolvedMutationInput { writer_exit_proof: Some(proof), ..ResolvedMutationInput::default() }).unwrap()
     }
@@ -294,8 +293,8 @@ impl Fixture {
         Actor::Agent(AgentCaller {
             assignment_generation: auth.assignment_generation,
             auth,
-            conversation: run.attachment.as_ref().and_then(|attachment| attachment.conversation.clone())
-                .unwrap_or_else(|| ConversationIdentity { harness: run.launch_config.harness_kind.clone(), session_id: format!("opaque-chat-{run_id}") }),
+            conversation: Some(run.attachment.as_ref().and_then(|attachment| attachment.conversation.clone())
+                .unwrap_or_else(|| ConversationIdentity { harness: run.launch_config.harness_kind.clone(), session_id: format!("opaque-chat-{run_id}") })),
             endpoint_identity: String::new(), session_id: SESSION.into(),
             workspace_id: String::new(), tab_id: String::new(), pane_id: String::new(),
             boot_id: None, terminal_id: None, native_session_id: None,
@@ -321,6 +320,7 @@ impl Fixture {
         let native = format!("native-{run_id}-{attempt}");
         let location = RunLocation {
             boot_id: Some("boot-one".into()),
+            peer_process: None,
             terminal_id: Some(format!("terminal-{run_id}-{attempt}")),
             native_session_id: Some(native.clone()),
             endpoint_identity: "endpoint-one".into(),
@@ -337,6 +337,9 @@ impl Fixture {
                     launch_tag: location.launch_tag.clone(),
                     launch_attempt: attempt,
                     endpoint_identity: location.endpoint_identity.clone(),
+                    staging_workspace_id: None,
+                    scope_unit: None,
+                    latch: None,
                 },
             )
             .unwrap();
@@ -349,6 +352,7 @@ impl Fixture {
                         process: NativeProcessIdentity { pid: 11, start_ticks: 12, kernel_boot_id: Some("kernel-one".into()) },
                         executable_device: "1".into(), executable_inode: "2".into(), argv_digest: "a".repeat(64),
                     }),
+                    process_scope: None,
                 },
             )
             .unwrap();
@@ -362,8 +366,8 @@ impl Fixture {
         Actor::Agent(AgentCaller {
             auth: self.auth(run_id, if run.kind == RunKind::Worker { JobRole::Worker } else { JobRole::Root }),
             assignment_generation: run.assignment_generation,
-            conversation: run.attachment.as_ref().and_then(|attachment| attachment.conversation.clone())
-                .unwrap_or_else(|| ConversationIdentity { harness: run.launch_config.harness_kind.clone(), session_id: format!("opaque-chat-{run_id}") }),
+            conversation: Some(run.attachment.as_ref().and_then(|attachment| attachment.conversation.clone())
+                .unwrap_or_else(|| ConversationIdentity { harness: run.launch_config.harness_kind.clone(), session_id: format!("opaque-chat-{run_id}") })),
             endpoint_identity: location.endpoint_identity,
             session_id: SESSION.into(),
             workspace_id: location.workspace_id,

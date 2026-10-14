@@ -47,7 +47,7 @@ export const wireProjectConfiguration: WireDescriptor<V1.ProjectConfiguration> =
   "checkout_template": req(str),
   "providers": req(list(named(() => wireProjectProvider))),
   "limits": req(named(() => wireProjectLimits)),
-  "orchestration": req(named(() => wireOrchestrationConfiguration), { fill: () => ({"command":"omp","extra_args":[],"harness_kind":"omp","inbox_prompt_hints":false,"resume_args":null,"routes":[]}) }),
+  "orchestration": req(named(() => wireOrchestrationConfiguration), { fill: () => ({"command":"omp","extra_args":[],"harness_kind":"omp","hook_args":null,"inbox_prompt_hints":false,"initial_prompt_args":null,"max_parallel":4,"process_scope":"auto","resume_args":null,"routes":[]}) }),
 });
 
 export const wireOrchestrationConfiguration: WireDescriptor<V1.OrchestrationConfiguration> = struct<V1.OrchestrationConfiguration>("OrchestrationConfiguration", {
@@ -55,9 +55,15 @@ export const wireOrchestrationConfiguration: WireDescriptor<V1.OrchestrationConf
   "command": req(str, { fill: "omp" }),
   "extra_args": req(list(str), { fill: () => ([]) }),
   "resume_args": req(nullable(list(str)), { fill: null }),
+  "initial_prompt_args": req(nullable(list(str)), { fill: null }),
+  "hook_args": req(nullable(list(str)), { fill: null }),
+  "max_parallel": req(u32, { fill: 4 }),
+  "process_scope": req(named(() => wireScopeMode), { fill: "auto" }),
   "inbox_prompt_hints": req(bool, { fill: false }),
   "routes": req(list(named(() => wireOrchestrationRoute)), { fill: () => ([]) }),
 });
+
+export const wireScopeMode: WireDescriptor<V1.ScopeMode> = literal<V1.ScopeMode>("ScopeMode", ["auto", "off"]);
 
 export const wireOrchestrationRoute: WireDescriptor<V1.OrchestrationRoute> = struct<V1.OrchestrationRoute>("OrchestrationRoute", {
   "provider": req(str),
@@ -91,7 +97,7 @@ export const wireRepositoryListResponse: WireDescriptor<V1.RepositoryListRespons
 
 export const wireWorkspaceSetupMode: WireDescriptor<V1.WorkspaceSetupMode> = literal<V1.WorkspaceSetupMode>("WorkspaceSetupMode", ["create", "open"]);
 
-export const wireWorkspaceCheckoutOwnership: WireDescriptor<V1.WorkspaceCheckoutOwnership> = literal<V1.WorkspaceCheckoutOwnership>("WorkspaceCheckoutOwnership", ["owned_worktree", "borrowed_directory"]);
+export const wireWorkspaceCheckoutOwnership: WireDescriptor<V1.WorkspaceCheckoutOwnership> = literal<V1.WorkspaceCheckoutOwnership>("WorkspaceCheckoutOwnership", ["owned_worktree", "borrowed_directory", "owned_attempt_directory"]);
 
 export const wireWorkspaceSetupRequest: WireDescriptor<V1.WorkspaceSetupRequest> = tagged<V1.WorkspaceSetupRequest, "operation">("WorkspaceSetupRequest", "operation", {
   "create": {
@@ -111,6 +117,40 @@ export const wireWorkspaceSetupRequest: WireDescriptor<V1.WorkspaceSetupRequest>
     "task_name": req(nullable(str), { fill: null }),
     "focus": req(bool),
   },
+});
+
+export const wireOwnedCheckoutRequest: WireDescriptor<V1.OwnedCheckoutRequest> = struct<V1.OwnedCheckoutRequest>("OwnedCheckoutRequest", {
+  "operation_id": req(str),
+  "repository_checkout": req(str),
+  "checkout_path": req(str),
+  "branch": req(str),
+  "base": req(str),
+  "artifact": req(nullable(named(() => wireProjectArtifact)), { fill: null }),
+  "source_workspace_id": req(str),
+});
+
+export const wireDirectoryCheckoutRequest: WireDescriptor<V1.DirectoryCheckoutRequest> = struct<V1.DirectoryCheckoutRequest>("DirectoryCheckoutRequest", {
+  "operation_id": req(str),
+  "checkout_path": req(str),
+  "source_workspace_id": req(str),
+});
+
+export const wireBindMovedSpaceRequest: WireDescriptor<V1.BindMovedSpaceRequest> = struct<V1.BindMovedSpaceRequest>("BindMovedSpaceRequest", {
+  "operation_id": req(str),
+  "expected_generation": req(u32),
+  "endpoint_identity": req(str),
+  "workspace_id": req(str),
+  "tab_id": req(str),
+  "pane_id": req(str),
+  "terminal_id": req(str),
+  "move_operation_id": req(str),
+});
+
+export const wireOwnedAttemptDirectoryRequest: WireDescriptor<V1.OwnedAttemptDirectoryRequest> = struct<V1.OwnedAttemptDirectoryRequest>("OwnedAttemptDirectoryRequest", {
+  "operation_id": req(str),
+  "run_id": req(str),
+  "source_root": req(str),
+  "source_workspace_id": req(str),
 });
 
 export const wireProjectArtifact: WireDescriptor<V1.ProjectArtifact> = struct<V1.ProjectArtifact>("ProjectArtifact", {
@@ -155,7 +195,7 @@ export const wireWorkspaceReconcileRequest: WireDescriptor<V1.WorkspaceReconcile
 
 export const wireWorkspaceOperationState: WireDescriptor<V1.WorkspaceOperationState> = literal<V1.WorkspaceOperationState>("WorkspaceOperationState", ["planned", "running", "completed", "partial", "outcome_unknown", "cancelled", "needs_review"]);
 
-export const wireWorkspaceOperationStep: WireDescriptor<V1.WorkspaceOperationStep> = literal<V1.WorkspaceOperationStep>("WorkspaceOperationStep", ["planned", "validated", "herdr_requested", "herdr_observed", "worktree_ready", "workspace_verified", "context_preparing", "context_ready", "environment_requested", "environment_ready", "completed"]);
+export const wireWorkspaceOperationStep: WireDescriptor<V1.WorkspaceOperationStep> = literal<V1.WorkspaceOperationStep>("WorkspaceOperationStep", ["planned", "validated", "herdr_requested", "herdr_observed", "worktree_ready", "workspace_verified", "context_preparing", "context_ready", "environment_requested", "environment_ready", "completed", "checkout_prepared", "space_bound"]);
 
 export const wireWorkspaceOwnedResource: WireDescriptor<V1.WorkspaceOwnedResource> = struct<V1.WorkspaceOwnedResource>("WorkspaceOwnedResource", {
   "kind": req(str),

@@ -40,6 +40,8 @@ fn runtime() -> RuntimeView {
     RuntimeView {
         endpoint_identity: "endpoint".into(),
         boot_id: None,
+        peer_process: None,
+        focused_workspace_id: Some("space".into()),
         workspaces: vec![super::super::herdr::RuntimeWorkspace {
             workspace_id: "space".into(), label: "Space".into(), cwd: "/".into(),
         }],
@@ -49,6 +51,7 @@ fn runtime() -> RuntimeView {
             tab_id: "tab".into(),
             tab_label: "tag".into(),
             pane_id: "pane".into(),
+            cwd: None,
             terminal_id: Some("terminal".into()),
             native_session_id: None,
             native_session_file: None,
@@ -143,6 +146,7 @@ fn receipt() -> RunLocation {
         pane_id: "pane".into(),
         launch_tag: "tag".into(),
         boot_id: Some("boot".into()),
+        peer_process: None,
         terminal_id: Some("terminal".into()),
         native_session_id: Some("native".into()),
     }
@@ -227,6 +231,7 @@ fn test_attachment(run: &mut Run) -> &mut cockpit_protocol::orchestration::Execu
         launch_mode: None,
         location: None,
         conversation: None,
+        process_scope: None,
         process: None,
         shell: None,
         machine_id: None,
@@ -284,6 +289,7 @@ impl ReviewFixture {
         );
         run.stage = stage;
         run.launch_config.resume_args = Some(vec!["--session".into(), "{session_id}".into()]);
+        run.launch_config.process_scope = cockpit_protocol::projects::ScopeMode::Off;
         test_attachment(&mut run).location = Some(receipt());
         test_attachment(&mut run).conversation = Some(cockpit_protocol::orchestration::ConversationIdentity {
             harness: "omp".into(), session_id: "conversation".into(),
@@ -382,7 +388,7 @@ impl ReviewFixture {
         worker.assignment_generation = Some(1);
         state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
             root_id: worker.root_id.clone(), task_id: worker.task_id.clone().unwrap(),
-            generation: 0, owner: None,
+            generation: 0, owner: None, schedule: None,
         });
         state.runs.push(root);
         locked.save(&mut state).unwrap();
@@ -432,7 +438,7 @@ impl ReviewFixture {
         worker.assignment_generation = Some(1);
         state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
             root_id: worker.root_id.clone(), task_id: worker.task_id.clone().unwrap(),
-            generation: 0, owner: None,
+            generation: 0, owner: None, schedule: None,
         });
         state.runs.extend([root, worker.clone()]);
         locked.save(&mut state).unwrap();
@@ -475,6 +481,7 @@ impl ReviewFixture {
         self.worker_task(Some((prerequisite, checked)));
         self.change(|run| {
             run.stage = RunStage::Starting;
+            run.target = Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() });
             test_attachment(run).location = None;
             test_attachment(run).conversation = None;
             test_attachment(run).process = None;
@@ -500,6 +507,7 @@ impl ReviewFixture {
                 cli_path: self.root.join("cockpit-cli"), config_path: None, herdr_socket: None,
                 extra_args: self.run.launch_config.extra_args.clone(),
                 resume_args: self.run.launch_config.resume_args.clone(),
+                max_parallel: self.run.launch_config.max_parallel,
                 inbox_prompt_hints: self.run.launch_config.inbox_prompt_hints, herdr_executable: None,
             }))
     }
@@ -537,7 +545,7 @@ async fn dispatch_reservation_stages_active_credential_and_durable_claim_before_
     std::fs::create_dir_all(&checkout_path).unwrap();
     let (project, checkout) = super::super::project_identity::resolve_directory(&checkout_path, None, None).await.unwrap();
     let (reserved, path) = fixture.service.reserve_dispatch_launch(
-        &fixture.run, project.clone(), checkout.clone(), None,
+        &fixture.run, project.clone(), checkout.clone(), None, None,
     ).unwrap();
     let attachment = reserved.attachment.as_ref().unwrap();
     assert!(reserved.setup.as_ref().unwrap().base_commit.is_none(), "non-Git has no code baseline");
@@ -582,7 +590,7 @@ async fn dispatch_reservation_stages_active_credential_and_durable_claim_before_
         assert!(claim_json.get(key).is_none(), "checkout ownership must not expire");
     }
     let reopened = OrchestrationService::open(&fixture.config).unwrap();
-    let (retried, retry_path) = reopened.reserve_dispatch_launch(&reserved, project, checkout, None).unwrap();
+    let (retried, retry_path) = reopened.reserve_dispatch_launch(&reserved, project, checkout, None, None).unwrap();
     let after = reopened.store.lock().unwrap().read().unwrap();
     assert_eq!(retry_path, path);
     assert_eq!(std::fs::read(&retry_path).unwrap(), credential_bytes, "retry must not rotate credentials");
@@ -609,7 +617,7 @@ async fn dispatch_baseline_freezes_actual_head_before_launch_and_survives_retry(
     let (project, checkout) = super::super::project_identity::resolve_directory(&root, None, None).await.unwrap();
     let baseline = setup_base_commit(fixture.run.setup.as_ref().unwrap(), &checkout).await.unwrap().unwrap();
     let (reserved, _) = fixture.service.reserve_dispatch_launch(
-        &fixture.run, project.clone(), checkout.clone(), Some(baseline.clone()),
+        &fixture.run, project.clone(), checkout.clone(), Some(baseline.clone()), None,
     ).unwrap();
     assert_eq!(reserved.setup.as_ref().unwrap().base_commit.as_deref(), Some(baseline.as_str()));
     assert!(tokio::process::Command::new("git").current_dir(&root)
@@ -622,7 +630,7 @@ async fn dispatch_baseline_freezes_actual_head_before_launch_and_survives_retry(
         Some(baseline.clone()));
     let reopened = OrchestrationService::open(&fixture.config).unwrap();
     let (retried, _) = reopened.reserve_dispatch_launch(
-        &reserved, project, checkout, Some(later),
+        &reserved, project, checkout, Some(later), None,
     ).unwrap();
     assert_eq!(retried.setup.as_ref().unwrap().base_commit, Some(baseline));
 }
@@ -640,13 +648,13 @@ async fn dispatch_reservation_denies_other_root_same_or_nested_checkout_without_
             _ => (&inner, &outer),
         };
         let (project, checkout) = super::super::project_identity::resolve_directory(first_path, None, None).await.unwrap();
-        fixture.service.reserve_dispatch_launch(&fixture.run, project, checkout, None).unwrap();
+        fixture.service.reserve_dispatch_launch(&fixture.run, project, checkout, None, None).unwrap();
         let other = fixture.another_worker();
         assert_ne!(other.root_id, fixture.run.root_id);
         assert_ne!(other.run_id, fixture.run.run_id);
         let (project, checkout) = super::super::project_identity::resolve_directory(second_path, None, None).await.unwrap();
         let before = fixture.service.store.lock().unwrap().read().unwrap();
-        let error = fixture.service.reserve_dispatch_launch(&other, project, checkout, None).unwrap_err();
+        let error = fixture.service.reserve_dispatch_launch(&other, project, checkout, None, None).unwrap_err();
         assert_eq!(error.code, if nesting == 0 { "checkout_claim_conflict" } else { "checkout_identity_changed" });
         let after = fixture.service.store.lock().unwrap().read().unwrap();
         assert_eq!(serde_json::to_value(after).unwrap(), serde_json::to_value(before).unwrap(),
@@ -661,7 +669,7 @@ async fn dispatch_reservation_refuses_changed_inode_without_rotating_epoch_or_cl
     std::fs::create_dir_all(&path).unwrap();
     let (project, checkout) = super::super::project_identity::resolve_directory(&path, None, None).await.unwrap();
     let (reserved, credential_path) = fixture.service.reserve_dispatch_launch(
-        &fixture.run, project.clone(), checkout.clone(), None,
+        &fixture.run, project.clone(), checkout.clone(), None, None,
     ).unwrap();
     let credential_bytes = std::fs::read(&credential_path).unwrap();
     std::fs::rename(&path, fixture.root.join("previous-checkout")).unwrap();
@@ -671,7 +679,7 @@ async fn dispatch_reservation_refuses_changed_inode_without_rotating_epoch_or_cl
     assert_ne!(fresh_checkout.directory_identity, checkout.directory_identity);
     let before = fixture.service.store.lock().unwrap().read().unwrap();
     for (project, checkout) in [(project, checkout), (fresh_project, fresh_checkout)] {
-        let error = fixture.service.reserve_dispatch_launch(&reserved, project, checkout, None).unwrap_err();
+        let error = fixture.service.reserve_dispatch_launch(&reserved, project, checkout, None, None).unwrap_err();
         assert_eq!(error.code, "checkout_identity_changed");
         let after = fixture.service.store.lock().unwrap().read().unwrap();
         assert_eq!(serde_json::to_value(after).unwrap(), serde_json::to_value(&before).unwrap());
@@ -735,11 +743,14 @@ async fn root_main_exit_proof_is_same_boot_and_independent_of_worker_consumers()
         let herdr = CountingHerdr::new(absent, false, false);
         let observed = fixture.service.observe_root_resume(&herdr, &expected).await;
         assert!(observed.writer_exit_proof.is_none(), "root authority never claims worker consumer closure");
-        if matches!(case, 0 | 5 | 10) {
+        if matches!(case, 0 | 5 | 9 | 10) {
             let proof = observed.root_main_recovery.unwrap();
             assert_eq!(proof.run_id, expected.run_id);
             assert_eq!(proof.attachment.process, expected.attachment.as_ref().unwrap().process);
             assert!(proof.idle_shell.is_none());
+            if case == 9 {
+                assert!(proof.attachment.conversation.is_none(), "optional absent conversation does not invalidate exact physical exit proof");
+            }
         } else {
             assert!(observed.root_main_recovery.is_none(), "case {case}");
             assert!(observed.observation_cause.is_some(), "case {case}");
@@ -814,6 +825,8 @@ struct CountingHerdr {
     prompt_calls: std::sync::atomic::AtomicUsize,
     prompt_requests: parking_lot::Mutex<Vec<super::super::herdr::AgentPromptRequest>>,
     prompt_unknown: bool,
+    event_messages: parking_lot::Mutex<Option<tokio::sync::mpsc::Receiver<crate::SessionChange>>>,
+    event_subscriptions: std::sync::atomic::AtomicUsize,
 }
 impl CountingHerdr {
     fn new(observed: RuntimeView, error: bool, paused: bool) -> Self {
@@ -836,6 +849,8 @@ impl CountingHerdr {
             prompt_calls: 0.into(),
             prompt_requests: parking_lot::Mutex::new(Vec::new()),
             prompt_unknown: false,
+            event_messages: parking_lot::Mutex::new(None),
+            event_subscriptions: 0.into(),
         }
     }
     fn assert_read_only(&self) {
@@ -847,6 +862,11 @@ impl CountingHerdr {
 }
 #[async_trait::async_trait]
 impl OrchestrationHerdr for CountingHerdr {
+    async fn session_changes(&self, _: &str) -> Result<SessionSubscription, InspectionError> {
+        self.event_subscriptions.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.event_messages.lock().take().map(|messages| SessionSubscription { messages })
+            .ok_or_else(|| InspectionError::new("disconnected", "Fixture event stream unavailable"))
+    }
     async fn runtime(&self, _: &str) -> Result<RuntimeView, InspectionError> {
         self.runtime_calls
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -883,14 +903,18 @@ impl OrchestrationHerdr for CountingHerdr {
         assert_eq!(session, "test-session");
         assert_eq!(request.endpoint_identity, "endpoint");
         assert_eq!(request.workspace_id, "space");
+        let separator = request.command.iter().rposition(|argument| argument == "--").expect("literal harness boundary");
+        assert_eq!(request.command.get(1).map(String::as_str), Some("agent-exec"));
         if let Some(expected) = &self.expected_command {
-            assert_eq!(&request.command, expected);
+            assert_eq!(&request.command[separator + 1..], expected.as_slice());
         } else {
-            assert_eq!(request.command.first().map(String::as_str), Some("omp"));
+            assert_eq!(request.command.get(separator + 1).map(String::as_str), Some("omp"));
         }
         assert_eq!(request.env.get("COCKPIT_HARNESS"), Some(&self.expected_harness));
         assert!(!request.env.contains_key("COCKPIT_SESSION_ID"), "launch must not freeze or fabricate chat identity");
         assert!(!request.env.contains_key("COCKPIT_OMP_EXTENSION"));
+        assert!(!request.env.contains_key("COCKPIT_WORKSPACE_ID"), "placement-dependent environment is released only after actual receipt");
+        assert!(matches!(request.env.get("COCKPIT_INBOX_HOOK").map(String::as_str), Some("0" | "1")));
         assert_eq!(request.env.get("COCKPIT_LAUNCH_TAG"), Some(&request.launch_tag));
         let auth = super::super::credentials::read_job_auth(
             std::path::Path::new(request.env.get("COCKPIT_JOB_CREDENTIAL_FILE").unwrap()),
@@ -920,6 +944,9 @@ impl OrchestrationHerdr for CountingHerdr {
         let info = self.process_info.clone().ok_or_else(|| {
             InspectionError::new("process_unavailable", "No foreground process evidence")
         })?;
+        if pane_id != info.pane_id {
+            return Err(InspectionError::new("stale_identity", "Requested pane is not the exact configured process-info source"));
+        }
         assert_eq!(pane_id, "pane");
         Ok(info)
     }
@@ -1095,6 +1122,7 @@ async fn blocked_consumer_does_not_prevent_independent_worker_in_same_root_from_
     );
     independent.stage = RunStage::Starting;
     independent.setup = fixture.run.setup.clone();
+    independent.target = fixture.run.target.clone();
     independent.dispatch = Some(crate::orchestration::dispatch(DispatchStep::SetupPending));
     {
         let locked = fixture.service.store.lock().unwrap();
@@ -1107,7 +1135,7 @@ async fn blocked_consumer_does_not_prevent_independent_worker_in_same_root_from_
         independent.assignment_generation = Some(1);
         state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
             root_id: independent.root_id.clone(), task_id: independent_task.clone(),
-            generation: 0, owner: None,
+            generation: 0, owner: None, schedule: None,
         });
         state.runs.push(independent.clone());
         locked.save(&mut state).unwrap();
@@ -1655,7 +1683,7 @@ fn root_registration_pins_generic_conversation_without_physical_process_evidence
     let old = fixture.current().1;
     let actor = Actor::Agent(AgentCaller {
         auth: fixture.staged_auth(&old),
-        conversation: ConversationIdentity { harness: "omp".into(), session_id: "opaque/non-uuid chat".into() },
+        conversation: Some(ConversationIdentity { harness: "omp".into(), session_id: "opaque/non-uuid chat".into() }),
         assignment_generation: None,
         endpoint_identity: String::new(), session_id: String::new(), workspace_id: String::new(),
         tab_id: String::new(), pane_id: String::new(), boot_id: None, terminal_id: None,
@@ -1716,8 +1744,10 @@ async fn generic_launch_preserves_literal_argv_and_durable_harness_policy() {
         command: "/opt/plain agent".into(),
         extra_args: vec!["--fresh".into(), "literal ; $(no-shell)".into()],
         resume_args: Some(vec!["--resume".into(), "{session_id}".into()]),
+        process_scope: cockpit_protocol::projects::ScopeMode::Off,
         inbox_prompt_hints: false,
         routes: Vec::new(),
+        ..Default::default()
     };
     fixture.change(|run| run.launch_config = config.clone());
     fixture.run = fixture.current().1;
@@ -1736,159 +1766,94 @@ async fn generic_launch_preserves_literal_argv_and_durable_harness_policy() {
 }
 
 #[test]
-fn bootstrap_observed_argv_preserves_opaque_identity_within_prompt_bounds() {
-    let identities = [
-        "opaque-id".to_owned(),
-        "-leading-option".to_owned(),
-        "quotes\" apostrophe' backtick` $(command) slash\\ [brackets]".to_owned(),
-        "\"".repeat(512),
-        "\\".repeat(512),
-        "🧭".repeat(128),
-    ];
+fn bootstrap_is_usable_without_conversation_metadata_or_registration_skill_turn() {
     for kind in [RunKind::Supervisor, RunKind::Adopted, RunKind::Worker] {
-        let mut run = crate::orchestration::new_run(
+        let run = crate::orchestration::new_run(
             "bootstrap-run", "session", kind, "Bootstrap".into(),
             "bootstrap-run", None, None, 1,
         );
-        let mut pane = runtime().panes.remove(0);
-        for harness in &identities {
-            run.launch_config.harness_kind = harness.clone();
-            for session_id in &identities {
-                pane.native_session_id = Some(session_id.clone());
-                let prompt = bootstrap_text(&run, &pane);
-                assert!(prompt.native_session_file.is_none());
-                let text = prompt.text;
-                assert!(text.len() <= 4096, "prompt length: {}", text.len());
-                assert!(!text.chars().any(char::is_control));
-                let argv: Vec<String> = serde_json::from_str(&text[text.find('[').unwrap()..]).unwrap();
-                assert_eq!(argv, vec![
-                    "run".to_owned(), "context".to_owned(),
-                    format!("--harness={harness}"),
-                    format!("--session-id={session_id}"), "--json".to_owned(),
-                ]);
-            }
-        }
-    }
-}
-
-#[test]
-fn bootstrap_missing_or_invalid_observation_has_no_explicit_argv() {
-    let invalid = [String::new(), "\n".into(), "\u{7f}".into(), "x".repeat(513)];
-    for kind in [RunKind::Supervisor, RunKind::Adopted, RunKind::Worker] {
-        let mut run = crate::orchestration::new_run(
-            "bootstrap-run", "session", kind, "Bootstrap".into(),
-            "bootstrap-run", None, None, 1,
-        );
-        let mut pane = runtime().panes.remove(0);
-        for session_id in std::iter::once(None).chain(invalid.iter().cloned().map(Some)) {
-            pane.native_session_id = session_id;
-            let prompt = bootstrap_text(&run, &pane);
-            assert!(prompt.native_session_file.is_none());
-            let text = prompt.text;
-            assert!(!text.contains('['));
-            assert!(text.len() <= 4096);
-            assert!(!text.chars().any(char::is_control));
-        }
-        pane.native_session_id = Some("valid-observation".into());
-        for harness in &invalid {
-            run.launch_config.harness_kind = harness.clone();
-            let prompt = bootstrap_text(&run, &pane);
-            assert!(prompt.native_session_file.is_none());
-            let text = prompt.text;
-            assert!(!text.contains('['));
-            assert!(text.len() <= 4096);
-            assert!(!text.chars().any(char::is_control));
-        }
-    }
-}
-
-#[test]
-fn bootstrap_file_invocation_preserves_exact_path_until_journal_creation() {
-    let fixture = ReviewFixture::new(RunStage::Starting);
-    let path = fixture.root.join("misleading-id ' \" ` $(command) \\ [journal].jsonl");
-    let exact_path = path.to_str().unwrap();
-    assert!(!path.exists());
-    for kind in [RunKind::Supervisor, RunKind::Adopted, RunKind::Worker] {
-        let mut run = fixture.run.clone();
-        run.kind = kind;
-        let mut pane = runtime().panes.remove(0);
-        pane.native_session_file = Some(exact_path.into());
-        let prompt = bootstrap_text(&run, &pane);
-        assert_eq!(prompt.native_session_file.as_deref(), Some(exact_path));
-        assert!(prompt.text.len() <= 4096);
-        assert!(!prompt.text.chars().any(char::is_control));
-        let invocation: serde_json::Value =
-            serde_json::from_str(prompt.text.split_once("Invocation: ").unwrap().1).unwrap();
-        assert_eq!(invocation, serde_json::json!({
-            "env": { "PI_SESSION_FILE": exact_path },
-            "argv": ["run", "context", "--harness=omp", "--json"],
-        }));
-        assert_eq!(super::super::session_identity::read_omp_session_file(
-            std::path::Path::new(invocation["env"]["PI_SESSION_FILE"].as_str().unwrap()),
-        ).unwrap_err().code, "session_header_invalid");
-    }
-    // The first tool turn creates the advertised journal; the next invocation
-    // reads its header, never a conversation ID inferred from its basename.
-    std::fs::write(&path, "{\"type\":\"session\",\"id\":\"actual-header-id\"}\n").unwrap();
-    assert_eq!(super::super::session_identity::read_omp_session_file(&path).unwrap(),
-        "actual-header-id");
-}
-
-#[test]
-fn bootstrap_prefers_actual_id_and_omits_unusable_file_hints_without_truncation() {
-    let fixture = ReviewFixture::new(RunStage::Starting);
-    let mut pane = runtime().panes.remove(0);
-    pane.native_session_file = Some("/exact/advertised.jsonl".into());
-    pane.native_session_id = Some("actual-header-id".into());
-    let prompt = bootstrap_text(&fixture.run, &pane);
-    assert!(prompt.native_session_file.is_none());
-    let argv: Vec<String> =
-        serde_json::from_str(prompt.text.split_once("Argv: ").unwrap().1).unwrap();
-    assert_eq!(argv, ["run", "context", "--harness=omp", "--session-id=actual-header-id", "--json"]);
-
-    pane.native_session_id = None;
-    for path in ["".into(), "relative.jsonl".into(), "/bad\npath".into(),
-        "/bad\u{7f}path".into(), format!("/{}", "\"".repeat(4096))] {
-        pane.native_session_file = Some(path);
-        let prompt = bootstrap_text(&fixture.run, &pane);
-        assert!(prompt.native_session_file.is_none());
-        assert!(!prompt.text.contains("Invocation: "));
-        assert!(prompt.text.len() <= 4096);
-        assert!(!prompt.text.chars().any(char::is_control));
-    }
-    pane.native_session_file = Some("/exact/advertised.jsonl".into());
-    let mut generic = fixture.run.clone();
-    generic.launch_config.harness_kind = "plain-agent".into();
-    let prompt = bootstrap_text(&generic, &pane);
-    assert!(prompt.native_session_file.is_none());
-    assert!(!prompt.text.contains("Invocation: "));
-    pane.native_session_id = Some("generic-current-id".into());
-    let prompt = bootstrap_text(&generic, &pane);
-    assert!(prompt.native_session_file.is_none());
-    let argv: Vec<String> =
-        serde_json::from_str(prompt.text.split_once("Argv: ").unwrap().1).unwrap();
-    assert_eq!(argv, ["run", "context", "--harness=plain-agent", "--session-id=generic-current-id", "--json"]);
-    pane.native_session_id = None;
-
-    // Serialized size (including escaping), not raw path length, gates hints.
-    pane.native_session_file = Some("/".into());
-    let overhead = bootstrap_text(&fixture.run, &pane).text.len();
-    let maximum_quotes = (4096 - overhead) / 2;
-    for (count, emitted) in [(maximum_quotes, true), (maximum_quotes + 1, false)] {
-        let path = format!("/{}", "\"".repeat(count));
-        pane.native_session_file = Some(path.clone());
-        let prompt = bootstrap_text(&fixture.run, &pane);
-        assert!(prompt.text.len() <= 4096);
-        assert_eq!(prompt.native_session_file.is_some(), emitted);
-        if emitted {
-            assert!(prompt.text.len() >= 4095);
-            let invocation: serde_json::Value =
-                serde_json::from_str(prompt.text.split_once("Invocation: ").unwrap().1).unwrap();
-            assert_eq!(invocation["env"]["PI_SESSION_FILE"].as_str(), Some(path.as_str()));
+        let prompt = render_run_bootstrap(&run);
+        assert!(prompt.contains("run context --json"));
+        assert!(prompt.contains("inbox next --wait 0 --deliverable --json"));
+        assert!(prompt.contains("do not start a competing long inbox"));
+        assert!(!prompt.contains("skills show"));
+        assert!(!prompt.contains("PI_SESSION_FILE"));
+        assert!(!prompt.contains("--session-id"));
+        if kind == RunKind::Worker {
+            assert!(prompt.contains("run done"));
+            assert!(prompt.contains("task show --self"));
+            assert!(prompt.contains("task inputs --self --json"));
         } else {
-            assert!(!prompt.text.contains("Invocation: "));
+            assert!(prompt.contains("task schedule"));
+            assert!(prompt.contains("worker-replace"));
         }
     }
+}
+
+#[test]
+fn disabled_hook_bootstrap_uses_one_event_driven_wait_and_revalidates_replacement_progress() {
+    let mut run = crate::orchestration::new_run("run", "session", RunKind::Worker, "Task".into(), "root", None, None, 2);
+    run.launch_config.hook_args = Some(Vec::new());
+    let prompt = render_run_bootstrap(&run);
+    assert!(prompt.contains("one event-driven"));
+    assert!(prompt.contains("inbox next --wait 600 --deliverable --json"));
+    assert!(!prompt.contains("not start a competing"));
+    assert!(prompt.contains("advisory"));
+    assert!(prompt.contains("revalidate"));
+    assert!(prompt.contains("whole-task"));
+}
+
+#[test]
+fn initial_prompt_is_one_literal_argument_and_custom_placeholder_is_whole() {
+    let mut run = crate::orchestration::new_run(
+        "bootstrap-run", "session", RunKind::Worker, "Bootstrap".into(),
+        "bootstrap-run", None, None, 1,
+    );
+    let prompt = "quotes \" ; $(no-shell)\nwork brief";
+    assert_eq!(prompt_args(&run, prompt.into()).unwrap(), [prompt]);
+    run.launch_config.initial_prompt_args = Some(vec!["--prompt".into(), "{prompt}".into()]);
+    assert_eq!(prompt_args(&run, prompt.into()).unwrap(), ["--prompt", prompt]);
+    for invalid in [vec!["prefix-{prompt}".into()], vec!["{prompt}".into(), "{prompt}".into()], vec![]] {
+        run.launch_config.initial_prompt_args = Some(invalid);
+        assert_eq!(prompt_args(&run, prompt.into()).unwrap_err().code, "invalid_launch_settings");
+    }
+    assert_eq!(expand_argument(&["--hook".into(), "{hook_path}".into()], "{hook_path}", "/path with spaces/hook.ts").unwrap(),
+        ["--hook", "/path with spaces/hook.ts"]);
+}
+
+#[test]
+fn only_pending_effects_have_wake_deadlines_and_unknown_launch_is_not_replayed() {
+    let mut run = crate::orchestration::new_run(
+        "deadline-run", "session", RunKind::Worker, "Deadline".into(),
+        "root", None, None, 1,
+    );
+    assert!(pending_operation_delay(&run, 5000).is_none());
+    for step in [DispatchStep::Launched, DispatchStep::NeedsReview, DispatchStep::SetupUnknown] {
+        run.dispatch = Some(crate::orchestration::dispatch(step));
+        assert!(pending_operation_delay(&run, 5000).is_none());
+        assert!(!dispatch_actionable(&run));
+    }
+    for step in [DispatchStep::SetupRunning, DispatchStep::LaunchPending] {
+        run.dispatch = Some(crate::orchestration::dispatch(step));
+        assert!(pending_operation_delay(&run, 5000).unwrap() <= Duration::from_millis(250));
+    }
+    run.dispatch = Some(crate::orchestration::dispatch(DispatchStep::LaunchUnknown));
+    assert!(pending_operation_delay(&run, 5000).is_some());
+    run.dispatch.as_mut().unwrap().updated_at = "2000-01-01T00:00:00Z".into();
+    assert!(pending_operation_delay(&run, 5000).is_none(), "expired unknown effects must not create an idle retry loop");
+}
+
+#[tokio::test]
+async fn filesystem_receiver_consumes_changes_without_idle_reading() {
+    let (sender, receiver) = tokio::sync::watch::channel(0);
+    let mut receiver = Some(receiver);
+    sender.send_replace(1);
+    filesystem_changed(&mut receiver).await;
+    assert_eq!(*receiver.as_ref().unwrap().borrow(), 1);
+    assert!(!receiver.as_ref().unwrap().has_changed().unwrap());
+    drop(sender);
+    filesystem_changed(&mut receiver).await;
+    assert!(receiver.is_none(), "closed watchers must be reinstalled, not spin");
 }
 
 fn inbox_hint_fixture(enabled: bool) -> (ReviewFixture, RuntimeView) {
@@ -1917,38 +1882,18 @@ fn inbox_hint_fixture(enabled: bool) -> (ReviewFixture, RuntimeView) {
 }
 
 #[tokio::test]
-async fn prompt_pins_advertised_file_only_when_bootstrap_emits_that_invocation() {
-    for source in ["file", "id", "oversized", "ordinary"] {
-        let (mut fixture, mut observed) = inbox_hint_fixture(true);
-        let path = if source == "oversized" {
-            format!("/{}", "\"".repeat(4096))
-        } else {
-            "/exact/advertised.jsonl".into()
-        };
-        observed.panes[0].native_session_file = Some(path.clone());
-        if source != "ordinary" {
-            fixture.change(|run| {
-                run.stage = RunStage::Starting;
-                test_attachment(run).conversation = None;
-                test_attachment(run).location.as_mut().unwrap().native_session_id = None;
-            });
-            fixture.run = fixture.current().1;
-            observed.panes[0].native_session_id =
-                (source == "id").then(|| "actual-id".into());
-        }
-        let adapter = Arc::new(CountingHerdr::new(observed, false, false));
-        fixture.dispatcher(Arc::clone(&adapter)).hint_agents().await.unwrap();
-        let requests = adapter.prompt_requests.lock();
-        assert_eq!(requests.len(), 1, "{source}");
-        assert_eq!(requests[0].native_session_file.as_deref(),
-            (source == "file").then_some(path.as_str()), "{source}");
-        if source == "file" {
-            assert!(requests[0].location.native_session_id.is_none());
-            let invocation: serde_json::Value =
-                serde_json::from_str(requests[0].text.split_once("Invocation: ").unwrap().1).unwrap();
-            assert_eq!(invocation["env"]["PI_SESSION_FILE"].as_str(), Some(path.as_str()));
-        }
-    }
+async fn initial_bootstrap_never_types_or_pins_unregistered_conversation_metadata() {
+    let (mut fixture, mut observed) = inbox_hint_fixture(true);
+    fixture.change(|run| {
+        run.stage = RunStage::Starting;
+        test_attachment(run).conversation = None;
+        test_attachment(run).location.as_mut().unwrap().native_session_id = None;
+    });
+    fixture.run = fixture.current().1;
+    observed.panes[0].native_session_file = Some("/advertised/session.jsonl".into());
+    let adapter = Arc::new(CountingHerdr::new(observed, false, false));
+    fixture.dispatcher(Arc::clone(&adapter)).hint_agents().await.unwrap();
+    assert!(adapter.prompt_requests.lock().is_empty());
 }
 
 fn append_hint_instruction(fixture: &ReviewFixture, message_id: &str) {
@@ -2041,7 +1986,7 @@ async fn uncertain_prompt_is_durable_and_not_repeated_after_restart_or_new_messa
     ).unwrap();
     let actor = super::super::Actor::Agent(super::super::AgentCaller {
         auth: super::super::credentials::read_job_auth(&credential_path).unwrap(),
-        conversation: fixture.run.attachment.as_ref().unwrap().conversation.clone().unwrap(),
+        conversation: fixture.run.attachment.as_ref().unwrap().conversation.clone(),
         assignment_generation: None,
         endpoint_identity: String::new(), session_id: "deliberately-foreign-physical-session".into(), workspace_id: String::new(),
         tab_id: String::new(), pane_id: String::new(), boot_id: None, terminal_id: None,
@@ -2146,4 +2091,182 @@ async fn interrupted_durable_hint_submission_becomes_unknown_without_resubmittin
     assert!(matches!(state.inbox_hints[0].state, HintState::Unknown));
     assert_eq!(state.inbox_hints[0].cause.as_deref(), Some("submission_interrupted"));
     assert_eq!(state.messages[0].stage, cockpit_protocol::orchestration::DeliveryStage::Stored);
+}
+
+#[tokio::test]
+async fn pane_events_coalesce_and_disconnect_reconnects_without_snapshot_polling() {
+    use std::sync::atomic::Ordering;
+    let adapter = Arc::new(CountingHerdr::new(runtime(), false, false));
+    let (source, messages) = tokio::sync::mpsc::channel(8);
+    *adapter.event_messages.lock() = Some(messages);
+    let (sender, mut wakes) = tokio::sync::mpsc::channel(1);
+    let stop = CancellationToken::new();
+    let herdr: Arc<dyn OrchestrationHerdr> = adapter.clone();
+    let task = tokio::spawn(watch_session(herdr, "test-session".into(), sender, stop.clone()));
+    tokio::time::timeout(Duration::from_secs(2), wakes.recv()).await.unwrap().unwrap();
+    for _ in 0..3 { source.send(crate::SessionChange::Changed).await.unwrap(); }
+    tokio::task::yield_now().await;
+    assert_eq!(wakes.len(), 1, "event bursts coalesce into one reconciliation");
+    wakes.recv().await.unwrap();
+    source.send(crate::SessionChange::Disconnected { code: "gap".into(), message: "fixture".into() }).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), wakes.recv()).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while adapter.event_subscriptions.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+    assert_eq!(adapter.runtime_calls.load(Ordering::SeqCst), 0, "event adapter must not drive idle runtime polling");
+    stop.cancel();
+    task.await.unwrap();
+}
+
+#[test]
+fn new_scope_creation_receipt_remains_event_actionable_after_semantic_readiness() {
+    let fixture = ReviewFixture::new(RunStage::Active);
+    let mut run = fixture.run.clone();
+    let dispatch = run.dispatch.as_mut().unwrap();
+    dispatch.step = DispatchStep::Launched;
+    dispatch.scope_unit = None;
+    assert!(!scope_creation_pending(&run), "old uncontained attempts are never retrofitted");
+    run.dispatch.as_mut().unwrap().scope_unit = Some("cockpit-r-fixture.scope".into());
+    assert!(scope_creation_pending(&run));
+    assert!(dispatch_actionable(&run), "semantic readiness must not discard the physical creation receipt");
+    assert!(pending_operation_delay(&run, 60_000).is_none(),
+        "the physical creation receipt is completed on events, not an idle retry timer");
+    run.dispatch.as_mut().unwrap().updated_at = "2000-01-01T00:00:00Z".into();
+    assert!(scope_creation_pending(&run));
+    assert!(dispatch_actionable(&run));
+    assert!(pending_operation_delay(&run, 60_000).is_none());
+}
+
+#[tokio::test]
+async fn launch_root_capture_is_exact_even_when_the_harness_has_spawned_children() {
+    let fixture = ReviewFixture::new(RunStage::Starting);
+    let shell = fixture.run.attachment.as_ref().unwrap().shell.clone().unwrap();
+    let mut adapter = CountingHerdr::new(runtime(), false, false);
+    adapter.process_info = Some(super::super::herdr::PaneProcessInfo {
+        pane_id: "pane".into(), shell_pid: Some(shell.process.pid),
+        foreground_pgid: Some(shell.process.pid),
+        processes: vec![(shell.process.pid, "root".into()), (shell.process.pid + 1, "child".into())],
+        shell_identity: Some(shell.clone()),
+    });
+    let observed = read_launch_shell(&adapter, &receipt()).await;
+    assert_eq!(observed, Some(shell));
+    let mut foreign = receipt();
+    foreign.pane_id = "foreign-pane".into();
+    assert!(read_launch_shell(&adapter, &foreign).await.is_none());
+}
+
+#[test]
+fn moved_terminal_requires_one_fresh_exclusive_destination_and_never_uses_focus() {
+    let source = receipt();
+    let mut observed = runtime();
+    observed.boot_id = source.boot_id.clone();
+    observed.workspaces.push(super::super::herdr::RuntimeWorkspace {
+        workspace_id: "destination".into(), label: "Owned".into(), cwd: "/owned".into(),
+    });
+    observed.panes[0].workspace_id = "destination".into();
+    observed.panes[0].workspace_label = "Owned".into();
+    observed.panes[0].tab_id = "actual-tab".into();
+    observed.panes[0].pane_id = "actual-pane".into();
+    let actual = moved_location(&observed, &source).unwrap();
+    assert_eq!(actual.workspace_id, "destination");
+    assert_eq!(actual.tab_id, "actual-tab");
+    assert_eq!(actual.pane_id, "actual-pane");
+    assert_eq!(observed.focused_workspace_id.as_deref(), Some("space"));
+    for mismatch in ["endpoint", "boot", "tag", "terminal", "duplicate", "foreign-pane", "source"] {
+        let mut wrong = observed.clone();
+        match mismatch {
+            "endpoint" => wrong.endpoint_identity = "foreign".into(),
+            "boot" => wrong.boot_id = None,
+            "tag" => wrong.panes[0].tab_label = "foreign".into(),
+            "terminal" => wrong.panes[0].terminal_id = Some("foreign".into()),
+            "duplicate" => wrong.panes.push(wrong.panes[0].clone()),
+            "foreign-pane" => {
+                let mut foreign = wrong.panes[0].clone();
+                foreign.terminal_id = Some("foreign".into());
+                wrong.panes.push(foreign);
+            }
+            "source" => wrong.panes[0].workspace_id = source.workspace_id.clone(),
+            _ => unreachable!(),
+        }
+        assert!(moved_location(&wrong, &source).is_none(), "{mismatch}");
+    }
+}
+
+#[tokio::test]
+async fn dependency_input_requires_actual_materialization_and_keeps_a_frozen_base_after_head_changes() {
+    let root = std::env::temp_dir().join(format!("cockpit-scheduled-input-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "commit", "-q", "--allow-empty", "-m", "base"],
+    ] {
+        assert!(tokio::process::Command::new("git").current_dir(&root).args(args).status().await.unwrap().success());
+    }
+    let path = root.to_str().unwrap();
+    let before = immutable_schedule_base(path, "HEAD").await.unwrap();
+    std::fs::write(root.join("prerequisite-output.txt"), "named dependency output\n").unwrap();
+    assert!(tokio::process::Command::new("git").current_dir(&root).args(["add", "prerequisite-output.txt"])
+        .status().await.unwrap().success());
+    assert!(tokio::process::Command::new("git").current_dir(&root)
+        .args(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "commit", "-q", "-m", "accepted prerequisite"]).status().await.unwrap().success());
+    let accepted = immutable_schedule_base(path, "HEAD").await.unwrap();
+    assert!(!schedule_commit_included(path, &accepted, &before).await.unwrap(), "checked/accepted does not publish the commit into an older base");
+    assert!(schedule_commit_included(path, &accepted, &accepted).await.unwrap());
+    assert!(tokio::process::Command::new("git").current_dir(&root).args(["reset", "--hard", &before])
+        .status().await.unwrap().success());
+    assert_eq!(immutable_schedule_base(path, "HEAD").await.unwrap(), before);
+    assert!(schedule_commit_included(path, &accepted, &accepted).await.unwrap(),
+        "the verified SHA remains the creation input, never the later moving HEAD");
+    assert!(schedule_commit_included(path, "--fake-input", &accepted).await.is_err());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn retained_space_restart_requires_exact_resumed_epoch_and_journalled_retained_location() {
+    use cockpit_protocol::orchestration::{ResumePhase, ResumeRecord};
+    let fixture = ReviewFixture::new(RunStage::Starting);
+    let mut run = fixture.run.clone();
+    run.kind = RunKind::Worker;
+    let (_, checkout) = super::super::project_identity::resolve_owned_directory(&fixture.root).unwrap();
+    run.checkout = Some(checkout.clone());
+    run.setup = Some(SetupSummary {
+        operation_id: None, generation: None, workspace_id: Some("retained-space".into()),
+        checkout_path: checkout.path, repository_id: None, branch: None, base: None,
+        base_commit: None, ownership: None, effects: Vec::new(), warnings: Vec::new(), project_workspace_id: Some("source-space".into()),
+    });
+    run.target = Some(DispatchTarget::SpaceWorktree { workspace_id: "source-space".into(), branch: None, base_ref: None });
+    run.attachment.as_mut().unwrap().epoch = 2;
+    run.resume = Some(ResumeRecord {
+        operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
+        previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+        phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now(),
+    });
+    run.dispatch = Some(crate::orchestration::dispatch(DispatchStep::SetupPending));
+    assert!(resumed_checkout_epoch(&run));
+    assert!(!restarts_in_retained_space(&run), "an epoch pin is not itself a physical launch receipt");
+    let dispatch = run.dispatch.as_mut().unwrap();
+    dispatch.launch_tag = Some("exact-new-epoch".into());
+    dispatch.staging_workspace_id = Some("retained-space".into());
+    assert!(restarts_in_retained_space(&run), "the existing bound Space receives the new scoped tab without a second move/bind");
+    assert!(matches!(run.target.as_ref(), Some(DispatchTarget::SpaceWorktree { workspace_id, .. }) if workspace_id == "source-space"));
+    let mut root = run.clone();
+    root.kind = RunKind::Supervisor;
+    assert!(!resumed_checkout_epoch(&root), "this correction must not reinterpret root non-destructive resumption");
+    for mismatch in ["epoch", "previous", "checkout", "source", "move", "unbound"] {
+        let mut changed = run.clone();
+        match mismatch {
+            "epoch" => changed.attachment.as_mut().unwrap().epoch = 3,
+            "previous" => changed.resume.as_mut().unwrap().previous_attachment_epoch = Some(0),
+            "checkout" => changed.setup.as_mut().unwrap().checkout_path.push_str("-foreign"),
+            "source" => changed.dispatch.as_mut().unwrap().staging_workspace_id = Some("source-space".into()),
+            "move" => changed.dispatch.as_mut().unwrap().move_operation_id = Some(uuid::Uuid::new_v4().to_string()),
+            "unbound" => changed.setup.as_mut().unwrap().workspace_id = None,
+            _ => unreachable!(),
+        }
+        assert!(!restarts_in_retained_space(&changed), "{mismatch}");
+    }
 }

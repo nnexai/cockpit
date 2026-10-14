@@ -4,6 +4,10 @@ mod endpoint;
 mod notes_cli;
 #[path = "cockpit/skills.rs"]
 mod skills_cli;
+#[path = "cockpit/contain.rs"]
+mod contain;
+#[path = "cockpit/agent_exec.rs"]
+mod agent_exec;
 
 use std::{fs::OpenOptions, io::{IsTerminal, Read}, net::SocketAddr, os::unix::fs::OpenOptionsExt, path::{Path, PathBuf}, process::ExitCode, sync::Arc, time::Duration};
 
@@ -67,6 +71,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Launch a literal command in a supported per-launch process scope.
+    Contain(contain::ContainArgs),
+    /// Wait for exact placement receipts, then exec a literal agent command.
+    AgentExec(agent_exec::AgentExecArgs),
     /// Inspect the configured Herdr installation.
     Status(StatusArgs),
     /// Serve the browser client and HTTP API in the foreground.
@@ -527,6 +535,8 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
         Command::Widget(_) => unreachable!("widget commands use their own exit-status contract"),
         Command::Notes(_) => unreachable!("Notes commands use their own exit-status contract"),
         Command::Skills(_) => unreachable!("skills commands use their own exit-status contract"),
+        Command::Contain(_) => unreachable!("contain is a launch-only exec helper"),
+        Command::AgentExec(_) => unreachable!("agent-exec is a launch-only waiting exec helper"),
         Command::Context(args) => run_context(args).await,
         Command::Orchestration(_) | Command::Task(_) | Command::Run(_) | Command::Inbox(_) | Command::Route(_) =>
             unreachable!("orchestration commands preserve their structured error contract"),
@@ -1073,6 +1083,8 @@ async fn main() -> ExitCode {
         Command::Route(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Notes(args) => return ExitCode::from(notes_cli::run(args).await),
         Command::Skills(args) => return ExitCode::from(skills_cli::run(args).await),
+        Command::Contain(args) => return ExitCode::from(contain::run(args).await),
+        Command::AgentExec(args) => return ExitCode::from(agent_exec::run(args).await),
         command => run_legacy(Cli { command }).await.map(|()| 0).map_err(CliError::from),
     };
     match result {

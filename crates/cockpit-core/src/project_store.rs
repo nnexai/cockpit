@@ -7,7 +7,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use cap_fs_ext::{DirExt, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, OpenOptions};
-use cockpit_protocol::projects::{WorkspaceOperation, WorkspaceSetupPlan};
+use cockpit_protocol::projects::{BindMovedSpaceRequest, OwnedAttemptDirectoryRequest, OwnedCheckoutRequest, WorkspaceOperation, WorkspaceSetupPlan};
+use cockpit_protocol::orchestration::{CheckoutIdentity, RunLocation};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -52,12 +53,86 @@ pub(crate) struct OwnedCreationReceipt {
     pub operation_id: String,
     pub resources: Vec<cockpit_protocol::orchestration::OwnedResourceIdentity>,
     pub git_capture_error: Option<String>,
+    #[serde(default)]
+    pub moved_space: Option<BindMovedSpaceRequest>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeSpaceBinding {
+    pub previous_operation_id: Option<String>,
+    pub expected_checkout: CheckoutIdentity,
+    pub source_location: RunLocation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OwnedCheckoutJournal {
+    pub request: OwnedCheckoutRequest,
+    #[serde(default)]
+    pub borrowed_directory: bool,
+    #[serde(default)]
+    pub attempt_directory: Option<OwnedAttemptDirectoryRequest>,
+    #[serde(default)]
+    pub directory_requested: bool,
+    pub existing_workspace_ids: Vec<String>,
+    #[serde(default)]
+    pub existing_terminal_ids: Vec<String>,
+    pub context_item_ids: Vec<String>,
+    pub context_repository_paths: Vec<String>,
+    pub git_requested: bool,
+    pub bind: Option<BindMovedSpaceRequest>,
+    #[serde(default)]
+    pub resume_binding: Option<ResumeSpaceBinding>,
+}
+
+fn validate_owned_journal(receipt: &OwnedCreationReceipt, journal: Option<&OwnedCheckoutJournal>) -> Result<(), InspectionError> {
+    if receipt.moved_space.is_some()
+        && journal.and_then(|j| j.bind.as_ref()) != receipt.moved_space.as_ref()
+    {
+        return Err(InspectionError::new("association_conflict", "owned Space proof differs from its exact move journal"));
+    }
+    if let Some(journal) = journal
+        && let Some(resume) = &journal.resume_binding
+    {
+        let binding = receipt.moved_space.as_ref().ok_or_else(|| InspectionError::new("association_conflict", "resumed Space has no exact move receipt"))?;
+        if !journal.borrowed_directory || journal.git_requested || journal.attempt_directory.is_some()
+            || resume.previous_operation_id.as_deref() == Some(receipt.operation_id.as_str())
+            || binding.operation_id != receipt.operation_id || binding.move_operation_id != receipt.operation_id
+            || binding.expected_generation != 1 || resume.expected_checkout.path != journal.request.checkout_path
+            || resume.source_location.endpoint_identity != binding.endpoint_identity
+            || resume.source_location.terminal_id.as_deref() != Some(binding.terminal_id.as_str())
+            || resume.source_location.workspace_id != journal.request.source_workspace_id
+            || resume.source_location.workspace_id == binding.workspace_id || receipt.resources.len() != 1
+            || !matches!(&receipt.resources[0], cockpit_protocol::orchestration::OwnedResourceIdentity::Space { identity }
+                if identity.creation_operation_id == receipt.operation_id && identity.workspace_id == binding.workspace_id)
+        {
+            return Err(InspectionError::new("association_conflict", "resumed binding may own only its exact new Space, never a filesystem resource"));
+        }
+    }
+    for resource in &receipt.resources {
+        if let cockpit_protocol::orchestration::OwnedResourceIdentity::AttemptDirectory { identity } = resource {
+            let journal = journal.ok_or_else(|| InspectionError::new("association_conflict", "attempt creation journal is missing"))?;
+            let request = journal.attempt_directory.as_ref().ok_or_else(|| InspectionError::new("association_conflict", "attempt creation request is missing"))?;
+            if !journal.directory_requested || request.operation_id != receipt.operation_id
+                || identity.creation_operation_id != receipt.operation_id || journal.request.operation_id != receipt.operation_id
+                || journal.request.checkout_path != identity.root || journal.request.repository_checkout != request.source_root
+                || journal.request.source_workspace_id != request.source_workspace_id
+                || Path::new(&identity.root).file_name().and_then(|name| name.to_str()) != Some(request.run_id.as_str())
+            {
+                return Err(InspectionError::new("association_conflict", "attempt creation differs from its exact exclusive-directory journal"));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredOperation {
     operation: WorkspaceOperation,
+    #[serde(default)]
+    owned_checkout: Option<OwnedCheckoutJournal>,
 }
 
 fn receipt_matches_operation(receipt: &TeardownReceipt, operation: &WorkspaceOperation) -> bool {
@@ -152,26 +227,39 @@ impl ProjectStore {
         &self,
         plan: WorkspaceSetupPlan,
     ) -> Result<WorkspaceOperation, InspectionError> {
+        self.persist_checkout_plan(plan, None)
+    }
+
+    pub(crate) fn persist_owned_checkout_plan(&self, plan: WorkspaceSetupPlan, journal: OwnedCheckoutJournal)
+        -> Result<WorkspaceOperation, InspectionError>
+    {
+        self.persist_checkout_plan(plan, Some(journal))
+    }
+
+    fn persist_checkout_plan(&self, plan: WorkspaceSetupPlan, owned_checkout: Option<OwnedCheckoutJournal>)
+        -> Result<WorkspaceOperation, InspectionError>
+    {
         validate_operation_id(&plan.operation_id)?;
         let now = timestamp();
+        let binding = owned_checkout.as_ref().and_then(|journal| journal.bind.as_ref());
         let operation = WorkspaceOperation {
             operation_id: plan.operation_id.clone(),
             generation: plan.generation,
             sequence: 0,
             session_id: plan.session_id.clone(),
             plan,
-            state: cockpit_protocol::projects::WorkspaceOperationState::Planned,
-            step: cockpit_protocol::projects::WorkspaceOperationStep::Planned,
-            workspace_id: None,
-            tab_id: None,
-            pane_id: None,
+            state: if binding.is_some() { cockpit_protocol::projects::WorkspaceOperationState::Running } else { cockpit_protocol::projects::WorkspaceOperationState::Planned },
+            step: if binding.is_some() { cockpit_protocol::projects::WorkspaceOperationStep::SpaceBound } else { cockpit_protocol::projects::WorkspaceOperationStep::Planned },
+            workspace_id: binding.map(|binding| binding.workspace_id.clone()),
+            tab_id: binding.map(|binding| binding.tab_id.clone()),
+            pane_id: binding.map(|binding| binding.pane_id.clone()),
             owned_resources: Vec::new(),
             error: None,
             resume_allowed: false,
             cancel_requested: false,
             updated_at: now,
         };
-        self.persist_initial(&operation)?;
+        self.persist_initial(&operation, owned_checkout)?;
         Ok(operation)
     }
 
@@ -228,11 +316,37 @@ impl ProjectStore {
     where
         F: FnOnce(&mut WorkspaceOperation) -> Result<(), InspectionError>,
     {
+        self.update_record(operation_id, expected_generation, |operation, _| change(operation))
+    }
+
+    pub(crate) fn owned_checkout(&self, operation_id: &str) -> Result<Option<OwnedCheckoutJournal>, InspectionError> {
+        validate_operation_id(operation_id)?;
+        let _lock = self.acquire_lock(operation_id)?;
+        Ok(self.read_stored_operation(&record_name(operation_id))?.owned_checkout)
+    }
+
+    pub(crate) fn update_owned_checkout(
+        &self,
+        operation_id: &str,
+        expected_generation: Option<u32>,
+        change: impl FnOnce(&mut WorkspaceOperation, &mut Option<OwnedCheckoutJournal>) -> Result<(), InspectionError>,
+    ) -> Result<WorkspaceOperation, InspectionError> {
+        self.update_record(operation_id, expected_generation, change)
+    }
+
+    fn update_record(
+        &self,
+        operation_id: &str,
+        expected_generation: Option<u32>,
+        change: impl FnOnce(&mut WorkspaceOperation, &mut Option<OwnedCheckoutJournal>) -> Result<(), InspectionError>,
+    ) -> Result<WorkspaceOperation, InspectionError>
+    {
         validate_operation_id(operation_id)?;
         let _lock = self.acquire_lock(operation_id)?;
         let name = record_name(operation_id);
         let stored = self.read_stored_operation(&name)?;
         let mut operation = stored.operation;
+        let mut owned_checkout = stored.owned_checkout;
         if let Some(expected) = expected_generation {
             if operation.generation != expected {
                 return Err(InspectionError::new(
@@ -247,7 +361,7 @@ impl ProjectStore {
         let sequence = operation.sequence.checked_add(1).ok_or_else(|| {
             InspectionError::new("invalid_sequence", "operation sequence overflow")
         })?;
-        change(&mut operation)?;
+        change(&mut operation, &mut owned_checkout)?;
         if operation.operation_id != operation_id {
             return Err(InspectionError::new(
                 "invalid_operation_id",
@@ -262,6 +376,7 @@ impl ProjectStore {
             &name,
             &StoredOperation {
                 operation: operation.clone(),
+                owned_checkout,
             },
         )
         .map_err(|error| {
@@ -412,6 +527,10 @@ impl ProjectStore {
                 if receipt.operation_id != operation_id {
                     return Err(InspectionError::new("association_conflict", "owned creation receipt belongs to another operation"));
                 }
+                drop(_lock);
+                if receipt.moved_space.is_some() || receipt.resources.iter().any(|r| matches!(r, cockpit_protocol::orchestration::OwnedResourceIdentity::AttemptDirectory { .. })) {
+                    validate_owned_journal(&receipt, self.owned_checkout(operation_id)?.as_ref())?;
+                }
                 Ok(Some(receipt))
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -426,6 +545,8 @@ impl ProjectStore {
         validate_operation_id(&receipt.operation_id)?;
         let operation = self.load(&receipt.operation_id)?;
         crate::project_teardown::validate_creation_receipt(receipt, &operation)?;
+        let journal = self.owned_checkout(&receipt.operation_id)?;
+        validate_owned_journal(receipt, journal.as_ref())?;
         let _lock = self.acquire_named_lock(&format!(".{}.owned.lock", receipt.operation_id), "owned_lock")?;
         let name = format!("{}.owned.json", receipt.operation_id);
         match self.root_dir.symlink_metadata(&name) {
@@ -433,10 +554,19 @@ impl ProjectStore {
                 return Err(InspectionError::new("unsafe_path", "owned creation receipt is not a regular file")),
             Ok(_) => {
                 let prior: OwnedCreationReceipt = read_json(&self.root_dir, &name)?;
-                if prior != *receipt {
+                if prior == *receipt {
+                    return Ok(());
+                }
+                let append_is_exact = prior.moved_space.is_none()
+                    && receipt.moved_space.is_some()
+                    && journal.as_ref().and_then(|j| j.bind.as_ref()) == receipt.moved_space.as_ref()
+                    && prior.git_capture_error == receipt.git_capture_error
+                    && receipt.resources.len() == prior.resources.len() + 1
+                    && receipt.resources.starts_with(&prior.resources)
+                    && matches!(receipt.resources.last(), Some(cockpit_protocol::orchestration::OwnedResourceIdentity::Space { .. }));
+                if !append_is_exact {
                     return Err(InspectionError::new("association_conflict", "owned creation provenance cannot be replaced"));
                 }
-                return Ok(());
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(map_io(error, "owned_read")),
@@ -530,7 +660,7 @@ impl ProjectStore {
         }
     }
 
-    fn persist_initial(&self, operation: &WorkspaceOperation) -> Result<(), InspectionError> {
+    fn persist_initial(&self, operation: &WorkspaceOperation, owned_checkout: Option<OwnedCheckoutJournal>) -> Result<(), InspectionError> {
         let _lock = self.acquire_lock(&operation.operation_id)?;
         let name = record_name(&operation.operation_id);
         match self.root_dir.symlink_metadata(&name) {
@@ -548,6 +678,7 @@ impl ProjectStore {
             &name,
             &StoredOperation {
                 operation: operation.clone(),
+                owned_checkout,
             },
         )
         .map_err(|error| {

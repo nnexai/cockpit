@@ -10,6 +10,7 @@ export const wireOrchestrationSnapshotRequest: WireDescriptor<V1.OrchestrationSn
 });
 
 export const wireOrchestrationWaitRequest: WireDescriptor<V1.OrchestrationWaitRequest> = struct<V1.OrchestrationWaitRequest>("OrchestrationWaitRequest", {
+  "root_id": req(nullable(str), { fill: null }),
   "after_revision": req(u53),
   "after_tasks_token": req(str),
   "timeout_ms": req(u32),
@@ -131,12 +132,34 @@ export const wireTaskOwnership: WireDescriptor<V1.TaskOwnership> = struct<V1.Tas
   "task_id": req(str),
   "generation": req(u53),
   "owner": req(nullable(named(() => wireTaskOwner)), { fill: null }),
+  "schedule": req(nullable(named(() => wireTaskSchedule)), { fill: null }),
 });
 
 export const wireTaskOwner: WireDescriptor<V1.TaskOwner> = struct<V1.TaskOwner>("TaskOwner", {
   "run_id": req(str),
-  "conversation": req(named(() => wireConversationIdentity)),
+  "conversation": req(nullable(named(() => wireConversationIdentity)), { fill: null }),
   "claim_operation_id": req(str),
+});
+
+export const wireTaskSchedule: WireDescriptor<V1.TaskSchedule> = struct<V1.TaskSchedule>("TaskSchedule", {
+  "operation_id": req(str),
+  "principal_key": req(str),
+  "target": req(nullable(named(() => wireDispatchTarget)), { fill: null }),
+  "brief": req(str),
+  "cleanup_policy": req(named(() => wireWorkerCleanupPolicy)),
+  "label": req(nullable(str), { fill: null }),
+  "scheduled_at": req(str),
+});
+
+export const wireReplacementPlacement: WireDescriptor<V1.ReplacementPlacement> = tagged<V1.ReplacementPlacement, "placement">("ReplacementPlacement", "placement", {
+  "same_checkout": {
+  },
+  "isolated_worktree": {
+    "base_commit": req(str),
+  },
+  "isolated_directory": {
+    "directory": req(str),
+  },
 });
 
 export const wireTaskDependencyState: WireDescriptor<V1.TaskDependencyState> = literal<V1.TaskDependencyState>("TaskDependencyState", ["none", "satisfied", "blocked", "invalid"]);
@@ -153,9 +176,19 @@ export const wireTaskView: WireDescriptor<V1.TaskView> = struct<V1.TaskView>("Ta
   "lane": req(named(() => wireTaskLane)),
   "current_run_id": req(nullable(str), { fill: null }),
   "dependencies": req(named(() => wireTaskDependencies)),
+  "scheduled": req(bool),
+  "attempt": req(nullable(named(() => wireAttemptBadge)), { fill: null }),
 });
 
-export const wireTaskLane: WireDescriptor<V1.TaskLane> = literal<V1.TaskLane>("TaskLane", ["queued", "starting", "working", "review", "accepted"]);
+export const wireTaskLane: WireDescriptor<V1.TaskLane> = literal<V1.TaskLane>("TaskLane", ["blocked", "ready", "working", "review", "accepted"]);
+
+export const wireAttemptBadge: WireDescriptor<V1.AttemptBadge> = struct<V1.AttemptBadge>("AttemptBadge", {
+  "run_id": req(str),
+  "attempt": req(u32),
+  "state": req(named(() => wireAttemptState)),
+});
+
+export const wireAttemptState: WireDescriptor<V1.AttemptState> = literal<V1.AttemptState>("AttemptState", ["starting", "running", "stalled"]);
 
 export const wireRunKind: WireDescriptor<V1.RunKind> = literal<V1.RunKind>("RunKind", ["supervisor", "adopted", "worker"]);
 
@@ -163,7 +196,7 @@ export const wireRunStage: WireDescriptor<V1.RunStage> = literal<V1.RunStage>("R
 
 export const wireCloseReason: WireDescriptor<V1.CloseReason> = literal<V1.CloseReason>("CloseReason", ["accepted", "cancelled", "superseded", "failed"]);
 
-export const wireDispatchStep: WireDescriptor<V1.DispatchStep> = literal<V1.DispatchStep>("DispatchStep", ["planning", "plan_failed", "setup_pending", "setup_running", "setup_unknown", "launch_intent", "launch_pending", "launch_unknown", "launched", "needs_review"]);
+export const wireDispatchStep: WireDescriptor<V1.DispatchStep> = literal<V1.DispatchStep>("DispatchStep", ["planning", "plan_failed", "setup_pending", "setup_running", "setup_unknown", "launch_intent", "launch_pending", "launch_unknown", "move_intent", "move_unknown", "placed", "launched", "needs_review"]);
 
 export const wireDispatchTarget: WireDescriptor<V1.DispatchTarget> = tagged<V1.DispatchTarget, "target">("DispatchTarget", "target", {
   "setup": {
@@ -176,6 +209,10 @@ export const wireDispatchTarget: WireDescriptor<V1.DispatchTarget> = tagged<V1.D
     "workspace_id": req(str),
     "branch": req(nullable(str), { fill: null }),
     "base_ref": req(nullable(str), { fill: null }),
+  },
+  "owned_attempt_directory": {
+    "source_root": req(str),
+    "source_workspace_id": req(nullable(str), { fill: null }),
   },
 });
 
@@ -270,11 +307,34 @@ export const wireExecutionAttachment: WireDescriptor<V1.ExecutionAttachment> = s
   "process": req(nullable(named(() => wireNativeProcessIdentity)), { fill: null }),
   "shell": req(nullable(named(() => wireNativeShellIdentity)), { fill: null }),
   "machine_id": req(nullable(str), { fill: null }),
+  "process_scope": req(nullable(named(() => wireOwnedProcessScope)), { fill: null }),
   "launch_attempt": req(u32),
   "updated_at": req(str),
 });
 
-export const wireResumeMode: WireDescriptor<V1.ResumeMode> = literal<V1.ResumeMode>("ResumeMode", ["reattach_or_restart", "replace_existing"]);
+export const wireOwnedProcessScope: WireDescriptor<V1.OwnedProcessScope> = struct<V1.OwnedProcessScope>("OwnedProcessScope", {
+  "kind": req(named(() => wireScopeKind)),
+  "unit": req(str),
+  "invocation_id": req(str),
+  "control_group": req(str),
+  "cgroup_device": req(str),
+  "cgroup_inode": req(str),
+  "machine_id": req(str),
+  "kernel_boot_id": req(str),
+  "member": req(named(() => wireNativeProcessIdentity)),
+  "captured_at": req(str),
+});
+
+export const wireScopeKind: WireDescriptor<V1.ScopeKind> = literal<V1.ScopeKind>("ScopeKind", ["systemd_user_scope"]);
+
+export const wireAgentLaunchReceipt: WireDescriptor<V1.AgentLaunchReceipt> = struct<V1.AgentLaunchReceipt>("AgentLaunchReceipt", {
+  "latch": req(str),
+  "nonce": req(str),
+  "latch_device": req(str),
+  "latch_inode": req(str),
+});
+
+export const wireAgentLatchState: WireDescriptor<V1.AgentLatchState> = literal<V1.AgentLatchState>("AgentLatchState", ["awaiting", "release_intent", "released", "unknown"]);
 
 export const wireResumePhase: WireDescriptor<V1.ResumePhase> = literal<V1.ResumePhase>("ResumePhase", ["reconciling", "reattached", "launching", "connected", "blocked"]);
 
@@ -354,6 +414,7 @@ export const wireRunAttachResult: WireDescriptor<V1.RunAttachResult> = struct<V1
 
 export const wireRunLocation: WireDescriptor<V1.RunLocation> = struct<V1.RunLocation>("RunLocation", {
   "boot_id": req(nullable(str), { fill: null }),
+  "peer_process": req(nullable(named(() => wireNativeProcessIdentity)), { fill: null }),
   "terminal_id": req(nullable(str), { fill: null }),
   "native_session_id": req(nullable(str), { fill: null }),
   "endpoint_identity": req(str),
@@ -495,7 +556,7 @@ export const wireResourceBuildRegistration: WireDescriptor<V1.ResourceBuildRegis
   "process": req(named(() => wireNativeProcessIdentity)),
 });
 
-export const wireOwnedResourceKind: WireDescriptor<V1.OwnedResourceKind> = literal<V1.OwnedResourceKind>("OwnedResourceKind", ["worker_terminal", "worktree", "branch", "space", "scratch", "fixture_set"]);
+export const wireOwnedResourceKind: WireDescriptor<V1.OwnedResourceKind> = literal<V1.OwnedResourceKind>("OwnedResourceKind", ["worker_terminal", "worktree", "branch", "space", "scratch", "fixture_set", "attempt_directory"]);
 
 export const wireResourceOwnership: WireDescriptor<V1.ResourceOwnership> = literal<V1.ResourceOwnership>("ResourceOwnership", ["owned", "borrowed", "unknown"]);
 
@@ -538,6 +599,13 @@ export const wireOwnedFilesystemIdentity: WireDescriptor<V1.OwnedFilesystemIdent
   "manifest_inode": req(str),
 });
 
+export const wireOwnedAttemptDirectoryIdentity: WireDescriptor<V1.OwnedAttemptDirectoryIdentity> = struct<V1.OwnedAttemptDirectoryIdentity>("OwnedAttemptDirectoryIdentity", {
+  "creation_operation_id": req(str),
+  "root": req(str),
+  "device": req(str),
+  "inode": req(str),
+});
+
 export const wireFixtureAdapterId: WireDescriptor<V1.FixtureAdapterId> = literal<V1.FixtureAdapterId>("FixtureAdapterId", ["ui_polish_runtime"]);
 
 export const wireOwnedFixtureIdentity: WireDescriptor<V1.OwnedFixtureIdentity> = struct<V1.OwnedFixtureIdentity>("OwnedFixtureIdentity", {
@@ -562,6 +630,9 @@ export const wireOwnedResourceIdentity: WireDescriptor<V1.OwnedResourceIdentity>
   },
   "scratch": {
     "identity": req(named(() => wireOwnedFilesystemIdentity)),
+  },
+  "attempt_directory": {
+    "identity": req(named(() => wireOwnedAttemptDirectoryIdentity)),
   },
   "fixture_set": {
     "identity": req(named(() => wireOwnedFixtureIdentity)),
@@ -662,7 +733,7 @@ export const wireNativeShellIdentity: WireDescriptor<V1.NativeShellIdentity> = s
   "argv_digest": req(str),
 });
 
-export const wireRetirementTrigger: WireDescriptor<V1.RetirementTrigger> = literal<V1.RetirementTrigger>("RetirementTrigger", ["accept", "accept_recovery", "operator_conflict_resolution"]);
+export const wireRetirementTrigger: WireDescriptor<V1.RetirementTrigger> = literal<V1.RetirementTrigger>("RetirementTrigger", ["accept", "accept_recovery", "operator_conflict_resolution", "replacement"]);
 
 export const wireRetirementIdentity: WireDescriptor<V1.RetirementIdentity> = struct<V1.RetirementIdentity>("RetirementIdentity", {
   "attachment_id": req(nullable(str), { fill: null }),
@@ -678,16 +749,25 @@ export const wireRetirementIdentity: WireDescriptor<V1.RetirementIdentity> = str
   "pane_id": req(str),
   "terminal_id": req(str),
   "herdr_boot_id": req(nullable(str), { fill: null }),
+  "herdr_peer": req(nullable(named(() => wireNativeProcessIdentity)), { fill: null }),
   "conversation": req(nullable(named(() => wireConversationIdentity)), { fill: null }),
   "process": req(nullable(named(() => wireNativeProcessIdentity)), { fill: null }),
   "shell": req(nullable(named(() => wireNativeShellIdentity)), { fill: null }),
 });
 
+export const wireReplacementRetirementAuthority: WireDescriptor<V1.ReplacementRetirementAuthority> = struct<V1.ReplacementRetirementAuthority>("ReplacementRetirementAuthority", {
+  "operation_id": req(str),
+  "previous_run_id": req(str),
+  "previous_generation": req(u53),
+  "replacement_run_id": req(str),
+});
+
 export const wireRunRetirement: WireDescriptor<V1.RunRetirement> = struct<V1.RunRetirement>("RunRetirement", {
   "retirement_id": req(str),
   "trigger": req(named(() => wireRetirementTrigger)),
-  "result_message_id": req(str),
-  "task_revision": req(str),
+  "result_message_id": req(nullable(str), { fill: null }),
+  "task_revision": req(nullable(str), { fill: null }),
+  "replacement": req(nullable(named(() => wireReplacementRetirementAuthority)), { fill: null }),
   "identity": req(nullable(named(() => wireRetirementIdentity)), { fill: null }),
   "state": req(named(() => wireRetirementState)),
   "created_at": req(str),
@@ -717,7 +797,7 @@ export const wireRetirementState: WireDescriptor<V1.RetirementState> = tagged<V1
   },
 });
 
-export const wireRetirementBlocker: WireDescriptor<V1.RetirementBlocker> = literal<V1.RetirementBlocker>("RetirementBlocker", ["open_descendant_runs"]);
+export const wireRetirementBlocker: WireDescriptor<V1.RetirementBlocker> = literal<V1.RetirementBlocker>("RetirementBlocker", ["open_descendant_runs", "resource_admissions"]);
 
 export const wireTerminalOutcome: WireDescriptor<V1.TerminalOutcome> = literal<V1.TerminalOutcome>("TerminalOutcome", ["closed_by_cockpit", "already_absent", "absent_after_uncertain_close"]);
 
@@ -762,6 +842,13 @@ export const wireRun: WireDescriptor<V1.Run> = struct<V1.Run>("Run", {
 export const wireDispatchState: WireDescriptor<V1.DispatchState> = struct<V1.DispatchState>("DispatchState", {
   "launch_tag": req(nullable(str), { fill: null }),
   "endpoint_identity": req(nullable(str), { fill: null }),
+  "scope_unit": req(nullable(str), { fill: null }),
+  "pre_move_scope": req(nullable(named(() => wireOwnedProcessScope)), { fill: null }),
+  "latch": req(nullable(named(() => wireAgentLaunchReceipt)), { fill: null }),
+  "latch_state": req(nullable(named(() => wireAgentLatchState)), { fill: null }),
+  "source_location": req(nullable(named(() => wireRunLocation)), { fill: null }),
+  "move_operation_id": req(nullable(str), { fill: null }),
+  "staging_workspace_id": req(nullable(str), { fill: null }),
   "recovery": req(nullable(named(() => wireWorkspaceRecoveryAction)), { fill: null }),
   "agent_started": req(bool),
   "step": req(named(() => wireDispatchStep)),
@@ -995,8 +1082,6 @@ export const wireOrchestrationAction: WireDescriptor<V1.OrchestrationAction> = t
     "run_id": req(str),
     "operation_id": req(str),
     "expected_attachment_epoch": req(nullable(u53), { fill: null }),
-    "mode": req(named(() => wireResumeMode)),
-    "decision_id": req(nullable(str), { fill: null }),
   },
   "run_register": {
     "operation_id": req(str),
@@ -1027,6 +1112,30 @@ export const wireOrchestrationAction: WireDescriptor<V1.OrchestrationAction> = t
     "label": req(nullable(str), { fill: null }),
     "brief": req(str),
     "cleanup_policy": req(named(() => wireWorkerCleanupPolicy)),
+  },
+  "task_schedule": {
+    "operation_id": req(str),
+    "root_id": req(str),
+    "task_id": req(str),
+    "target": req(nullable(named(() => wireDispatchTarget)), { fill: null }),
+    "brief": req(str),
+    "cleanup_policy": req(named(() => wireWorkerCleanupPolicy)),
+    "label": req(nullable(str), { fill: null }),
+    "expected_task_revision": req(nullable(str), { fill: null }),
+    "expected_doc_revision": req(nullable(str), { fill: null }),
+  },
+  "task_schedule_cancel": {
+    "operation_id": req(str),
+    "root_id": req(str),
+    "task_id": req(str),
+  },
+  "worker_replace": {
+    "operation_id": req(str),
+    "root_id": req(str),
+    "task_id": req(str),
+    "expected_run_id": req(str),
+    "expected_assignment_generation": req(u53),
+    "reason": req(str),
   },
   "task_scope_update": {
     "operation_id": req(str),
@@ -1111,7 +1220,7 @@ export const wireOrchestrationAction: WireDescriptor<V1.OrchestrationAction> = t
 export const wireOrchestrationActionResult: WireDescriptor<V1.OrchestrationActionResult> = tagged<V1.OrchestrationActionResult, "result">("OrchestrationActionResult", "result", {
   "run_registered": {
     "run_id": req(str),
-    "conversation": req(named(() => wireConversationIdentity)),
+    "conversation": req(nullable(named(() => wireConversationIdentity)), { fill: null }),
     "assignment_generation": req(nullable(u53), { fill: null }),
     "duplicate": req(bool),
   },
@@ -1123,6 +1232,17 @@ export const wireOrchestrationActionResult: WireDescriptor<V1.OrchestrationActio
   },
   "worker_started": {
     "start": req(named(() => wireWorkerStartResult)),
+  },
+  "task_scheduled": {
+    "operation_id": req(str),
+    "task_id": req(str),
+    "duplicate": req(bool),
+  },
+  "worker_replaced": {
+    "start": req(named(() => wireWorkerStartResult)),
+    "previous_run_id": req(str),
+    "assignment_generation": req(u53),
+    "placement": req(named(() => wireReplacementPlacement)),
   },
   "task_scope_updated": {
     "update": req(named(() => wireTaskScopeUpdateResult)),

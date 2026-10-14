@@ -45,18 +45,6 @@ describe("shortcut registry", () => {
     expect(formatShortcut("terminal-copy", "other")).toBe("Ctrl+Shift+C");
   });
 
-  it("keeps observational Show and both explicit Start entry points keyless", () => {
-    const show = SHORTCUTS.find(entry => entry.id === "show-supervisor")!;
-    const start = SHORTCUTS.find(entry => entry.id === "start-supervisor")!;
-    const another = SHORTCUTS.find(entry => entry.id === "start-another-supervisor")!;
-    for (const entry of [show, start, another]) {
-      expect(entry.prefix).toBeUndefined();
-      expect(formatShortcut(entry.id, "other")).toBe("");
-    }
-    expect(start.label).toBe("Start agent");
-    expect(start.note).toContain("fresh current Space");
-    expect(another.label).toBe("Start another agent…");
-  });
 });
 
 describe("viewer shortcuts", () => {

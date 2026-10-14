@@ -61,7 +61,7 @@ struct Module {
     inputs: BTreeMap<String, DeriveInput>,
 }
 
-type Inputs = BTreeMap<String, (&'static str, DeriveInput, Option<(Value, Value)>)>;
+type Inputs = BTreeMap<String, (&'static str, DeriveInput, Option<Value>)>;
 
 pub(crate) fn wire_model(sections: &[&Section]) -> Result<Vec<WireType>, String> {
     let mut modules: BTreeMap<&'static str, Module> = BTreeMap::new();
@@ -343,12 +343,13 @@ fn fields_model(
         let custom_fill = match field.attrs.default() {
             attr::Default::Path(path)
                 if owner == "OrchestrationConfiguration"
-                    && matches!(name, "harness_kind" | "command")
-                    && path.path.is_ident("default_harness") =>
+                    && ((matches!(name, "harness_kind" | "command") && path.path.is_ident("default_harness"))
+                        || (name == "max_parallel" && path.path.is_ident("default_max_parallel"))) =>
             {
                 Some(inputs[owner].2.as_ref()
+                    .and_then(|defaults| defaults.get(name))
                     .ok_or_else(|| format!("{field_owner}: missing grounded configuration default"))?
-                    .1.clone())
+                    .clone())
             }
             default => {
                 reject_default_path(default, &field_owner)?;
@@ -481,7 +482,7 @@ fn named_default(
     let (_, input, grounded_default) = inputs
         .get(name)
         .ok_or_else(|| format!("{name}: unsupported default source type"))?;
-    if let Some((value, _)) = grounded_default {
+    if let Some(value) = grounded_default {
         return Ok(Some(value.clone()));
     }
     // Only the explicitly recognized configuration has a manual Default.

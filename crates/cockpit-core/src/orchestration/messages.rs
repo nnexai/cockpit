@@ -10,6 +10,82 @@ use crate::InspectionError;
 mod inbox;
 mod report;
 
+
+#[derive(serde::Serialize)]
+pub struct InboxCounts {
+    pub run_id: String,
+    pub pending: bool,
+    pub through_seq: u64,
+    pub counts: Vec<InboxKindCount>,
+}
+
+#[derive(serde::Serialize)]
+pub struct InboxKindCount {
+    pub kind: MessageKind,
+    pub count: u64,
+}
+
+// Deliberately omit text, report summaries/plans, and all runtime/task records.
+#[derive(serde::Deserialize)]
+pub(crate) struct InboxMessage {
+    to_run_id: String,
+    seq: u64,
+    from: ActorRef,
+    kind: MessageKind,
+    stage: DeliveryStage,
+    report: Option<InboxReport>,
+}
+#[derive(serde::Deserialize)]
+struct InboxReport { kind: ReportKind }
+
+#[derive(Clone, Copy)]
+struct InboxEntry<'a> {
+    recipient: &'a str,
+    sender: &'a ActorRef,
+    seq: u64,
+    kind: MessageKind,
+    stage: DeliveryStage,
+    progress: bool,
+}
+
+pub fn inbox_counts(messages: &[Message], run_id: &str, after: u64) -> InboxCounts {
+    count_inbox(messages.iter().map(|message| InboxEntry {
+        recipient: &message.to_run_id, sender: &message.from, seq: message.seq,
+        kind: message.kind, stage: message.stage,
+        progress: message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Progress),
+    }), run_id, after)
+}
+
+pub(crate) fn saved_inbox_counts(messages: &[InboxMessage], run_id: &str, after: u64) -> InboxCounts {
+    count_inbox(messages.iter().map(|message| InboxEntry {
+        recipient: &message.to_run_id, sender: &message.from, seq: message.seq,
+        kind: message.kind, stage: message.stage,
+        progress: message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Progress),
+    }), run_id, after)
+}
+
+fn count_inbox<'a>(messages: impl Iterator<Item = InboxEntry<'a>> + Clone, run_id: &str, after: u64) -> InboxCounts {
+    let mut latest_progress = HashMap::new();
+    for message in messages.clone().filter(|message| message.recipient == run_id && message.progress) {
+        let sender = match message.sender { ActorRef::Run { run_id } => Some(run_id.as_str()), _ => None };
+        latest_progress.insert(sender, message.seq);
+    }
+    let latest_progress: HashSet<_> = latest_progress.into_values().collect();
+    let mut counts = std::collections::BTreeMap::new();
+    let mut through = after;
+    for message in messages.filter(|message| message.recipient == run_id && message.seq > after
+        && message.stage != DeliveryStage::Acked && (!message.progress || latest_progress.contains(&message.seq))) {
+        through = through.max(message.seq);
+        let key = match message.kind {
+            MessageKind::WorkBrief => "work_brief", MessageKind::SupervisorBrief => "supervisor_brief",
+            MessageKind::Instruction => "instruction", MessageKind::Answer => "answer",
+            MessageKind::CancelRequest => "cancel_request", MessageKind::Report => "report",
+            MessageKind::Observation => "observation",
+        };
+        counts.entry(key).or_insert(InboxKindCount { kind: message.kind, count: 0 }).count += 1;
+    }
+    InboxCounts { run_id: run_id.to_owned(), pending: !counts.is_empty(), through_seq: through, counts: counts.into_values().collect() }
+}
 const MAX_TEXT: usize = 16 * 1024;
 
 fn text_bound(text: &str) -> Result<(), InspectionError> {

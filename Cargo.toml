@@ -39,7 +39,7 @@ serde_derive_internals = "=0.29.1"
 percent-encoding = "2"
 futures-util = "0.3"
 base64 = "0.22"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 bincode = { version = "2", features = ["serde"] }
 nix = { version = "=0.30.1", features = ["process", "signal", "fs", "user"] }
 sha2 = "=0.10.9"

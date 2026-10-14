@@ -7,7 +7,7 @@ use cockpit_protocol::orchestration::{
 
 use super::super::{
     CliError,
-    args::{MAX_TEXT_BYTES, RecoveryArg, RunCommand},
+    args::{MAX_TEXT_BYTES, RecoveryArg, RunCommand, RunOperation, TaskCommand, InboxCommand},
     context::read_bounded,
     task_submission_error,
 };
@@ -272,7 +272,7 @@ fn global_evidence_is_available_after_nested_commands() {
 }
 
 #[test]
-fn removed_aliases_and_missing_dedupe_are_rejected() {
+fn removed_aliases_are_rejected_and_message_ids_are_optional() {
     let cli = <TestCli as clap::CommandFactory>::command();
     let run = cli.find_subcommand("run").unwrap();
     for command in ["propose", "prepare", "execute", "bind", "bind-session", "retry-launch",
@@ -290,7 +290,7 @@ fn removed_aliases_and_missing_dedupe_are_rejected() {
             "--summary",
             "x"
         ])
-        .is_err()
+        .is_ok()
     );
     assert!(
         TestCli::try_parse_from([
@@ -303,7 +303,7 @@ fn removed_aliases_and_missing_dedupe_are_rejected() {
             "--text",
             "x"
         ])
-        .is_err()
+        .is_ok()
     );
 }
 
@@ -416,9 +416,9 @@ fn worker_action(target: &[&str]) -> OrchestrationAction {
     let TestCommand::Run(args) = TestCli::try_parse_from(flags).unwrap().command else {
         panic!("expected run");
     };
-    let super::super::args::RunOperation::Mutation(action) =
-        args.command.operation(&args.common).unwrap() else { panic!("expected mutation"); };
-    action
+    let RunOperation::WorkerStart(args) =
+        args.command.operation(&args.common).unwrap() else { panic!("expected deferred start"); };
+    args.action("root".into()).unwrap()
 }
 
 #[test]
@@ -438,21 +438,21 @@ fn worker_start_preserves_exact_operation_scope_and_cas_fences() {
     for obsolete in ["prepare_brief", "parent_run_id", "supersedes_run_id", "plan_revision"] {
         assert!(encoded.get(obsolete).is_none());
     }
-    for required in ["--operation-id", "--task", "--task-revision", "--doc-revision", "--cleanup-policy"] {
+    for optional in ["--operation-id", "--task-revision", "--doc-revision", "--cleanup-policy", "--root"] {
         let mut flags = worker_flags();
-        let index = flags.iter().position(|flag| *flag == required).unwrap();
+        let index = flags.iter().position(|flag| *flag == optional).unwrap();
         flags.drain(index..index + 2);
         flags.extend(["--space", "project"]);
-        assert!(TestCli::try_parse_from(flags).is_err(), "{required} is required");
+        let TestCommand::Run(args) = TestCli::try_parse_from(flags).unwrap().command else {
+            panic!("expected run");
+        };
+        assert!(matches!(args.command.operation(&args.common).unwrap(), RunOperation::WorkerStart(_)));
     }
     let mut flags = worker_flags();
-    let index = flags.iter().position(|flag| *flag == "--root").unwrap();
+    let index = flags.iter().position(|flag| *flag == "--task").unwrap();
     flags.drain(index..index + 2);
     flags.extend(["--space", "project"]);
-    let TestCommand::Run(args) = TestCli::try_parse_from(flags).unwrap().command else {
-        panic!("expected run");
-    };
-    assert!(args.command.operation(&args.common).is_err());
+    assert!(TestCli::try_parse_from(flags).is_err());
     for obsolete in ["--parent", "--supersedes", "--plan-revision", "--operator"] {
         let mut flags = worker_flags();
         flags.extend(["--space", "project", obsolete, "other"]);
@@ -461,8 +461,7 @@ fn worker_start_preserves_exact_operation_scope_and_cas_fences() {
 }
 
 #[test]
-fn worker_start_targets_remain_explicit_exclusive_and_unfocused() {
-    assert!(TestCli::try_parse_from(worker_flags()).is_err());
+fn worker_start_targets_remain_exclusive_and_unfocused() {
     for targets in [
         ["--repository", "repo", "--path", "/tmp/project"],
         ["--repository", "repo", "--space", "project"],
@@ -498,11 +497,6 @@ fn worker_start_targets_remain_explicit_exclusive_and_unfocused() {
             flags.extend([target, "project", modifier, "branch"]);
             assert!(TestCli::try_parse_from(flags).is_err());
         }
-    }
-    for modifier in ["--checkout-path", "--artifact", "--linked-artifact", "--task-name"] {
-        let mut flags = worker_flags();
-        flags.extend(["--space-worktree", "project", modifier, "value"]);
-        assert!(TestCli::try_parse_from(flags).is_err());
     }
 }
 
@@ -599,8 +593,8 @@ fn durable_lifecycle_commands_preserve_explicit_operation_payloads() {
     let cases = [
         (vec!["start", "--operation-id", id, "--mode", "reuse-or-resume", "--space", "space",
             "--selected-root-id", "root", "--expected-project-key", "project"], "supervisor_start"),
-        (vec!["resume", "run", "--operation-id", id, "--mode", "replace-existing",
-            "--expected-attachment-epoch", "7", "--decision-id", "decision"], "run_resume"),
+        (vec!["resume", "run", "--operation-id", id,
+            "--expected-attachment-epoch", "7"], "run_resume"),
         (vec!["register", "--operation-id", id], "run_register"),
     ];
     for (flags, expected) in cases {
@@ -622,16 +616,22 @@ fn durable_lifecycle_commands_preserve_explicit_operation_payloads() {
             assert_eq!(encoded["expected_project_key"], "project");
         }
         if expected == "run_resume" {
-            assert_eq!(encoded["mode"], "replace_existing");
             assert_eq!(encoded["expected_attachment_epoch"], 7);
-            assert_eq!(encoded["decision_id"], "decision");
+            assert!(encoded.get("mode").is_none());
+            assert!(encoded.get("decision_id").is_none());
         }
     }
     for flags in [
         vec!["start", "--mode", "another"],
         vec!["start", "--operation-id", id],
-        vec!["resume", "run", "--operation-id", id],
+        vec!["resume", "run"],
         vec!["register"],
+    ] {
+        assert!(TestCli::try_parse_from(["test", "run"].into_iter().chain(flags)).is_err());
+    }
+    for flags in [
+        vec!["resume", "run", "--operation-id", id, "--mode", "replace-existing"],
+        vec!["resume", "run", "--operation-id", id, "--decision-id", "decision"],
     ] {
         assert!(TestCli::try_parse_from(["test", "run"].into_iter().chain(flags)).is_err());
     }
@@ -757,4 +757,379 @@ fn native_identity_and_delivery_paths_have_no_aliases() {
     assert!(TestCli::try_parse_from(["test", "inbox", "woken", "--through", "1"]).is_err());
     assert!(TestCli::try_parse_from(["test", "inbox", "wait", "--with-retirement"]).is_err());
     assert!(TestCli::try_parse_from(["test", "inbox", "ack", "--through", "1"]).is_ok());
+}
+
+#[test]
+fn schedule_defaults_and_explicit_scope_are_preserved() {
+    let TestCommand::Task(args) = TestCli::try_parse_from([
+        "test", "task", "schedule", "task",
+    ]).unwrap().command else { panic!("expected task") };
+    let TaskCommand::Schedule { task, operation_id, task_revision, doc_revision, launch } = args.command
+        else { panic!("expected schedule") };
+    assert_eq!(task, "task");
+    assert!(operation_id.is_none() && task_revision.is_none() && doc_revision.is_none());
+    let launch = launch.read().unwrap();
+    assert!(launch.target.is_none(), "the domain chooses the source-owned isolated worktree");
+    assert!(launch.brief.is_empty());
+    assert_eq!(launch.cleanup_policy, cockpit_protocol::orchestration::WorkerCleanupPolicy::OwnedWhenSafe);
+    let TestCommand::Task(args) = TestCli::try_parse_from([
+        "test", "task", "schedule", "task", "--operation-id", "operation",
+        "--task-revision", "task-rev", "--doc-revision", "doc-rev",
+        "--space-worktree", "source", "--brief", "Extra constraint", "--label", "worker",
+    ]).unwrap().command else { panic!("expected task") };
+    let TaskCommand::Schedule { operation_id, task_revision, doc_revision, launch, .. } = args.command
+        else { panic!("expected schedule") };
+    assert_eq!(operation_id.as_deref(), Some("operation"));
+    assert_eq!(task_revision.as_deref(), Some("task-rev"));
+    assert_eq!(doc_revision.as_deref(), Some("doc-rev"));
+    let launch = launch.read().unwrap();
+    assert!(matches!(launch.target, Some(DispatchTarget::SpaceWorktree {
+        workspace_id, branch: None, base_ref: None,
+    }) if workspace_id == "source"));
+    assert_eq!(launch.brief, "Extra constraint");
+    assert_eq!(launch.label.as_deref(), Some("worker"));
+    assert!(TestCli::try_parse_from(["test", "task", "schedule"]).is_err());
+    assert!(TestCli::try_parse_from([
+        "test", "task", "schedule", "task", "--space", "a", "--path", "/tmp/b",
+    ]).is_err());
+    assert!(TestCli::try_parse_from([
+        "test", "task", "schedule", "task", "--brief", "x", "--brief-file", "brief",
+    ]).is_err());
+}
+
+#[test]
+fn schedule_cancel_and_restart_keep_explicit_targets_and_optional_ids() {
+    for explicit in [false, true] {
+        let mut flags = vec!["schedule-cancel", "task"];
+        if explicit { flags.extend(["--operation-id", "operation"]); }
+        let OrchestrationAction::TaskScheduleCancel { root_id, task_id, operation_id } =
+            parsed_task_action(&flags).unwrap() else { panic!("expected cancel") };
+        assert_eq!(root_id, "root");
+        assert_eq!(task_id, "task");
+        if explicit {
+            assert_eq!(operation_id, "operation");
+        } else {
+            assert_eq!(uuid::Uuid::parse_str(&operation_id).unwrap().get_version_num(), 4);
+        }
+        let mut flags = vec!["test", "task", "restart", "task", "--reason", "Interrupted attempt"];
+        if explicit { flags.extend(["--operation-id", "operation"]); }
+        let TestCommand::Task(args) = TestCli::try_parse_from(flags).unwrap().command
+            else { panic!("expected task") };
+        assert!(matches!(args.command, TaskCommand::Restart { task, operation_id, reason }
+            if task == "task" && operation_id.as_deref() == explicit.then_some("operation")
+                && reason == "Interrupted attempt"));
+    }
+    for flags in [
+        vec!["schedule-cancel"], vec!["restart", "task"], vec!["restart", "--reason", "x"],
+    ] {
+        assert!(TestCli::try_parse_from(["test", "task"].into_iter().chain(flags)).is_err());
+    }
+}
+
+#[test]
+fn replacement_brief_and_self_selection_need_no_conversation_flags() {
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "worker-replace", "worker", "--reason", "Lost attachment",
+    ]).unwrap().command else { panic!("expected run") };
+    assert!(args.common.harness.is_none() && args.common.session_id.is_none());
+    assert!(matches!(args.command.operation(&args.common).unwrap(),
+        RunOperation::WorkerReplace { run, operation_id: None, reason }
+        if run == "worker" && reason == "Lost attachment"));
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "worker-replace", "worker", "--reason", "Replace safely",
+        "--operation-id", "operation",
+    ]).unwrap().command else { panic!("expected run") };
+    assert!(matches!(args.command.operation(&args.common).unwrap(),
+        RunOperation::WorkerReplace { operation_id: Some(id), .. } if id == "operation"));
+    let TestCommand::Run(args) = TestCli::try_parse_from(["test", "run", "brief"]).unwrap().command
+        else { panic!("expected run") };
+    assert!(matches!(args.command.operation(&args.common).unwrap(), RunOperation::Brief));
+    let TestCommand::Task(args) = TestCli::try_parse_from(["test", "task", "show", "--self"]).unwrap().command
+        else { panic!("expected task") };
+    assert!(matches!(args.command, TaskCommand::Show { task: None, self_task: true }));
+    let TestCommand::Task(args) = TestCli::try_parse_from(["test", "task", "show", "task"]).unwrap().command
+        else { panic!("expected task") };
+    assert!(matches!(args.command, TaskCommand::Show { task: Some(task), self_task: false } if task == "task"));
+    for flags in [
+        vec!["test", "task", "show"],
+        vec!["test", "task", "show", "task", "--self"],
+        vec!["test", "run", "worker-replace", "worker"],
+        vec!["test", "run", "worker-replace", "--reason", "x"],
+        vec!["test", "run", "brief", "worker"],
+    ] {
+        assert!(TestCli::try_parse_from(flags).is_err());
+    }
+}
+
+#[test]
+fn task_inputs_selects_explicit_or_own_task_without_a_mutation_action() {
+    for (flags, expected_task, expected_self) in [
+        (vec!["test", "task", "inputs", "task-id"], Some("task-id"), false),
+        (vec!["test", "task", "inputs", "--self"], None, true),
+        (vec!["test", "task", "inputs"], None, false),
+    ] {
+        let TestCommand::Task(args) = TestCli::try_parse_from(flags).unwrap().command
+            else { panic!("expected task") };
+        let TaskCommand::Inputs { task, self_task } = &args.command
+            else { panic!("expected inputs") };
+        assert_eq!(task.as_deref(), expected_task);
+        assert_eq!(*self_task, expected_self);
+        assert_eq!(
+            args.command.action("root".into()).unwrap_err().code,
+            "orchestration_usage",
+        );
+    }
+    let conflict = TestCli::try_parse_from([
+        "test", "task", "inputs", "task-id", "--self",
+    ]).unwrap_err();
+    assert_eq!(conflict.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn done_preserves_truthful_check_statuses_and_source_alternatives() {
+    use cockpit_protocol::orchestration::CheckStatus;
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "done", "--summary", "Checks failed", "--failed",
+        "--check", "parser::cargo test parser::failed",
+        "--check", "native::native smoke::not_run::No disposable compositor",
+        "--artifact", "/tmp/output-a", "--artifact", "https://forge/output-b",
+    ]).unwrap().command else { panic!("expected run") };
+    let RunOperation::Done { message_id, summary, failed, checks, artifacts, source_output_file } =
+        args.command.operation(&args.common).unwrap() else { panic!("expected done") };
+    assert!(message_id.is_none() && failed && source_output_file.is_none());
+    assert_eq!(summary, "Checks failed");
+    assert_eq!(artifacts, ["/tmp/output-a", "https://forge/output-b"]);
+    let outcomes = checks.into_iter().map(super::super::args::check_outcome).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(outcomes[0].outcome, CheckStatus::Failed);
+    assert_eq!(outcomes[0].command_or_scenario, "cargo test parser");
+    assert_eq!(outcomes[1].outcome, CheckStatus::NotRun);
+    assert_eq!(outcomes[1].limitation.as_deref(), Some("No disposable compositor"));
+    assert!(outcomes.iter().all(|check| check.evidence.is_none()));
+    let passed = super::super::args::check_outcome("parser::cargo test parser::passed".into()).unwrap();
+    assert_eq!(passed.outcome, CheckStatus::Passed);
+    for invalid in ["contract", "contract::command", "::command::passed", "contract::::passed",
+        "contract::command::success"] {
+        assert_eq!(super::super::args::check_outcome(invalid.into()).unwrap_err().code, "orchestration_usage");
+    }
+    for flags in [
+        vec!["done", "--summary", "No evidence yet", "--failed"],
+        vec!["done", "--summary", "Committed output", "--message-id", "result",
+            "--source-output-file", "source.json"],
+    ] {
+        assert!(TestCli::try_parse_from(["test", "run"].into_iter().chain(flags)).is_ok());
+    }
+    for flags in [
+        vec!["done"],
+        vec!["done", "--summary", "x", "--source-output-file", "source.json"],
+        vec!["report", "--kind", "result", "--summary", "x", "--outcome", "succeeded",
+            "--source-output-file", "source.json"],
+        vec!["done", "--summary", "x", "--message-id", "result", "--source-output-file", "source.json",
+            "--check", "contract::command::passed"],
+        vec!["done", "--summary", "x", "--message-id", "result", "--source-output-file", "source.json",
+            "--artifact", "artifact"],
+    ] {
+        assert!(TestCli::try_parse_from(["test", "run"].into_iter().chain(flags)).is_err());
+    }
+}
+
+#[test]
+fn report_generates_one_message_identity_when_not_supplied() {
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "report", "--kind", "needs-input", "--summary", "Choose the outcome",
+    ]).unwrap().command else { panic!("expected run") };
+    let RunOperation::Mutation(OrchestrationAction::Report { message_id, summary, kind, .. }) =
+        args.command.operation(&args.common).unwrap() else { panic!("expected report") };
+    assert_eq!(uuid::Uuid::parse_str(&message_id).unwrap().get_version_num(), 4);
+    assert_eq!(summary, "Choose the outcome");
+    assert_eq!(kind, cockpit_protocol::orchestration::ReportKind::NeedsInput);
+}
+
+#[test]
+fn root_answer_preserves_exact_question_and_human_text_without_target_selection() {
+    let text = "Use the private fixture.\nKeep λ unchanged.";
+    for explicit in [false, true] {
+        let mut flags = vec!["test", "run", "answer", "--in-reply-to", "root-question", "--text", text];
+        if explicit {
+            flags.extend(["--message-id", "00000000-0000-4000-8000-000000000005"]);
+        }
+        let TestCommand::Run(args) = TestCli::try_parse_from(flags).unwrap().command
+            else { panic!("expected run") };
+        assert!(args.command.caller_required());
+        args.command.preflight(&args.common).unwrap();
+        let RunOperation::Answer { message_id, question, text: actual } =
+            args.command.operation(&args.common).unwrap() else { panic!("expected root answer") };
+        assert_eq!(question, "root-question");
+        assert_eq!(actual, text);
+        assert_eq!(message_id.as_deref(), explicit.then_some("00000000-0000-4000-8000-000000000005"));
+    }
+    for flags in [
+        vec!["test", "run", "answer", "--text", text],
+        vec!["test", "run", "answer", "--in-reply-to", "root-question"],
+        vec!["test", "run", "answer", "worker", "--in-reply-to", "root-question", "--text", text],
+    ] {
+        assert!(TestCli::try_parse_from(flags).is_err());
+    }
+}
+
+#[test]
+fn root_answer_requires_nonempty_question_and_bounded_actual_human_text() {
+    for (question, text) in [("", "answer"), (" \t ", "answer"), ("question", ""), ("question", " \n ")] {
+        let TestCommand::Run(args) = TestCli::try_parse_from([
+            "test", "run", "answer", "--in-reply-to", question, "--text", text,
+        ]).unwrap().command else { panic!("expected run") };
+        assert_eq!(args.command.operation(&args.common).err().unwrap().code, "orchestration_usage");
+    }
+    let exact = "λ".repeat(MAX_TEXT_BYTES / 2);
+    let overflow = format!("{exact}a");
+    for (text, valid) in [(exact.as_str(), true), (overflow.as_str(), false)] {
+        let TestCommand::Run(args) = TestCli::try_parse_from([
+            "test", "run", "answer", "--in-reply-to", "question", "--text", text,
+        ]).unwrap().command else { panic!("expected run") };
+        let result = args.command.operation(&args.common);
+        if valid {
+            assert!(matches!(result.unwrap(), RunOperation::Answer { text: actual, .. } if actual == text));
+        } else {
+            assert_eq!(result.err().unwrap().code, "message_too_large");
+        }
+    }
+}
+
+#[test]
+fn inbox_next_wait_and_capture_options_are_bounded() {
+    for wait in ["0", "3600"] {
+        let TestCommand::Inbox(args) = TestCli::try_parse_from([
+            "test", "inbox", "next", "--wait", wait, "--deliverable",
+            "--capture-file", "/tmp/private/mail.json", "--json",
+        ]).unwrap().command else { panic!("expected inbox") };
+        assert!(matches!(args.command, InboxCommand::Next { wait: seconds, deliverable: true, capture_file: Some(path) }
+            if seconds == wait.parse::<u64>().unwrap() && path == PathBuf::from("/tmp/private/mail.json")));
+        assert!(args.common.json);
+    }
+    let TestCommand::Inbox(args) = TestCli::try_parse_from(["test", "inbox", "next"]).unwrap().command
+        else { panic!("expected inbox") };
+    assert!(matches!(args.command, InboxCommand::Next { wait: 0, deliverable: false, capture_file: None }));
+    for invalid in ["-1", "3601", "18446744073709551616", "forever"] {
+        assert!(TestCli::try_parse_from(["test", "inbox", "next", "--wait", invalid]).is_err());
+    }
+}
+
+#[test]
+fn typed_failures_and_conflicts_survive_cli_context() {
+    for code in ["revision_conflict", "conversation_conflict", "assignment_conflict",
+        "job_credential_invalid", "job_unauthorized", "message_id_conflict"] {
+        let error = CliError::from(cockpit_core::InspectionError::new(code, "Exact failure"));
+        assert_eq!(error.code, code);
+        assert_eq!(error.message, "Exact failure");
+        let error = task_submission_error(error, "retained-task");
+        assert_eq!(error.code, code);
+        assert!(error.message.starts_with("Exact failure; task ID retained-task."));
+        assert!(error.message.contains("inspect `task show retained-task`"));
+    }
+}
+
+#[test]
+fn message_generates_one_identity_and_keeps_question_linkage() {
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "message", "worker", "--kind", "answer",
+        "--text", "Use the owned fixture", "--in-reply-to", "question",
+    ]).unwrap().command else { panic!("expected run") };
+    args.command.preflight(&args.common).unwrap();
+    let RunOperation::Mutation(OrchestrationAction::MessageSend { message_id, to_run_id, in_reply_to, .. }) =
+        args.command.operation(&args.common).unwrap() else { panic!("expected message") };
+    assert_eq!(uuid::Uuid::parse_str(&message_id).unwrap().get_version_num(), 4);
+    assert_eq!(to_run_id, "worker");
+    assert_eq!(in_reply_to.as_deref(), Some("question"));
+}
+
+#[test]
+fn checklist_parse_allows_internally_resolved_task_revision() {
+    let TestCommand::Task(args) = TestCli::try_parse_from([
+        "test", "task", "step-set-checked", "task", "--step-id", "step",
+        "--checked", "true", "--scope", "leaf",
+    ]).unwrap().command else { panic!("expected task") };
+    assert!(matches!(args.command, TaskCommand::StepSetChecked {
+        task, step_id, checked: true, scope: super::super::args::StepScopeArg::Leaf,
+    } if task.task == "task" && task.revision.is_none() && step_id == "step"));
+}
+
+#[test]
+fn task_inputs_projection_keeps_direct_order_and_opaque_source_references() {
+    use cockpit_protocol::orchestration::{Run, Task, TaskBoard};
+    use serde_json::json;
+
+    let task = |id: &str, depends_on: Vec<&str>| -> Task {
+        serde_json::from_value(json!({
+            "task_id": id, "title": id, "body": "private body",
+            "description": "private description", "description_editable": true,
+            "steps": [], "depends_on": depends_on, "checked": true,
+            "line": 1, "task_revision": format!("revision-{id}"),
+        })).unwrap()
+    };
+    let consumer = task("consumer", vec!["second", "missing", "first"]);
+    let first = task("first", vec!["transitive"]);
+    let mut second = task("second", vec![]);
+    second.diagnostic = Some("Scope diagnostic".into());
+    let dependency_state = json!({
+        "state": "blocked",
+        "unmet": [{"task_id": "missing", "reason": "missing"}],
+        "problems": [],
+    });
+    let mut board: TaskBoard = serde_json::from_value(json!({
+        "root_id": "root", "path": "private document", "doc_revision": "doc",
+        "unidentified_items": 0, "diagnostics": [],
+        "tasks": ([first, second].into_iter().map(|task| json!({
+            "task": task, "lane": "accepted", "scheduled": false,
+            "dependencies": {"state": "satisfied", "unmet": [], "problems": []},
+        })).collect::<Vec<_>>()),
+    })).unwrap();
+    board.tasks.push(serde_json::from_value(json!({
+        "task": &consumer, "lane": "blocked", "scheduled": false,
+        "dependencies": &dependency_state,
+    })).unwrap());
+    let artifacts = json!(["../opaque?not=a-path", "sha256:not-a-hash", "https://example.invalid/ref"]);
+    let run: Run = serde_json::from_value(json!({
+        "session_id": "private session", "brief": "private brief",
+        "run_id": "accepted-first", "kind": "worker", "label": "private label",
+        "root_id": "root", "task_id": "first", "attempt": 2,
+        "launch_config": {}, "stage": "closed", "close_reason": "accepted",
+        "annotations": [], "created_at": "now", "updated_at": "now",
+        "result": {"message_id": "result", "kind": "result", "outcome": "succeeded",
+            "summary": "private summary", "plan": "private plan", "at": "now"},
+        "source_output": {"kind": "non_code", "result_message_id": "result",
+            "task_revision": "revision-first", "artifacts": artifacts, "focused_checks": []},
+        "setup": {"checkout_path": "/actual/checkout", "base_commit": "base",
+            "project_workspace_id": "source-space", "effects": ["private effect"],
+            "warnings": ["private warning"]},
+    })).unwrap();
+
+    // Acceptance validity is supplied by the domain; this test covers projection only.
+    let projected = super::super::output::task_inputs("root", &board, &consumer, &[&run]);
+    assert_eq!(projected["dependency_state"], dependency_state);
+    let dependencies = projected["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.iter().map(|entry| entry["task_id"].as_str().unwrap())
+        .collect::<Vec<_>>(), ["second", "missing", "first"]);
+    assert!(dependencies[0]["accepted_run"].is_null());
+    assert_eq!(dependencies[0]["diagnostics"][0], "Scope diagnostic");
+    assert_eq!(dependencies[0]["diagnostics"][1],
+        "No valid accepted Result/source reference matches the current prerequisite scope");
+    assert!(dependencies[1]["accepted_run"].is_null());
+    assert_eq!(dependencies[1]["diagnostics"][0],
+        "Prerequisite is missing from the current canonical task document");
+    let accepted = &dependencies[2]["accepted_run"];
+    assert_eq!(accepted["source_output"]["artifacts"], artifacts);
+    assert_eq!(accepted["result"], json!({
+        "message_id": "result", "kind": "result", "outcome": "succeeded",
+    }));
+    assert_eq!(accepted["setup"], json!({
+        "checkout_path": "/actual/checkout", "base_commit": "base",
+        "project_workspace_id": "source-space",
+    }));
+    assert_eq!(accepted.as_object().unwrap().keys().map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>(),
+        ["run_id", "attempt", "result", "source_output", "integration", "setup",
+            "checkout", "project"].into_iter().collect());
+    assert_eq!(accepted["source_output"].as_object().unwrap().keys().map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>(),
+        ["kind", "result_message_id", "task_revision", "artifacts", "focused_checks"]
+            .into_iter().collect());
 }

@@ -8,6 +8,7 @@ section!(
         ProjectProvider,
         ProjectConfiguration,
         OrchestrationConfiguration,
+        ScopeMode,
         OrchestrationRoute,
     ]
 );
@@ -29,6 +30,10 @@ section!(
         WorkspaceSetupMode,
         WorkspaceCheckoutOwnership,
         WorkspaceSetupRequest,
+        OwnedCheckoutRequest,
+        DirectoryCheckoutRequest,
+        BindMovedSpaceRequest,
+        OwnedAttemptDirectoryRequest,
         ProjectArtifact,
         WorkspaceSetupPlan,
         WorkspaceOperationRequest,

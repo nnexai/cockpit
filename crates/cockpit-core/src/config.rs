@@ -548,6 +548,22 @@ fn validate_orchestration(
             ));
         }
     }
+    if !(1..=64).contains(&configuration.max_parallel) {
+        return Err(InspectionError::new("invalid_orchestration_parallelism", "max_parallel must be between 1 and 64"));
+    }
+    for (args, placeholder, allow_empty) in [
+        (configuration.initial_prompt_args.as_ref(), "{prompt}", false),
+        (configuration.hook_args.as_ref(), "{hook_path}", true),
+    ] {
+        if let Some(args) = args {
+            validate_orchestration_args(args)?;
+            if !(allow_empty && args.is_empty())
+                && (args.iter().filter(|arg| arg.as_str() == placeholder).count() != 1
+                    || args.iter().any(|arg| arg.contains(placeholder) && arg != placeholder)) {
+                return Err(InspectionError::new("invalid_orchestration_args", format!("Arguments require exactly one whole {placeholder} placeholder")));
+            }
+        }
+    }
     validate_orchestration_args(&configuration.extra_args)?;
     if configuration.routes.len() > 256 {
         return Err(InspectionError::new(

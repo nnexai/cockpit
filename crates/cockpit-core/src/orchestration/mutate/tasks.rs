@@ -485,9 +485,10 @@ mod tests {
                 root_id: root_id.clone(), task_id: task.task_id.clone(), generation: 1,
                 owner: Some(TaskOwner {
                     run_id: worker.run_id.clone(),
-                    conversation: worker.attachment.as_ref().unwrap().conversation.clone().unwrap(),
+                    conversation: Some(worker.attachment.as_ref().unwrap().conversation.clone().unwrap()),
                     claim_operation_id: id(),
                 }),
+            schedule: None,
             });
             state.runs.extend([root, worker]);
             claims::reserve_claim(&mut state, &checkout, &holder, &id()).unwrap();
@@ -499,7 +500,7 @@ mod tests {
             let auth = credentials::test_job_auth(&mut self.state, index, role);
             Actor::Agent(AgentCaller {
                 auth,
-                conversation: self.state.runs[index].attachment.as_ref().unwrap().conversation.clone().unwrap(),
+                conversation: Some(self.state.runs[index].attachment.as_ref().unwrap().conversation.clone().unwrap()),
                 assignment_generation: self.state.runs[index].assignment_generation,
                 endpoint_identity: String::new(), session_id: String::new(),
                 workspace_id: String::new(), tab_id: String::new(), pane_id: String::new(),
@@ -532,6 +533,7 @@ mod tests {
             let service = OrchestrationService {
                 store: OrchestrationStore::open(&self.directory).unwrap(),
                 revision: watch::channel(self.state.revision).0,
+                notifications: std::sync::Mutex::new(None),
                 launch_config: Default::default(),
             };
             let locked = self.store.lock().unwrap();
@@ -547,6 +549,7 @@ mod tests {
             let service = OrchestrationService {
                 store: OrchestrationStore::open(&self.directory).unwrap(),
                 revision: watch::channel(self.state.revision).0,
+                notifications: std::sync::Mutex::new(None),
                 launch_config: Default::default(),
             };
             let operator = Actor::Operator(OperatorOrigin::Browser);
@@ -630,10 +633,10 @@ mod tests {
         let mut fixture = Fixture::new();
         let mut worker = fixture.actor(1, JobRole::Worker);
         let Actor::Agent(caller) = &mut worker else { unreachable!() };
-        caller.conversation.session_id = "other-conversation".into();
+        caller.conversation.as_mut().unwrap().session_id = "other-conversation".into();
         assert!(fixture.content(&worker, 1, &fixture.task).is_err());
         let Actor::Agent(caller) = &mut worker else { unreachable!() };
-        caller.conversation.session_id = "worker-conversation".into();
+        caller.conversation.as_mut().unwrap().session_id = "worker-conversation".into();
         caller.assignment_generation = Some(2);
         assert!(fixture.content(&worker, 1, &fixture.task).is_err());
         let mut root = fixture.actor(0, JobRole::Root);
@@ -965,7 +968,7 @@ mod tests {
                 fixture.state.task_ownership[0].generation = 3;
                 fixture.state.task_ownership[0].owner = Some(TaskOwner {
                     run_id: newer.run_id.clone(),
-                    conversation: newer.attachment.as_ref().unwrap().conversation.clone().unwrap(),
+                    conversation: Some(newer.attachment.as_ref().unwrap().conversation.clone().unwrap()),
                     claim_operation_id: id(),
                 });
                 fixture.state.runs.push(newer);
@@ -1029,7 +1032,7 @@ mod tests {
                 fixture.state.task_ownership[0].generation = 3;
                 fixture.state.task_ownership[0].owner = Some(TaskOwner {
                     run_id: newer.run_id.clone(),
-                    conversation: newer.attachment.as_ref().unwrap().conversation.clone().unwrap(),
+                    conversation: Some(newer.attachment.as_ref().unwrap().conversation.clone().unwrap()),
                     claim_operation_id: id(),
                 });
                 fixture.state.runs.push(newer);
@@ -1041,6 +1044,7 @@ mod tests {
             let service = OrchestrationService {
                 store: OrchestrationStore::open(&fixture.directory).unwrap(),
                 revision: watch::channel(fixture.state.revision).0,
+                notifications: std::sync::Mutex::new(None),
                 launch_config: Default::default(),
             };
             service.recover_intents().unwrap();

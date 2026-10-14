@@ -8,15 +8,16 @@ import { byId, workbenchView, type WorkbenchView } from "./model";
 import { useWorkarea, type WorkareaController } from "./useWorkarea";
 import { useSidebarState, type SidebarState } from "./useSidebarState";
 import { useWidgetWindowState, type WidgetWindowState } from "./useWidgetWindowState";
-import { useSupervisorNavigation, type SupervisorNavigation } from "./useSupervisorNavigation";
+import { useLiaisonNavigation, type LiaisonNavigation } from "./useLiaisonNavigation";
+import { useLiaison, type LiaisonController } from "../supervisor/useLiaison";
 import { useWorkbenchUI, type WorkbenchUI } from "./useWorkbenchUI";
 import { useViewerSources } from "./useViewerSources";
 import type { ViewerSourcesState } from "./commands";
 import { browserOpenDisabledReason } from "../layout/browserLifecycle";
 import type { WorkbenchProps } from "./Workbench";
 
-export interface WorkbenchState extends WorkbenchView, WorkareaController, SidebarState, WidgetWindowState, SupervisorNavigation, WorkbenchUI {
-  libraryOpen: boolean; notesOpen: boolean; supervisorOpen: boolean; libraryCommand: LibraryCommand | null;
+export interface WorkbenchState extends WorkbenchView, WorkareaController, SidebarState, WidgetWindowState, LiaisonNavigation, WorkbenchUI {
+  libraryOpen: boolean; notesOpen: boolean; overviewOpen: boolean; liaison: LiaisonController; libraryCommand: LibraryCommand | null;
   mutationBusy: boolean; modalOpen: boolean; browserOpen: boolean; browserInputActive: boolean; browserReason: string | null;
   viewerSources: ViewerSourcesState; sidebarSession: SessionSummary | undefined;
   gitPoll: { spaces: ReadonlyMap<string, SpaceGitStatus>; error: string | undefined; refresh(): void };
@@ -31,15 +32,16 @@ export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
   const workarea = useWorkarea(state.sessionId, selection.paneId);
   const libraryOpen = workarea.view.kind === "library";
   const notesOpen = workarea.view.kind === "notes";
-  const supervisorOpen = workarea.view.kind === "supervisor";
+  const overviewOpen = workarea.view.kind === "overview";
   const ui = useWorkbenchUI(props, workarea);
   const widget = useWidgetWindowState(props, workarea, selectedTab, sourcePaneId, spaces, allTabs, tabs);
-  const navigation = useSupervisorNavigation(props, supervisorOpen, workarea.closeSupervisor);
+  const navigation = useLiaisonNavigation(props, workarea.closeOverview);
+  const liaison = useLiaison(props, workarea.closeOverview, navigation.supervisorTerminal, workarea.view.kind === "terminal");
   const sidebar = useSidebarState(props);
   const { sidebarCollapsed, narrowViewport, drawerOpen } = sidebar;
   const { popupPending, dialog, commandsOpen, sessionChooserOpen, setupOpen, recoveryOpen, teardownSpaceId, libraryAddOpen } = ui;
   const mutationBusy = mutations.pending !== null;
-  const modalOpen = Boolean(workarea.supervisor?.modal) || Boolean(popup || popupPending) || dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen;
+  const modalOpen = Boolean(popup || popupPending) || dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen;
   const gitPoll = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
   const spaceGit = gitPoll.spaces;
   const gitBlocked = state.sync !== "live" ? "Herdr is not live" : mutationBusy ? "Herdr is applying a change" : popup || popupPending ? "The popup owns keyboard input" : gitPoll.error ? `Git status unavailable: ${gitPoll.error}` : undefined;
@@ -69,7 +71,7 @@ export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
   const browserOpen = Boolean(tabLayout?.viewers.browser);
   const browserInputActive = selectedLeaf?.kind === "browser" && workarea.view.kind === "terminal";
   const browserReason = !selectedTab ? "Select a tab first" : state.sync !== "live" ? "Herdr is not live" : browserOpenDisabledReason(props.ctx, selectedTab.id);
-  return { ...view, ...workarea, ...ui, ...widget, ...navigation, ...sidebar, libraryOpen, notesOpen, supervisorOpen,
+  return { ...view, ...workarea, ...ui, ...widget, ...navigation, ...sidebar, libraryOpen, notesOpen, overviewOpen, liaison,
     libraryCommand: workarea.view.kind === "library" ? workarea.view.command : null,
     mutationBusy, modalOpen, viewerSources, browserOpen, browserInputActive, browserReason,
     sidebarSession: props.sessions.find(session => session.id === state.sessionId), gitPoll, spaceGit, gitBlocked, gitActions, gitNotice, runGitAction };

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   CheckoutIdentity, ExecutionAttachment, NativeProcessIdentity, NativeShellIdentity, OrchestrationAction,
-  OrchestrationSnapshot, ProjectIdentity, ResumeRecord, RetirementIdentity, RetirementState, RunRetirement, Task, TaskDependencies,
+  OrchestrationSnapshot, ProjectIdentity, ResumeRecord, RetirementIdentity, RetirementState, RunRetirement, ReplacementRetirementAuthority, Task, TaskDependencies,
   CheckOutcome, Integration, ResourceRequestRecord, SourceOutput, CleanupItem, OwnedGitIdentity, OwnedFilesystemIdentity,
-  OwnedResourceIdentity, OwnedResourceRecord, CleanupFinishResult,
+  OwnedResourceIdentity, OwnedResourceRecord, CleanupFinishResult, OwnedProcessScope, AgentLaunchReceipt, OwnedAttemptDirectoryIdentity,
 } from "../protocol/generated/v1";
 import { CockpitClientError } from "./CockpitClient";
 import { createBrowserClient } from "./browser";
@@ -37,9 +37,9 @@ const checkout: CheckoutIdentity = {
 const attachment: ExecutionAttachment = {
   attachment_id: assignmentTaskId, epoch: 1, state: "connected", launch_mode: "shell_agent",
   location: { endpoint_identity: "endpoint", session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane",
-    launch_tag: "launch", boot_id: "boot", terminal_id: "terminal", native_session_id: null },
+    launch_tag: "launch", boot_id: "boot", terminal_id: "terminal", native_session_id: null, peer_process: null },
   conversation: { harness: "omp", session_id: "opaque-conversation" }, process: processIdentity, shell: shellIdentity, machine_id: "machine",
-  launch_attempt: 1, updated_at: at,
+  process_scope: null, launch_attempt: 1, updated_at: at,
 };
 const resume: ResumeRecord = {
   operation_id: prerequisiteId, run_id: "run", previous_attachment_epoch: 1, phase: "blocked",
@@ -74,11 +74,12 @@ const retirementIdentity: RetirementIdentity = {
   attachment_id: assignmentTaskId, attachment_epoch: 1, launch_mode: "shell_agent",
   run_attempt: 1, launch_attempt: 1, launch_tag: "launch", endpoint_identity: "endpoint",
   session_id: "session", workspace_id: "space", tab_id: "tab", pane_id: "pane",
-  terminal_id: "terminal", herdr_boot_id: "boot", conversation: attachment.conversation, process: processIdentity, shell: shellIdentity,
+  terminal_id: "terminal", herdr_boot_id: "boot", herdr_peer: null, conversation: attachment.conversation, process: processIdentity, shell: shellIdentity,
 };
 const retirementStates: RetirementState[] = [
   { state: "waiting", blockers: [] },
   { state: "waiting", blockers: ["open_descendant_runs"] },
+  { state: "waiting", blockers: ["resource_admissions"] },
   { state: "close_intent", at },
   ...(["closed_by_cockpit", "already_absent", "absent_after_uncertain_close"] as const)
     .map(terminal => ({ state: "retired" as const, at, terminal })),
@@ -94,7 +95,7 @@ const retirementStates: RetirementState[] = [
 function retirementRecord(state: RetirementState, identity: RetirementIdentity | null = retirementIdentity): RunRetirement {
   return {
     retirement_id: assignmentTaskId, trigger: "accept", result_message_id: "result",
-    task_revision: hash, identity, state, created_at: at, updated_at: at,
+    task_revision: hash, replacement: null, identity, state, created_at: at, updated_at: at,
   };
 }
 const target = { target: "setup" as const, request: { operation: "open" as const, path: "/repo", label: null, task_name: null, focus: false } };
@@ -161,6 +162,9 @@ const ownedFilesystem: OwnedFilesystemIdentity = {
   creation_operation_id: prerequisiteId, machine_id: "machine", root: "/tmp/disposable", device: "2049", inode: "403",
   manifest_path: "/tmp/disposable/manifest.json", manifest_device: "2049", manifest_inode: "404",
 };
+const ownedAttemptDirectory: OwnedAttemptDirectoryIdentity = {
+  creation_operation_id: prerequisiteId, root: `/state/orchestration/attempts/${childStepId}`, device: "2049", inode: "405",
+};
 const ownedIdentities: OwnedResourceIdentity[] = [
   { kind: "worker_terminal", identity: retirementIdentity }, { kind: "worktree", identity: ownedGit },
   { kind: "branch", identity: ownedGit },
@@ -169,6 +173,7 @@ const ownedIdentities: OwnedResourceIdentity[] = [
   { kind: "scratch", identity: ownedFilesystem },
   { kind: "fixture_set", identity: { adapter: "ui_polish_runtime", creation_operation_id: prerequisiteId,
     filesystem: ownedFilesystem, processes: [processIdentity] } },
+  { kind: "attempt_directory", identity: ownedAttemptDirectory },
 ];
 const cleanupItem: CleanupItem = {
   operation_id: null, state: "waiting_integration", reason: { class: "transient", code: "integration_pending",
@@ -192,13 +197,15 @@ const snapshot: OrchestrationSnapshot = {
   session_id: "session", revision: 2, tasks_token: hash,
   roots: [{ root_id: "root", label: "Supervisor", kind: "supervisor", open_runs: 1, needs_you: 1 }],
   board: { root_id: "root", path: "/tasks/root.md", doc_revision: hash, unidentified_items: 0,
-    diagnostics: [{ code: "task_id_duplicate", message: "Duplicate" }], tasks: [{ task, lane: "working", current_run_id: "run", dependencies }] },
+    diagnostics: [{ code: "task_id_duplicate", message: "Duplicate" }], tasks: [{ task, lane: "working", current_run_id: "run", dependencies, scheduled: false, attempt: null }] },
   runs: [{
     session_id: "session", brief: "Implement the assigned task", run_id: "run", kind: "worker", label: "Worker", root_id: "root",
     parent_run_id: "root", task_id: "task", attempt: 1, task_revision_at_start: hash, stage: "working", close_reason: null,
-    assignment_generation: 1, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] },
+    assignment_generation: 1, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null,
+      initial_prompt_args: null, hook_args: null, max_parallel: 4, process_scope: "auto", inbox_prompt_hints: false, routes: [] },
     dispatch: { step: "launched", launch_attempt: 1, error: { code: "launch_unknown", message: "Review" }, updated_at: at,
-      launch_tag: "launch", endpoint_identity: "endpoint", recovery: "retry_environment", agent_started: true },
+      launch_tag: "launch", endpoint_identity: "endpoint", recovery: "retry_environment", agent_started: true, scope_unit: null, pre_move_scope: null,
+      latch: null, latch_state: null, source_location: null, move_operation_id: null, staging_workspace_id: null },
     target, setup: { operation_id: "operation", generation: 1, workspace_id: "space", checkout_path: "/repo", repository_id: "repo",
       branch: "task", base: "main", base_commit: baseCommit, ownership: "owned_worktree", effects: ["Create"], warnings: ["Warning"], project_workspace_id: null },
     cleanup_policy: "owned_when_safe",
@@ -208,7 +215,7 @@ const snapshot: OrchestrationSnapshot = {
     created_at: at, updated_at: at,
   }],
   messages: [message],
-  task_ownership: [{ root_id: "root", task_id: "task", generation: 1, owner: { run_id: "run", conversation: attachment.conversation!, claim_operation_id: prerequisiteId } }],
+  task_ownership: [{ root_id: "root", task_id: "task", generation: 1, owner: { run_id: "run", conversation: attachment.conversation!, claim_operation_id: prerequisiteId }, schedule: null }],
   intents: [{ intent_id: "intent", root_id: "root", task_id: "task", run_id: "run", expected_task_revision: hash, state: "pending",
     origin: null, supervisor_run_id: null, conversation: null, result_message_id: null }],
   assignment_intents: [{ root_id: "root", task_id: assignmentTaskId, state: "conflict" }],
@@ -237,12 +244,18 @@ const actions: OrchestrationAction[] = [
   { action: "task_step_remove", root_id: "root", task_id: "task", expected_task_revision: hash, step_id: childStepId },
   { action: "tasks_assign_ids", root_id: "root", expected_doc_revision: hash },
   startAction,
-  { action: "run_resume", run_id: "run", operation_id: prerequisiteId, expected_attachment_epoch: 1, mode: "reattach_or_restart", decision_id: null },
+  { action: "run_resume", run_id: "run", operation_id: prerequisiteId, expected_attachment_epoch: 1 },
   { action: "run_attach", operation_id: prerequisiteId, attachment_id: assignmentTaskId, expected_attachment_epoch: 1, conversation: attachment.conversation! },
   { action: "run_register", operation_id: prerequisiteId },
   { action: "task_unassign", operation_id: prerequisiteId, root_id: "root", task_id: "task", expected_assignment_generation: 1 },
   { action: "run_adopt", label: "Adopted", location: attachment.location! },
   workerStartAction,
+  { action: "task_schedule", operation_id: assignmentTaskId, root_id: prerequisiteId, task_id: parentStepId,
+    target: null, brief: "Implement after dependencies", cleanup_policy: "owned_when_safe", label: null,
+    expected_task_revision: hash, expected_doc_revision: hash },
+  { action: "task_schedule_cancel", operation_id: assignmentTaskId, root_id: prerequisiteId, task_id: parentStepId },
+  { action: "worker_replace", operation_id: assignmentTaskId, root_id: prerequisiteId, task_id: parentStepId,
+    expected_run_id: "run", expected_assignment_generation: 1, reason: "Stalled worker" },
   scopeUpdateAction,
   { action: "accept", run_id: "run", expected_task_revision: hash },
   { action: "send_back", run_id: "run", text: "Retry" },
@@ -278,8 +291,160 @@ function replaceField(value: unknown, path: (string | number)[], replacement: un
   if (remove) delete owner[key]; else owner[key] = replacement;
   return copy;
 }
+const defaultedSnapshotFields: Readonly<Record<string, true>> = {
+  "runs.0.attachment.process_scope": true,
+  "runs.0.attachment.location.peer_process": true,
+  "runs.0.dispatch.scope_unit": true,
+  "runs.0.dispatch.pre_move_scope": true,
+  "runs.0.dispatch.latch": true,
+  "runs.0.dispatch.latch_state": true,
+  "runs.0.dispatch.source_location": true,
+  "runs.0.dispatch.move_operation_id": true,
+  "runs.0.dispatch.staging_workspace_id": true,
+  "task_ownership.0.owner.conversation": true,
+  "task_ownership.0.schedule": true,
+  "runs.0.launch_config.initial_prompt_args": true,
+  "runs.0.launch_config.hook_args": true,
+  "runs.0.launch_config.max_parallel": true,
+  "runs.0.launch_config.process_scope": true,
+};
 
 describe("orchestration protocol boundary", () => {
+  it("decodes queued schedules, explicit replacement and current task attempt badges", () => {
+    const scheduleAction = actions.find(action => action.action === "task_schedule")!;
+    const replaceAction = actions.find(action => action.action === "worker_replace")!;
+    expect(parseOrchestrationAction(scheduleAction)).toEqual(scheduleAction);
+    expect(parseOrchestrationAction(replaceAction)).toEqual(replaceAction);
+    expect(parseOrchestrationAction({ ...scheduleAction, expected_task_revision: null, expected_doc_revision: null })).toBeDefined();
+    for (const [action, field, invalid] of [
+      [scheduleAction, "expected_task_revision", "bad"], [scheduleAction, "task_id", "not-a-uuid"],
+      [replaceAction, "expected_run_id", ""], [replaceAction, "reason", "bad\0reason"],
+      [replaceAction, "expected_assignment_generation", -1],
+    ] as const) {
+      expect(() => parseOrchestrationAction({ ...action, [field]: invalid })).toThrow(CockpitClientError);
+    }
+    const schedule = { operation_id: assignmentTaskId, principal_key: "conversation-key", target: null,
+      brief: "Implement when ready", cleanup_policy: "owned_when_safe" as const, label: null, scheduled_at: at };
+    const dto = { ...snapshot, task_ownership: [{ ...snapshot.task_ownership[0]!, schedule }] };
+    expect(parseOrchestrationSnapshot(dto).task_ownership[0]!.schedule).toEqual(schedule);
+    for (const state of ["starting", "running", "stalled"] as const) {
+      const badge = { run_id: "run", attempt: 2, state };
+      const view = { ...snapshot.board!.tasks[0]!, scheduled: true, attempt: badge };
+      const board = { ...snapshot.board!, tasks: [view] };
+      expect(parseOrchestrationSnapshot({ ...snapshot, board }).board!.tasks[0]).toEqual(view);
+      for (const invalid of [{ ...badge, attempt: 0 }, { ...badge, state: "queued" }, { ...badge, run_id: "" }]) {
+        expect(() => parseOrchestrationSnapshot({ ...snapshot, board: { ...board, tasks: [{ ...view, attempt: invalid }] } }))
+          .toThrow(CockpitClientError);
+      }
+    }
+    for (const placement of [{ placement: "same_checkout" }, { placement: "isolated_worktree", base_commit: baseCommit },
+      { placement: "isolated_directory", directory: ownedAttemptDirectory.root }]) {
+      const response = { revision: 3, result: { result: "worker_replaced", start: workerStarted.start,
+        previous_run_id: "run", assignment_generation: 2, placement } };
+      expect(parseOrchestrationMutationResponse(response)).toEqual(response);
+      expect(() => parseOrchestrationMutationResponse(replaceField(response, ["result", "previous_run_id"], ""))).toThrow(CockpitClientError);
+    }
+    expect(() => parseOrchestrationMutationResponse({ revision: 3, result: { result: "worker_replaced",
+      start: workerStarted.start, previous_run_id: "run", assignment_generation: 2,
+      placement: { placement: "isolated_worktree", base_commit: "bad" } } })).toThrow(CockpitClientError);
+  });
+
+  it("decodes isolated directory attempts with their own four-field identity and preserves outputs-kept facts", () => {
+    for (const source_workspace_id of ["source-space", null]) {
+      const action = { ...workerStartAction, target: { target: "owned_attempt_directory",
+        source_root: "/notes/source", source_workspace_id } };
+      expect(parseOrchestrationAction(action)).toEqual(action);
+      expect(() => parseOrchestrationAction(replaceField(action, ["target", "source_root"], "../source"))).toThrow(CockpitClientError);
+      expect(() => parseOrchestrationAction(replaceField(action, ["target", "target"], "future_directory"))).toThrow(CockpitClientError);
+    }
+    const record = { ...ownedResource, kind: "attempt_directory", identity: { kind: "attempt_directory", identity: ownedAttemptDirectory },
+      cleanup: { ...cleanupItem, state: "kept", reason: { class: "authority", code: "outputs_kept",
+        message: "Publish unique outputs before removing the empty attempt directory" } } };
+    const response = { revision: 3, result: { result: "resource_registered", resource: record, duplicate: false } };
+    expect(parseOrchestrationMutationResponse(response)).toEqual(response);
+    for (const [field, invalid] of [
+      ["creation_operation_id", "not-a-uuid"], ["root", "../source"], ["device", "01"], ["inode", "-1"],
+    ] as const) {
+      expect(() => parseOrchestrationMutationResponse(replaceField(response, ["result", "resource", "identity", "identity", field], invalid)))
+        .toThrow(CockpitClientError);
+    }
+    for (const extra of [{ machine_id: "machine" }, { manifest_path: "/state/manifest" }, { creation_id: assignmentTaskId }]) {
+      expect(() => parseOrchestrationMutationResponse(replaceField(response, ["result", "resource", "identity", "identity"],
+        { ...ownedAttemptDirectory, ...extra }))).toThrow(CockpitClientError);
+    }
+    const replacement = { revision: 4, result: { result: "worker_replaced", start: workerStarted.start,
+      previous_run_id: "run", assignment_generation: 2, placement: { placement: "isolated_directory", directory: ownedAttemptDirectory.root } } };
+    expect(parseOrchestrationMutationResponse(replacement)).toEqual(replacement);
+    expect(() => parseOrchestrationMutationResponse(replaceField(replacement, ["result", "placement", "directory"], "../attempt"))).toThrow(CockpitClientError);
+  });
+
+  it("decodes pinned latch and moved-space receipts without accepting incomplete proof or future states", () => {
+    const latch: AgentLaunchReceipt = { latch: "/state/launch-latch", nonce: "launch-nonce",
+      latch_device: "29", latch_inode: "123" };
+    const dispatch = { ...snapshot.runs[0]!.dispatch!, latch, source_location: attachment.location!,
+      move_operation_id: assignmentTaskId, staging_workspace_id: "staging-space" };
+    for (const latch_state of ["awaiting", "release_intent", "released", "unknown"] as const) {
+      const receipt = { ...dispatch, latch_state };
+      expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "dispatch"], receipt))
+        .runs[0]!.dispatch).toEqual(receipt);
+    }
+    const dto = replaceField(snapshot, ["runs", 0, "dispatch"], { ...dispatch, latch_state: "released" });
+    for (const field of fieldPaths(latch)) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "dispatch", "latch", ...field], undefined, true)))
+        .toThrow(CockpitClientError);
+    }
+    for (const [path, invalid] of [
+      [["latch", "latch"], "../latch"], [["latch", "nonce"], ""], [["latch", "latch_inode"], "01"],
+      [["latch"], { ...latch, private_capability: "secret" }], [["latch_state"], "future_state"],
+      [["step"], "future_step"], [["source_location", "pane_id"], ""],
+      [["move_operation_id"], "not-a-uuid"], [["staging_workspace_id"], ""],
+    ] as const) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "dispatch", ...path], invalid)))
+        .toThrow(CockpitClientError);
+    }
+    for (const field of ["latch", "latch_state", "source_location", "move_operation_id", "staging_workspace_id"] as const) {
+      expect(parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "dispatch", field], undefined, true))
+        .runs[0]!.dispatch![field]).toBeNull();
+    }
+  });
+
+  it("preserves owned process scope pins and defaults absent new conversation or scope facts", () => {
+    const scope: OwnedProcessScope = { kind: "systemd_user_scope", unit: "cockpit-worker.scope",
+      invocation_id: "invocation", control_group: "/user.slice/cockpit-worker.scope",
+      cgroup_device: "29", cgroup_inode: "123", machine_id: "machine", kernel_boot_id: "kernel-boot",
+      member: processIdentity, captured_at: at };
+    const dto = replaceField(snapshot, ["runs", 0, "attachment", "process_scope"], scope);
+    expect(parseOrchestrationSnapshot(dto).runs[0]!.attachment!.process_scope).toEqual(scope);
+    const preMoveScope = { ...scope, captured_at: "2026-10-05T11:59:00Z" };
+    const withPreMoveScope = replaceField(dto, ["runs", 0, "dispatch", "pre_move_scope"], preMoveScope);
+    const parsedScopes = parseOrchestrationSnapshot(withPreMoveScope).runs[0]!;
+    expect(parsedScopes.dispatch!.pre_move_scope).toEqual(preMoveScope);
+    expect(parsedScopes.attachment!.process_scope).toEqual(scope);
+    expect(parseOrchestrationSnapshot(replaceField(withPreMoveScope, ["runs", 0, "dispatch", "pre_move_scope"], undefined, true))
+      .runs[0]!.dispatch!.pre_move_scope).toBeNull();
+    for (const [field, invalid] of [
+      ["kind", "process_group"], ["unit", ""], ["control_group", "../scope"], ["cgroup_inode", "01"],
+      ["machine_id", ""], ["captured_at", "yesterday"],
+    ] as const) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "attachment", "process_scope", field], invalid)))
+        .toThrow(CockpitClientError);
+    }
+    for (const path of fieldPaths(scope)) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "attachment", "process_scope", ...path], undefined, true)))
+        .toThrow(CockpitClientError);
+    }
+    expect(parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "attachment", "process_scope"], undefined, true))
+      .runs[0]!.attachment!.process_scope).toBeNull();
+    const registered = { revision: 3, result: { result: "run_registered", run_id: "run", assignment_generation: null, duplicate: false } };
+    expect(parseOrchestrationMutationResponse(registered)).toEqual({ ...registered, result: { ...registered.result, conversation: null } });
+    expect(parseOrchestrationSnapshot(replaceField(snapshot, ["task_ownership", 0, "owner", "conversation"], undefined, true))
+      .task_ownership[0]!.owner!.conversation).toBeNull();
+    for (const max_parallel of [0, 4]) {
+      expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "launch_config", "max_parallel"], max_parallel))
+        .runs[0]!.launch_config.max_parallel).toBe(max_parallel);
+    }
+  });
+
   it("roundtrips every closed owned-resource identity and rejects mismatched kinds or private capabilities", () => {
     for (const resource of ownedIdentities) {
       const action = { action: "resource_register", request: { operation_id: prerequisiteId, run_id: "run", resource } };
@@ -293,7 +458,11 @@ describe("orchestration protocol boundary", () => {
       for (const dto of [action, response]) {
         const parse = dto === action ? parseOrchestrationAction : parseOrchestrationMutationResponse;
         for (const field of fieldPaths(dto)) {
-          expect(() => parse(replaceField(dto, field, undefined, true)), field.join(".")).toThrow(CockpitClientError);
+          if (field[field.length - 1] === "herdr_peer") {
+            expect(parse(replaceField(dto, field, undefined, true))).toEqual(dto);
+          } else {
+            expect(() => parse(replaceField(dto, field, undefined, true)), field.join(".")).toThrow(CockpitClientError);
+          }
         }
         for (const ownerPath of [[], ...fieldPaths(dto)]) {
           const owner = ownerPath.reduce<unknown>((value, key) => (value as Record<string | number, unknown>)[key], dto);
@@ -591,7 +760,12 @@ describe("orchestration protocol boundary", () => {
       [{ action: "resource_request", request: resourceRequest }, parseOrchestrationAction],
     ] as const) {
       for (const field of fieldPaths(dto)) {
-        expect(() => parse(replaceField(dto, field, undefined, true)), field.join(".")).toThrow(CockpitClientError);
+        if (Object.hasOwn(defaultedSnapshotFields, field.join("."))) {
+          const expected = field.join(".") === "task_ownership.0.owner.conversation" ? replaceField(dto, field, null) : dto;
+          expect(parse(replaceField(dto, field, undefined, true)), field.join(".")).toEqual(expected);
+        } else {
+          expect(() => parse(replaceField(dto, field, undefined, true)), field.join(".")).toThrow(CockpitClientError);
+        }
       }
       for (const ownerPath of [[], ...fieldPaths(dto)]) {
         const owner = ownerPath.reduce<unknown>((value, key) => (value as Record<string | number, unknown>)[key], dto);
@@ -641,10 +815,16 @@ describe("orchestration protocol boundary", () => {
     expect(() => parseOrchestrationSnapshot({ ...snapshot, questions: [{ ...question, extra: true }] })).toThrow(CockpitClientError);
   });
 
-  it("accepts all populated DTOs and rejects every missing nested field", () => {
+  it("accepts populated DTOs and defaults only the newly optional saved fields", () => {
     expect(parseOrchestrationSnapshot(snapshot)).toEqual(snapshot);
     for (const path of fieldPaths(snapshot)) {
-      expect(() => parseOrchestrationSnapshot(replaceField(snapshot, path, undefined, true)), path.join(".")).toThrow(CockpitClientError);
+      if (Object.hasOwn(defaultedSnapshotFields, path.join("."))) {
+        const expected = path.join(".") === "task_ownership.0.owner.conversation" ? replaceField(snapshot, path, null) : snapshot;
+        expect(parseOrchestrationSnapshot(replaceField(snapshot, path, undefined, true)), path.join("."))
+          .toEqual(expected);
+      } else {
+        expect(() => parseOrchestrationSnapshot(replaceField(snapshot, path, undefined, true)), path.join(".")).toThrow(CockpitClientError);
+      }
       expect(() => parseOrchestrationSnapshot(replaceField(snapshot, path, {})), path.join(".")).toThrow(CockpitClientError);
     }
     expect(parseOrchestrationSnapshot({ ...snapshot, runtime: { status: "unavailable", error: { code: "offline", message: "Offline" } } }).runtime.status).toBe("unavailable");
@@ -679,7 +859,7 @@ describe("orchestration protocol boundary", () => {
     for (const stage of ["proposed", "awaiting_prepare", "preparing", "initializing", "ready"]) {
       expect(() => parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "stage"], stage)), stage).toThrow(CockpitClientError);
     }
-    for (const lane of ["setup", "ready"]) {
+    for (const lane of ["setup", "queued", "starting"]) {
       expect(() => parseOrchestrationSnapshot(replaceField(snapshot, ["board", "tasks", 0, "lane"], lane))).toThrow(CockpitClientError);
     }
     for (const kind of ["awaits_prepare", "awaits_execute"]) {
@@ -695,7 +875,7 @@ describe("orchestration protocol boundary", () => {
     for (const stage of ["queued", "starting", "working", "reported", "active", "closed"]) {
       expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "stage"], stage)).runs[0]!.stage).toBe(stage);
     }
-    for (const lane of ["queued", "starting", "working", "review", "accepted"]) {
+    for (const lane of ["blocked", "ready", "working", "review", "accepted"]) {
       expect(parseOrchestrationSnapshot(replaceField(snapshot, ["board", "tasks", 0, "lane"], lane)).board!.tasks[0]!.lane).toBe(lane);
     }
   });
@@ -903,13 +1083,13 @@ describe("orchestration protocol boundary", () => {
       }
     }
     expect(parseOrchestrationAction({ action: "run_resume", run_id: "run", operation_id: assignmentTaskId,
-      expected_attachment_epoch: null, mode: "replace_existing", decision_id: childStepId })).toBeDefined();
+      expected_attachment_epoch: null })).toBeDefined();
     expect(parseOrchestrationAction({ ...startAction, mode: "another", selected_root_id: "root", expected_project_key: project.key })).toBeDefined();
     for (const invalid of [
       { ...startAction, mode: "unknown" }, { ...startAction, selected_root_id: "" },
       { ...startAction, expected_project_key: "" }, { ...startAction, expected_project_key: "é".repeat(257) },
       { action: "run_resume", run_id: "run", operation_id: assignmentTaskId, expected_attachment_epoch: null, mode: "unknown", decision_id: null },
-      { action: "run_resume", run_id: "", operation_id: assignmentTaskId, expected_attachment_epoch: null, mode: "replace_existing", decision_id: null },
+      { action: "run_resume", run_id: "", operation_id: assignmentTaskId, expected_attachment_epoch: null },
       { action: "run_resume", run_id: "run", operation_id: assignmentTaskId, expected_attachment_epoch: null, mode: "replace_existing", decision_id: "bad" },
       { action: "run_attach", operation_id: assignmentTaskId, attachment_id: prerequisiteId, expected_attachment_epoch: 1, conversation: { harness: "omp", session_id: "" } },
     ]) expect(() => parseOrchestrationAction(invalid)).toThrow(CockpitClientError);
@@ -1098,13 +1278,85 @@ describe("orchestration protocol boundary", () => {
     ]) expect(() => parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "target"], invalid))).toThrow(CockpitClientError);
   });
 
+  it("decodes native peer identity receipts without inventing legacy boot evidence", () => {
+    const peer: NativeProcessIdentity = { ...processIdentity, pid: 314, start_ticks: 2718 };
+    const location = { ...attachment.location!, boot_id: null, peer_process: peer };
+    const identity = { ...retirementIdentity, herdr_boot_id: null, herdr_peer: peer };
+    const retirement = retirementRecord({ state: "waiting", blockers: [] }, identity);
+    const run = { ...snapshot.runs[0]!, attachment: { ...attachment, location }, retirement };
+    const dto = { ...snapshot, runs: [run] };
+    const decoded = parseOrchestrationSnapshot(dto).runs[0]!;
+    expect(decoded.attachment!.location!.peer_process).toEqual(peer);
+    expect(decoded.attachment!.location!.boot_id).toBeNull();
+    expect(decoded.retirement!.identity!.herdr_peer).toEqual(peer);
+    expect(decoded.retirement!.identity!.herdr_boot_id).toBeNull();
+    const action = { action: "run_adopt", label: "Adopted", location };
+    expect(parseOrchestrationAction(action)).toEqual(action);
+    const withoutLocationPeer = replaceField(dto, ["runs", 0, "attachment", "location", "peer_process"], undefined, true);
+    const legacy = replaceField(withoutLocationPeer, ["runs", 0, "retirement", "identity", "herdr_peer"], undefined, true);
+    const restored = parseOrchestrationSnapshot(legacy).runs[0]!;
+    expect(restored.attachment!.location!.peer_process).toBeNull();
+    expect(restored.retirement!.identity!.herdr_peer).toBeNull();
+    for (const path of [["attachment", "location", "peer_process"], ["retirement", "identity", "herdr_peer"]]) {
+      for (const field of fieldPaths(peer)) {
+        expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, ...path, ...field], undefined, true)))
+          .toThrow(CockpitClientError);
+      }
+      for (const invalid of [{ ...peer, pid: -1 }, { ...peer, start_ticks: 1.5 }, { ...peer, kernel_boot_id: "" },
+        { ...peer, invented_boot: "unsupported" }]) {
+        expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, ...path], invalid))).toThrow(CockpitClientError);
+      }
+    }
+  });
+
+  it("decodes replacement retirement authority without inventing accepted Result pins", () => {
+    const replacement: ReplacementRetirementAuthority = { operation_id: prerequisiteId, previous_run_id: "run",
+      previous_generation: 1, replacement_run_id: childStepId };
+    const retirement: RunRetirement = { ...retirementRecord({ state: "waiting", blockers: [] }),
+      trigger: "replacement", result_message_id: null, task_revision: null, replacement };
+    const dto = replaceField(snapshot, ["runs", 0, "retirement"], retirement);
+    expect(parseOrchestrationSnapshot(dto).runs[0]!.retirement).toEqual(retirement);
+    for (const field of ["result_message_id", "task_revision"] as const) {
+      expect(parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", field], undefined, true))
+        .runs[0]!.retirement![field]).toBeNull();
+    }
+    for (const path of fieldPaths(replacement)) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "replacement", ...path], undefined, true)))
+        .toThrow(CockpitClientError);
+    }
+    for (const [path, invalid] of [
+      [["replacement"], null], [["replacement", "operation_id"], "not-a-uuid"],
+      [["replacement", "previous_run_id"], ""], [["replacement", "replacement_run_id"], ""],
+      [["replacement", "previous_generation"], -1], [["replacement", "previous_generation"], Number.MAX_SAFE_INTEGER + 1],
+      [["replacement"], { ...replacement, secret: "private" }],
+      [["result_message_id"], "fabricated-result"], [["task_revision"], hash], [["trigger"], "future_retirement"],
+    ] as const) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", ...path], invalid)))
+        .toThrow(CockpitClientError);
+    }
+    const accepted = retirementRecord({ state: "waiting", blockers: [] });
+    expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "retirement"],
+      { ...accepted, replacement: undefined })).runs[0]!.retirement).toEqual(accepted);
+    for (const trigger of ["accept", "accept_recovery", "operator_conflict_resolution"] as const) {
+      for (const changed of [{ result_message_id: null }, { task_revision: null }, { replacement }]) {
+        expect(() => parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "retirement"], { ...accepted, trigger, ...changed })))
+          .toThrow(CockpitClientError);
+      }
+    }
+  });
+
   it.each(retirementStates)("decodes strict retirement state $state", state => {
     const retirement = retirementRecord(state);
     const dto = replaceField(snapshot, ["runs", 0, "retirement"], retirement);
     expect(parseOrchestrationSnapshot(dto).runs[0]!.retirement).toEqual(retirement);
     for (const path of fieldPaths(retirement)) {
-      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", ...path], undefined, true)), path.join("."))
-        .toThrow(CockpitClientError);
+      if (path.join(".") === "replacement" || path.join(".") === "identity.herdr_peer") {
+        expect(parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", ...path], undefined, true))
+          .runs[0]!.retirement).toEqual(retirement);
+      } else {
+        expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", ...path], undefined, true)), path.join("."))
+          .toThrow(CockpitClientError);
+      }
     }
     for (const path of [[], ["identity"], ["identity", "process"], ["state"]]) {
       const owner = path.reduce<unknown>((value, key) => (value as Record<string, unknown>)[key], retirement);
@@ -1114,6 +1366,10 @@ describe("orchestration protocol boundary", () => {
     }
     expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "state", "state"], "unknown_state")))
       .toThrow(CockpitClientError);
+    if (state.state === "waiting") {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["runs", 0, "retirement", "state", "blockers"],
+        ["future_resource_admission"]))).toThrow(CockpitClientError);
+    }
   });
 
   it("permits null retirement identity only for identity-incomplete retention", () => {
@@ -1280,7 +1536,9 @@ describe("orchestration protocol boundary", () => {
   });
 
   it("decodes pending launches and refuses live agent proof on absent panes", () => {
-    expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "dispatch", "step"], "launch_pending"))).toBeDefined();
+    for (const step of ["launch_pending", "move_intent", "move_unknown", "placed"]) {
+      expect(parseOrchestrationSnapshot(replaceField(snapshot, ["runs", 0, "dispatch", "step"], step)).runs[0]!.dispatch!.step).toBe(step);
+    }
     for (const presence of ["missing", "endpoint_changed", "unobserved"]) {
       const dto = replaceField(snapshot, ["runtime", "runs", 0, "presence"], presence);
       expect(() => parseOrchestrationSnapshot(dto)).toThrow(CockpitClientError);
@@ -1342,6 +1600,10 @@ describe("orchestration protocol boundary", () => {
       expect(parseOrchestrationMutationRequest({ session_id: "session", expected_revision: 2, action }).action).toEqual(action);
       for (const path of fieldPaths(action)) {
         if (action.action === "cleanup_finish" && path.join(".") === "request.run_id") continue;
+        if (path.join(".") === "location.peer_process" || path[path.length - 1] === "herdr_peer") {
+          expect(parseOrchestrationAction(replaceField(action, path, undefined, true))).toEqual(action);
+          continue;
+        }
         expect(() => parseOrchestrationAction(replaceField(action, path, undefined, true)), `${action.action}:${path.join(".")}`).toThrow(CockpitClientError);
       }
       expect(() => parseOrchestrationAction({ ...action, actor: "operator" })).toThrow(CockpitClientError);
@@ -1363,6 +1625,9 @@ describe("orchestration protocol boundary", () => {
       { result: "run_resumed", resume: { run_id: "run", resume, duplicate: false } },
       { result: "run_attached", attach: { run_id: "run", attachment, duplicate: false } },
       workerStarted, scopeUpdated,
+      { result: "task_scheduled", operation_id: assignmentTaskId, task_id: parentStepId, duplicate: false },
+      { result: "worker_replaced", start: workerStarted.start, previous_run_id: "run", assignment_generation: 2,
+        placement: { placement: "same_checkout" } },
       { result: "integration_recorded", receipt: { operation_id: prerequisiteId, run_id: "run", integration: integrated, checks: integrated.checks, duplicate: false } },
       { result: "resource", request: resourceRecord, duplicate: false },
       { result: "resource_registered", resource: ownedResource, duplicate: false },
@@ -1370,7 +1635,13 @@ describe("orchestration protocol boundary", () => {
     for (const result of results) {
       const response = { revision: 2, result };
       expect(parseOrchestrationMutationResponse(response)).toEqual(response);
-      for (const path of fieldPaths(response)) expect(() => parseOrchestrationMutationResponse(replaceField(response, path, undefined, true))).toThrow(CockpitClientError);
+      for (const path of fieldPaths(response)) {
+        if (["result.attach.attachment.process_scope", "result.attach.attachment.location.peer_process"].includes(path.join("."))) {
+          expect(parseOrchestrationMutationResponse(replaceField(response, path, undefined, true))).toEqual(response);
+        } else {
+          expect(() => parseOrchestrationMutationResponse(replaceField(response, path, undefined, true))).toThrow(CockpitClientError);
+        }
+      }
     }
     expect(() => parseOrchestrationMutationResponse({ revision: 2, result: { result: "unknown" } })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationMutationResponse({ revision: 2, result: { result: "inbox", messages: [{ ...message, seq: -1 }], read_through_seq: 1 } })).toThrow(CockpitClientError);
@@ -1499,8 +1770,10 @@ describe("orchestration protocol boundary", () => {
   });
 
   it("validates long-poll timeouts and invalidation tokens", () => {
-    const request = { after_revision: 2, after_tasks_token: hash, timeout_ms: 30_000 };
+    const request = { root_id: null, after_revision: 2, after_tasks_token: hash, timeout_ms: 30_000 };
     expect(parseOrchestrationWaitRequest(request)).toEqual(request);
+    expect(parseOrchestrationWaitRequest({ ...request, root_id: "selected-root" })).toEqual({ ...request, root_id: "selected-root" });
+    for (const root_id of ["", " ", 7, false]) expect(() => parseOrchestrationWaitRequest({ ...request, root_id })).toThrow(CockpitClientError);
     for (const timeout_ms of [-1, 30_001, 1.5, NaN, "30000"]) expect(() => parseOrchestrationWaitRequest({ ...request, timeout_ms })).toThrow(CockpitClientError);
     for (const path of fieldPaths(request)) expect(() => parseOrchestrationWaitRequest(replaceField(request, path, undefined, true))).toThrow(CockpitClientError);
     expect(() => parseOrchestrationWaitRequest({ ...request, after_revision: Number.MAX_SAFE_INTEGER + 1 })).toThrow(CockpitClientError);
@@ -1564,7 +1837,7 @@ describe("browser/native orchestration parity", () => {
 
   const snapshotRequest = { session_id: "session", root_id: "root" };
   const mutationRequest = { session_id: "session", expected_revision: 2, action: { action: "cancel_run" as const, run_id: "run" } };
-  const waitRequest = { after_revision: 2, after_tasks_token: hash, timeout_ms: 30_000 };
+  const waitRequest = { root_id: "root", after_revision: 2, after_tasks_token: hash, timeout_ms: 30_000 };
 
   it.each(["browser", "native"] as const)("rejects malformed responses and foreign sessions on %s", async transport => {
     for (const badSnapshot of [{ ...snapshot, session_id: "foreign" },

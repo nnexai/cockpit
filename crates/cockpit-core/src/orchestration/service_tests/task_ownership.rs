@@ -460,7 +460,7 @@ fn concurrent_conversation_claimants_publish_exactly_one_atomic_owner() {
     let task = fixture.create_task(&root, "Atomic claim");
     let (run, first) = pending_worker(&fixture, &root, &task);
     let mut second = first.clone();
-    caller_mut(&mut second).conversation.session_id = "different-opaque-chat".into();
+    caller_mut(&mut second).conversation.as_mut().unwrap().session_id = "different-opaque-chat".into();
     assert_eq!(ownership(&fixture, &root, &task).generation, 0);
     assert!(ownership(&fixture, &root, &task).owner.is_none());
     let operation = id();
@@ -486,7 +486,7 @@ fn concurrent_conversation_claimants_publish_exactly_one_atomic_owner() {
     assert_eq!(owner.run_id, run);
     assert_eq!(owner.conversation, caller.conversation);
     assert_eq!(owner.claim_operation_id, operation);
-    assert_eq!(fixture.run(&run).attachment.unwrap().conversation, Some(owner.conversation));
+    assert_eq!(fixture.run(&run).attachment.unwrap().conversation, owner.conversation);
     assert_eq!(fixture.state().messages.iter().filter(|message|
         message.to_run_id == run && message.kind == MessageKind::WorkBrief).count(), 1);
 }
@@ -519,8 +519,8 @@ fn registration_replay_and_implicit_same_chat_context_are_inert_but_other_chat_c
     for field in 0..2 {
         let mut other = actor.clone();
         let caller = caller_mut(&mut other);
-        if field == 0 { caller.conversation.session_id = "other-chat".into(); }
-        else { caller.conversation.harness = "other-harness".into(); }
+        if field == 0 { caller.conversation.as_mut().unwrap().session_id = "other-chat".into(); }
+        else { caller.conversation.as_mut().unwrap().harness = "other-harness".into(); }
         assert!(fixture.apply(&other, action.clone()).is_err());
         assert!(fixture.apply(&other, report(ReportKind::Progress, None, None)).is_err());
         assert_eq!(fixture.state_bytes(), bytes);
@@ -570,7 +570,7 @@ fn unassign_is_active_same_root_only_and_exact_generation_fenced() {
     let other_root = fixture.root();
     let outsider = fixture.root_actor(&other_root);
     let mut other_chat = supervisor.clone();
-    caller_mut(&mut other_chat).conversation.session_id = "different-supervisor-chat".into();
+    caller_mut(&mut other_chat).conversation.as_mut().unwrap().session_id = "different-supervisor-chat".into();
     let action = unassign(&root, &task, 1);
     let bytes = fixture.state_bytes();
     for actor in [&worker, &outsider, &other_chat, &Actor::Operator(OperatorOrigin::Browser)] {
@@ -816,14 +816,14 @@ fn root_registration_pins_opaque_chat_and_conflicting_replay_never_changes_it() 
     let fixture = Fixture::new();
     let root = fixture.root();
     let mut actor = fixture.neutral_actor(&root);
-    caller_mut(&mut actor).conversation.session_id = "not/a/uuid:conversation".into();
+    caller_mut(&mut actor).conversation.as_mut().unwrap().session_id = "not/a/uuid:conversation".into();
     let action = OrchestrationAction::RunRegister { operation_id: id() };
     fixture.apply(&actor, action.clone()).unwrap();
     let bytes = fixture.state_bytes();
     fixture.apply(&actor, action.clone()).unwrap();
     assert_eq!(fixture.state_bytes(), bytes);
     let mut other = actor.clone();
-    caller_mut(&mut other).conversation.session_id = "different-root-chat".into();
+    caller_mut(&mut other).conversation.as_mut().unwrap().session_id = "different-root-chat".into();
     assert!(fixture.apply(&other, action).is_err());
     assert_eq!(fixture.state_bytes(), bytes);
     assert_eq!(fixture.run(&root).assignment_generation, None);
@@ -883,4 +883,754 @@ fn unassign_generation_overflow_fails_without_releasing_owner_or_claims() {
     assert_eq!(serde_json::to_value(after.credentials).unwrap(),
         serde_json::to_value(before.credentials).unwrap());
     assert_eq!(fixture.run(&worker).stage, RunStage::Working);
+}
+
+fn replacement_action(root: &str, task: &Task, run: &Run) -> OrchestrationAction {
+    OrchestrationAction::WorkerReplace { operation_id: id(), root_id: root.into(), task_id: task.task_id.clone(),
+        expected_run_id: run.run_id.clone(), expected_assignment_generation: run.assignment_generation.unwrap(),
+        reason: "Continue safely from the committed checkpoint".into() }
+}
+
+fn replacement_input(fixture: &Fixture, run: &Run) -> ResolvedMutationInput {
+    let project = run.project.clone().unwrap_or_else(|| fixture.project());
+    let source = match &project.source {
+        ProjectSource::Git { .. } => ReplacementSource::GitHead {
+            commit: "a".repeat(40), source_workspace_id: Some(project.source_workspace_id.clone().unwrap_or_else(|| "source-space".into())),
+        },
+        ProjectSource::Directory { root } => ReplacementSource::Directory {
+            root: root.clone(), source_workspace_id: project.source_workspace_id.clone(),
+        },
+    };
+    ResolvedMutationInput { replacement_source: Some(source), checkout: run.checkout.clone(),
+        project: Some(project), ..Default::default() }
+}
+
+fn replacement_source(fixture: &Fixture, root: &str, run: &str) {
+    let source = fixture.root.join("borrowed-source");
+    std::fs::create_dir_all(&source).unwrap();
+    let (mut project, _) = project_identity::resolve_owned_directory(&source).unwrap();
+    project.source_workspace_id = Some("source-space".into());
+    fixture.seed_run(root, |run| run.project = Some(project.clone()));
+    fixture.seed_run(run, |run| run.project = Some(project));
+}
+
+#[test]
+fn credential_only_claim_activates_without_inventing_conversation_and_enriches_metadata_later() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Harness-neutral capability");
+    let (worker, mut actor) = pending_worker(&fixture, &root, &task);
+    caller_mut(&mut actor).conversation = None;
+    let caller = match &actor { Actor::Agent(caller) => caller, _ => unreachable!() };
+    fixture.service.ensure_registered(caller).unwrap();
+    assert_eq!(fixture.run(&worker).stage, RunStage::Working);
+    assert!(fixture.run(&worker).attachment.unwrap().conversation.is_none());
+    assert!(ownership(&fixture, &root, &task).owner.unwrap().conversation.is_none());
+    fixture.apply(&actor, report(ReportKind::Progress, None, None)).unwrap();
+    let bytes = fixture.state_bytes();
+    fixture.service.ensure_registered(caller).unwrap();
+    assert_eq!(fixture.state_bytes(), bytes);
+    caller_mut(&mut actor).conversation = Some(ConversationIdentity { harness: fixture.run(&worker).launch_config.harness_kind.clone(), session_id: "observed-real-session".into() });
+    let caller = match &actor { Actor::Agent(caller) => caller, _ => unreachable!() };
+    fixture.service.ensure_registered(caller).unwrap();
+    assert_eq!(fixture.run(&worker).attachment.unwrap().conversation, caller.conversation);
+    let brief_count = fixture.state().messages.iter().filter(|message| message.to_run_id == worker && message.kind == MessageKind::WorkBrief).count();
+    assert_eq!(brief_count, 1);
+    let bytes = fixture.state_bytes();
+    caller_mut(&mut actor).conversation.as_mut().unwrap().session_id = "wrong-session".into();
+    assert_code(fixture.apply(&actor, report(ReportKind::Progress, None, None)), "job_unauthorized");
+    assert_eq!(fixture.state_bytes(), bytes);
+}
+
+#[test]
+fn credential_only_root_can_schedule_without_actual_session_metadata() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let mut actor = fixture.neutral_actor(&root);
+    caller_mut(&mut actor).conversation = None;
+    fixture.service.ensure_registered(match &actor { Actor::Agent(caller) => caller, _ => unreachable!() }).unwrap();
+    let task = fixture.create_task(&root, "Neutral supervisor");
+    fixture.apply(&actor, schedule_action(&root, &task)).unwrap();
+    assert!(ownership(&fixture, &root, &task).schedule.is_some());
+}
+
+#[test]
+fn atomic_replacement_of_live_writer_retains_physical_history_and_rejects_every_old_authority() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Replace current writer");
+    let supervisor = fixture.root_actor(&root);
+    let worker = fixture.start(&root, &task);
+    fixture.setup(&worker);
+    let actor = fixture.launch_and_bind(&worker);
+    replacement_source(&fixture, &root, &worker);
+    fixture.apply(&actor, report(ReportKind::Progress, None, None)).unwrap();
+    let old = fixture.run(&worker);
+    let claims = serde_json::to_value(&fixture.state().checkout_claims).unwrap();
+    let action = replacement_action(&root, &task, &old);
+    let resolved = replacement_input(&fixture, &old);
+    let apply = |action| fixture.service.mutate_resolved(&supervisor,
+        OrchestrationMutationRequest { session_id: SESSION.into(), expected_revision: None, action }, &resolved);
+    let response = apply(action.clone()).unwrap();
+    let OrchestrationActionResult::WorkerReplaced { start, previous_run_id, assignment_generation, placement } = response.result else { unreachable!() };
+    assert_eq!(previous_run_id, worker);
+    assert_eq!(assignment_generation, 3);
+    let expected_directory = fixture.service.base().join("attempts").join(&start.run_id).to_string_lossy().into_owned();
+    assert_eq!(placement, ReplacementPlacement::IsolatedDirectory { directory: expected_directory });
+    let successor = fixture.run(&start.run_id);
+    assert_eq!(successor.attempt, old.attempt + 1);
+    assert!(matches!(&successor.target, Some(DispatchTarget::OwnedAttemptDirectory { source_root, source_workspace_id: Some(space) })
+        if Some(source_root) == old.project.as_ref().and_then(|project| match &project.source { ProjectSource::Directory { root } => Some(root), _ => None })
+            && space == "source-space"));
+    assert_eq!(successor.project, old.project);
+    let retained = fixture.run(&worker);
+    assert_eq!(retained.close_reason, Some(CloseReason::Superseded));
+    assert_eq!(serde_json::to_value(&retained.attachment).unwrap(), serde_json::to_value(&old.attachment).unwrap());
+    assert_eq!(serde_json::to_value(&retained.source_output).unwrap(), serde_json::to_value(&old.source_output).unwrap());
+    assert_eq!(serde_json::to_value(&fixture.state().checkout_claims).unwrap(), claims);
+    assert!(fixture.state().messages.iter().any(|message| matches!(&message.from, ActorRef::Run { run_id } if run_id == &worker)));
+    assert!(fixture.state().credentials.iter().filter(|credential| credential.run_id == worker)
+        .all(|credential| credential.state == credentials::CredentialState::Revoked));
+    let bytes = fixture.state_bytes();
+    let replay = apply(action.clone()).unwrap();
+    assert!(matches!(replay.result, OrchestrationActionResult::WorkerReplaced { start: WorkerStartResult { duplicate: true, .. }, .. }));
+    assert_eq!(fixture.state_bytes(), bytes);
+    assert_code(fixture.apply(&actor, report(ReportKind::Progress, None, None)), "job_unauthorized");
+    assert_code(fixture.apply(&actor, OrchestrationAction::RunRegister { operation_id: caller_auth(&actor).credential_id.clone() }), "job_unauthorized");
+    assert_code(apply(replacement_action(&root, &task, &old)), "assignment_generation_conflict");
+    assert_eq!(fixture.state_bytes(), bytes);
+}
+
+#[test]
+fn pending_sticky_attempt_can_be_replaced_without_cleanup_or_late_launch_authority() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Replace pending attempt");
+    let supervisor = fixture.root_actor(&root);
+    let (worker, actor) = pending_worker(&fixture, &root, &task);
+    replacement_source(&fixture, &root, &worker);
+    fixture.seed_run(&worker, |run| {
+        run.stage = RunStage::Starting;
+        run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchUnknown;
+        run.resume = Some(ResumeRecord { operation_id: id(), run_id: worker.clone(), previous_attachment_epoch: Some(1),
+            phase: ResumePhase::Launching, cause: None, decision_id: None, replacement_attachment_epoch: None, updated_at: now() });
+    });
+    let old = fixture.run(&worker);
+    let response = fixture.service.mutate_resolved(&supervisor, OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: None, action: replacement_action(&root, &task, &old),
+    }, &replacement_input(&fixture, &old)).unwrap();
+    let OrchestrationActionResult::WorkerReplaced { start, assignment_generation, .. } = response.result else { unreachable!() };
+    assert_eq!(assignment_generation, 3);
+    assert_eq!(fixture.run(&start.run_id).assignment_generation, Some(3));
+    assert!(fixture.service.record_dispatch(&worker, DispatchUpdate::Step { step: DispatchStep::LaunchPending, error: None }).is_err());
+    assert!(fixture.apply(&actor, OrchestrationAction::RunRegister { operation_id: id() }).is_err());
+    assert_eq!(serde_json::to_value(&fixture.run(&worker).attachment).unwrap(), serde_json::to_value(&old.attachment).unwrap());
+}
+
+#[test]
+fn replacement_refusals_are_atomic_for_stale_generation_wrong_root_worker_and_unproven_source() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Replacement fences");
+    let supervisor = fixture.root_actor(&root);
+    let worker = fixture.start(&root, &task);
+    fixture.setup(&worker);
+    let actor = fixture.launch_and_bind(&worker);
+    replacement_source(&fixture, &root, &worker);
+    let old = fixture.run(&worker);
+    for mode in 0..4 {
+        let mut action = replacement_action(&root, &task, &old);
+        let mut resolved = replacement_input(&fixture, &old);
+        let OrchestrationAction::WorkerReplace { expected_assignment_generation, root_id, .. } = &mut action else { unreachable!() };
+        if mode == 0 { *expected_assignment_generation += 1; }
+        if mode == 1 { *root_id = id(); }
+        if mode == 3 { resolved.replacement_source = None; }
+        let bytes = fixture.state_bytes();
+        assert!(fixture.service.mutate_resolved(if mode == 2 { &actor } else { &supervisor },
+            OrchestrationMutationRequest { session_id: SESSION.into(), expected_revision: None, action }, &resolved).is_err());
+        assert_eq!(fixture.state_bytes(), bytes);
+    }
+}
+
+fn schedule_action(root: &str, task: &Task) -> OrchestrationAction {
+    OrchestrationAction::TaskSchedule { operation_id: id(), root_id: root.into(), task_id: task.task_id.clone(),
+        target: Some(target()), brief: "Execute the canonical task when prerequisites are accepted".into(),
+        cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe, label: None,
+        expected_task_revision: Some(task.task_revision.clone()), expected_doc_revision: None }
+}
+
+#[test]
+fn dependency_schedule_queues_until_acceptance_rechecks_fresh_graph_and_is_idempotent() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let prerequisite = fixture.create_task(&root, "Prerequisite");
+    let dependent = fixture.create_task(&root, "Dependent");
+    let supervisor = fixture.root_actor(&root);
+    fixture.apply(&supervisor, OrchestrationAction::TaskDependenciesSet { root_id: root.clone(),
+        task_id: dependent.task_id.clone(), expected_task_revision: dependent.task_revision.clone(),
+        expected_doc_revision: task_document_revision(&fixture, &root), depends_on: vec![prerequisite.task_id.clone()] }).unwrap();
+    let dependent = fixture.task(&root, &dependent.task_id);
+    let schedule = schedule_action(&root, &dependent);
+    fixture.apply(&supervisor, schedule.clone()).unwrap();
+    let bytes = fixture.state_bytes();
+    assert!(matches!(fixture.apply(&supervisor, schedule).unwrap().result, OrchestrationActionResult::TaskScheduled { duplicate: true, .. }));
+    assert_eq!(fixture.state_bytes(), bytes);
+    assert!(fixture.service.schedule_candidates(4).unwrap().is_empty());
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        locked.tasks(&root).unwrap().check(&prerequisite.task_id, &prerequisite.task_revision, true).unwrap();
+    }
+    let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    let resolved = ResolvedMutationInput { project: Some(fixture.project()), ..Default::default() };
+    let start = fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap();
+    assert_eq!(start.attempt, 1);
+    assert!(ownership(&fixture, &root, &dependent).schedule.is_some());
+    let bytes = fixture.state_bytes();
+    assert!(fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap().duplicate);
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture.apply(&supervisor, OrchestrationAction::TaskScheduleCancel { operation_id: id(), root_id: root.clone(),
+        task_id: dependent.task_id.clone() }).unwrap();
+    assert!(ownership(&fixture, &root, &dependent).schedule.is_none());
+    assert_eq!(fixture.run(&start.run_id).stage, RunStage::Queued);
+    assert!(fixture.service.scheduled_start(&candidate, &resolved).unwrap().is_none());
+}
+
+#[test]
+fn schedule_dispatch_refuses_unbound_root_without_discarding_durable_authorization() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Fenced scheduled task");
+    let supervisor = fixture.root_actor(&root);
+    fixture.apply(&supervisor, schedule_action(&root, &task)).unwrap();
+    let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    fixture.seed_state(|state| {
+        for credential in &mut state.credentials {
+            if credential.run_id == root { credential.state = credentials::CredentialState::Revoked; }
+        }
+    });
+    let bytes = fixture.state_bytes();
+    assert!(fixture.service.schedule_candidates(4).unwrap().is_empty());
+    assert!(fixture.service.scheduled_start(&candidate, &ResolvedMutationInput {
+        project: Some(fixture.project()), ..Default::default()
+    }).unwrap().is_none());
+    assert_eq!(fixture.state_bytes(), bytes);
+}
+
+#[test]
+fn durable_task_schedule_survives_liaison_attachment_and_credential_rotation() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Resume authorized schedule");
+    let supervisor = fixture.root_actor(&root);
+    fixture.apply(&supervisor, schedule_action(&root, &task)).unwrap();
+    let original = ownership(&fixture, &root, &task).schedule.unwrap();
+    fixture.seed_state(|state| {
+        for credential in &mut state.credentials {
+            if credential.run_id == root { credential.state = credentials::CredentialState::Revoked; }
+        }
+        let run = state.runs.iter_mut().find(|run| run.run_id == root).unwrap();
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.epoch += 1;
+        attachment.attachment_id = id();
+        attachment.state = AttachmentState::Reserved;
+        attachment.conversation = None;
+    });
+    let mut restarted = fixture.neutral_actor(&root);
+    caller_mut(&mut restarted).conversation = None;
+    fixture.service.ensure_registered(match &restarted { Actor::Agent(caller) => caller, _ => unreachable!() }).unwrap();
+    let candidates = fixture.service.schedule_candidates(4).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].schedule.principal_key, original.principal_key);
+    let start = fixture.service.scheduled_start(&candidates[0], &ResolvedMutationInput {
+        project: Some(fixture.project()), ..Default::default()
+    }).unwrap().unwrap();
+    assert_eq!(start.attempt, 1);
+    assert!(fixture.apply(&supervisor, OrchestrationAction::TaskScheduleCancel {
+        operation_id: id(), root_id: root.clone(), task_id: task.task_id.clone(),
+    }).is_err());
+}
+
+#[test]
+fn concurrent_replacements_publish_only_one_successor_and_one_generation_fence() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Concurrent replacement");
+    let supervisor = fixture.root_actor(&root);
+    let worker = fixture.start(&root, &task);
+    fixture.setup(&worker);
+    let _actor = fixture.launch_and_bind(&worker);
+    replacement_source(&fixture, &root, &worker);
+    let old = fixture.run(&worker);
+    let resolved = replacement_input(&fixture, &old);
+    let barrier = std::sync::Barrier::new(2);
+    let results = std::thread::scope(|scope| {
+        let apply = || {
+            let action = replacement_action(&root, &task, &old);
+            barrier.wait();
+            fixture.service.mutate_resolved(&supervisor, OrchestrationMutationRequest {
+                session_id: SESSION.into(), expected_revision: None, action,
+            }, &resolved)
+        };
+        let first = scope.spawn(apply);
+        let second = scope.spawn(apply);
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    assert_ne!(results.0.is_ok(), results.1.is_ok());
+    let state = fixture.state();
+    assert_eq!(state.runs.iter().filter(|run| run.task_id.as_ref() == Some(&task.task_id) && run.stage != RunStage::Closed).count(), 1);
+    assert_eq!(ownership(&fixture, &root, &task).generation, 2);
+}
+
+#[test]
+fn newly_blocked_dependency_and_parallel_limit_are_rechecked_at_schedule_claim() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Claim recheck");
+    let supervisor = fixture.root_actor(&root);
+    fixture.apply(&supervisor, schedule_action(&root, &task)).unwrap();
+    let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    let blocker = fixture.create_task(&root, "New prerequisite");
+    fixture.apply(&supervisor, OrchestrationAction::TaskDependenciesSet {
+        root_id: root.clone(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision.clone(),
+        expected_doc_revision: task_document_revision(&fixture, &root), depends_on: vec![blocker.task_id.clone()],
+    }).unwrap();
+    let bytes = fixture.state_bytes();
+    assert!(fixture.service.scheduled_start(&candidate, &ResolvedMutationInput { project: Some(fixture.project()), ..Default::default() }).unwrap().is_none());
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture.seed_run(&root, |run| run.launch_config.max_parallel = 0);
+    assert!(fixture.service.schedule_candidates(4).unwrap().is_empty());
+}
+
+#[test]
+fn precise_exit_proof_replaces_in_same_checkout_without_overwriting_old_attachment() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Proven same-checkout replacement");
+    let supervisor = fixture.root_actor(&root);
+    let worker = fixture.start(&root, &task);
+    fixture.setup(&worker);
+    let _actor = fixture.launch_and_bind(&worker);
+    let old = fixture.run(&worker);
+    let attachment = old.attachment.as_ref().unwrap();
+    let claim = fixture.state().checkout_claims.into_iter().find(|claim| old.checkout_claim_id.as_ref() == Some(&claim.claim_id)).unwrap();
+    let proof = claims::WriterExitProof { incarnation: AttachmentReference {
+        run_id: worker.clone(), attachment_id: attachment.attachment_id.clone(), attachment_epoch: attachment.epoch,
+    }, claim_revision: claim.revision, checkout: old.checkout.clone(), machine_id: attachment.machine_id.clone().unwrap(),
+        previous_kernel_boot_id: attachment.process.as_ref().unwrap().kernel_boot_id.clone().unwrap(),
+        observed_kernel_boot_id: "kernel-two".into(), all_consumers_absent: true, basis: claims::ExitBasis::Reboot };
+    let response = fixture.service.mutate_resolved(&supervisor, OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: None, action: replacement_action(&root, &task, &old),
+    }, &ResolvedMutationInput { writer_exit_proof: Some(proof), ..Default::default() }).unwrap();
+    let OrchestrationActionResult::WorkerReplaced { start, placement, .. } = response.result else { unreachable!() };
+    assert_eq!(placement, ReplacementPlacement::SameCheckout);
+    let successor = fixture.run(&start.run_id);
+    assert_eq!(successor.checkout, old.checkout);
+    assert_eq!(successor.checkout_claim_id, old.checkout_claim_id);
+    assert_eq!(successor.stage, RunStage::Starting);
+    assert_eq!(serde_json::to_value(&fixture.run(&worker).attachment).unwrap(), serde_json::to_value(&old.attachment).unwrap());
+    let claim = fixture.state().checkout_claims.into_iter().find(|claim| successor.checkout_claim_id.as_ref() == Some(&claim.claim_id)).unwrap();
+    assert_eq!(claim.holder.unwrap().run_id, successor.run_id);
+}
+
+#[test]
+fn first_credentialed_call_can_claim_before_physical_receipt_without_late_stage_reset() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Fast neutral harness");
+    let _supervisor = fixture.root_actor(&root);
+    let worker = fixture.start(&root, &task);
+    let mut actor = fixture.launch_tab(&worker);
+    let physical = fixture.run(&worker).attachment.unwrap();
+    fixture.seed_run(&worker, |run| {
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.location = None;
+        attachment.process = None;
+        attachment.shell = None;
+        attachment.state = AttachmentState::Connecting;
+        run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchIntent;
+    });
+    caller_mut(&mut actor).conversation = None;
+    fixture.service.ensure_registered(match &actor { Actor::Agent(caller) => caller, _ => unreachable!() }).unwrap();
+    assert_eq!(fixture.run(&worker).stage, RunStage::Working);
+    let generation = ownership(&fixture, &root, &task).generation;
+    fixture.service.record_dispatch(&worker, DispatchUpdate::TabReceipt {
+        location: physical.location.unwrap(), launch_shell_identity: physical.shell, process_scope: None,
+    }).unwrap();
+    let receipt = fixture.run(&worker);
+    assert_eq!(receipt.stage, RunStage::Working);
+    assert_eq!(ownership(&fixture, &root, &task).generation, generation);
+    assert!(receipt.attachment.as_ref().unwrap().conversation.is_none());
+    let bytes = fixture.state_bytes();
+    fixture.service.record_launch_pending(&receipt).unwrap();
+    assert_eq!(fixture.state_bytes(), bytes);
+}
+
+fn latched_staging_worker(fixture: &Fixture) -> (String, Task, String, Run) {
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "One terminal placement");
+    let _supervisor = fixture.root_actor(&root);
+    let worker = fixture.start(&root, &task);
+    fixture.setup(&worker);
+    let _actor = fixture.launch_tab(&worker);
+    fixture.seed_run(&worker, |run| {
+        let source = run.attachment.as_ref().unwrap().location.as_ref().unwrap();
+        let dispatch = run.dispatch.as_mut().unwrap();
+        dispatch.latch = Some(AgentLaunchReceipt { latch: "/private/test.fifo".into(), nonce: "nonce".into(),
+            latch_device: "1".into(), latch_inode: "2".into() });
+        dispatch.latch_state = Some(AgentLatchState::Awaiting);
+        dispatch.staging_workspace_id = Some(source.workspace_id.clone());
+        let setup = run.setup.as_mut().unwrap();
+        setup.operation_id = Some(id());
+        setup.generation = Some(1);
+        setup.ownership = Some(cockpit_protocol::projects::WorkspaceCheckoutOwnership::OwnedWorktree);
+    });
+    let staged = fixture.run(&worker);
+    (root, task, worker, staged)
+}
+
+fn moved_receipts(staged: &Run) -> (RunLocation, SetupSummary) {
+    let mut location = staged.attachment.as_ref().unwrap().location.clone().unwrap();
+    location.workspace_id = "actual-owned-space".into();
+    location.tab_id = "actual-moved-tab".into();
+    location.pane_id = "actual-moved-pane".into();
+    let mut setup = staged.setup.clone().unwrap();
+    setup.workspace_id = Some(location.workspace_id.clone());
+    (location, setup)
+}
+
+#[test]
+fn durable_unknown_move_reconciles_exact_terminal_but_never_resends() {
+    let fixture = Fixture::new();
+    let (_root, _task, worker, staged) = latched_staging_worker(&fixture);
+    let source = staged.attachment.as_ref().unwrap().location.clone().unwrap();
+    let move_id = id();
+    assert!(fixture.service.record_move_intent(&staged, source.clone(), &move_id).unwrap());
+    let intent = fixture.run(&worker);
+    let bytes = fixture.state_bytes();
+    assert!(!fixture.service.record_move_intent(&staged, source.clone(), &move_id).unwrap());
+    assert_eq!(fixture.state_bytes(), bytes);
+    assert!(fixture.service.record_move_unknown(&intent, ErrorResponse { code: "move_outcome_unknown".into(), message: "Adapter response was lost".into() }).unwrap());
+    let unknown = fixture.run(&worker);
+    let bytes = fixture.state_bytes();
+    assert!(!fixture.service.record_move_intent(&unknown, source.clone(), &id()).unwrap());
+    assert_eq!(fixture.state_bytes(), bytes);
+    let (location, setup) = moved_receipts(&staged);
+    assert!(fixture.service.record_placement(&unknown, location.clone(), setup).unwrap());
+    let placed = fixture.run(&worker);
+    assert_eq!(placed.dispatch.as_ref().unwrap().step, DispatchStep::Placed);
+    assert_eq!(placed.dispatch.as_ref().unwrap().source_location.as_ref().unwrap().workspace_id, source.workspace_id);
+    assert_eq!(placed.attachment.as_ref().unwrap().location.as_ref().unwrap().terminal_id, source.terminal_id);
+    assert_eq!(placed.attachment.as_ref().unwrap().location.as_ref().unwrap().workspace_id, location.workspace_id);
+    let bytes = fixture.state_bytes();
+    assert!(fixture.service.record_dispatch(&worker, DispatchUpdate::TabReceipt {
+        location: source, launch_shell_identity: staged.attachment.as_ref().unwrap().shell.clone(), process_scope: None,
+    }).is_err());
+    assert_eq!(fixture.state_bytes(), bytes);
+}
+
+#[test]
+fn moved_placement_refuses_foreign_terminal_changed_checkout_and_superseded_epoch() {
+    let fixture = Fixture::new();
+    let (root, task, worker, staged) = latched_staging_worker(&fixture);
+    let source = staged.attachment.as_ref().unwrap().location.clone().unwrap();
+    assert!(fixture.service.record_move_intent(&staged, source, &id()).unwrap());
+    let intent = fixture.run(&worker);
+    for mode in 0..3 {
+        let (mut location, mut setup) = moved_receipts(&staged);
+        if mode == 0 { location.terminal_id = Some("foreign-terminal".into()); }
+        if mode == 1 { setup.checkout_path.push_str("-foreign"); }
+        if mode == 2 { setup.operation_id = Some(id()); }
+        let bytes = fixture.state_bytes();
+        assert!(fixture.service.record_placement(&intent, location, setup).is_err());
+        assert_eq!(fixture.state_bytes(), bytes);
+    }
+    let supervisor = fixture.root_actor(&root);
+    fixture.apply(&supervisor, unassign(&root, &task, 0)).unwrap();
+    let (location, setup) = moved_receipts(&staged);
+    let bytes = fixture.state_bytes();
+    assert!(!fixture.service.record_placement(&intent, location, setup).unwrap());
+    assert_eq!(fixture.state_bytes(), bytes);
+}
+
+#[test]
+fn latch_effect_intent_is_at_most_once_except_proven_reader_absence_and_preserves_fast_registration() {
+    let fixture = Fixture::new();
+    let (_root, _task, worker, staged) = latched_staging_worker(&fixture);
+    let source = staged.attachment.as_ref().unwrap().location.clone().unwrap();
+    assert!(fixture.service.record_move_intent(&staged, source, &id()).unwrap());
+    let (location, setup) = moved_receipts(&staged);
+    assert!(fixture.service.record_placement(&fixture.run(&worker), location, setup).unwrap());
+    let placed = fixture.run(&worker);
+    let intent = fixture.service.record_latch_release_intent(&placed, None).unwrap().unwrap();
+    let bytes = fixture.state_bytes();
+    assert!(fixture.service.record_latch_release_intent(&intent, None).unwrap().is_none());
+    assert_eq!(fixture.state_bytes(), bytes);
+    assert!(fixture.service.record_latch_reader_absent(&intent).unwrap());
+    let second_intent = fixture.service.record_latch_release_intent(&fixture.run(&worker), None).unwrap().unwrap();
+    assert!(fixture.service.record_latch_release_unknown(&second_intent, ErrorResponse {
+        code: "latch_write_unknown".into(), message: "Write completion unavailable".into(),
+    }).unwrap());
+    let bytes = fixture.state_bytes();
+    assert!(fixture.service.record_latch_release_intent(&fixture.run(&worker), None).unwrap().is_none());
+    assert_eq!(fixture.state_bytes(), bytes);
+
+    let fixture = Fixture::new();
+    let (root, task, worker, staged) = latched_staging_worker(&fixture);
+    let source = staged.attachment.as_ref().unwrap().location.clone().unwrap();
+    fixture.service.record_move_intent(&staged, source, &id()).unwrap();
+    let (location, setup) = moved_receipts(&staged);
+    fixture.service.record_placement(&fixture.run(&worker), location, setup).unwrap();
+    let intent = fixture.service.record_latch_release_intent(&fixture.run(&worker), None).unwrap().unwrap();
+    let mut actor = fixture.neutral_actor(&worker);
+    caller_mut(&mut actor).conversation = None;
+    fixture.service.ensure_registered(match &actor { Actor::Agent(caller) => caller, _ => unreachable!() }).unwrap();
+    assert!(fixture.service.record_latch_released(&intent).unwrap());
+    let final_run = fixture.run(&worker);
+    assert_eq!(final_run.stage, RunStage::Working);
+    assert_eq!(final_run.dispatch.as_ref().unwrap().step, DispatchStep::Launched);
+    assert_eq!(final_run.dispatch.as_ref().unwrap().latch_state, Some(AgentLatchState::Released));
+    assert_eq!(ownership(&fixture, &root, &task).owner.unwrap().run_id, worker);
+    let bytes = fixture.state_bytes();
+    assert!(!fixture.service.record_latch_released(&intent).unwrap());
+    assert_eq!(fixture.state_bytes(), bytes);
+}
+
+#[test]
+fn root_placement_sets_only_actual_project_space_and_preserves_explicit_source() {
+    for explicit in [None, Some("explicit-project-space")] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        fixture.setup(&root);
+        let _actor = fixture.launch_tab(&root);
+        fixture.seed_run(&root, |run| {
+            run.project.as_mut().unwrap().source_workspace_id = explicit.map(str::to_owned);
+            let staging = run.attachment.as_ref().unwrap().location.as_ref().unwrap().workspace_id.clone();
+            let dispatch = run.dispatch.as_mut().unwrap();
+            dispatch.latch = Some(AgentLaunchReceipt { latch: "/private/root.fifo".into(), nonce: "root-nonce".into(),
+                latch_device: "1".into(), latch_inode: "2".into() });
+            dispatch.latch_state = Some(AgentLatchState::Awaiting);
+            dispatch.staging_workspace_id = Some(staging);
+            let setup = run.setup.as_mut().unwrap();
+            setup.operation_id = Some(id());
+            setup.generation = Some(1);
+            setup.ownership = Some(cockpit_protocol::projects::WorkspaceCheckoutOwnership::OwnedWorktree);
+        });
+        let staged = fixture.run(&root);
+        let source = staged.attachment.as_ref().unwrap().location.clone().unwrap();
+        fixture.service.record_move_intent(&staged, source.clone(), &id()).unwrap();
+        let (location, setup) = moved_receipts(&staged);
+        fixture.service.record_placement(&fixture.run(&root), location.clone(), setup).unwrap();
+        let placed = fixture.run(&root);
+        assert_eq!(placed.project.as_ref().unwrap().source_workspace_id.as_deref(), Some(explicit.unwrap_or(&location.workspace_id)));
+        assert_eq!(placed.dispatch.as_ref().unwrap().staging_workspace_id.as_deref(), Some(source.workspace_id.as_str()));
+        assert_ne!(placed.attachment.as_ref().unwrap().location.as_ref().unwrap().workspace_id, source.workspace_id);
+    }
+}
+
+#[test]
+fn accepted_dependency_outputs_are_observed_without_turning_reads_into_dispatch_gates() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (parent, parent_run, worker) = fixture.working(&root);
+    let child = fixture.create_task(&root, "Read prerequisite outputs");
+    let supervisor = fixture.root_actor(&root);
+    fixture.apply(&supervisor, OrchestrationAction::TaskDependenciesSet {
+        root_id: root.clone(), task_id: child.task_id.clone(),
+        expected_task_revision: child.task_revision.clone(),
+        expected_doc_revision: task_document_revision(&fixture, &root),
+        depends_on: vec![parent.task_id.clone()],
+    }).unwrap();
+    let revision = task_document_revision(&fixture, &root);
+    assert!(fixture.service.accepted_dependency_run_ids(SESSION, &root, &child.task_id, &revision).unwrap().is_empty());
+    fixture.apply(&worker, fixture.successful_result(&worker)).unwrap();
+    fixture.apply(&supervisor, OrchestrationAction::Accept {
+        run_id: parent_run.clone(), expected_task_revision: parent.task_revision.clone(),
+    }).unwrap();
+    let revision = task_document_revision(&fixture, &root);
+    assert_eq!(fixture.service.accepted_dependency_run_ids(SESSION, &root, &child.task_id, &revision).unwrap(), vec![parent_run.clone()]);
+    let child = fixture.task(&root, &child.task_id);
+    fixture.apply(&supervisor, schedule_action(&root, &child)).unwrap();
+    let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    let snapshot = fixture.service.schedule_input_requirements(&candidate).unwrap();
+    assert_eq!(snapshot.accepted_sources[0].run_id, parent_run);
+    assert!(matches!(snapshot.accepted_sources[0].source_output, SourceOutput::NonCode { .. }));
+    assert!(fixture.service.scheduled_start(&candidate, &ResolvedMutationInput {
+        project: Some(fixture.project()), ..Default::default()
+    }).unwrap().is_some(), "Accepted non-code output does not invent a Git ancestry prerequisite");
+}
+
+#[test]
+fn same_repository_code_input_is_pinned_and_rechecked_inside_schedule_publication() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (parent, parent_run, worker) = fixture.working(&root);
+    let supervisor = fixture.root_actor(&root);
+    fixture.apply(&worker, fixture.successful_result(&worker)).unwrap();
+    fixture.apply(&supervisor, OrchestrationAction::Accept {
+        run_id: parent_run.clone(), expected_task_revision: parent.task_revision.clone(),
+    }).unwrap();
+    // This consumer fixture exercises the domain's host-evidence fence, not
+    // Git execution. Main's live scenario proves actual commit ancestry.
+    let project = fixture.project();
+    fixture.seed_run(&parent_run, |run| {
+        let result = run.result.as_mut().unwrap();
+        let output = SourceOutput::Code {
+            repository_key: project.key.clone(), checkout_key: "accepted-checkout".into(),
+            base_commit: "a".repeat(40), head_commit: "b".repeat(40),
+            commits: vec!["b".repeat(40)], task_revision: parent.task_revision.clone(),
+            result_message_id: result.message_id.clone(), focused_checks: vec![],
+        };
+        result.source_output = Some(output.clone());
+        run.source_output = Some(output);
+    });
+    let child = fixture.create_task(&root, "Consume actual code output");
+    fixture.apply(&supervisor, OrchestrationAction::TaskDependenciesSet {
+        root_id: root.clone(), task_id: child.task_id.clone(),
+        expected_task_revision: child.task_revision.clone(),
+        expected_doc_revision: task_document_revision(&fixture, &root),
+        depends_on: vec![parent.task_id.clone()],
+    }).unwrap();
+    let child = fixture.task(&root, &child.task_id);
+    let mut action = schedule_action(&root, &child);
+    if let OrchestrationAction::TaskSchedule { target, .. } = &mut action {
+        *target = Some(DispatchTarget::SpaceWorktree {
+            workspace_id: "input-project-space".into(), branch: None, base_ref: None,
+        });
+    }
+    fixture.apply(&supervisor, action).unwrap();
+    let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    let snapshot = fixture.service.schedule_input_requirements(&candidate).unwrap();
+    let mut resolved = ResolvedMutationInput { project: Some(project), ..Default::default() };
+    let before = fixture.state_bytes();
+    assert_eq!(fixture.service.scheduled_start(&candidate, &resolved).unwrap_err().code, "dependency_input_unavailable");
+    assert_eq!(fixture.state_bytes(), before, "An unmet materialized input cannot publish an attempt");
+    resolved.schedule_inputs = Some(ScheduleInputFacts {
+        snapshot, base_commit: Some("c".repeat(40)), verified_code_runs: vec![parent_run.clone()],
+    });
+    fixture.seed_run(&parent_run, |run| {
+        for output in [&mut run.source_output, &mut run.result.as_mut().unwrap().source_output] {
+            if let Some(SourceOutput::Code { head_commit, .. }) = output { *head_commit = "d".repeat(40); }
+        }
+    });
+    let before = fixture.state_bytes();
+    assert_eq!(fixture.service.scheduled_start(&candidate, &resolved).unwrap_err().code, "dependency_input_changed");
+    assert_eq!(fixture.state_bytes(), before);
+    resolved.schedule_inputs.as_mut().unwrap().snapshot = fixture.service.schedule_input_requirements(&candidate).unwrap();
+    let started = fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap();
+    assert!(matches!(fixture.run(&started.run_id).target,
+        Some(DispatchTarget::SpaceWorktree { base_ref: Some(commit), .. }) if commit == "c".repeat(40)));
+}
+
+#[test]
+fn resumed_worker_missing_space_rebinds_exact_epoch_without_promoting_borrowed_checkout() {
+    for borrowed in [false, true] {
+        for authorized in [false, true] {
+            let fixture = Fixture::new();
+            let (_, _, worker, _) = latched_staging_worker(&fixture);
+            let operation = id();
+            let original_creator = if borrowed { None } else { Some(id()) };
+            let new_attachment_id = id();
+            fixture.seed_state(|state| {
+                for credential in state.credentials.iter_mut().filter(|credential| credential.run_id == worker) {
+                    credential.state = credentials::CredentialState::Revoked;
+                }
+                for claim in state.checkout_claims.iter_mut().filter(|claim|
+                    claim.holder.as_ref().is_some_and(|holder| holder.run_id == worker)) {
+                    let holder = claim.holder.as_mut().unwrap();
+                    holder.attachment_id = new_attachment_id.clone();
+                    holder.attachment_epoch = 2;
+                    claim.transition_operation_id = Some(operation.clone());
+                }
+                let run = state.runs.iter_mut().find(|run| run.run_id == worker).unwrap();
+                run.attachment.as_mut().unwrap().epoch = 2;
+                run.attachment.as_mut().unwrap().attachment_id = new_attachment_id.clone();
+                let setup = run.setup.as_mut().unwrap();
+                setup.operation_id = original_creator.clone();
+                setup.generation = if borrowed { None } else { Some(1) };
+                setup.workspace_id = Some("missing-retained-space".into());
+                setup.ownership = if borrowed { None } else {
+                    Some(cockpit_protocol::projects::WorkspaceCheckoutOwnership::OwnedWorktree)
+                };
+                if authorized {
+                    run.resume = Some(ResumeRecord { operation_id: operation.clone(), run_id: worker.clone(),
+                        previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+                        phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now() });
+                    let at = now();
+                    state.operations.push(store::DurableOperationRecord {
+                        operation_id: operation.clone(), actor_run_id: Some(run.root_id.clone()),
+                        principal_key: "authorized-resume-fixture".into(), root_id: run.root_id.clone(),
+                        kind: store::DurableOperationKind::RunResume, request_digest: "exact-cutover-fixture".into(),
+                        run_id: Some(worker.clone()), resume_operation_id: Some(operation.clone()),
+                        result: None, effect_receipts: Vec::new(), created_at: at.clone(), updated_at: at,
+                    });
+                }
+            });
+            let staged = fixture.run(&worker);
+            if authorized {
+                assert!(fixture.service.resume_startup_pending(&staged).unwrap());
+                let mut observed = staged.attachment.clone().unwrap();
+                observed.state = AttachmentState::Connected;
+                for wrong in 0..4 {
+                    let mut foreign = observed.clone();
+                    match wrong {
+                        0 => foreign.process.as_mut().unwrap().pid += 1,
+                        1 => foreign.shell.as_mut().unwrap().argv_digest = "foreign-shell".into(),
+                        2 => foreign.machine_id = Some("foreign-machine".into()),
+                        _ => foreign.epoch += 1,
+                    }
+                    let before = fixture.state_bytes();
+                    assert_eq!(fixture.service.advance_resume_observed(&worker, &operation,
+                        &ResolvedMutationInput { attachment_observation: Some(foreign), ..Default::default() })
+                        .unwrap_err().code, "attachment_conflict");
+                    assert_eq!(fixture.state_bytes(), before);
+                }
+                let before = fixture.state_bytes();
+                let waiting = fixture.service.advance_resume_observed(&worker, &operation,
+                    &ResolvedMutationInput { attachment_observation: Some(observed), ..Default::default() }).unwrap();
+                assert!(waiting.duplicate);
+                assert_eq!(waiting.resume.phase, ResumePhase::Launching);
+                assert_eq!(fixture.state_bytes(), before, "Waiting FIFO presence is not failed semantic registration");
+            }
+            let source = staged.attachment.as_ref().unwrap().location.clone().unwrap();
+            let move_operation = id();
+            fixture.service.record_move_intent(&staged, source, &move_operation).unwrap();
+            let (location, setup) = moved_receipts(&staged);
+            let before = fixture.state_bytes();
+            let outcome = fixture.service.record_placement(&fixture.run(&worker), location.clone(), setup);
+            if authorized {
+                assert!(outcome.unwrap());
+                let placed = fixture.run(&worker);
+                assert_eq!(placed.setup.as_ref().unwrap().operation_id, original_creator);
+                assert_eq!(placed.setup.as_ref().unwrap().ownership, staged.setup.as_ref().unwrap().ownership);
+                assert_eq!(placed.setup.as_ref().unwrap().workspace_id.as_ref(), Some(&location.workspace_id));
+                assert_eq!(placed.checkout, staged.checkout);
+                assert_eq!(placed.project, staged.project);
+                assert_eq!(placed.dispatch.as_ref().unwrap().move_operation_id.as_ref(), Some(&move_operation));
+                let intent = fixture.service.record_latch_release_intent(&placed, None).unwrap().unwrap();
+                fixture.service.record_latch_released(&intent).unwrap();
+                let released = fixture.run(&worker);
+                let mut observed = released.attachment.clone().unwrap();
+                observed.state = AttachmentState::Connected;
+                let before = fixture.state_bytes();
+                assert!(fixture.service.advance_resume_observed(&worker, &operation,
+                    &ResolvedMutationInput { attachment_observation: Some(observed), ..Default::default() })
+                    .unwrap().duplicate);
+                assert_eq!(fixture.state_bytes(), before, "The released-to-first-CLI claim window is still startup");
+                let mut caller = fixture.neutral_actor(&worker);
+                caller_mut(&mut caller).conversation = None;
+                // Ordinary CLI calls run CliRuntime::open's private-credential
+                // claim before the low-level mutation. Fixture::apply alone
+                // intentionally exercises that low-level authority boundary.
+                let Actor::Agent(agent) = &caller else { unreachable!() };
+                fixture.service.job_registration_run(agent).unwrap();
+                fixture.service.ensure_registered(agent).unwrap();
+                fixture.apply(&caller, report(ReportKind::Progress, None, None)).unwrap();
+                assert_eq!(fixture.run(&worker).resume.as_ref().unwrap().phase, ResumePhase::Connected);
+                assert_eq!(fixture.run(&worker).stage, RunStage::Working);
+            } else {
+                assert_eq!(outcome.unwrap_err().code, "placement_receipt_conflict");
+                assert_eq!(fixture.state_bytes(), before);
+            }
+        }
+    }
 }

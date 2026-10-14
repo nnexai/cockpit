@@ -28,6 +28,7 @@ import type {
   WidgetSummary,
 } from "../protocol/generated/v1";
 import { App } from "./App";
+import { orchestrationFixture, runFixture, taskFixture } from "./supervisor/testFixtures";
 import { FILE_NAVIGATION_EVENT } from "./input/fileNavigation";
 
 const terminalReadyCallbacks = vi.hoisted(() => new Map<string, () => void>());
@@ -641,7 +642,7 @@ describe("mounted App mutation and session ordering", () => {
     vi.mocked(fixture.client.projectConfiguration).mockResolvedValue({
       version: 1, repository_roots: [], worktree_root: "", state_root: "", cache_root: "",
       library_root: "/data/cockpit/library", notes_root: "/data/cockpit/notes", branch_template: "", checkout_template: "", providers: [],
-      orchestration: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] },
+      orchestration: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, initial_prompt_args: null, hook_args: null, max_parallel: 4, process_scope: "auto", inbox_prompt_hints: false, routes: [] },
       limits: { catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
         context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,
         library_folder_files: 1, library_folder_bytes: 1, library_file_bytes: 1, library_space_pages: 1,
@@ -1228,125 +1229,143 @@ describe("Library view presentation lifecycle", () => {
   });
 });
 
-describe("merged local workarea lifecycle", () => {
-  it("starts from Commands in the current Space through the same single-entry workarea without changing Herdr focus", async () => {
-    const fixture = new AppFixture();
-    vi.mocked(fixture.client.orchestrationSnapshot).mockResolvedValue({
-      state_store_id: "b6a4d026-71f1-4e5a-8c38-571d314b73a3", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
-      session_id: "session-1", revision: 1, tasks_token: "tasks-1",
-      roots: [], board: null, runs: [], messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
-      runtime: { status: "fresh", endpoint_identity: "fixture-endpoint", observed_at: "2026-10-06T12:00:00Z", runs: [] },
-    });
+describe("liaison conversation and compact task rail", () => {
+  function bindLiaison(fixture: AppFixture, current: () => OrchestrationSnapshot) {
+    vi.mocked(fixture.client.orchestrationSnapshot).mockImplementation(async () => current());
     vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
+    vi.mocked(fixture.client.orchestrationProjectRootLookup).mockImplementation(async () => ({
+      status: "resolved", project: { key: "project", source: { kind: "directory", root: "/project" }, repository_id: null, source_workspace_id: "space-1" },
+      lookup_revision: current().revision, preferred_root_id: current().runs.length ? "root" : null,
+      roots: current().runs.length ? [{ root_id: "root", connection: "connected", resume: "available", cause: null, updated_at: "2026-10-07T12:00:00Z" }] : [],
+    }));
+  }
+  it("starts a real liaison from Commands and opens its actual terminal tab", async () => {
+    const fixture = new AppFixture();
+    let current = orchestrationFixture([], []);
+    bindLiaison(fixture, () => current);
     vi.mocked(fixture.client.orchestrationMutate).mockImplementation(async request => {
       if (request.action.action !== "supervisor_start") throw new Error("Expected supervisor start");
-      return { revision: 2, result: { result: "supervisor_started", start: { root_id: "new-root", outcome: "created", operation_id: request.action.operation_id, resume_operation_id: null, duplicate: false } } };
+      current = { ...orchestrationFixture(), revision: 2 };
+      return { revision: 2, result: { result: "supervisor_started", start: { root_id: "root", outcome: "created", operation_id: request.action.operation_id, resume_operation_id: null, duplicate: false } } };
     });
     await mount(fixture);
-    const selectedBefore = selectedLeaf();
-    fixture.focusCalls.mockClear();
-    expect(container.querySelector('button[aria-label="Start supervisor"]')).toBeNull();
-    await openCommand("Start agent");
+    const beforeStart = snapshot("session-1");
+    beforeStart.tabs = beforeStart.tabs.filter(tab => tab.id === "tab-1");
+    beforeStart.panes = beforeStart.panes.filter(pane => pane.id === "pane-1");
+    beforeStart.spaces[0] = { ...beforeStart.spaces[0], tab_count: 1, pane_count: 1 };
+    fixture.emitSnapshot("session-1", 1, 2, beforeStart);
     await settle();
-    expect(fixture.client.orchestrationMutate).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toEqual({
-      action: "supervisor_start", operation_id: expect.any(String), mode: "reuse_or_resume", target: { target: "existing_space", workspace_id: snapshot("session-1").focused_space_id }, label: null, selected_root_id: null, expected_project_key: null,
-    });
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await openCommand("Start supervisor");
+    await settle();
+    expect(fixture.client.orchestrationMutate).toHaveBeenCalledOnce();
+    const created = snapshot("session-1");
+    created.tabs[1].label = "ck-root-1-1";
+    created.panes[1].title = "ck-root-1-1";
+    // Start requests a resync: its replacement stream begins with sequence 1.
+    // First publish physical membership without echoing the requested focus.
+    fixture.emitSnapshot("session-1", 1, 1, created);
+    await settle();
+    await vi.waitFor(() => expect(terminal("pane-2")).not.toBeNull());
+    readyTerminal("pane-2");
+    const focused = snapshot("session-1", "tab-2", "pane-2");
+    focused.tabs[1].label = "ck-root-1-1";
+    focused.panes[1].title = "ck-root-1-1";
+    fixture.emitSnapshot("session-1", 1, 2, focused);
+    await settle();
+    expect(selectedTab()).toBe("Tab 2: Supervisor");
+    expect(terminal("pane-2")).not.toBeNull();
+    expect(selectedLeaf()).toBe("pane-2");
+    expect(leaf("pane-2").querySelector(".pane-title")?.textContent).toBe("Liaison");
+    expect(document.activeElement).toBe(terminal("pane-2"));
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Tasks"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Task overview"]')).toBeNull();
     expect(fixture.client.planWorkspace).not.toHaveBeenCalled();
-    expect(fixture.mutateCalls).not.toHaveBeenCalled();
-    expect(fixture.focusCalls).not.toHaveBeenCalled();
-    const supervisor = container.querySelector<HTMLElement>('section[aria-label="Supervisor"]')!;
-    expect(supervisor.hidden).toBe(false);
-    click(button("Supervisor"));
-    await settle();
-    expect(supervisor.hidden).toBe(true);
-    expect(terminal("pane-1")).not.toBeNull();
-    expect(selectedLeaf()).toBe(selectedBefore);
-    expect(fixture.focusCalls).not.toHaveBeenCalled();
-    expect(fixture.mutateCalls).not.toHaveBeenCalled();
   });
-  it("switches Notes, Supervisor and Library without changing Herdr focus or pane selection", async () => {
-    const fixture = new AppFixture();
-    emptyLibrary(fixture);
-    vi.mocked(fixture.client.notes).mockRejectedValue(new CockpitClientError("http_error", "No notes are bound", { operationCode: "notes_unbound" }));
-    vi.mocked(fixture.client.orchestrationSnapshot).mockResolvedValue({
-      state_store_id: "b6a4d026-71f1-4e5a-8c38-571d314b73a3", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
-      session_id: "session-1", revision: 1, tasks_token: "tasks-1",
-      roots: [], board: null, runs: [], messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
-      runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "No runtime observation" } },
-    });
-    vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
+  it("reuses a live liaison without starting another process", async () => {
+    const fixture = new AppFixture(), current = orchestrationFixture();
+    bindLiaison(fixture, () => current);
     await mount(fixture);
-    fixture.focusCalls.mockClear();
-
-    act(() => button("Open Notes").focus());
-    click(button("Open Notes"));
+    await openCommand("Start supervisor");
     await settle();
-    expect(container.querySelector('section[aria-label="Notes"]')).not.toBeNull();
-    expect(terminal("pane-1")).toBeNull();
-    click(button("Close Notes"));
-    await settle();
-    expect(document.activeElement).toBe(button("Open Notes"));
-    click(button("Open Notes"));
-    await settle();
-
-    click(button("Supervisor"));
-    await settle();
-    const supervisor = container.querySelector<HTMLElement>('section[aria-label="Supervisor"]')!;
-    expect(supervisor.hidden).toBe(false);
-    expect(container.querySelector('section[aria-label="Notes"]')).toBeNull();
-
-    click(button("Library"));
-    await settle();
-    expect(supervisor.hidden).toBe(true);
-    expect(container.querySelector('section[aria-label="Library"]')).not.toBeNull();
-
-    await openCommand("Open Notes");
-    expect(container.querySelector('section[aria-label="Library"]')).toBeNull();
-    expect(container.querySelector('section[aria-label="Notes"]')).not.toBeNull();
-    click(button("Close Notes"));
-    await settle();
-    expect(document.activeElement).toBe(button("Commands"));
-    expect(selectedLeaf()).toBe("pane-1");
-    expect(fixture.focusCalls).not.toHaveBeenCalled();
-    expect(fixture.mutateCalls).not.toHaveBeenCalled();
-
-    click(button("Supervisor"));
-    await settle();
-    expect(supervisor.hidden).toBe(false);
-    click(button("Supervisor"));
-    await settle();
-    expect(supervisor.hidden).toBe(true);
-    expect(document.activeElement).toBe(terminal("pane-1"));
-    expect(selectedLeaf()).toBe("pane-1");
-    expect(fixture.focusCalls).not.toHaveBeenCalled();
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+    expect(fixture.focusCalls).toHaveBeenCalledWith("session-1", { kind: "pane", target_id: "pane-2" });
   });
-
-  it("ignores a late Supervisor observation after switching to Notes", async () => {
-    const fixture = new AppFixture();
-    vi.mocked(fixture.client.notes).mockRejectedValue(new CockpitClientError("http_error", "No notes are bound", { operationCode: "notes_unbound" }));
-    const observation = deferred<OrchestrationSnapshot>();
-    vi.mocked(fixture.client.orchestrationSnapshot).mockReturnValue(observation.promise);
+  it("shares one observer, keeps one terminal attachment through the overview and returns keyboard control", async () => {
+    const fixture = new AppFixture(), current = orchestrationFixture([taskFixture("Work")]);
+    bindLiaison(fixture, () => current);
     await mount(fixture);
-    fixture.focusCalls.mockClear();
-    click(button("Supervisor"));
+    fixture.emitSnapshot("session-1", 1, 2, snapshot("session-1", "tab-2", "pane-2"));
+    await settle(); readyTerminal("pane-2"); await settle();
+    const conversation = terminal("pane-2"), reads = vi.mocked(fixture.client.orchestrationSnapshot).mock.calls.length;
+    const attaches = vi.mocked(fixture.client.openTerminal).mock.calls.filter(([request]) => request.pane_id === "pane-2").length;
+    expect(container.querySelector('[aria-label="Tasks"]')).not.toBeNull();
+    click(button("Open overview")); await settle();
+    expect(container.querySelector('[aria-label="Task overview"]')).not.toBeNull();
+    expect(document.activeElement).toBe(button("‹ Conversation"));
+    expect(terminal("pane-2")).toBe(conversation);
+    click(button("Graph")); await settle();
+    expect(container.querySelector('[aria-label="Task dependency graph"]')).not.toBeNull();
+    click(button("‹ Conversation")); await settle();
+    expect(document.activeElement).toBe(conversation);
+    expect(vi.mocked(fixture.client.orchestrationSnapshot).mock.calls.length).toBe(reads);
+    expect(vi.mocked(fixture.client.openTerminal).mock.calls.filter(([request]) => request.pane_id === "pane-2")).toHaveLength(attaches);
+  });
+  it("does not turn worker needs-input or Herdr blocked status into a human decision hint", async () => {
+    const fixture = new AppFixture();
+    const worker = runFixture({ run_id: "worker", kind: "worker", parent_run_id: "root", task_id: "task", last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Routine question", plan: null, source_output: null, at: "2026-10-07T12:00:00Z" } });
+    const current = orchestrationFixture([taskFixture("Work")], [runFixture(), worker]);
+    current.questions = [{ run_id: "worker", question_message_id: "question", asked_at: "2026-10-07T12:00:00Z", receipt: { status: "unresolved" } }];
+    if (current.runtime.status === "fresh") current.runtime.runs[0].agent_status = "blocked";
+    bindLiaison(fixture, () => current);
+    await mount(fixture);
+    expect(container.querySelector(".liaison-tab-dot")).toBeNull();
+    expect(container.querySelector('[role="status"][aria-live="polite"]')?.textContent).not.toContain("waiting for you");
+  });
+  it("shows and clears only the root NeedsInput hint without moving focus or sending an Answer", async () => {
+    const fixture = new AppFixture(), pending: Deferred<OrchestrationWaitResponse>[] = [];
+    let current = orchestrationFixture([], [runFixture({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Human decision", plan: null, source_output: null, at: "2026-10-07T12:00:00Z" } })]);
+    current.questions = [{ run_id: "root", question_message_id: "question", asked_at: "2026-10-07T12:00:00Z", receipt: { status: "unresolved" } }];
+    bindLiaison(fixture, () => current);
+    vi.mocked(fixture.client.orchestrationWait).mockImplementation(() => { const wait = deferred<OrchestrationWaitResponse>(); pending.push(wait); return wait.promise; });
+    await mount(fixture);
+    const input = document.activeElement;
+    expect(container.querySelector(".liaison-tab-dot")).not.toBeNull();
+    expect(container.querySelector('[aria-label="Tasks"]')).toBeNull();
+    expect(container.querySelector("textarea")).toBeNull();
+    current = { ...current, revision: 2, tasks_token: "cleared", questions: [{ ...current.questions[0], receipt: { status: "answer_acknowledged", answer: { sender: { type: "run", run_id: "root" }, message_id: "answer", seq: 2, stage: "acked", created_at: "2026-10-07T12:00:01Z", acked_at: "2026-10-07T12:00:01Z" } } }] };
+    await act(async () => pending.at(-1)!.resolve({ revision: 2, tasks_token: "cleared", changed: true }));
     await settle();
-    click(button("Open Notes"));
-    await settle();
-
-    observation.resolve({
-      state_store_id: "b6a4d026-71f1-4e5a-8c38-571d314b73a3", cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
-      session_id: "session-1", revision: 1, tasks_token: "tasks-1",
-      roots: [], board: null, runs: [], messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
-      runtime: { status: "unavailable", error: { code: "herdr_unavailable", message: "Late observation" } },
+    expect(container.querySelector(".liaison-tab-dot")).toBeNull();
+    expect(document.activeElement).toBe(input);
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+  it("resumes only a disconnected root with an available recovery, even when its old terminal still exists", async () => {
+    const fixture = new AppFixture(), current = orchestrationFixture();
+    bindLiaison(fixture, () => current);
+    vi.mocked(fixture.client.orchestrationProjectRootLookup).mockResolvedValue({
+      status: "resolved", project: { key: "project", source: { kind: "directory", root: "/project" }, repository_id: null, source_workspace_id: "space-1" }, lookup_revision: 1, preferred_root_id: "root",
+      roots: [{ root_id: "root", connection: "disconnected", resume: "available", cause: null, updated_at: "2026-10-07T12:00:00Z" }],
     });
-    await settle();
-    expect(container.querySelector('section[aria-label="Notes"]')).not.toBeNull();
-    expect(container.querySelector<HTMLElement>('section[aria-label="Supervisor"]')?.hidden).toBe(true);
-    expect(fixture.client.orchestrationWait).not.toHaveBeenCalled();
-    expect(fixture.focusCalls).not.toHaveBeenCalled();
-    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+    vi.mocked(fixture.client.orchestrationMutate).mockImplementation(async request => {
+      if (request.action.action !== "run_resume") throw new Error("Expected root resume");
+      current.revision = 2;
+      return { revision: 2, result: { result: "run_resumed", resume: { run_id: "root", duplicate: false, resume: { operation_id: request.action.operation_id, run_id: "root", previous_attachment_epoch: 1, phase: "connected", cause: null, decision_id: null, replacement_attachment_epoch: 1, updated_at: "2026-10-07T12:00:00Z" } } } };
+    });
+    await mount(fixture);
+    click(button("Resume supervisor")); await settle();
+    expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toEqual({ action: "run_resume", run_id: "root", operation_id: expect.any(String), expected_attachment_epoch: 1 });
+  });
+  it("retries an unconfirmed Start with the same operation identity rather than launching another liaison", async () => {
+    const fixture = new AppFixture(), current = orchestrationFixture([], []);
+    bindLiaison(fixture, () => current);
+    vi.mocked(fixture.client.orchestrationMutate).mockRejectedValue(new Error("Response lost"));
+    await mount(fixture);
+    click(button("Start supervisor")); await settle();
+    click(button("Start supervisor")); await settle();
+    const actions = vi.mocked(fixture.client.orchestrationMutate).mock.calls.map(([request]) => request.action);
+    expect(actions).toHaveLength(2);
+    expect(actions[1]).toEqual(actions[0]);
   });
 });
 

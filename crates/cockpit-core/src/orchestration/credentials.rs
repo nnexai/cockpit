@@ -290,31 +290,32 @@ pub(crate) fn validate_job_auth(
 pub(crate) fn validate_registration(
     state: &OrchestrationState, caller: &super::AgentCaller,
 ) -> Result<AuthorizedJob, InspectionError> {
-    super::validate_identity(&caller.conversation.harness)?;
-    super::validate_identity(&caller.conversation.session_id)?;
+    validate_conversation(caller.conversation.as_ref())?;
     let job = validate_auth(state, &caller.auth, AuthPurpose::Registration)?;
     let record = state.credentials.iter().find(|record| record.credential_id == caller.auth.credential_id).expect("validated capability");
-    if record.conversation.as_ref().is_some_and(|bound| bound != &caller.conversation) {
-        return Err(unauthorized());
-    }
     let run = &state.runs[job.run_index];
-    if caller.assignment_generation != job.assignment_generation
+    if conversation_mismatch(record.conversation.as_ref(), caller.conversation.as_ref())
+        || caller.assignment_generation != job.assignment_generation
         || run.assignment_generation != job.assignment_generation
-        || run.launch_config.harness_kind != caller.conversation.harness {
+        || caller.conversation.as_ref().is_some_and(|actual| run.launch_config.harness_kind != actual.harness) {
         return Err(unauthorized());
     }
     let attachment = run.attachment.as_ref().ok_or_else(unauthorized)?;
-    if let Some(bound) = &attachment.conversation {
-        if bound != &caller.conversation { return Err(unauthorized()); }
-        validate_assignment(state, caller, &job)?;
-    } else if job.role == JobRole::Worker {
+    if conversation_mismatch(attachment.conversation.as_ref(), caller.conversation.as_ref()) {
+        return Err(unauthorized());
+    }
+    if job.role == JobRole::Worker {
         let generation = job.assignment_generation.ok_or_else(unauthorized)?;
         let task_id = run.task_id.as_ref().ok_or_else(unauthorized)?;
         let ownership = state.task_ownership.iter()
             .find(|record| record.root_id == run.root_id && &record.task_id == task_id)
             .ok_or_else(unauthorized)?;
-        if ownership.owner.is_some()
-            || ownership.generation.checked_add(1) != Some(generation) {
+        if let Some(owner) = &ownership.owner {
+            if ownership.generation != generation || owner.run_id != run.run_id
+                || conversation_mismatch(owner.conversation.as_ref(), caller.conversation.as_ref()) {
+                return Err(unauthorized());
+            }
+        } else if ownership.generation.checked_add(1) != Some(generation) {
             return Err(unauthorized());
         }
     }
@@ -332,20 +333,18 @@ pub(crate) fn validate_caller(
 pub(crate) fn validate_current_assignment(
     state: &OrchestrationState, caller: &super::AgentCaller, job: &AuthorizedJob,
 ) -> Result<(), InspectionError> {
-    if state.credentials.iter().find(|record| record.credential_id == caller.auth.credential_id)
-        .and_then(|record| record.conversation.as_ref()) != Some(&caller.conversation) {
-        return Err(unauthorized());
-    }
+    let bound = state.credentials.iter().find(|record| record.credential_id == caller.auth.credential_id)
+        .and_then(|record| record.conversation.as_ref());
+    if conversation_mismatch(bound, caller.conversation.as_ref()) { return Err(unauthorized()); }
     validate_assignment(state, caller, job)
 }
 
 fn validate_assignment(
     state: &OrchestrationState, caller: &super::AgentCaller, job: &AuthorizedJob,
 ) -> Result<(), InspectionError> {
-    super::validate_identity(&caller.conversation.harness)?;
-    super::validate_identity(&caller.conversation.session_id)?;
+    validate_conversation(caller.conversation.as_ref())?;
     let run = &state.runs[job.run_index];
-    if run.attachment.as_ref().and_then(|a| a.conversation.as_ref()) != Some(&caller.conversation)
+    if conversation_mismatch(run.attachment.as_ref().and_then(|a| a.conversation.as_ref()), caller.conversation.as_ref())
         || caller.assignment_generation != job.assignment_generation {
         return Err(unauthorized());
     }
@@ -356,11 +355,24 @@ fn validate_assignment(
         let owner = ownership.owner.as_ref().ok_or_else(unauthorized)?;
         if Some(ownership.generation) != job.assignment_generation
             || run.assignment_generation != job.assignment_generation
-            || owner.run_id != run.run_id || owner.conversation != caller.conversation {
+            || owner.run_id != run.run_id || conversation_mismatch(owner.conversation.as_ref(), caller.conversation.as_ref()) {
             return Err(unauthorized());
         }
     } else if caller.assignment_generation.is_some() {
         return Err(unauthorized());
+    }
+    Ok(())
+}
+
+fn conversation_mismatch(bound: Option<&cockpit_protocol::orchestration::ConversationIdentity>,
+    actual: Option<&cockpit_protocol::orchestration::ConversationIdentity>) -> bool {
+    matches!((bound, actual), (Some(bound), Some(actual)) if bound != actual)
+}
+
+fn validate_conversation(actual: Option<&cockpit_protocol::orchestration::ConversationIdentity>) -> Result<(), InspectionError> {
+    if let Some(actual) = actual {
+        super::validate_identity(&actual.harness)?;
+        super::validate_identity(&actual.session_id)?;
     }
     Ok(())
 }
@@ -434,7 +446,7 @@ fn validate_auth(
     if attachment.attachment_id != auth.attachment_id
         || attachment.epoch != auth.attachment_epoch
         || attachment.state == AttachmentState::Revoked
-        || (purpose == AuthPurpose::Ordinary && attachment.state == AttachmentState::Quiescing)
+        || (matches!(purpose, AuthPurpose::Ordinary | AuthPurpose::Registration) && attachment.state == AttachmentState::Quiescing)
     {
         return Err(unauthorized());
     }
@@ -702,6 +714,7 @@ pub(crate) fn test_job_auth(
         process: None,
         shell: None,
         machine_id: None,
+        process_scope: None,
         launch_attempt: 1,
         launch_mode: None,
         updated_at: super::now(),
@@ -735,11 +748,10 @@ pub(crate) fn test_job_auth(
         } else {
             state.checkout_claims.push(claim);
         }
-        if let (Some(generation), Some(conversation), Some(task_id)) = (
-            run.assignment_generation, run.attachment.as_ref().and_then(|a| a.conversation.clone()), run.task_id.clone()) {
+        if let (Some(generation), Some(task_id)) = (run.assignment_generation, run.task_id.clone()) {
             let ownership = cockpit_protocol::orchestration::TaskOwnership { root_id: run.root_id.clone(), task_id,
-                generation, owner: Some(cockpit_protocol::orchestration::TaskOwner { run_id: run.run_id.clone(),
-                    conversation, claim_operation_id: auth.credential_id.clone() }) };
+                generation, schedule: None, owner: Some(cockpit_protocol::orchestration::TaskOwner { run_id: run.run_id.clone(),
+                    conversation: run.attachment.as_ref().and_then(|a| a.conversation.clone()), claim_operation_id: auth.credential_id.clone() }) };
             if let Some(existing) = state.task_ownership.iter_mut().find(|record|
                 record.root_id == ownership.root_id && record.task_id == ownership.task_id) {
                 *existing = ownership;

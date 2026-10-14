@@ -863,6 +863,29 @@ fn orchestration_configuration_rejects_removed_extension_and_model_fields() {
 }
 
 #[test]
+fn initial_prompt_hook_and_parallel_configuration_validate_whole_arguments() {
+    let mut configuration = OrchestrationConfiguration::default();
+    assert_eq!(configuration.max_parallel, 4);
+    configuration.hook_args = Some(Vec::new());
+    assert!(validate_orchestration(&configuration).is_ok(), "empty hook argv explicitly disables the adapter");
+    configuration.initial_prompt_args = Some(vec!["--prompt".into(), "{prompt}".into()]);
+    configuration.hook_args = Some(vec!["--hook".into(), "{hook_path}".into()]);
+    assert!(validate_orchestration(&configuration).is_ok());
+    for invalid in [vec![], vec!["--prompt={prompt}".into()], vec!["{prompt}".into(), "{prompt}".into()]] {
+        configuration.initial_prompt_args = Some(invalid);
+        assert_eq!(validate_orchestration(&configuration).unwrap_err().code, "invalid_orchestration_args");
+    }
+    configuration.initial_prompt_args = None;
+    configuration.hook_args = Some(vec!["--hook={hook_path}".into()]);
+    assert_eq!(validate_orchestration(&configuration).unwrap_err().code, "invalid_orchestration_args");
+    configuration.hook_args = None;
+    for invalid in [0, 65] {
+        configuration.max_parallel = invalid;
+        assert_eq!(validate_orchestration(&configuration).unwrap_err().code, "invalid_orchestration_parallelism");
+    }
+}
+
+#[test]
 fn notes_root_loading_precedence_validation_and_no_directory_creation() {
     // Environment-dependent cases run in separate processes, so no test
     // mutates the shared process environment.

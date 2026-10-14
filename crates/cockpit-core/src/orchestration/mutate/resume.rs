@@ -13,6 +13,10 @@ pub(in crate::orchestration) fn principal_key(ctx: &MutationCtx<'_>) -> Result<S
     let credential = ctx.state.credentials.iter().find(|c| c.credential_id == agent.auth.credential_id)
         .ok_or_else(|| error("job_auth_invalid", "Authenticated operation principal is missing"))?;
     // Stable capability incarnation plus pinned assignment; session does not confer authority.
+    credential_principal(credential)
+}
+
+pub(in crate::orchestration) fn credential_principal(credential: &credentials::JobCredentialRecord) -> Result<String, InspectionError> {
     let bytes = serde_json::to_vec(&(&credential.run_id, &credential.attachment_id,
         credential.attachment_epoch, credential.role, credential.assignment_generation))
         .map_err(|_| error("orchestration_state_invalid", "Cannot encode operation principal"))?;
@@ -45,12 +49,13 @@ pub(in crate::orchestration) fn replay(ctx: &MutationCtx<'_>, operation_id: &str
     };
     match &mut result {
         OrchestrationActionResult::SupervisorStarted { start } => start.duplicate = true,
-        OrchestrationActionResult::WorkerStarted { start } => start.duplicate = true,
+        OrchestrationActionResult::WorkerStarted { start } | OrchestrationActionResult::WorkerReplaced { start, .. } => start.duplicate = true,
         OrchestrationActionResult::TaskScopeUpdated { update } => update.duplicate = true,
         OrchestrationActionResult::RunResumed { resume } => resume.duplicate = true,
         OrchestrationActionResult::RunAttached { attach } => attach.duplicate = true,
         OrchestrationActionResult::RunRegistered { duplicate, .. }
-        | OrchestrationActionResult::TaskUnassigned { duplicate, .. } => *duplicate = true,
+        | OrchestrationActionResult::TaskUnassigned { duplicate, .. }
+        | OrchestrationActionResult::TaskScheduled { duplicate, .. } => *duplicate = true,
         OrchestrationActionResult::IntegrationRecorded { receipt } => receipt.duplicate = true,
         OrchestrationActionResult::Resource { request, duplicate } => {
             *request = ctx.state.resource_requests.iter().find(|r| r.request_id == request.request_id)
@@ -121,16 +126,6 @@ fn resume_target(ctx: &MutationCtx<'_>, run_id: &str) -> Result<usize, Inspectio
     Ok(index)
 }
 
-fn decision_for(state: &OrchestrationState, index: usize) -> String {
-    let run = &state.runs[index];
-    let attachment = run.attachment.as_ref();
-    let revision = run.checkout_claim_id.as_ref().and_then(|id| state.checkout_claims.iter().find(|c| &c.claim_id == id)).map(|c| c.revision);
-    let bytes = Sha256::digest(format!("resume-decision:v1:{}:{:?}:{:?}:{revision:?}", run.run_id,
-        attachment.map(|a| &a.attachment_id), attachment.map(|a| a.epoch)).as_bytes());
-    let mut uuid = [0u8; 16];
-    uuid.copy_from_slice(&bytes[..16]);
-    Uuid::from_bytes(uuid).to_string()
-}
 
 fn effects(run: &Run) -> Vec<DurableEffectReceipt> {
     let mut receipts = Vec::new();
@@ -142,8 +137,34 @@ fn effects(run: &Run) -> Vec<DurableEffectReceipt> {
     receipts
 }
 
+fn startup_registration_pending(state: &OrchestrationState, run: &Run) -> bool {
+    let (Some(resume), Some(attachment), Some(dispatch)) = (&run.resume, &run.attachment, &run.dispatch) else { return false };
+    if run.stage != RunStage::Starting || resume.phase != ResumePhase::Launching
+        || resume.run_id != run.run_id || resume.replacement_attachment_epoch != Some(attachment.epoch)
+        || resume.previous_attachment_epoch.is_none_or(|previous|
+            previous == 0 || previous.checked_add(1) != Some(attachment.epoch))
+        || matches!(attachment.state, AttachmentState::Quiescing | AttachmentState::Revoked)
+        || dispatch.error.is_some()
+        || !matches!(dispatch.latch_state, Some(AgentLatchState::Awaiting | AgentLatchState::ReleaseIntent | AgentLatchState::Released))
+        || !matches!(dispatch.step, DispatchStep::LaunchIntent |
+            DispatchStep::MoveIntent | DispatchStep::Placed | DispatchStep::LaunchPending | DispatchStep::Launched)
+        || state.credentials.iter().any(|credential| credential.run_id == run.run_id
+            && credential.state == credentials::CredentialState::Active
+            && (credential.attachment_id != attachment.attachment_id || credential.attachment_epoch != attachment.epoch))
+        || !state.operations.iter().any(|operation| operation.operation_id == resume.operation_id
+            && operation.kind == DurableOperationKind::RunResume && operation.run_id.as_ref() == Some(&run.run_id)) {
+        return false;
+    }
+    run.kind != RunKind::Worker || run.checkout_claim_id.as_ref().is_some_and(|claim_id|
+        state.checkout_claims.iter().any(|claim| &claim.claim_id == claim_id
+            && matches!(claim.state, claims::ClaimState::Reserved | claims::ClaimState::Held)
+            && claim.transition_operation_id.as_ref() == Some(&resume.operation_id)
+            && claim.holder.as_ref().is_some_and(|holder| holder.run_id == run.run_id
+                && holder.attachment_id == attachment.attachment_id && holder.attachment_epoch == attachment.epoch)))
+}
+
 pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
-    let OrchestrationAction::RunResume { run_id, operation_id, expected_attachment_epoch, mode, decision_id } = &action else { unreachable!() };
+    let OrchestrationAction::RunResume { run_id, operation_id, expected_attachment_epoch } = &action else { unreachable!() };
     let index = resume_target(ctx, run_id)?;
     if let Some(result) = replay(ctx, operation_id, DurableOperationKind::RunResume, &action)? {
         return Ok(Applied::Document(result));
@@ -164,15 +185,6 @@ pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> 
     if expected_attachment_epoch.is_some() && *expected_attachment_epoch != old_epoch {
         return Err(error("attachment_conflict", "Attachment epoch changed before Resume"));
     }
-    if *mode == ResumeMode::ReplaceExisting {
-        let expected_decision = decision_for(ctx.state, index);
-        if decision_id.as_deref() != Some(expected_decision.as_str())
-            || ctx.state.runs[index].resume.as_ref().and_then(|r| r.decision_id.as_ref()) != Some(&expected_decision) {
-            return Err(error("resume_decision_conflict", "Replace requires the current attachment and claim decision"));
-        }
-    } else if decision_id.is_some() {
-        return Err(error("resume_decision_conflict", "A replacement decision is valid only for Replace"));
-    }
     // New requests join an unsettled owner operation instead of starting another effect.
     let root_id = ctx.state.runs[index].root_id.clone();
     if let Some(current) = ctx.state.runs[index].resume.as_ref().filter(|r|
@@ -189,13 +201,13 @@ pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> 
         OrchestrationActionResult::RunResumed { resume: RunResumeResult {
             run_id: run_id.clone(), resume, duplicate: false,
         }}, Vec::new())?;
-    apply_observation(ctx.state, index, operation_id, *mode, ctx.resolved)?;
+    apply_observation(ctx.state, index, operation_id, ctx.resolved)?;
     Ok(Applied::Machine(OrchestrationActionResult::RunResumed { resume: RunResumeResult {
         run_id: run_id.clone(), resume: ctx.state.runs[index].resume.clone().expect("resume installed"), duplicate: false,
     }}))
 }
 
-pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, operation_id: &str, mode: ResumeMode, resolved: Option<&ResolvedMutationInput>) -> Result<(), InspectionError> {
+pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, operation_id: &str, resolved: Option<&ResolvedMutationInput>) -> Result<(), InspectionError> {
     if state.runs[index].resume.as_ref().is_none_or(|r| r.operation_id != operation_id) {
         return Err(error("operation_conflict", "Resume observation does not match the active operation"));
     }
@@ -232,6 +244,13 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
         if let Some(expected) = resolved.and_then(|input| input.root_attachment_expected.as_ref()) {
             project_identity::revalidate_root_observation(state, &state.runs[index], expected)?;
         }
+        // A live scoped FIFO helper is physical presence, not a failed semantic
+        // registration. Preserve the already-authorized replacement operation
+        // while placement/exec and the credentialed claim are still in flight.
+        if startup_registration_pending(state, &state.runs[index])
+            && !has_current_binding(state, &state.runs[index]) {
+            return Ok(());
+        }
         if state.runs[index].kind != RunKind::Worker
             && !project_identity::same_location(current.location.as_ref(), observed.location.as_ref())
             && let Some(dispatch) = state.runs[index].dispatch.as_mut() {
@@ -245,7 +264,7 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
         if !has_current_binding(state, &state.runs[index]) {
             state.runs[index].attachment.as_mut().expect("observed attachment").state = AttachmentState::Disconnected;
             return block(state, index, "run_unregistered",
-                "The live incarnation is preserved but its current capability has no matching registered conversation", false);
+                "The live incarnation is preserved but its current private capability has not claimed the attempt");
         }
         let resume = state.runs[index].resume.as_mut().expect("matched resume");
         resume.phase = if resume.replacement_attachment_epoch == Some(observed.epoch) {
@@ -272,11 +291,11 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
             return Err(error("root_main_exit_unproven", "Root-main recovery requires its dedicated physical observation"));
         }
         if state.runs[index].dispatch.as_ref().is_some_and(|d| matches!(d.step, DispatchStep::SetupUnknown | DispatchStep::SetupRunning)) {
-            return block(state, index, "resume_effect_unknown", "Unsettled setup must be reconciled before replacement", false);
+            return block(state, index, "resume_effect_unknown", "Unsettled setup must be reconciled before replacement");
         }
         let current = state.runs[index].attachment.as_ref().ok_or_else(|| error("writer_exit_unproven", "No recorded incarnation to replace"))?;
         if current.conversation.is_some() && state.runs[index].launch_config.resume_args.is_none() {
-            return block(state, index, "harness_resume_unsupported", "The configured harness has no same-conversation resume arguments; the existing attachment is preserved", false);
+            return block(state, index, "harness_resume_unsupported", "The configured harness has no same-conversation resume arguments; the existing attachment is preserved");
         }
         let receipts = effects(&state.runs[index]);
         let epoch = current.epoch.checked_add(1).filter(|n| *n <= MAX_SAFE_COUNTER).ok_or_else(|| error("orchestration_state_full", "Attachment epoch exhausted"))?;
@@ -320,24 +339,18 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
         super::reviewed::reset_launch_metadata_after_resume(state, index)?;
         return Ok(());
     }
-    if mode == ResumeMode::ReplaceExisting {
-        return block(state, index, "same_boot_replacement_unsupported",
-            "This harness cannot prove all same-boot checkout consumers stopped; the current attachment and claim are preserved", true);
-    }
     if let Some(cause) = resolved.and_then(|r| r.observation_cause.as_ref()) {
-        let decision = cause.class == ResumeCauseClass::Decision;
-        block(state, index, &cause.code, &cause.message, decision)?;
+        block(state, index, &cause.code, &cause.message)?;
         return Ok(());
     }
-    block(state, index, "writer_exit_unproven", "The saved writer remains protected; reconnect or obtain verified quiescence", false)
+    block(state, index, "writer_exit_unproven", "The saved writer remains protected; reconnect or obtain verified quiescence")
 }
 
-fn block(state: &mut OrchestrationState, index: usize, code: &str, message: &str, decision: bool) -> Result<(), InspectionError> {
-    let decision_id = decision.then(|| decision_for(state, index));
+fn block(state: &mut OrchestrationState, index: usize, code: &str, message: &str) -> Result<(), InspectionError> {
     let resume = state.runs[index].resume.as_mut().expect("resume installed");
     resume.phase = ResumePhase::Blocked;
-    resume.cause = Some(ResumeCause { code: code.into(), message: message.into(), class: if decision { ResumeCauseClass::Decision } else { ResumeCauseClass::Recover } });
-    resume.decision_id = decision_id;
+    resume.cause = Some(ResumeCause { code: code.into(), message: message.into(), class: ResumeCauseClass::Recover });
+    resume.decision_id = None;
     resume.updated_at = now();
     Ok(())
 }
@@ -426,13 +439,28 @@ impl OrchestrationService {
             let task = document.task(run.task_id.as_deref().ok_or_else(|| error("task_not_found", "Worker task is missing"))?)?;
             state.runs[index].task_revision_at_start = Some(task.task_revision.clone());
         }
-        apply_observation(&mut state, index, operation_id, ResumeMode::ReattachOrRestart, Some(resolved))?;
+        let waiting_registration = startup_registration_pending(&state, &state.runs[index]);
+        apply_observation(&mut state, index, operation_id, Some(resolved))?;
+        if waiting_registration && startup_registration_pending(&state, &state.runs[index]) {
+            return Ok(RunResumeResult { run_id: run_id.into(),
+                resume: state.runs[index].resume.clone().expect("matched resume"), duplicate: true });
+        }
         let result = RunResumeResult { run_id: run_id.into(), resume: state.runs[index].resume.clone().expect("matched resume"), duplicate: false };
         let record = state.operations.iter_mut().find(|r| r.operation_id == operation_id).expect("matched operation");
         record.updated_at = now();
         let revision = locked.save(&mut state)?;
         self.revision.send_replace(revision);
         Ok(result)
+    }
+
+    pub(crate) fn resume_startup_pending(&self, expected: &Run) -> Result<bool, InspectionError> {
+        let locked = self.store.lock()?;
+        let state = locked.read()?;
+        let current = &state.runs[scoped_index(&state, &expected.session_id, &expected.run_id)?];
+        Ok(current.assignment_generation == expected.assignment_generation
+            && current.attachment.as_ref().zip(expected.attachment.as_ref()).is_some_and(|(current, expected)|
+                project_identity::same_root_attachment(current, expected))
+            && startup_registration_pending(&state, current))
     }
 
     pub(crate) fn resume_owner(&self, expected: &Run, resolved: &ResolvedMutationInput) -> Result<RunResumeResult, InspectionError> {
@@ -452,8 +480,7 @@ impl OrchestrationService {
         let response = self.mutate_resolved(&Actor::Operator(OperatorOrigin::Native), OrchestrationMutationRequest {
             session_id: current.session_id.clone(), expected_revision: None,
             action: OrchestrationAction::RunResume { run_id: current.run_id.clone(), operation_id: id(),
-                expected_attachment_epoch: current.attachment.as_ref().map(|a| a.epoch),
-                mode: ResumeMode::ReattachOrRestart, decision_id: None },
+                expected_attachment_epoch: current.attachment.as_ref().map(|a| a.epoch) },
         }, resolved)?;
         match response.result {
             OrchestrationActionResult::RunResumed { resume } => Ok(resume),

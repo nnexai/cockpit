@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import type { SessionSnapshotResponse } from "../../protocol/generated/v1";
 import { PaneChrome } from "./PaneChrome";
 import { TerminalLeaf, type TerminalLeafProps } from "./TerminalLeaf";
@@ -15,6 +15,8 @@ type Props = {
   ctx: LeafCtx; tab: TabLayoutState; leaf: Leaf; rect: Rect; pane?: Pane;
   selected: boolean; browserInputActive: boolean; browserLiveInputEnabled: boolean;
   terminal: TerminalLeafProps | null;
+  taskRail?: ReactNode;
+  terminalTitle?: string;
   focusStatus: "pending" | "error" | null; focusError?: string;
   closeDisabled: boolean;
   widgetInputBlocked: boolean; widgetLive: boolean; widgetLocation?: string;
@@ -26,7 +28,7 @@ type Props = {
 export function LeafHost(props: Props) {
   const { ctx, tab, leaf, rect, pane, selected, terminal } = props;
   const viewer = leaf.kind === "files" ? tab.viewers.files : leaf.kind === "review" ? tab.viewers.review : undefined;
-  const title = leaf.kind === "terminal" ? pane?.title || "Terminal" : leaf.kind === "files" ? viewer?.selector.kind === "files_context" ? "Context" : "Files" : leaf.kind === "review" ? "Review" : "Browser";
+  const title = leaf.kind === "terminal" ? props.terminalTitle ?? (pane?.title || "Terminal") : leaf.kind === "files" ? viewer?.selector.kind === "files_context" ? "Context" : "Files" : leaf.kind === "review" ? "Review" : "Browser";
   const root = viewer?.context?.roots.find(candidate => candidate.root_id === viewer.context?.default_root_id);
   if (leaf.kind === "widget") return <WidgetDock ctx={ctx} tab={tab} width={rect.width} selected={selected} inputBlocked={props.widgetInputBlocked} live={props.widgetLive} location={props.widgetLocation} onSelect={props.onSelect} onZoom={props.onZoom} onGoToAgent={props.onWidgetAgent} />;
   return <>
@@ -35,7 +37,7 @@ export function LeafHost(props: Props) {
       focusStatus={leaf.kind === "terminal" ? props.focusStatus : null} focusError={props.focusError}
       onRetryFocus={props.onRetryFocus} onZoom={props.onZoom} onClose={props.onClose}
       closeDisabled={props.closeDisabled} onMenu={props.onMenu} />
-    {leaf.kind === "terminal" && terminal ? <TerminalLeaf key={`${ctx.serverInstance}:${pane?.terminal_id}`} {...terminal} /> : null}
+    {leaf.kind === "terminal" && terminal ? <div className="liaison-terminal-body"><div className="liaison-terminal-layout"><TerminalLeaf key={`${ctx.serverInstance}:${pane?.terminal_id}`} {...terminal} />{props.taskRail}</div></div> : null}
     {leaf.kind === "files" && tab.viewers.files ? <FilesLeaf ctx={ctx} tabId={tab.tabId} slot={tab.viewers.files} selected={selected} onSelect={props.onSelect} /> : null}
     {leaf.kind === "review" && tab.viewers.review ? <ReviewLeaf ctx={ctx} tabId={tab.tabId} slot={tab.viewers.review} selected={selected} onSelect={props.onSelect} /> : null}
     {leaf.kind === "browser" && tab.viewers.browser ? <BrowserLeaf ctx={ctx} tabId={tab.tabId} slot={tab.viewers.browser} rect={rect} selected={selected} inputActive={props.browserInputActive} liveInputEnabled={props.browserLiveInputEnabled} onSelect={props.onSelect} /> : null}

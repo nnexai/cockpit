@@ -76,7 +76,8 @@ fn source_defaults_and_serialization_presence_are_preserved() {
         field("ProjectConfiguration", "orchestration").fill,
         Some(json!({
             "harness_kind": "omp", "command": "omp", "extra_args": [],
-            "resume_args": null, "inbox_prompt_hints": false, "routes": []
+            "resume_args": null, "initial_prompt_args": null, "hook_args": null,
+            "max_parallel": 4, "process_scope": "auto", "inbox_prompt_hints": false, "routes": []
         }))
     );
     assert_eq!(field("OrchestrationConfiguration", "harness_kind").fill, Some(json!("omp")));
@@ -87,31 +88,101 @@ fn source_defaults_and_serialization_presence_are_preserved() {
 fn launch_configuration_defaults_follow_literal_source_and_reject_computation() {
     let source = r#"
         fn default_harness() -> String { "custom".into() }
+        fn default_max_parallel() -> u32 { 7 }
+        #[derive(Deserialize, Default)]
+        #[serde(rename_all = "snake_case")]
+        enum ScopeMode { #[default] #[serde(rename = "automatic")] Auto, Off }
+        #[derive(Deserialize)]
+        struct OrchestrationConfiguration {
+            #[serde(default = "default_harness")] harness_kind: String,
+            #[serde(default = "default_harness")] command: String,
+            extra_args: Vec<String>, resume_args: Option<Vec<String>>,
+            initial_prompt_args: Option<Vec<String>>, hook_args: Option<Vec<String>>,
+            #[serde(default = "default_max_parallel")] max_parallel: u32,
+            process_scope: ScopeMode, inbox_prompt_hints: bool, routes: Vec<String>,
+        }
         impl Default for OrchestrationConfiguration {
             fn default() -> Self {
                 Self {
                     harness_kind: default_harness(), command: default_harness(),
-                    extra_args: Vec::new(), resume_args: None,
+                    extra_args: Vec::new(), resume_args: None, initial_prompt_args: None, hook_args: None,
+                    max_parallel: default_max_parallel(), process_scope: ScopeMode::Auto,
                     inbox_prompt_hints: false, routes: Vec::new()
                 }
             }
         }
     "#;
     let file = syn::parse_file(source).unwrap();
-    let (configuration, harness) = super::source::orchestration_defaults(&file).unwrap();
-    assert_eq!(harness, json!("custom"));
+    let configuration = super::source::orchestration_defaults(&file).unwrap();
     assert_eq!(configuration, json!({
         "harness_kind": "custom", "command": "custom", "extra_args": [],
-        "resume_args": null, "inbox_prompt_hints": false, "routes": []
+        "resume_args": null, "initial_prompt_args": null, "hook_args": null,
+        "max_parallel": 7, "process_scope": "automatic", "inbox_prompt_hints": false, "routes": []
     }));
     for changed in [
         source.replace("\"custom\".into()", "std::env::var(\"HARNESS\").unwrap()"),
         source.replace("Vec::new()", "compute_args()"),
         source.replace("resume_args: None,", ""),
+        source.replace("-> u32 { 7 }", "-> u32 { 1 + 6 }"),
+        source.replace("\"custom\".into()", "7"),
+        source.replace("-> u32 { 7 }", "-> u32 { 4294967296 }"),
+        source.replace("-> u32 { 7 }", "-> u32 { default_max_parallel() }"),
+        source.replace("-> u32 { 7 }", "-> u32 { default_harness() }")
+            .replace("\"custom\".into()", "default_max_parallel()"),
+        source.replace("process_scope: ScopeMode::Auto,", "process_scope: ScopeMode::Missing,"),
+        source.replace("max_parallel: default_max_parallel(),", "max_parallel: 7,"),
+        source.replace("fn default_max_parallel()", "fn default_max_parallel(limit: u32)"),
+        source.replace("-> u32 { 7 }", "-> u32 { let limit = 7; limit }"),
+        source.replace(" Auto, Off", " Auto { limit: u32 }, Off"),
     ] {
         let file = syn::parse_file(&changed).unwrap();
         assert!(super::source::orchestration_defaults(&file).is_err());
     }
+}
+
+#[test]
+fn orchestration_config_and_optional_scope_defaults_match_rust_decoding() {
+    let decoded: crate::projects::OrchestrationConfiguration =
+        serde_json::from_value(json!({})).expect("omitted config fields decode");
+    let defaults = serde_json::to_value(decoded).expect("serialize current defaults");
+    assert_eq!(field("ProjectConfiguration", "orchestration").fill, Some(defaults.clone()));
+    for source_field in fields("OrchestrationConfiguration") {
+        assert_eq!(source_field.fill.as_ref(), defaults.get(&source_field.name),
+            "config default {}", source_field.name);
+    }
+    assert_eq!(dto("ScopeMode").shape, WireShape::Literals(vec!["auto".into(), "off".into()]));
+    for (owner, key) in [
+        ("TaskOwner", "conversation"), ("TaskOwnership", "schedule"),
+        ("ExecutionAttachment", "process_scope"), ("DispatchState", "scope_unit"),
+        ("DispatchState", "latch"), ("DispatchState", "latch_state"),
+        ("DispatchState", "source_location"), ("DispatchState", "move_operation_id"),
+        ("DispatchState", "staging_workspace_id"),
+        ("DispatchState", "pre_move_scope"),
+        ("RunLocation", "peer_process"), ("RetirementIdentity", "herdr_peer"),
+        ("RunRetirement", "result_message_id"), ("RunRetirement", "task_revision"),
+        ("RunRetirement", "replacement"),
+    ] {
+        let source_field = field(owner, key);
+        assert!(matches!(source_field.ty, WireTy::Option(_)));
+        assert_eq!(source_field.fill, Some(json!(null)), "{owner}.{key}");
+    }
+    let (_, results) = tagged("OrchestrationActionResult");
+    let registered = &results.iter().find(|(name, _)| name == "run_registered").unwrap().1;
+    assert_eq!(registered.iter().find(|field| field.name == "conversation").unwrap().fill, Some(json!(null)));
+}
+
+#[test]
+fn attempt_directory_identity_is_distinct_and_requires_only_its_creation_pin() {
+    let identity = fields("OwnedAttemptDirectoryIdentity");
+    assert_eq!(identity.iter().map(|field| field.name.as_str()).collect::<Vec<_>>(),
+        ["creation_operation_id", "root", "device", "inode"]);
+    assert!(identity.iter().all(|field| field.fill.is_none() && !field.ts_optional));
+    assert!(dto("OwnedAttemptDirectoryIdentity").deny_unknown_fields);
+    assert!(fields("OwnedFilesystemIdentity").iter().any(|field| field.name == "manifest_path"));
+    let (_, resources) = tagged("OwnedResourceIdentity");
+    let attempt = &resources.iter().find(|(name, _)| name == "attempt_directory").unwrap().1;
+    assert_eq!(attempt.len(), 1);
+    assert_eq!(attempt[0].ty, WireTy::Named("OwnedAttemptDirectoryIdentity".into()));
 }
 
 #[test]
@@ -121,7 +192,7 @@ fn session_ownership_actions_and_results_are_source_grounded() {
         ["harness", "session_id"]
     );
     assert_eq!(field("TaskOwnership", "owner").ty, WireTy::Option(Box::new(WireTy::Named("TaskOwner".into()))));
-    assert_eq!(field("TaskOwner", "conversation").ty, WireTy::Named("ConversationIdentity".into()));
+    assert_eq!(field("TaskOwner", "conversation").ty, WireTy::Option(Box::new(WireTy::Named("ConversationIdentity".into()))));
     assert_eq!(field("ExecutionAttachment", "conversation").ty, WireTy::Option(Box::new(WireTy::Named("ConversationIdentity".into()))));
     assert_eq!(field("RunObservation", "actual_agent").ty, WireTy::Bool);
     assert_eq!(field("Run", "launch_config").ty, WireTy::Named("OrchestrationConfiguration".into()));

@@ -278,6 +278,7 @@ pub(super) fn recover_startup(store: &ProjectStore) -> Result<(), InspectionErro
         let Some(_lease) = store.try_acquire_execution_lease(&operation.operation_id)? else {
             continue;
         };
+        let actor_placement = store.owned_checkout(&operation.operation_id)?.is_some();
         store.update(
             &operation.operation_id,
             Some(operation.generation),
@@ -287,7 +288,7 @@ pub(super) fn recover_startup(store: &ProjectStore) -> Result<(), InspectionErro
                     operation.resume_allowed = false;
                 } else {
                     operation.state = WorkspaceOperationState::Partial;
-                    operation.resume_allowed = true;
+                    operation.resume_allowed = !actor_placement;
                 }
                 operation.error = Some(error_response(
                     "abandoned",

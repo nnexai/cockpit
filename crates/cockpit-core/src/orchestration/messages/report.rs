@@ -127,13 +127,13 @@ fn publish_report_receipt(
 ) -> Result<(), InspectionError> {
     let run = &mut state.runs[index];
     run.last_report = Some(report.clone());
-    if kind == ReportKind::Result {
+    // A liaison persists across batches. Its Result is diagnostic history, not
+    // worker completion or a source-integration receipt that ends delegation.
+    if kind == ReportKind::Result && run.parent_run_id.is_some() {
         run.source_output = report.source_output.clone();
         run.integration = Integration::Pending;
         run.result = Some(report);
-        if run.parent_run_id.is_some() {
-            run.stage = RunStage::Reported;
-        }
+        run.stage = RunStage::Reported;
     }
     run.updated_at = now();
     if matches!(kind, ReportKind::Initialized | ReportKind::Result | ReportKind::NeedsInput)

@@ -1,8 +1,8 @@
 import type { TaskView } from "../../protocol/generated/v1";
 
 export type DependencyPosition = { view: TaskView; x: number; y: number; level: number; independent: boolean; cycle: boolean };
-export type DependencyEdge = { from: string; to: string; provenance: boolean };
-export function dependencyLayout(tasks: readonly TaskView[], showCompleted: boolean) {
+export type DependencyEdge = { from: string; to: string };
+export function dependencyLayout(tasks: readonly TaskView[]) {
   const counts = new Map<string, number>();
   for (const view of tasks) counts.set(view.task.task_id, (counts.get(view.task.task_id) ?? 0) + 1);
   const valid = tasks.filter(view => counts.get(view.task.task_id) === 1);
@@ -10,17 +10,12 @@ export function dependencyLayout(tasks: readonly TaskView[], showCompleted: bool
   const incident = new Set<string>();
   const edges: DependencyEdge[] = [];
   for (const view of valid) {
-    for (const id of view.task.depends_on) if (byId.has(id)) { edges.push({ from: id, to: view.task.task_id, provenance: false }); incident.add(id); incident.add(view.task.task_id); }
-    if (view.task.follow_up_of && byId.has(view.task.follow_up_of)) { incident.add(view.task.follow_up_of); incident.add(view.task.task_id); if (!view.task.depends_on.includes(view.task.follow_up_of)) edges.push({ from: view.task.follow_up_of, to: view.task.task_id, provenance: true }); }
+    for (const id of view.task.depends_on) if (byId.has(id)) { edges.push({ from: id, to: view.task.task_id }); incident.add(id); incident.add(view.task.task_id); }
   }
-  const shown = new Set(valid.filter(view => showCompleted || !view.task.checked || incident.has(view.task.task_id) || view.task.depends_on.length > 0 || !!view.task.follow_up_of).map(view => view.task.task_id));
-  // Retain accepted context to a fixed point, including provenance chains.
-  let added = true;
-  while (added) { added = false; for (const edge of edges) if (shown.has(edge.from) || shown.has(edge.to)) for (const id of [edge.from, edge.to]) if (!shown.has(id)) { shown.add(id); added = true; } }
-  const displayed = valid.filter(view => shown.has(view.task.task_id));
+  const displayed = valid;
   const forward = new Map<string, string[]>(), reverse = new Map<string, string[]>();
   for (const view of displayed) { forward.set(view.task.task_id, []); reverse.set(view.task.task_id, []); }
-  for (const edge of edges) if (!edge.provenance && shown.has(edge.from) && shown.has(edge.to)) { forward.get(edge.from)!.push(edge.to); reverse.get(edge.to)!.push(edge.from); }
+  for (const edge of edges) { forward.get(edge.from)!.push(edge.to); reverse.get(edge.to)!.push(edge.from); }
   const visited = new Set<string>(), finish: string[] = [];
   for (const view of displayed) {
     const id = view.task.task_id;
@@ -41,36 +36,34 @@ export function dependencyLayout(tasks: readonly TaskView[], showCompleted: bool
     members.push(collected);
   }
   const outgoing = members.map(() => new Set<number>()), indegree = members.map(() => 0), levels = members.map(() => 0);
-  for (const edge of edges) if (!edge.provenance && component.has(edge.from) && component.has(edge.to)) {
+  for (const edge of edges) if (component.has(edge.from) && component.has(edge.to)) {
     const from = component.get(edge.from)!, to = component.get(edge.to)!;
     if (from !== to && !outgoing[from].has(to)) { outgoing[from].add(to); indegree[to]++; }
   }
   const queue = indegree.flatMap((count, index) => count === 0 ? [index] : []);
   for (let cursor = 0; cursor < queue.length; cursor++) for (const next of outgoing[queue[cursor]]) { levels[next] = Math.max(levels[next], levels[queue[cursor]] + 1); if (--indegree[next] === 0) queue.push(next); }
-  const rowByLevel = new Map<number, number>();
+  const rowsByLevel = new Map<number, Set<number>>();
   const positions: DependencyPosition[] = [];
-  const groupLine = members.map(ids => ids.reduce((line, id) => Math.min(line, byId.get(id)!.task.line), Number.POSITIVE_INFINITY));
-  const ordered = [...displayed].sort((a, b) => groupLine[component.get(a.task.task_id)!] - groupLine[component.get(b.task.task_id)!] || component.get(a.task.task_id)! - component.get(b.task.task_id)! || a.task.line - b.task.line || a.task.task_id.localeCompare(b.task.task_id));
+  const ordered = [...displayed].sort((a, b) => levels[component.get(a.task.task_id)!] - levels[component.get(b.task.task_id)!] || a.task.line - b.task.line || a.task.task_id.localeCompare(b.task.task_id));
+  const positionById = new Map<string, DependencyPosition>();
   for (const view of ordered) {
     const id = view.task.task_id, group = component.get(id)!, independent = !incident.has(id) && view.task.depends_on.length === 0;
-    const level = levels[group], row = rowByLevel.get(level) ?? 0;
-    if (!independent) rowByLevel.set(level, row + 1);
-    positions.push({ view, x: 16 + level * 272, y: 44 + row * 72, level, independent, cycle: members[group].length > 1 || view.task.depends_on.includes(id) });
+    const level = levels[group], used = rowsByLevel.get(level) ?? new Set<number>();
+    const firstPrerequisite = view.task.depends_on.map(prerequisite => positionById.get(prerequisite)).find(position => position !== undefined);
+    let row = firstPrerequisite ? (firstPrerequisite.y - 16) / 56 : 0;
+    if (!independent) {
+      while (used.has(row)) row++;
+      used.add(row); rowsByLevel.set(level, used);
+    }
+    const position = { view, x: 16 + level * 272, y: 16 + row * 56, level, independent, cycle: members[group].length > 1 || view.task.depends_on.includes(id) };
+    positions.push(position); positionById.set(id, position);
   }
-  let bandTop = 64;
-  for (const count of rowByLevel.values()) bandTop = Math.max(bandTop, 64 + count * 72);
+  let bandTop = 16;
+  for (const used of rowsByLevel.values()) for (const row of used) bandTop = Math.max(bandTop, 16 + (row + 1) * 56);
   let independentRow = 0;
-  for (const position of positions) if (position.independent) { position.x = 16; position.y = bandTop + (++independentRow) * 72; }
-  positions.sort((a, b) => Number(a.independent) - Number(b.independent) || a.level - b.level || a.y - b.y || a.view.task.task_id.localeCompare(b.view.task.task_id));
-  const cycleGroups: { x: number; y: number; height: number; count: number }[] = [];
-  const positionById = new Map(positions.map(position => [position.view.task.task_id, position]));
-  for (const ids of members) {
-    if (ids.length < 2 && !byId.get(ids[0])!.task.depends_on.includes(ids[0])) continue;
-    let first = Number.POSITIVE_INFINITY, last = 0;
-    for (const id of ids) { const position = positionById.get(id)!; first = Math.min(first, position.y); last = Math.max(last, position.y); }
-    cycleGroups.push({ x: positionById.get(ids[0])!.x - 6, y: first - 6, height: last - first + 60, count: ids.length });
-  }
-  let width = 288, height = 160;
-  for (const position of positions) { width = Math.max(width, position.x + 256); height = Math.max(height, position.y + 72); }
-  return { positions, cycleGroups, edges: edges.filter(edge => shown.has(edge.from) && shown.has(edge.to)), hiddenCompleted: valid.length - displayed.length, independentTop: bandTop, width, height };
+  for (const position of positions) if (position.independent) { position.x = 16; position.y = bandTop + independentRow++ * 56; }
+  positions.sort((a, b) => a.y - b.y || a.level - b.level || a.view.task.line - b.view.task.line);
+  let width = 288, height = 80;
+  for (const position of positions) { width = Math.max(width, position.x + 256); height = Math.max(height, position.y + 64); }
+  return { positions, edges, independentTop: bandTop, width, height };
 }

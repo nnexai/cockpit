@@ -1,11 +1,23 @@
 use crate::InspectionError;
 use async_trait::async_trait;
-use cockpit_protocol::orchestration::{NativeShellIdentity, RunLocation};
+use cockpit_protocol::orchestration::{NativeProcessIdentity, NativeShellIdentity, RunLocation};
 use std::collections::BTreeMap;
 
 #[async_trait]
 pub trait OrchestrationHerdr: Send + Sync {
     async fn runtime(&self, session_id: &str) -> Result<RuntimeView, InspectionError>;
+    /// Live pane/status events, registered before the owner's reconciliation read.
+    /// Adapters must invalidate after gaps/reconnects rather than polling snapshots.
+    async fn session_changes(&self, _session_id: &str) -> Result<crate::SessionSubscription, InspectionError> {
+        Err(InspectionError::new("herdr_events_unsupported", "This adapter has no session event stream"))
+    }
+    /// Move only the freshly created exact waiting terminal into a new Space.
+    /// The caller journals intent first; uncertain outcomes are observed, not replayed.
+    async fn move_pane_to_new_space(
+        &self, _session_id: &str, _source: &RunLocation, _label: &str, _tab_label: &str,
+    ) -> Result<(), InspectionError> {
+        Err(InspectionError::new("herdr_move_unsupported", "This adapter has no owned pane placement"))
+    }
     async fn create_agent_tab(
         &self,
         session_id: &str,
@@ -88,6 +100,8 @@ pub struct PaneProcessInfo {
 pub struct RuntimeView {
     pub endpoint_identity: String,
     pub boot_id: Option<String>,
+    pub peer_process: Option<NativeProcessIdentity>,
+    pub focused_workspace_id: Option<String>,
     pub workspaces: Vec<RuntimeWorkspace>,
     pub panes: Vec<RuntimePane>,
 }
@@ -104,6 +118,8 @@ pub struct RuntimePane {
     pub tab_id: String,
     pub tab_label: String,
     pub pane_id: String,
+    /// Fresh pane working directory, not a workspace's inferred project path.
+    pub cwd: Option<String>,
     pub terminal_id: Option<String>,
     pub native_session_id: Option<String>,
     /// Exact OMP-advertised path, independently of journal creation or readability.

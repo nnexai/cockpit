@@ -2,6 +2,7 @@ mod agent;
 mod mutate;
 mod assignments;
 mod dependencies;
+mod dependency_inputs;
 mod scope_intents;
 mod steps;
 pub mod dispatch;
@@ -22,6 +23,7 @@ mod store;
 pub(crate) mod claims;
 pub mod credentials;
 mod tasks_md;
+mod wait_notifications;
 pub(crate) mod resource_queue;
 pub mod cleanup;
 pub(crate) mod fixture_resources;
@@ -30,7 +32,7 @@ pub use agent::NativeAgentKind;
 pub use mutate::integration::OutputFacts;
 pub use resource_queue::ResourceSourceFacts;
 pub use cleanup::ResourceRegistrationFacts;
-pub use messages::latest_progress_sequences;
+pub use messages::{latest_progress_sequences, inbox_counts, InboxCounts, InboxKindCount};
 pub use credentials::{JobAuth, JobRole, SecretBytes, read_job_auth};
 pub use claims::{RootMainRecoveryProof, WriterExitProof};
 use mutate::{Applied, MutationCtx};
@@ -57,7 +59,7 @@ pub enum Actor {
 #[derive(Debug, Clone)]
 pub struct AgentCaller {
     pub auth: JobAuth,
-    pub conversation: ConversationIdentity,
+    pub conversation: Option<ConversationIdentity>,
     pub assignment_generation: Option<u64>,
     pub endpoint_identity: String,
     pub session_id: String,
@@ -89,6 +91,8 @@ pub struct ResolvedMutationInput {
     pub project: Option<ProjectIdentity>,
     pub checkout: Option<CheckoutIdentity>,
     pub writer_exit_proof: Option<WriterExitProof>,
+    pub replacement_source: Option<ReplacementSource>,
+    pub schedule_inputs: Option<ScheduleInputFacts>,
     pub root_main_recovery: Option<RootMainRecoveryProof>,
     pub attachment_observation: Option<ExecutionAttachment>,
     pub root_attachment_expected: Option<ExecutionAttachment>,
@@ -98,9 +102,52 @@ pub struct ResolvedMutationInput {
     pub resource_registration: Option<ResourceRegistrationFacts>,
 }
 
+#[derive(Debug, Clone)]
+pub enum ReplacementSource {
+    GitHead { commit: String, source_workspace_id: Option<String> },
+    Directory { root: String, source_workspace_id: Option<String> },
+}
+
+#[derive(Debug, Clone)]
+pub struct ScheduleCandidate {
+    pub session_id: String,
+    pub root_id: String,
+    pub task_id: String,
+    pub schedule: TaskSchedule,
+    pub next_attempt: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ScheduleInputSource {
+    pub task_id: String,
+    pub run_id: String,
+    pub result_message_id: String,
+    pub task_revision: String,
+    pub project_key: Option<String>,
+    pub source_output: SourceOutput,
+    pub integration: Option<Integration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ScheduleInputSnapshot {
+    pub root_id: String,
+    pub task_id: String,
+    pub doc_revision: String,
+    pub task_revision: String,
+    pub accepted_sources: Vec<ScheduleInputSource>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScheduleInputFacts {
+    pub snapshot: ScheduleInputSnapshot,
+    pub base_commit: Option<String>,
+    pub verified_code_runs: Vec<String>,
+}
+
 pub struct OrchestrationService {
     store: OrchestrationStore,
     revision: watch::Sender<u64>,
+    notifications: std::sync::Mutex<Option<wait_notifications::WaitNotifications>>,
     launch_config: cockpit_protocol::projects::OrchestrationConfiguration,
 }
 #[derive(Debug, Clone)]
@@ -115,21 +162,18 @@ pub(crate) enum DispatchUpdate {
         step: DispatchStep,
         error: Option<ErrorResponse>,
     },
-    SetupDone {
-        workspace_id: String,
-        checkout_path: String,
-    },
-    SetupProgress {
-        generation: u32,
-    },
     LaunchIntent {
         launch_tag: String,
         launch_attempt: u32,
         endpoint_identity: String,
+        scope_unit: Option<String>,
+        latch: Option<AgentLaunchReceipt>,
+        staging_workspace_id: Option<String>,
     },
     TabReceipt {
         location: RunLocation,
         launch_shell_identity: Option<NativeShellIdentity>,
+        process_scope: Option<OwnedProcessScope>,
     },
 }
 
@@ -138,14 +182,44 @@ impl OrchestrationService {
         let store = OrchestrationStore::open(Path::new(&configuration.state_root))?;
         let initial = store.lock()?.read()?.revision;
         let (revision, _) = watch::channel(initial);
-        Ok(Self { store, revision, launch_config: configuration.orchestration.clone() })
+        Ok(Self { store, revision, notifications: std::sync::Mutex::new(None), launch_config: configuration.orchestration.clone() })
     }
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.revision.subscribe()
     }
+    /// Filesystem changes include commits from other processes and editors.
+    /// Registration failures are explicit; no idle timer substitutes for a watch.
+    pub fn changes(&self) -> Result<watch::Receiver<u64>, InspectionError> {
+        let mut notifications = self.notifications.lock().unwrap_or_else(|error| error.into_inner());
+        if notifications.as_ref().is_some_and(|watcher| watcher.error().is_some()) {
+            *notifications = None;
+        }
+        if notifications.is_none() {
+            *notifications = Some(wait_notifications::WaitNotifications::open(self.store.base())?);
+        }
+        Ok(notifications.as_ref().expect("watcher initialized").subscribe())
+    }
+    /// Dispatcher-owned ref watches share the durable-state notification owner.
+    pub(crate) fn watch_cleanup_refs(&self, paths: &[std::path::PathBuf]) -> Result<(), InspectionError> {
+        let mut notifications = self.notifications.lock().unwrap_or_else(|error| error.into_inner());
+        if notifications.as_ref().is_some_and(|watcher| watcher.error().is_some()) {
+            *notifications = None;
+        }
+        if notifications.is_none() {
+            *notifications = Some(wait_notifications::WaitNotifications::open(self.store.base())?);
+        }
+        notifications.as_mut().expect("watcher initialized").watch_cleanup_refs(paths)
+    }
+    fn notification_error(&self) -> Option<InspectionError> {
+        let mut notifications = self.notifications.lock().unwrap_or_else(|error| error.into_inner());
+        let error = notifications.as_ref().and_then(|watcher| watcher.error());
+        if error.is_some() { *notifications = None; }
+        error
+    }
     pub fn base(&self) -> &Path {
         self.store.base()
     }
+    pub fn store_identity(&self) -> &str { self.store.identity() }
     fn snapshot_records(
         &self, request: &OrchestrationSnapshotRequest,
     ) -> Result<(OrchestrationState, Vec<TaskBoard>, String), InspectionError> {
@@ -180,7 +254,7 @@ impl OrchestrationService {
                     }
                 }
                 let tasks = document.tasks.into_iter().zip(facts).map(|(task, dependencies)| TaskView {
-                    task, dependencies, lane: TaskLane::Queued, current_run_id: None,
+                    task, dependencies, lane: TaskLane::Ready, current_run_id: None, scheduled: false, attempt: None,
                 }).collect();
                 boards.push(TaskBoard {
                     root_id: root.root_id.clone(),
@@ -239,11 +313,14 @@ impl OrchestrationService {
         &self,
         request: &OrchestrationWaitRequest,
     ) -> Result<OrchestrationWaitResponse, InspectionError> {
-        self.wait_scope(request, None).await
+        self.wait_scope(request, request.root_id.as_deref()).await
     }
     pub async fn wait_for_root(
         &self, request: &OrchestrationWaitRequest, root_id: &str,
     ) -> Result<OrchestrationWaitResponse, InspectionError> {
+        if request.root_id.as_deref().is_some_and(|requested| requested != root_id) {
+            return Err(error("root_not_found", "Wait request and authenticated root differ"));
+        }
         self.wait_scope(request, Some(root_id)).await
     }
     async fn wait_scope(
@@ -252,16 +329,22 @@ impl OrchestrationService {
         safe_counter(request.after_revision)?;
         let deadline = tokio::time::Instant::now()
             + Duration::from_millis(u64::from(request.timeout_ms.min(30_000)));
+        let mut filesystem = self.changes()?;
         let mut subscription = self.subscribe();
-        loop {
+        // Root admission is performed once, before the quiet wait. Subsequent
+        // notifications need only the durable header, not body-bearing records.
+        if let Some(root_id) = root_id {
             let state = self.store.lock()?.read()?;
-            if let Some(root_id) = root_id {
-                let root = &state.runs[run_index(&state, root_id)?];
-                if root.parent_run_id.is_some() || root.root_id != root.run_id {
-                    return Err(error("root_not_found", "Wait scope must name the authenticated root"));
-                }
+            let root = &state.runs[run_index(&state, root_id)?];
+            if root.parent_run_id.is_some() || root.root_id != root.run_id {
+                return Err(error("root_not_found", "Wait scope must name the authenticated root"));
             }
-            let revision = state.revision;
+        }
+        loop {
+            filesystem.borrow_and_update();
+            subscription.borrow_and_update();
+            if let Some(error) = self.notification_error() { return Err(error); }
+            let revision = self.store.lock()?.wait_revision()?;
             let tasks_token = match root_id {
                 Some(root_id) => self.store.tasks_token_for_root(root_id)?,
                 None => self.store.tasks_token()?,
@@ -275,7 +358,42 @@ impl OrchestrationService {
                     changed,
                 });
             }
-            tokio::select! { _ = subscription.changed() => {}, _ = tokio::time::sleep_until(deadline.min(tokio::time::Instant::now()+Duration::from_secs(1))) => {} }
+            tokio::select! {
+                changed = filesystem.changed() => {
+                    changed.map_err(|_| error("orchestration_watch", "Filesystem watcher stopped"))?;
+                },
+                _ = subscription.changed() => {},
+                _ = tokio::time::sleep_until(deadline) => {},
+            }
+        }
+    }
+    /// Quiet durable inbox view: no task boards, message bodies, or Herdr reads.
+    /// Live caller evidence is fenced by the CLI before and after this wait.
+    pub async fn wait_inbox(
+        &self, caller: &AgentCaller, after: u64, timeout: Duration,
+    ) -> Result<InboxCounts, InspectionError> {
+        safe_counter(after)?;
+        let mut filesystem = self.changes()?;
+        let mut subscription = self.subscribe();
+        let own = self.job_role(caller)?.0;
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            filesystem.borrow_and_update();
+            subscription.borrow_and_update();
+            if let Some(error) = self.notification_error() { return Err(error); }
+            let (_, messages) = self.store.lock()?.inbox_cursor()?;
+            let counts = messages::saved_inbox_counts(&messages, &own.run_id, after);
+            if counts.pending || tokio::time::Instant::now() >= deadline {
+                self.job_role(caller)?;
+                return Ok(counts);
+            }
+            tokio::select! {
+                changed = filesystem.changed() => {
+                    changed.map_err(|_| error("orchestration_watch", "Filesystem watcher stopped"))?;
+                },
+                _ = subscription.changed() => {},
+                _ = tokio::time::sleep_until(deadline) => {},
+            }
         }
     }
     pub fn mutate(
@@ -315,11 +433,13 @@ impl OrchestrationService {
         let Admission { caller, .. } = admit(&mut state, actor, request)?;
         match &request.action {
             OrchestrationAction::SupervisorStart { .. } => { operator(actor)?; }
-            OrchestrationAction::WorkerStart { .. } | OrchestrationAction::TaskScopeUpdate { .. } => {
+            OrchestrationAction::WorkerStart { .. } | OrchestrationAction::TaskScopeUpdate { .. }
+            | OrchestrationAction::TaskSchedule { .. } | OrchestrationAction::TaskScheduleCancel { .. }
+            | OrchestrationAction::WorkerReplace { .. } => {
                 if let Actor::Agent(agent) = actor {
                     let role = state.credentials.iter().find(|r| r.credential_id == agent.auth.credential_id)
                         .expect("admitted credential").role;
-                    if kind == DurableOperationKind::WorkerStart && role != JobRole::Root {
+                    if kind != DurableOperationKind::TaskScopeUpdate && role != JobRole::Root {
                         return Err(error("actor_forbidden", "Credential role cannot replay this task operation"));
                     }
                 }
@@ -342,6 +462,22 @@ impl OrchestrationService {
             return Ok(None);
         }
         Ok(result.map(|result| OrchestrationMutationResponse { revision: ctx.state.revision, result }))
+    }
+
+    /// Claims a pending private capability without requiring harness metadata.
+    pub fn ensure_registered(&self, caller: &AgentCaller) -> Result<Run, InspectionError> {
+        let operation_id = if let Some(conversation) = &caller.conversation {
+            let namespace = Uuid::parse_str(&caller.auth.credential_id)
+                .map_err(|_| error("job_unauthorized", "Credential identifier is invalid"))?;
+            let identity = serde_json::to_vec(conversation)
+                .map_err(|_| error("job_unauthorized", "Conversation metadata is invalid"))?;
+            Uuid::new_v5(&namespace, &identity).to_string()
+        } else { caller.auth.credential_id.clone() };
+        self.mutate(&Actor::Agent(caller.clone()), OrchestrationMutationRequest {
+            session_id: caller.session_id.clone(), expected_revision: None,
+            action: OrchestrationAction::RunRegister { operation_id },
+        })?;
+        self.job_run(caller)
     }
 
     pub fn job_registration_run(&self, caller: &AgentCaller) -> Result<Run, InspectionError> {
@@ -668,8 +804,7 @@ impl OrchestrationService {
 /// Logical registration is independent of Herdr/native-process observation.
 pub(crate) fn has_current_binding(state: &OrchestrationState, run: &Run) -> bool {
     let Some(attachment) = run.attachment.as_ref() else { return false };
-    let Some(conversation) = &attachment.conversation else { return false };
-    if run.stage == RunStage::Closed
+    if !matches!(run.stage, RunStage::Active | RunStage::Working | RunStage::Reported)
         || matches!(attachment.state, AttachmentState::Revoked | AttachmentState::Quiescing) {
         return false;
     }
@@ -679,12 +814,12 @@ pub(crate) fn has_current_binding(state: &OrchestrationState, run: &Run) -> bool
         && credential.state == credentials::CredentialState::Active
         && credential.attachment_id == attachment.attachment_id && credential.attachment_epoch == attachment.epoch
         && credential.assignment_generation == run.assignment_generation
-        && credential.conversation.as_ref() == Some(conversation))
+        && !matches!((credential.conversation.as_ref(), attachment.conversation.as_ref()), (Some(bound), Some(actual)) if bound != actual))
         && (role == JobRole::Root || state.task_ownership.iter().any(|record|
             record.root_id == run.root_id && Some(&record.task_id) == run.task_id.as_ref()
                 && Some(record.generation) == run.assignment_generation
                 && record.owner.as_ref().is_some_and(|owner| owner.run_id == run.run_id
-                    && &owner.conversation == conversation)))
+                    && !matches!((owner.conversation.as_ref(), attachment.conversation.as_ref()), (Some(bound), Some(actual)) if bound != actual))))
 }
 
 /// Exact eligibility shared by project-root preference and host candidate listing.
@@ -935,6 +1070,9 @@ fn durable_operation(action: &OrchestrationAction) -> Option<(&str, store::Durab
         OrchestrationAction::RunRegister { operation_id } => (operation_id.as_str(), DurableOperationKind::RunRegister),
         OrchestrationAction::TaskUnassign { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::TaskUnassign),
         OrchestrationAction::WorkerStart { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::WorkerStart),
+        OrchestrationAction::TaskSchedule { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::TaskSchedule),
+        OrchestrationAction::TaskScheduleCancel { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::TaskScheduleCancel),
+        OrchestrationAction::WorkerReplace { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::WorkerReplace),
         OrchestrationAction::TaskScopeUpdate { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::TaskScopeUpdate),
         OrchestrationAction::IntegrationRecord { record } => (record.operation_id.as_str(), DurableOperationKind::IntegrationRecord),
         OrchestrationAction::Report { message_id, .. } => (message_id.as_str(), DurableOperationKind::Report),
@@ -952,6 +1090,8 @@ fn allows_stale_machine_revision(action: &OrchestrationAction) -> bool {
         | OrchestrationAction::RunResume { .. } | OrchestrationAction::RunAttach { .. }
         | OrchestrationAction::RunRegister { .. } | OrchestrationAction::TaskUnassign { .. }
         | OrchestrationAction::WorkerStart { .. }
+        | OrchestrationAction::TaskSchedule { .. } | OrchestrationAction::TaskScheduleCancel { .. }
+        | OrchestrationAction::WorkerReplace { .. }
         | OrchestrationAction::TaskScopeUpdate { .. } | OrchestrationAction::Report { .. }
         | OrchestrationAction::MessageSend { .. } | OrchestrationAction::IntegrationRecord { .. }
         | OrchestrationAction::ResourceRequest { .. })
@@ -1066,6 +1206,7 @@ fn same_launch_location(left: Option<&RunLocation>, right: Option<&RunLocation>)
             left.endpoint_identity == right.endpoint_identity
                 && left.session_id == right.session_id
                 && left.boot_id == right.boot_id
+                && left.peer_process == right.peer_process
                 && left.terminal_id == right.terminal_id
                 && left.native_session_id == right.native_session_id
                 && left.workspace_id == right.workspace_id
@@ -1097,6 +1238,13 @@ fn dispatch(step: DispatchStep) -> DispatchState {
         updated_at: now(),
         launch_tag: None,
         endpoint_identity: None,
+        scope_unit: None,
+        pre_move_scope: None,
+        latch: None,
+        latch_state: None,
+        source_location: None,
+        move_operation_id: None,
+        staging_workspace_id: None,
         recovery: None,
         agent_started: false,
     }
@@ -1152,6 +1300,7 @@ pub(crate) fn reserved_attachment(epoch: u64, launch_attempt: u32) -> ExecutionA
         attachment_id: id(), epoch, state: AttachmentState::Reserved,
         location: None, conversation: None, process: None, shell: None,
         machine_id: None, launch_attempt, launch_mode: None, updated_at: now(),
+        process_scope: None,
     }
 }
 fn brief(

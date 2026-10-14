@@ -454,7 +454,7 @@ mod tests {
             credentials::test_job_auth(&mut state, 0, JobRole::Root);
             let auth = credentials::test_job_auth(&mut state, 1, JobRole::Worker);
             let actor = Actor::Agent(AgentCaller {
-                auth, conversation: state.runs[1].attachment.as_ref().unwrap().conversation.clone().unwrap(),
+                auth, conversation: Some(state.runs[1].attachment.as_ref().unwrap().conversation.clone().unwrap()),
                 assignment_generation: Some(1),
                 endpoint_identity: String::new(), session_id: String::new(),
                 workspace_id: String::new(), tab_id: String::new(), pane_id: String::new(),
@@ -684,7 +684,7 @@ mod tests {
             match invalid {
                 0 => f.state.task_ownership[0].generation += 1,
                 1 => f.state.task_ownership[0].owner = None,
-                2 => f.state.task_ownership[0].owner.as_mut().unwrap().conversation.session_id.push_str("-other"),
+                2 => f.state.task_ownership[0].owner.as_mut().unwrap().conversation.as_mut().unwrap().session_id.push_str("-other"),
                 3 => f.state.runs[1].assignment_generation = Some(2),
                 4 => f.state.runs[1].attachment.as_mut().unwrap().conversation.as_mut().unwrap().session_id.push_str("-other"),
                 5 => {
@@ -693,7 +693,7 @@ mod tests {
                 }
                 6 => {
                     let Actor::Agent(caller) = &mut f.actor else { unreachable!() };
-                    caller.conversation.session_id.push_str("-other");
+                    caller.conversation.as_mut().unwrap().session_id.push_str("-other");
                 }
                 _ => {
                     let run_id = &f.state.runs[1].run_id;
@@ -706,6 +706,7 @@ mod tests {
             let service = OrchestrationService {
                 store: OrchestrationStore::open(&directory).unwrap(),
                 revision: watch::channel(f.state.revision).0,
+                notifications: std::sync::Mutex::new(None),
                 launch_config: Default::default(),
             };
             let locked = service.store.lock().unwrap();

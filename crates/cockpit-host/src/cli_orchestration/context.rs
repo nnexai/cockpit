@@ -191,18 +191,7 @@ impl Context {
             let job = service.job_registration_run(caller)?;
             Self::check_launch(args, &job)?;
             caller.session_id = job.session_id.clone();
-            match job.attachment.as_ref().and_then(|attachment| attachment.conversation.as_ref()) {
-                Some(conversation) if conversation != &caller.conversation =>
-                    return Err(CliError::new("conversation_conflict", "Credential is registered to another conversation")),
-                Some(_) => {},
-                None => {
-                    service.mutate_resolved(&Actor::Agent(caller.clone()), OrchestrationMutationRequest {
-                        session_id: job.session_id.clone(), expected_revision: None,
-                        action: OrchestrationAction::RunRegister { operation_id: caller.auth.credential_id.clone() },
-                    }, &cockpit_core::orchestration::ResolvedMutationInput::default())?;
-                },
-            }
-            Some(service.job_role(caller)?.0)
+            Some(service.ensure_registered(caller)?)
         } else { None };
         let agent_context = caller_required
             || std::env::var_os("COCKPIT_RUN_ID").is_some()
@@ -314,7 +303,7 @@ impl Context {
         self.check_caller().await?;
         let input = if matches!(&request.action,
             OrchestrationAction::SupervisorStart { .. } | OrchestrationAction::RunResume { .. }
-                | OrchestrationAction::WorkerStart { .. }
+                | OrchestrationAction::WorkerStart { .. } | OrchestrationAction::WorkerReplace { .. }
                 | OrchestrationAction::ResourceRegister { .. })
         {
             let projects = cockpit_core::projects::ProjectService::new(
@@ -333,6 +322,77 @@ impl Context {
             &error.code, format!("{}; durable mutation may already be committed", error.message),
         ))?;
         Ok(result)
+    }
+
+    pub(super) async fn replacement_action(
+        &self, root: &str, task: &str, selected_run: Option<&str>,
+        operation_id: Option<String>, reason: String,
+    ) -> Result<OrchestrationAction, CliError> {
+        use cockpit_core::orchestration::JobRole;
+        use cockpit_protocol::orchestration::RunStage;
+        let Some(Actor::Agent(caller)) = &self.actor else {
+            return Err(CliError::new("credential_required", "Replacement requires the managing root credential"));
+        };
+        let (own, role) = self.service.job_role(caller)?;
+        if role != JobRole::Root || own.root_id != root {
+            return Err(CliError::new("actor_forbidden", "Only the managing root replaces task attempts"));
+        }
+        let snapshot = self.snapshot(Some(root.into())).await?;
+        let ownership = snapshot.task_ownership.iter().find(|ownership| ownership.root_id == root && ownership.task_id == task)
+            .ok_or_else(|| CliError::new("task_unassigned", "Task has no current or pending assignment"))?;
+        let run = snapshot.runs.iter().find(|run| {
+            run.root_id == root && run.task_id.as_deref() == Some(task)
+                && run.assignment_generation == Some(ownership.generation)
+                && run.stage != RunStage::Closed
+                && selected_run.is_none_or(|selected| run.run_id == selected)
+                && ownership.owner.as_ref().is_none_or(|owner| owner.run_id == run.run_id)
+        }).ok_or_else(|| CliError::new("assignment_conflict", "Selected task attempt is no longer current; inspect the task before retrying"))?;
+        if reason.trim().is_empty() || reason.len() > 4096 {
+            return Err(CliError::usage("Replacement --reason must be nonempty and at most 4 KiB"));
+        }
+        Ok(OrchestrationAction::WorkerReplace {
+            operation_id: super::args::submission_id(operation_id, "Operation")?,
+            root_id: root.into(), task_id: task.into(), expected_run_id: run.run_id.clone(),
+            expected_assignment_generation: ownership.generation, reason,
+        })
+    }
+
+    pub(super) async fn source_output(
+        &self, message_id: &str, checks: Vec<String>, artifacts: Vec<String>,
+    ) -> Result<cockpit_protocol::orchestration::SourceOutput, CliError> {
+        use cockpit_protocol::orchestration::SourceOutput;
+        let snapshot = self.snapshot(None).await?;
+        let run = self.own_run(&snapshot)?;
+        let task_id = run.task_id.as_ref().ok_or_else(|| CliError::new("task_not_assigned", "Result requires an assigned canonical task"))?;
+        let task = snapshot.board.as_ref().and_then(|board| board.tasks.iter().find(|view| &view.task.task_id == task_id))
+            .ok_or_else(|| CliError::new("task_not_found", "Assigned canonical task is unavailable"))?;
+        let focused_checks = checks.into_iter().map(super::args::check_outcome).collect::<Result<Vec<_>, _>>()?;
+        let Some(checkout) = run.checkout.as_ref().filter(|checkout| checkout.git.is_some()) else {
+            if artifacts.is_empty() {
+                return Err(CliError::usage("Non-code Result needs actual --artifact paths or --source-output-file"));
+            }
+            return Ok(SourceOutput::NonCode { result_message_id: message_id.into(),
+                task_revision: task.task.task_revision.clone(), artifacts, focused_checks });
+        };
+        if !artifacts.is_empty() {
+            return Err(CliError::usage("--artifact is for non-code Results; code source is the committed Git range"));
+        }
+        let project = run.project.as_ref().ok_or_else(|| CliError::new("source_output_required", "Run has no proven project identity"))?;
+        let base_commit = run.setup.as_ref().and_then(|setup| setup.base_commit.as_ref())
+            .ok_or_else(|| CliError::new("source_output_required", "Run has no frozen pre-work base commit"))?;
+        let directory = std::path::Path::new(&checkout.path);
+        let head_commit = cockpit_core::space_git::git_line(directory, &["rev-parse", "--verify", "HEAD^{commit}"]).await?;
+        let range = format!("{base_commit}..{head_commit}");
+        let output = cockpit_core::space_git::git_output(directory, &["rev-list", "--reverse", "--topo-order", &range]).await?;
+        if !output.status.success() {
+            return Err(CliError::new("git_read_failed", "Cannot enumerate the actual source commit range"));
+        }
+        let text = std::str::from_utf8(&output.stdout).map_err(|_| CliError::new("git_read_failed", "Commit range is not UTF-8"))?;
+        let commits = text.lines().map(str::to_owned).collect();
+        self.check_caller().await?;
+        Ok(SourceOutput::Code { repository_key: project.key.clone(), checkout_key: checkout.key.clone(),
+            base_commit: base_commit.clone(), head_commit, commits,
+            task_revision: task.task.task_revision.clone(), result_message_id: message_id.into(), focused_checks })
     }
 
 }

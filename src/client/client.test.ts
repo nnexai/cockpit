@@ -1362,7 +1362,8 @@ describe("Notes decoder and transport security boundaries", () => {
     const config: ProjectConfiguration = {
       version: 1, repository_roots: [], worktree_root: "/worktrees", state_root: "/state", cache_root: "/cache",
       library_root: "/library", notes_root: "/notes", branch_template: "", checkout_template: "", providers: [],
-      orchestration: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] },
+      orchestration: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null,
+        initial_prompt_args: null, hook_args: null, max_parallel: 4, process_scope: "auto", inbox_prompt_hints: false, routes: [] },
       limits: { catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
         context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,
         library_folder_files: 1, library_folder_bytes: 1, library_file_bytes: 1, library_space_pages: 1,
@@ -1385,13 +1386,14 @@ describe("Orchestration attachment transport cutover", () => {
     const at = "2026-10-10T12:00:00Z";
     const attachment: ExecutionAttachment = {
       attachment_id: "00000000-0000-4000-8000-000000000001", epoch: 1, state: "disconnected", launch_mode: null,
-      location: { boot_id: null, terminal_id: null, native_session_id: null, endpoint_identity: "endpoint", session_id: "session-1", workspace_id: "space-1", tab_id: "tab-1", pane_id: "pane-1", launch_tag: "legacy-launch" },
-      conversation: null, process: null, shell: null, machine_id: null, launch_attempt: 0, updated_at: at,
+      location: { boot_id: null, terminal_id: null, native_session_id: null, peer_process: null, endpoint_identity: "endpoint", session_id: "session-1", workspace_id: "space-1", tab_id: "tab-1", pane_id: "pane-1", launch_tag: "legacy-launch" },
+      conversation: null, process: null, shell: null, machine_id: null, process_scope: null, launch_attempt: 0, updated_at: at,
     };
     const run: Run = {
       session_id: "session-1", brief: "", run_id: "root", root_id: "root", parent_run_id: null,
       kind: "adopted", label: "Saved supervisor", task_id: null, attempt: 1, task_revision_at_start: null,
-      assignment_generation: null, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] },
+      assignment_generation: null, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null,
+        initial_prompt_args: null, hook_args: null, max_parallel: 4, process_scope: "auto", inbox_prompt_hints: false, routes: [] },
       stage: "active", close_reason: null, dispatch: null, target: null, setup: null,
       cleanup_policy: null, last_report: null, result: null, source_output: null, integration: { state: "pending" }, annotations: [],
       project: null, checkout: null, attachment, checkout_claim_id: null, resume: null, retirement: null,

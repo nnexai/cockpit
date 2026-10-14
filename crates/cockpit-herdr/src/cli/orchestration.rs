@@ -101,6 +101,28 @@ fn validate_close_receipt(result: &Value) -> Result<(), InspectionError> {
     Ok(())
 }
 
+fn validate_orchestration_close_snapshot(result: &Value, pane_id: &str) -> Result<(), InspectionError> {
+    let protect = || InspectionError::new("foreign_space_group_close_risk",
+        "Automatic primary-Git pane retirement cannot atomically exclude foreign Spaces; the terminal and source group were retained");
+    let snapshot = result.get("snapshot").and_then(Value::as_object).ok_or_else(protect)?;
+    let panes = snapshot.get("panes").and_then(Value::as_array).ok_or_else(protect)?;
+    let spaces = snapshot.get("workspaces").and_then(Value::as_array).ok_or_else(protect)?;
+    let mut matching = panes.iter().filter(|pane| pane.get("pane_id").and_then(Value::as_str) == Some(pane_id));
+    let pane = matching.next().ok_or_else(protect)?;
+    if matching.next().is_some() { return Err(protect()); }
+    let workspace_id = pane.get("workspace_id").and_then(Value::as_str).ok_or_else(protect)?;
+    let mut matching = spaces.iter().filter(|space| space.get("workspace_id").and_then(Value::as_str) == Some(workspace_id));
+    let space = matching.next().ok_or_else(protect)?;
+    if matching.next().is_some() { return Err(protect()); }
+    if let Some(worktree) = space.get("worktree").filter(|value| !value.is_null()) {
+        let linked = worktree.get("is_linked_worktree").and_then(Value::as_bool).ok_or_else(protect)?;
+        if !linked { return Err(protect()); }
+    }
+    // Never close the entire Space: a foreign tab may appear after this read.
+    // Stock pane.close preserves any other pane/tab in linked or non-Git Spaces.
+    Ok(())
+}
+
 fn validate_agent_tab_request(request: &AgentTabRequest) -> Result<(), InspectionError> {
     validate_tab_request(&request.cwd, &request.label, &request.launch_tag, &request.env)
 }
@@ -129,8 +151,9 @@ fn direct_agent_tab_params(request: &DirectAgentTabRequest) -> Result<Value, Ins
     if request.launch_tag.is_empty()
         || request.command.first().is_none_or(|program| program.trim().is_empty()
             || program.starts_with('-') || program.len() > 4096 || program.chars().any(char::is_control))
-        || request.command.len() > 19 // executable, 16 configured args, optional session-directory pair
-        || request.command.iter().any(|arg| arg.len() > 4096 || arg.chars().any(char::is_control))
+        || request.command.len() > 64 // configured argv plus prompt, hook, session and scope envelope
+        || request.command.iter().map(String::len).sum::<usize>() > 262_144
+        || request.command.iter().any(|arg| arg.len() > 32_768 || arg.contains('\0'))
     {
         return Err(InspectionError::new(
             "invalid_launch_request",
@@ -201,6 +224,7 @@ fn direct_launch_location(
     if before.endpoint_identity != request.endpoint_identity
         || runtime.endpoint_identity != request.endpoint_identity
         || before.boot_id != runtime.boot_id
+        || before.peer_process.as_ref().is_some_and(|peer| runtime.peer_process.as_ref() != Some(peer))
         || runtime.workspaces.iter().filter(|space| space.workspace_id == request.workspace_id).count() != 1
         || tab_panes.next().is_some()
         || pane.is_none_or(|pane| {
@@ -230,6 +254,7 @@ fn direct_launch_location(
         pane_id: pane_id.into(),
         launch_tag: request.launch_tag.clone(),
         boot_id: runtime.boot_id.clone(),
+        peer_process: runtime.peer_process.clone(),
         terminal_id: pane.terminal_id.clone(),
         native_session_id: pane.native_session_id.clone(),
     })
@@ -258,6 +283,8 @@ fn launch_environment(env: &BTreeMap<String, String>) -> Result<Value, Inspectio
                 | "COCKPIT_ARTIFACT_URL"
                 | "COCKPIT_CONFIG_PATH"
                 | "COCKPIT_HARNESS"
+                | "COCKPIT_BOOTSTRAP_ARGV"
+                | "COCKPIT_INBOX_HOOK"
                 | "COCKPIT_HERDR_SESSION"
                 | "COCKPIT_HERDR_SOCKET"
                 | "COCKPIT_HERDR_EXECUTABLE"
@@ -298,6 +325,7 @@ fn validate_prompt_target(runtime: &RuntimeView, request: &AgentPromptRequest) -
         || pane.workspace_id != location.workspace_id || pane.tab_id != location.tab_id
         || location.launch_tag.is_empty() || pane.tab_label != location.launch_tag
         || location.boot_id.as_ref().is_some_and(|id| runtime.boot_id.as_ref() != Some(id))
+        || location.peer_process.as_ref().is_some_and(|peer| runtime.peer_process.as_ref() != Some(peer))
         || location.native_session_id.as_ref().is_some_and(|id| pane.native_session_id.as_ref() != Some(id))
         || request.native_session_file.as_ref().is_some_and(|path| pane.native_session_file.as_ref() != Some(path))
     {
@@ -360,9 +388,51 @@ fn validate_prompt_receipt(result: &Value, request: &AgentPromptRequest) -> Resu
 
 #[async_trait]
 impl OrchestrationHerdr for HerdrCliAdapter {
+    async fn session_changes(&self, session_id: &str) -> Result<cockpit_core::SessionSubscription, InspectionError> {
+        let snapshot = self.read_snapshot(session_id).await?;
+        self.subscribe_socket(session_id.to_owned(), snapshot).await
+    }
+    async fn move_pane_to_new_space(
+        &self, session_id: &str, source: &RunLocation, label: &str, tab_label: &str,
+    ) -> Result<(), InspectionError> {
+        let runtime = self.runtime(session_id).await?;
+        let mut matching = runtime.panes.iter().filter(|pane| pane.pane_id == source.pane_id);
+        let pane = matching.next();
+        if source.session_id != session_id || runtime.endpoint_identity != source.endpoint_identity
+            || source.boot_id.as_ref().is_some_and(|boot| runtime.boot_id.as_ref() != Some(boot))
+            || source.peer_process.as_ref().is_some_and(|peer| runtime.peer_process.as_ref() != Some(peer))
+            || matching.next().is_some()
+            || source.terminal_id.as_ref().is_none_or(|terminal| runtime.panes.iter()
+                .filter(|pane| pane.terminal_id.as_ref() == Some(terminal)).count() != 1)
+            || pane.is_none_or(|pane| pane.workspace_id != source.workspace_id
+                || pane.tab_id != source.tab_id || pane.terminal_id != source.terminal_id
+                || pane.tab_label != source.launch_tag || source.launch_tag != tab_label)
+            || runtime.panes.iter().filter(|pane| pane.workspace_id == source.workspace_id
+                && pane.tab_id == source.tab_id).count() != 1
+        {
+            return Err(InspectionError::new("stale_identity", "The exact waiting launch terminal changed; placement was not dispatched"));
+        }
+        let destination = super::operations::pane_move_destination(&cockpit_protocol::v1::PaneMoveDestination::NewSpace {
+            label: Some(label.into()), tab_label: Some(tab_label.into()),
+        });
+        let (result, _) = self.socket_request_with_identity(
+            session_id, "pane.move", json!({"pane_id": source.pane_id, "destination": destination, "focus": false}),
+            Some(&source.endpoint_identity),
+        ).await.map_err(unknown)?;
+        let result = object(&result, "pane.move result")?;
+        if required_string(result, "type", "pane.move result")? != "pane_move" {
+            return Err(InspectionError::new("herdr_outcome_unknown", "Pane move returned no supported receipt"));
+        }
+        let moved = result.get("move_result").and_then(Value::as_object)
+            .ok_or_else(|| InspectionError::new("herdr_outcome_unknown", "Pane move receipt is missing"))?;
+        if moved.get("changed").and_then(Value::as_bool) != Some(true) {
+            return Err(InspectionError::new("pane_move_not_applied", "Herdr did not move the exact waiting pane"));
+        }
+        Ok(())
+    }
     async fn runtime(&self, session_id: &str) -> Result<RuntimeView, InspectionError> {
-        let (result, endpoint_identity) = self
-            .socket_request_with_identity(session_id, "session.snapshot", json!({}), None)
+        let (result, endpoint_identity, peer_process) = self
+            .socket_request_with_peer_process(session_id, "session.snapshot", json!({}), None)
             .await?;
         let parsed = parse_snapshot(json!({"result": &result}), session_id, &endpoint_identity)?;
         let raw = result
@@ -371,6 +441,12 @@ impl OrchestrationHerdr for HerdrCliAdapter {
         let raw_panes = raw.get("panes").and_then(Value::as_array);
         let raw_agents = raw.get("agents").and_then(Value::as_array);
         let raw_workspaces = raw.get("workspaces").and_then(Value::as_array);
+        let focused_workspace_id = raw_workspaces.and_then(|items| {
+            let mut focused = items.iter().filter(|item| item.get("focused").and_then(Value::as_bool) == Some(true));
+            let workspace = focused.next()?;
+            if focused.next().is_some() { return None; }
+            workspace.get("workspace_id").and_then(Value::as_str).map(str::to_owned)
+        });
         let workspaces = parsed
             .spaces
             .iter()
@@ -433,6 +509,7 @@ impl OrchestrationHerdr for HerdrCliAdapter {
                         .map(|tab| tab.label.clone())
                         .unwrap_or_default(),
                     pane_id: pane.id.clone(),
+                    cwd: pane.cwd.clone(),
                     terminal_id: Some(pane.terminal_id.clone()),
                     native_session_id,
                     native_session_file: omp_path.map(str::to_owned),
@@ -462,6 +539,8 @@ impl OrchestrationHerdr for HerdrCliAdapter {
                 .get("boot_id")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            peer_process,
+            focused_workspace_id,
             workspaces,
             panes,
         })
@@ -507,6 +586,7 @@ impl OrchestrationHerdr for HerdrCliAdapter {
             pane_id: pane.pane_id.clone(),
             launch_tag: request.launch_tag.clone(),
             boot_id: runtime.boot_id,
+            peer_process: runtime.peer_process,
             terminal_id: pane.terminal_id.clone(),
             native_session_id: pane.native_session_id.clone(),
         })
@@ -587,11 +667,12 @@ impl OrchestrationHerdr for HerdrCliAdapter {
         endpoint_identity: &str,
         pane_id: &str,
     ) -> Result<(), InspectionError> {
+        let (snapshot, _) = self.socket_request_with_identity(
+            session_id, "session.snapshot", json!({}), Some(endpoint_identity),
+        ).await?;
+        validate_orchestration_close_snapshot(&snapshot, pane_id)?;
         let (result, _) = self.socket_request_with_identity(
-            session_id,
-            "pane.close",
-            json!({"pane_id": pane_id}),
-            Some(endpoint_identity),
+            session_id, "pane.close", json!({"pane_id": pane_id}), Some(endpoint_identity),
         ).await.map_err(unknown)?;
         validate_close_receipt(&result)
     }
@@ -881,6 +962,7 @@ mod tests {
                     workspace_id: pane.workspace_id.clone(), tab_id: pane.tab_id.clone(),
                     pane_id: pane.pane_id.clone(), launch_tag: pane.tab_label.clone(),
                     boot_id: runtime.boot_id.clone(), terminal_id: pane.terminal_id.clone(),
+                    peer_process: runtime.peer_process.clone(),
                     native_session_id: if case == 9 || case >= 11 { None } else { pane.native_session_id.clone() },
                 },
                 harness_kind: "omp".into(),
@@ -963,6 +1045,26 @@ mod tests {
             }
             assert!(direct_agent_tab_params(&request).is_err(), "change {change}");
         }
+    }
+
+    #[test]
+    fn direct_launch_preserves_multiline_bootstrap_and_scoped_literal_argv() {
+        let mut request = direct_launch_request();
+        request.command = vec![
+            "/absolute/cockpit-cli".into(), "contain".into(), "--unit".into(),
+            "cockpit-w-fixture.scope".into(), "--description".into(), "Cockpit worker".into(),
+            "--".into(), "/usr/bin/agent".into(),
+        ];
+        request.command.extend((0..16).map(|index| format!("literal-option-{index}")));
+        let prompt = format!("Role and commands\n--- untrusted task brief ---\n{}\n", "🧭".repeat(4096));
+        request.command.push(prompt.clone());
+        request.env.insert("COCKPIT_BOOTSTRAP_ARGV".into(), "1".into());
+        let params = direct_agent_tab_params(&request).unwrap();
+        assert_eq!(params["root"]["command"], json!(request.command));
+        assert_eq!(params["root"]["command"].as_array().unwrap().last().unwrap(), &json!(prompt));
+        assert_eq!(params["root"]["env"]["COCKPIT_BOOTSTRAP_ARGV"], "1");
+        request.command.push("x".repeat(32_769));
+        assert_eq!(direct_agent_tab_params(&request).unwrap_err().code, "invalid_launch_request");
     }
 
     fn direct_receipt(request: &DirectAgentTabRequest) -> Value {
@@ -1153,6 +1255,7 @@ mod tests {
             pane_id: "owned-pane".into(),
             launch_tag: "original-tag".into(),
             boot_id: Some("boot".into()),
+            peer_process: None,
             terminal_id: Some("owned-terminal".into()),
             native_session_id: None,
         };
@@ -1162,6 +1265,7 @@ mod tests {
             tab_id: location.tab_id.clone(),
             tab_label: "User renamed tab".into(),
             pane_id: location.pane_id.clone(),
+            cwd: None,
             terminal_id: location.terminal_id.clone(),
             native_session_id: None,
             native_session_file: None,
@@ -1178,6 +1282,8 @@ mod tests {
         (RuntimeView {
             endpoint_identity: location.endpoint_identity.clone(),
             boot_id: location.boot_id.clone(),
+            peer_process: None,
+            focused_workspace_id: None,
             workspaces: vec![],
             panes: vec![pane, sibling],
         }, location)
@@ -1521,6 +1627,7 @@ mod tests {
                     tab_id: fixture["result"]["snapshot"]["panes"][0]["tab_id"].as_str().unwrap().into(),
                     launch_tag: fixture["result"]["snapshot"]["tabs"][0]["label"].as_str().unwrap().into(),
                     boot_id: None, native_session_id: Some("original-occupant".into()),
+                    peer_process: None,
                 },
                 harness_kind: fixture["result"]["snapshot"]["agents"][0]["agent"].as_str().unwrap().into(),
                 native_session_file: None,
@@ -1572,5 +1679,41 @@ mod tests {
             server.await.unwrap();
             std::fs::remove_file(socket).unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod close_guard_tests {
+    use super::*;
+
+    fn snapshot(linked: Option<bool>, other: bool, extra_pane: bool) -> Value {
+        let mut spaces = vec![json!({"workspace_id": "owned"})];
+        if let Some(linked) = linked {
+            spaces[0]["worktree"] = json!({"is_linked_worktree": linked, "repo_key": "repo"});
+        }
+        if other {
+            spaces.push(json!({"workspace_id": "foreign", "worktree": {"is_linked_worktree": true, "repo_key": "repo"}}));
+        }
+        let mut panes = vec![json!({"pane_id": "owned:p1", "workspace_id": "owned"})];
+        if extra_pane { panes.push(json!({"pane_id": "owned:p2", "workspace_id": "owned"})); }
+        json!({"snapshot": {"workspaces": spaces, "panes": panes}})
+    }
+
+    #[test]
+    fn primary_git_retirement_refuses_even_when_no_foreign_pane_was_observed() {
+        for (other, extra) in [(false, false), (true, false), (false, true), (true, true)] {
+            assert_eq!(validate_orchestration_close_snapshot(&snapshot(Some(false), other, extra), "owned:p1")
+                .unwrap_err().code, "foreign_space_group_close_risk");
+        }
+    }
+
+    #[test]
+    fn linked_and_non_git_retirement_keeps_pane_only_effect_even_with_other_tabs() {
+        for linked in [Some(true), None] {
+            assert!(validate_orchestration_close_snapshot(&snapshot(linked, true, false), "owned:p1").is_ok());
+            assert!(validate_orchestration_close_snapshot(&snapshot(linked, true, true), "owned:p1").is_ok());
+        }
+        assert_eq!(validate_orchestration_close_snapshot(&snapshot(None, false, false), "foreign:p9")
+            .unwrap_err().code, "foreign_space_group_close_risk");
     }
 }

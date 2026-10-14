@@ -33,6 +33,24 @@ pub struct WriterExitProof {
     pub(crate) previous_kernel_boot_id: String,
     pub(crate) observed_kernel_boot_id: String,
     pub(crate) all_consumers_absent: bool,
+    pub(crate) basis: ExitBasis,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExitBasis {
+    Reboot,
+    ScopeDrained { unit: String, invocation_id: String },
+}
+
+fn exit_basis_matches(old: &ExecutionAttachment, proof: &WriterExitProof) -> bool {
+    match &proof.basis {
+        ExitBasis::Reboot => proof.previous_kernel_boot_id != proof.observed_kernel_boot_id,
+        ExitBasis::ScopeDrained { unit, invocation_id } => {
+            proof.previous_kernel_boot_id == proof.observed_kernel_boot_id
+                && old.process_scope.as_ref().is_some_and(|scope| &scope.unit == unit && &scope.invocation_id == invocation_id
+                    && scope.machine_id == proof.machine_id && scope.kernel_boot_id == proof.observed_kernel_boot_id)
+        }
+    }
 }
 
 /// Recovery authority for the liaison main only, never consumer closure or
@@ -130,7 +148,7 @@ pub(crate) fn revoke_and_reserve_replacement(state: &mut OrchestrationState, cla
         || claim.state == ClaimState::Released || claim.state == ClaimState::Conflict
         || old.machine_id.as_ref() != Some(&proof.machine_id)
         || old_boot != Some(&proof.previous_kernel_boot_id) || proof.previous_kernel_boot_id.is_empty() || proof.observed_kernel_boot_id.is_empty()
-        || !proof.all_consumers_absent || proof.previous_kernel_boot_id == proof.observed_kernel_boot_id
+        || !proof.all_consumers_absent || !exit_basis_matches(old, proof)
         || replacement.epoch != epoch || replacement.attachment_id == old.attachment_id
         || replacement.state != AttachmentState::Reserved || replacement.process.is_some() || replacement.shell.is_some()
         || replacement.location.is_some() || replacement.conversation != old.conversation {
@@ -149,7 +167,129 @@ pub(crate) fn revoke_and_reserve_replacement(state: &mut OrchestrationState, cla
     claim.revision = next;
     claim.holder = Some(holder);
     claim.transition_operation_id = Some(operation_id.into());
+    // The exact old holder's exhaustive exit proof was consumed by this same
+    // claim CAS. Consumers are active references, not immutable creation
+    // receipts: retain every other holder and all resource audit/identity data.
+    // Root-main-only recovery never reaches this consumer discharge.
+    for resource in &mut state.owned_resources {
+        resource.consumers.retain(|consumer| consumer != &proof.incarnation);
+    }
     Ok(next)
+}
+
+/// Transfer only a precisely observed exited writer's checkout to a distinct
+/// attempt. The old incarnation and its resource/report history are retained.
+pub(crate) fn transfer_claim_to_successor(state: &mut OrchestrationState, claim_id: &str,
+    proof: &WriterExitProof, successor_id: &str, operation_id: &str) -> Result<(), InspectionError> {
+    super::tasks_md::validate_uuid(operation_id)?;
+    let old_index = validate_reference(state, &proof.incarnation)?;
+    let claim_index = state.checkout_claims.iter().position(|claim| claim.claim_id == claim_id)
+        .ok_or_else(|| refusal("checkout_claim_missing", "Protected checkout claim is missing"))?;
+    let successor_index = super::run_index(state, successor_id)?;
+    let old_run = &state.runs[old_index];
+    let old = old_run.attachment.as_ref().expect("validated incarnation");
+    let successor = &state.runs[successor_index];
+    let claim = &state.checkout_claims[claim_index];
+    let pending = successor.attachment.as_ref().ok_or_else(||
+        refusal("writer_exit_unproven", "Successor has no pristine pending attachment"))?;
+    let old_boot = old.process.as_ref().and_then(|process| process.kernel_boot_id.as_ref())
+        .or_else(|| old.shell.as_ref().and_then(|shell| shell.process.kernel_boot_id.as_ref()));
+    if claim.revision != proof.claim_revision || proof.checkout.as_ref() != Some(&claim.checkout)
+        || claim.holder.as_ref() != Some(&proof.incarnation) || !matches!(claim.state, ClaimState::Reserved | ClaimState::Held)
+        || old.machine_id.as_ref() != Some(&proof.machine_id)
+        || old_boot != Some(&proof.previous_kernel_boot_id) || proof.previous_kernel_boot_id.is_empty()
+        || proof.observed_kernel_boot_id.is_empty() || !proof.all_consumers_absent
+        || !exit_basis_matches(old, proof)
+        || successor.run_id == old_run.run_id || successor.root_id != old_run.root_id
+        || successor.task_id != old_run.task_id || successor.stage != cockpit_protocol::orchestration::RunStage::Queued
+        || successor.checkout_claim_id.is_some() || successor.checkout.is_some()
+        || pending.state != cockpit_protocol::orchestration::AttachmentState::Reserved || pending.epoch != 1
+        || pending.launch_attempt != 0 || pending.launch_mode.is_some() || pending.location.is_some()
+        || pending.conversation.is_some() || pending.process.is_some() || pending.shell.is_some()
+        || pending.process_scope.is_some() || pending.machine_id.is_some()
+        || state.credentials.iter().any(|credential| credential.run_id == successor.run_id) {
+        return Err(refusal("writer_exit_unproven", "Checkout transfer requires exact same-machine proof covering all protected consumers"));
+    }
+    let revision = claim.revision.checked_add(1).filter(|revision| *revision <= MAX_SAFE_COUNTER)
+        .ok_or_else(|| refusal("orchestration_state_full", "Claim revision exhausted"))?;
+    let checkout = claim.checkout.clone();
+    let holder = AttachmentReference { run_id: successor_id.into(), attachment_id: pending.attachment_id.clone(), attachment_epoch: pending.epoch };
+    let claim = &mut state.checkout_claims[claim_index];
+    claim.revision = revision;
+    claim.state = ClaimState::Reserved;
+    claim.holder = Some(holder);
+    claim.transition_operation_id = Some(operation_id.into());
+    let successor = &mut state.runs[successor_index];
+    successor.checkout = Some(checkout);
+    successor.checkout_claim_id = Some(claim_id.into());
+    Ok(())
+}
+
+pub(crate) fn seal_for_release(state: &mut OrchestrationState, claim_id: &str,
+    holder: &AttachmentReference, expected_revision: u64, operation_id: &str) -> Result<u64, InspectionError> {
+    super::tasks_md::validate_uuid(operation_id)?;
+    let index = validate_reference(state, holder)?;
+    let run = &state.runs[index];
+    if run.kind != cockpit_protocol::orchestration::RunKind::Worker
+        || run.stage != cockpit_protocol::orchestration::RunStage::Closed {
+        return Err(refusal("claim_release_forbidden", "Only closed worker attempts may seal checkout release"));
+    }
+    let claim_index = state.checkout_claims.iter().position(|claim| claim.claim_id == claim_id)
+        .ok_or_else(|| refusal("checkout_claim_missing", "Protected checkout claim is missing"))?;
+    let claim = &state.checkout_claims[claim_index];
+    if claim.holder.as_ref() != Some(holder) || claim.revision != expected_revision {
+        return Err(refusal("checkout_claim_conflict", "Checkout holder changed before release sealing"));
+    }
+    if claim.state == ClaimState::Quiescing && claim.transition_operation_id.as_deref() == Some(operation_id) {
+        return Ok(claim.revision);
+    }
+    if !matches!(claim.state, ClaimState::Held | ClaimState::Reserved) {
+        return Err(refusal("checkout_claim_conflict", "Checkout cannot be sealed from its current state"));
+    }
+    let revision = claim.revision.checked_add(1).filter(|revision| *revision <= MAX_SAFE_COUNTER)
+        .ok_or_else(|| refusal("orchestration_state_full", "Claim revision exhausted"))?;
+    let claim = &mut state.checkout_claims[claim_index];
+    claim.state = ClaimState::Quiescing;
+    claim.revision = revision;
+    claim.transition_operation_id = Some(operation_id.into());
+    let attachment = state.runs[index].attachment.as_mut().expect("validated incarnation");
+    attachment.state = AttachmentState::Quiescing;
+    attachment.updated_at = super::now();
+    for credential in &mut state.credentials {
+        if credential.run_id == holder.run_id && credential.attachment_id == holder.attachment_id
+            && credential.attachment_epoch == holder.attachment_epoch {
+            credential.state = CredentialState::Revoked;
+        }
+    }
+    Ok(revision)
+}
+
+pub(crate) fn release_with_proof(state: &mut OrchestrationState, claim_id: &str,
+    proof: &WriterExitProof) -> Result<u64, InspectionError> {
+    let index = validate_reference(state, &proof.incarnation)?;
+    let run = &state.runs[index];
+    let old = run.attachment.as_ref().expect("validated incarnation");
+    let claim_index = state.checkout_claims.iter().position(|claim| claim.claim_id == claim_id)
+        .ok_or_else(|| refusal("checkout_claim_missing", "Protected checkout claim is missing"))?;
+    let claim = &state.checkout_claims[claim_index];
+    let previous = old.process.as_ref().and_then(|process| process.kernel_boot_id.as_ref())
+        .or_else(|| old.shell.as_ref().and_then(|shell| shell.process.kernel_boot_id.as_ref()));
+    if run.kind != cockpit_protocol::orchestration::RunKind::Worker || run.stage != cockpit_protocol::orchestration::RunStage::Closed
+        || old.state != AttachmentState::Quiescing || claim.state != ClaimState::Quiescing
+        || claim.revision != proof.claim_revision || claim.holder.as_ref() != Some(&proof.incarnation)
+        || proof.checkout.as_ref() != Some(&claim.checkout) || old.machine_id.as_ref() != Some(&proof.machine_id)
+        || previous != Some(&proof.previous_kernel_boot_id) || proof.previous_kernel_boot_id.is_empty()
+        || proof.observed_kernel_boot_id.is_empty() || !proof.all_consumers_absent || !exit_basis_matches(old, proof) {
+        return Err(refusal("writer_exit_unproven", "Release requires a sealed exact holder and complete current consumer exit proof"));
+    }
+    let revision = claim.revision.checked_add(1).filter(|revision| *revision <= MAX_SAFE_COUNTER)
+        .ok_or_else(|| refusal("orchestration_state_full", "Claim revision exhausted"))?;
+    let claim = &mut state.checkout_claims[claim_index];
+    claim.state = ClaimState::Released;
+    claim.revision = revision;
+    claim.holder = None;
+    state.runs[index].attachment.as_mut().expect("validated incarnation").state = AttachmentState::Revoked;
+    Ok(revision)
 }
 
 pub(crate) fn revoke_root_and_reserve_replacement(state: &mut OrchestrationState, proof: &RootMainRecoveryProof, replacement: ExecutionAttachment, operation_id: &str) -> Result<(), InspectionError> {
@@ -235,7 +375,30 @@ mod tests {
         attachment.process = Some(cockpit_protocol::orchestration::NativeProcessIdentity { pid: 99, start_ticks: 7, kernel_boot_id: Some("old-boot".into()) });
         let replacement = super::super::reserved_attachment(2, 1);
         let mut proof = WriterExitProof { incarnation: old.clone(), claim_revision: 1, checkout: Some(checkout),
-            machine_id: "machine".into(), previous_kernel_boot_id: "old-boot".into(), observed_kernel_boot_id: "new-boot".into(), all_consumers_absent: false };
+            machine_id: "machine".into(), previous_kernel_boot_id: "old-boot".into(), observed_kernel_boot_id: "new-boot".into(), all_consumers_absent: false, basis: ExitBasis::Reboot };
+        let foreign_consumer = AttachmentReference { run_id: "other-worker".into(),
+            attachment_id: Uuid::new_v4().to_string(), attachment_epoch: 1 };
+        let other_epoch = AttachmentReference { attachment_epoch: 7, ..old.clone() };
+        let resource = cockpit_protocol::orchestration::OwnedResourceRecord {
+            resource_id: Uuid::new_v4().to_string(), root_id: "root".into(), run_id: "worker".into(),
+            kind: cockpit_protocol::orchestration::OwnedResourceKind::AttemptDirectory,
+            ownership: cockpit_protocol::orchestration::ResourceOwnership::Owned,
+            creation_operation_id: Some(op.clone()),
+            identity: cockpit_protocol::orchestration::OwnedResourceIdentity::AttemptDirectory {
+                identity: cockpit_protocol::orchestration::OwnedAttemptDirectoryIdentity {
+                    creation_operation_id: op.clone(), root: "/repo".into(),
+                    device: "device".into(), inode: "inode".into(),
+                },
+            },
+            authority: cockpit_protocol::orchestration::CleanupAuthority::OwnedWhenSafe,
+            consumers: vec![old.clone(), foreign_consumer.clone(), other_epoch.clone()],
+            integration_result_id: None,
+            cleanup: cockpit_protocol::orchestration::CleanupItem {
+                operation_id: None, state: cockpit_protocol::orchestration::CleanupState::Pending,
+                reason: None, effects: Vec::new(), updated_at: super::super::now(),
+            },
+        };
+        state.owned_resources.push(resource.clone());
         let before = serde_json::to_vec(&state).unwrap();
         assert_eq!(revoke_and_reserve_replacement(&mut state, &claim, &proof, replacement.clone(), &op).unwrap_err().code, "writer_exit_unproven");
         assert_eq!(serde_json::to_vec(&state).unwrap(), before);
@@ -252,6 +415,10 @@ mod tests {
         assert_eq!(state.runs[0].attachment.as_ref().unwrap().epoch, 2);
         assert_eq!(state.checkout_claims[0].state, ClaimState::Reserved);
         assert_eq!(state.checkout_claims[0].holder.as_ref().unwrap().attachment_epoch, 2);
+        let mut expected_resource = resource;
+        expected_resource.consumers = vec![foreign_consumer, other_epoch];
+        assert_eq!(state.owned_resources[0], expected_resource,
+            "Successful exact-holder discharge preserves other consumers and immutable resource audit");
         assert!(revoke_and_reserve_replacement(&mut state, &claim, &proof, super::super::reserved_attachment(2, 1), &op).is_err());
     }
     #[test]
@@ -278,6 +445,7 @@ mod tests {
             kernel_boot_id: crate::process_identity::kernel_boot_id() });
         attachment.location = Some(RunLocation {
             endpoint_identity: "endpoint".into(), boot_id: None, session_id: "session".into(),
+            peer_process: None,
             workspace_id: "space".into(), tab_id: "tab".into(), pane_id: "pane".into(),
             terminal_id: Some("terminal".into()), native_session_id: Some("native".into()), launch_tag: "tag".into(),
         });
@@ -324,5 +492,53 @@ mod tests {
                 assert_eq!(serde_json::to_vec(&state).unwrap(), before, "refusal {fence} must not mutate any authority");
             }
         }
+    }
+
+    #[test]
+    fn sealed_scope_release_rejects_stale_receipts_and_revokes_authority_atomically() {
+        use cockpit_protocol::orchestration::{CloseReason, NativeProcessIdentity, OwnedProcessScope, ScopeKind};
+        let mut state = OrchestrationState::default();
+        let holder = worker(&mut state, "scope-worker");
+        let checkout = checkout("/repo", "scope-checkout");
+        let operation = Uuid::new_v4().to_string();
+        let claim_id = reserve_claim(&mut state, &checkout, &holder, &operation).unwrap();
+        hold_claim(&mut state, &claim_id, &holder, 1).unwrap();
+        let process = NativeProcessIdentity { pid: 99, start_ticks: 7, kernel_boot_id: Some("same-boot".into()) };
+        let scope = OwnedProcessScope { kind: ScopeKind::SystemdUserScope, unit: "cockpit-w-store-run-e1-nonce.scope".into(),
+            invocation_id: "1".repeat(32), control_group: "/user.slice/test.scope".into(), cgroup_device: "1".into(), cgroup_inode: "2".into(),
+            machine_id: "machine".into(), kernel_boot_id: "same-boot".into(), member: process.clone(), captured_at: super::super::now() };
+        let run = &mut state.runs[0];
+        run.stage = cockpit_protocol::orchestration::RunStage::Closed;
+        run.close_reason = Some(CloseReason::Accepted);
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.machine_id = Some("machine".into());
+        attachment.process = Some(process);
+        attachment.process_scope = Some(scope.clone());
+        let (credential, _) = super::super::credentials::test_job_credential(&state.runs[0], super::super::JobRole::Worker);
+        state.credentials.push(credential);
+        let mut proof = WriterExitProof { incarnation: holder.clone(), claim_revision: 2, checkout: Some(checkout),
+            machine_id: "machine".into(), previous_kernel_boot_id: "same-boot".into(), observed_kernel_boot_id: "same-boot".into(),
+            all_consumers_absent: true, basis: ExitBasis::ScopeDrained { unit: scope.unit.clone(), invocation_id: scope.invocation_id.clone() } };
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(release_with_proof(&mut state, &claim_id, &proof).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+        let revision = seal_for_release(&mut state, &claim_id, &holder, 2, &operation).unwrap();
+        assert_eq!(revision, 3);
+        assert_eq!(state.checkout_claims[0].state, ClaimState::Quiescing);
+        assert_eq!(state.runs[0].attachment.as_ref().unwrap().state, AttachmentState::Quiescing);
+        assert_eq!(state.credentials[0].state, CredentialState::Revoked);
+        assert_eq!(seal_for_release(&mut state, &claim_id, &holder, revision, &operation).unwrap(), revision);
+        let sealed = serde_json::to_vec(&state).unwrap();
+        assert!(release_with_proof(&mut state, &claim_id, &proof).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(), sealed);
+        proof.claim_revision = revision;
+        proof.basis = ExitBasis::ScopeDrained { unit: scope.unit.clone(), invocation_id: "2".repeat(32) };
+        assert!(release_with_proof(&mut state, &claim_id, &proof).is_err());
+        assert_eq!(serde_json::to_vec(&state).unwrap(), sealed);
+        proof.basis = ExitBasis::ScopeDrained { unit: scope.unit, invocation_id: scope.invocation_id };
+        assert_eq!(release_with_proof(&mut state, &claim_id, &proof).unwrap(), 4);
+        assert_eq!(state.checkout_claims[0].state, ClaimState::Released);
+        assert!(state.checkout_claims[0].holder.is_none());
+        assert_eq!(state.runs[0].attachment.as_ref().unwrap().state, AttachmentState::Revoked);
     }
 }

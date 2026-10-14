@@ -316,7 +316,7 @@ fn output_line(output: &Output) -> Option<String> {
     (!text.is_empty() && !text.contains('\n')).then(|| text.to_owned())
 }
 
-pub(crate) async fn git_line(
+pub async fn git_line(
     directory: &Path,
     args: &[&str],
 ) -> Result<String, crate::InspectionError> {
@@ -329,7 +329,7 @@ pub(crate) async fn git_line(
     })
 }
 
-pub(crate) async fn git_output(
+pub async fn git_output(
     directory: &Path,
     args: &[&str],
 ) -> Result<Output, crate::InspectionError> {

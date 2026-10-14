@@ -47,7 +47,7 @@ pub(crate) fn revalidate_checkout(checkout: &CheckoutIdentity) -> Result<(), Ins
 
 /// Only for the owner-created dedicated supervisor directory. Ordinary targets
 /// must use Git discovery, never this directory-only constructor.
-pub(crate) fn resolve_owned_directory(path: &Path) -> Result<(ProjectIdentity, CheckoutIdentity), InspectionError> {
+pub fn resolve_owned_directory(path: &Path) -> Result<(ProjectIdentity, CheckoutIdentity), InspectionError> {
     let (root, identity) = directory(path)?;
     if Path::new(&root).join(".git").exists() { return Err(unavailable("Owned supervisor directory unexpectedly contains Git metadata")); }
     let project = ProjectIdentity { key: key(b"cockpit:project:directory:v1\0", &[&root]),
@@ -55,6 +55,50 @@ pub(crate) fn resolve_owned_directory(path: &Path) -> Result<(ProjectIdentity, C
     let checkout = CheckoutIdentity { key: checkout_key(&root, ""),
         path: root, directory_identity: identity, git: None };
     Ok((project, checkout))
+}
+
+/// Exact owner-created attempt checkout; its original project identity remains
+/// separate. This constructor never discovers or creates a replacement project.
+pub fn owned_attempt_checkout(path: &Path) -> Result<CheckoutIdentity, InspectionError> {
+    use cap_std::fs::MetadataExt as _;
+    let directory = crate::project_store::open_dir_nofollow_absolute(path)
+        .map_err(|_| unavailable("Owned attempt directory cannot be opened without following links"))?;
+    let metadata = directory.dir_metadata().map_err(|_| unavailable("Owned attempt directory cannot be inspected"))?;
+    if !metadata.is_dir() || metadata.mode() & 0o7777 != 0o700
+        || metadata.uid() != nix::unistd::Uid::effective().as_raw() {
+        return Err(unavailable("Owned attempt directory must be owner-private with mode 0700"));
+    }
+    let root = path_text(path)?;
+    Ok(CheckoutIdentity { key: checkout_key(&root, ""), path: root,
+        directory_identity: DirectoryIdentity { device: metadata.dev().to_string(), inode: metadata.ino().to_string() }, git: None })
+}
+
+impl OrchestrationService {
+    /// Revalidate a physical checkout without confusing a private attempt cwd
+    /// with its unchanged source project. Directory projects never probe Git.
+    pub async fn resolve_run_checkout(&self, run: &Run) -> Result<(ProjectIdentity, CheckoutIdentity), InspectionError> {
+        let saved = run.checkout.as_ref().ok_or_else(|| unavailable("Run has no recorded checkout"))?;
+        let project = run.project.as_ref().ok_or_else(|| unavailable("Run has no recorded source project"))?;
+        if let Some(DispatchTarget::OwnedAttemptDirectory { source_root, .. }) = &run.target {
+            let ProjectSource::Directory { root } = &project.source else {
+                return Err(unavailable("Owned attempt directory requires its original Directory project"));
+            };
+            let expected = self.base().join("attempts").join(&run.run_id);
+            if Path::new(&saved.path) != expected || source_root != root || directory(Path::new(root))?.0 != *root {
+                return Err(unavailable("Owned attempt checkout differs from its exact private run path or original source"));
+            }
+            return Ok((project.clone(), owned_attempt_checkout(&expected)?));
+        }
+        if let ProjectSource::Directory { root } = &project.source {
+            let (path, identity) = directory(Path::new(&saved.path))?;
+            if directory(Path::new(root))?.0 != *root {
+                return Err(unavailable("Original Directory project root changed"));
+            }
+            return Ok((project.clone(), CheckoutIdentity { key: checkout_key(&path, ""), path,
+                directory_identity: identity, git: None }));
+        }
+        resolve_directory(Path::new(&saved.path), project.repository_id.clone(), project.source_workspace_id.clone()).await
+    }
 }
 
 /// Git inspection is bounded and disables hooks, prompts, fsmonitor and ambient
@@ -140,6 +184,7 @@ fn root_container_unproven() -> InspectionError {
 pub(crate) fn same_location(left: Option<&RunLocation>, right: Option<&RunLocation>) -> bool {
     match (left, right) {
         (Some(a), Some(b)) => a.endpoint_identity == b.endpoint_identity && a.boot_id == b.boot_id
+            && a.peer_process == b.peer_process
             && a.session_id == b.session_id && a.workspace_id == b.workspace_id
             && a.tab_id == b.tab_id && a.pane_id == b.pane_id && a.terminal_id == b.terminal_id
             && a.native_session_id == b.native_session_id && a.launch_tag == b.launch_tag,
@@ -176,7 +221,6 @@ fn root_recovery_target(state: &super::store::OrchestrationState, run: &Run) -> 
     }
     let attachment = run.attachment.as_ref().ok_or_else(root_unproven)?;
     if matches!(attachment.state, AttachmentState::Quiescing | AttachmentState::Revoked)
-        || attachment.conversation.is_none()
         || attachment.location.as_ref().is_none_or(|location| location.session_id != run.session_id)
         || run.dispatch.as_ref().is_some_and(|dispatch|
             matches!(dispatch.step, DispatchStep::SetupRunning | DispatchStep::SetupUnknown
@@ -359,6 +403,7 @@ impl OrchestrationService {
                 let location = fresh.location.as_mut().ok_or_else(root_container_unproven)?;
                 location.endpoint_identity = runtime.endpoint_identity.clone();
                 location.boot_id = runtime.boot_id.clone();
+                location.peer_process = runtime.peer_process.clone();
                 location.tab_id = pane.tab_id.clone();
                 location.pane_id = pane.pane_id.clone();
                 location.terminal_id = pane.terminal_id.clone();
@@ -389,6 +434,7 @@ impl OrchestrationService {
         let fresh_runtime = herdr.runtime(&expected.session_id).await.map_err(|_| root_container_unproven())?;
         let fresh_pane = owned_root_pane(&fresh_runtime, expected, !alive)?;
         if fresh_runtime.endpoint_identity != runtime.endpoint_identity || fresh_runtime.boot_id != runtime.boot_id
+            || fresh_runtime.peer_process != runtime.peer_process
             || match (pane, fresh_pane) {
                 (Some(a), Some(b)) => a.pane_id != b.pane_id || a.tab_id != b.tab_id || a.terminal_id != b.terminal_id
                     || a.native_session_id != b.native_session_id || a.agent_kind != b.agent_kind,
@@ -422,7 +468,8 @@ impl OrchestrationService {
     /// Worker-only all-consumer proof; never used to recover a root liaison.
     /// A stale projection, heartbeat, endpoint failure or closed status is never
     /// substituted for OS incarnation evidence.
-    pub fn observe_writer_exit(&self, expected: &Run, checkout: &CheckoutIdentity) -> Result<WriterExitProof, InspectionError> {
+    pub fn observe_writer_exit(&self, expected: &Run, checkout: &CheckoutIdentity,
+        scope: Option<&crate::process_scope::ScopeObservation>, herdr_cwd_clear: bool) -> Result<WriterExitProof, InspectionError> {
         if expected.kind != RunKind::Worker { return Err(exit_unproven()); }
         let locked = self.store.lock()?;
         let state = locked.read()?;
@@ -437,7 +484,20 @@ impl OrchestrationService {
         if old.machine_id.as_deref() != Some(machine.as_str()) { return Err(exit_unproven()); }
         let previous = old.process.as_ref().and_then(|p| p.kernel_boot_id.as_ref())
             .or_else(|| old.shell.as_ref().and_then(|s| s.process.kernel_boot_id.as_ref())).ok_or_else(exit_unproven)?;
-        if previous == &boot { return Err(consumer_unproven()); }
+        let same_boot = previous == &boot;
+        let basis = if same_boot {
+            let observation = scope.ok_or_else(consumer_unproven)?;
+            let saved = old.process_scope.as_ref().ok_or_else(consumer_unproven)?;
+            let observed_at = time::OffsetDateTime::parse(&observation.observed_at, &time::format_description::well_known::Rfc3339)
+                .map_err(|_| consumer_unproven())?;
+            let age = time::OffsetDateTime::now_utc() - observed_at;
+            if &observation.scope != saved || saved.machine_id != machine || saved.kernel_boot_id != boot
+                || !matches!(observation.state, crate::process_scope::ScopeState::Drained) || !herdr_cwd_clear
+                || age.is_negative() || age > time::Duration::seconds(10) {
+                return Err(consumer_unproven());
+            }
+            super::claims::ExitBasis::ScopeDrained { unit: saved.unit.clone(), invocation_id: saved.invocation_id.clone() }
+        } else { super::claims::ExitBasis::Reboot };
         let absent = |attachment: &ExecutionAttachment, kind: RunKind| -> bool {
             if attachment.machine_id.as_deref() != Some(machine.as_str()) { return false; }
             let processes = attachment.process.iter().chain(attachment.shell.iter().map(|s| &s.process));
@@ -451,7 +511,7 @@ impl OrchestrationService {
             // instead have a locally attested process without a launch shell.
             count > 0 && (attachment.shell.is_some() || kind == RunKind::Adopted)
         };
-        if !absent(old, run.kind) { return Err(exit_unproven()); }
+        if !same_boot && !absent(old, run.kind) { return Err(exit_unproven()); }
         let mut owners = std::collections::HashSet::from([run.run_id.as_str()]);
         loop {
             let before = owners.len();
@@ -463,6 +523,19 @@ impl OrchestrationService {
             if owners.len() == before { break; }
         }
         for child in state.runs.iter().filter(|r| r.run_id != run.run_id && owners.contains(r.run_id.as_str())) {
+            if same_boot {
+                // Separately launched descendants need their own completed
+                // release proof. The parent scope cannot prove another scope empty.
+                let released = child.stage == RunStage::Closed && child.checkout_claim_id.as_ref().is_some_and(|claim_id|
+                    state.checkout_claims.iter().any(|claim| &claim.claim_id == claim_id && claim.state == super::claims::ClaimState::Released));
+                let contained_here = child.attachment.as_ref().and_then(|attachment| attachment.process_scope.as_ref())
+                    .zip(old.process_scope.as_ref()).is_some_and(|(child_scope, parent_scope)|
+                        child_scope.unit == parent_scope.unit && child_scope.invocation_id == parent_scope.invocation_id);
+                let never_launched = child.stage == RunStage::Closed && child.attachment.is_none()
+                    && child.dispatch.as_ref().is_none_or(|dispatch| matches!(dispatch.step, DispatchStep::Planning | DispatchStep::PlanFailed));
+                if !released && !contained_here && !never_launched { return Err(consumer_unproven()); }
+                continue;
+            }
             if child.attachment.as_ref().is_none_or(|a| !absent(a, child.kind)) { return Err(exit_unproven()); }
             let attachment = child.attachment.as_ref().ok_or_else(exit_unproven)?;
             if attachment.process.iter().chain(attachment.shell.iter().map(|shell| &shell.process))
@@ -474,8 +547,35 @@ impl OrchestrationService {
         let claim = state.checkout_claims.iter().find(|c| Some(c.claim_id.as_str()) == run.checkout_claim_id.as_deref()).ok_or_else(exit_unproven)?;
         if claim.checkout != *checkout || claim.holder.as_ref() != Some(&incarnation) { return Err(exit_unproven()); }
         Ok(WriterExitProof { incarnation, claim_revision: claim.revision, checkout: Some(checkout.clone()), machine_id: machine,
-            previous_kernel_boot_id: previous.clone(), observed_kernel_boot_id: boot, all_consumers_absent: true })
+            previous_kernel_boot_id: previous.clone(), observed_kernel_boot_id: boot, all_consumers_absent: true, basis })
     }
+}
+
+/// Fresh Herdr evidence covering panes outside the attempt's process scope.
+/// Only the exact successfully retired original pane is excluded.
+pub async fn checkout_consumers_clear(herdr: &dyn super::herdr::OrchestrationHerdr,
+    run: &Run, checkout: &CheckoutIdentity) -> Result<bool, InspectionError> {
+    let runtime = herdr.runtime(&run.session_id).await?;
+    let retired = run.retirement.as_ref().is_some_and(|retirement|
+        matches!(retirement.state, cockpit_protocol::orchestration::RetirementState::Retired { .. }));
+    let inferred_identity = if run.retirement.is_none() { super::retirement::identity_for(run) } else { None };
+    let Some(server_identity) = run.retirement.as_ref().and_then(|retirement| retirement.identity.as_ref())
+        .or(inferred_identity.as_ref()) else { return Ok(false); };
+    if super::retirement::server_fence(server_identity, &runtime).is_err() { return Ok(false); }
+    let checkout_path = std::path::Path::new(&checkout.path);
+    for pane in &runtime.panes {
+        if retired && server_identity.workspace_id == pane.workspace_id
+            && server_identity.tab_id == pane.tab_id && server_identity.pane_id == pane.pane_id
+            && pane.terminal_id.as_deref() == Some(server_identity.terminal_id.as_str()) { continue; }
+        let Some(cwd) = pane.cwd.as_deref() else { return Ok(false); };
+        let path = std::path::Path::new(cwd);
+        if !path.is_absolute() || path.components().any(|component| matches!(component, std::path::Component::ParentDir))
+            || path.starts_with(checkout_path) { return Ok(false); }
+        // Resolve aliases without accepting disappeared directories as proof.
+        let Ok(canonical) = path.canonicalize() else { return Ok(false); };
+        if canonical.starts_with(checkout_path) { return Ok(false); }
+    }
+    Ok(true)
 }
 
 fn exit_unproven() -> InspectionError {
@@ -485,7 +585,7 @@ fn exit_unproven() -> InspectionError {
 
 fn consumer_unproven() -> InspectionError {
     InspectionError::new("consumer_activity_unproven",
-        "This OMP runtime cannot prove all same-boot checkout consumers stopped. The checkout remains protected until same-machine reboot.")
+        "All checkout consumers require a matching drained owned process scope and clear live-pane evidence, or same-machine reboot proof.")
 }
 
 #[cfg(test)]

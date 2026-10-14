@@ -852,16 +852,25 @@ impl HerdrCliAdapter {
         }
     }
 
-    pub(crate) fn socket_peer_identity(path: &Path, stream: &UnixStream) -> Result<String, InspectionError> {
+    fn socket_peer_observation(
+        path: &Path, stream: &UnixStream, physical: bool,
+    ) -> Result<(String, Option<cockpit_protocol::orchestration::NativeProcessIdentity>), InspectionError> {
         let credentials = stream.peer_cred().map_err(|error| {
             InspectionError::new(
                 "endpoint_identity_unavailable",
                 format!("could not read Herdr Unix socket peer credentials: {error}"),
             )
         })?;
-        let process_start = Self::process_start_identity(credentials.pid())
-            .map_or_else(|| "unavailable".to_owned(), |start| start.to_string());
-        Ok(format!(
+        let start_ticks = Self::process_start_identity(credentials.pid());
+        let process_start = start_ticks.map_or_else(|| "unavailable".to_owned(), |start| start.to_string());
+        let peer_process = if physical && credentials.uid() == nix::unistd::Uid::current().as_raw() {
+            credentials.pid().and_then(|pid| u32::try_from(pid).ok()).zip(start_ticks)
+                .zip(cockpit_core::process_identity::kernel_boot_id())
+                .map(|((pid, start_ticks), kernel_boot_id)| cockpit_protocol::orchestration::NativeProcessIdentity {
+                    pid, start_ticks, kernel_boot_id: Some(kernel_boot_id),
+                })
+        } else { None };
+        Ok((format!(
             "unix-socket:{}:pid={}:uid={}:gid={}:start={process_start}",
             path.display(),
             credentials
@@ -869,7 +878,11 @@ impl HerdrCliAdapter {
                 .map_or_else(|| "unknown".to_owned(), |pid| pid.to_string()),
             credentials.uid(),
             credentials.gid(),
-        ))
+        ), peer_process))
+    }
+
+    pub(crate) fn socket_peer_identity(path: &Path, stream: &UnixStream) -> Result<String, InspectionError> {
+        Self::socket_peer_observation(path, stream, false).map(|(identity, _)| identity)
     }
 
     pub(crate) async fn socket_request(
@@ -884,12 +897,26 @@ impl HerdrCliAdapter {
     }
 
     pub(crate) async fn socket_request_with_identity(
+        &self, session_id: &str, method: &str, params: Value, expected_identity: Option<&str>,
+    ) -> Result<(Value, String), InspectionError> {
+        self.socket_request_attested(session_id, method, params, expected_identity, false)
+            .await.map(|(result, identity, _)| (result, identity))
+    }
+
+    pub(crate) async fn socket_request_with_peer_process(
+        &self, session_id: &str, method: &str, params: Value, expected_identity: Option<&str>,
+    ) -> Result<(Value, String, Option<cockpit_protocol::orchestration::NativeProcessIdentity>), InspectionError> {
+        self.socket_request_attested(session_id, method, params, expected_identity, true).await
+    }
+
+    async fn socket_request_attested(
         &self,
         session_id: &str,
         method: &str,
         params: Value,
         expected_identity: Option<&str>,
-    ) -> Result<(Value, String), InspectionError> {
+        physical: bool,
+    ) -> Result<(Value, String, Option<cockpit_protocol::orchestration::NativeProcessIdentity>), InspectionError> {
         let path = self.socket_path(session_id)?;
         let dispatch_read_before_identity = request_is_safe_to_dispatch_before_identity(method);
         let id = format!(
@@ -922,8 +949,10 @@ impl HerdrCliAdapter {
         // wait for its next accept/read tick; their response is not trusted until
         // the connected peer identity has been checked below.
         let mut actual_identity = None;
+        let mut peer_process = None;
         if !dispatch_read_before_identity {
-            let identity = Self::socket_peer_identity(&path, &stream)?;
+            let (identity, process) = Self::socket_peer_observation(&path, &stream, physical)?;
+            peer_process = process;
             if let Some(expected_identity) = expected_identity
                 && identity != expected_identity
             {
@@ -977,7 +1006,8 @@ impl HerdrCliAdapter {
         }
 
         if dispatch_read_before_identity {
-            let identity = Self::socket_peer_identity(&path, &stream)?;
+            let (identity, process) = Self::socket_peer_observation(&path, &stream, physical)?;
+            peer_process = process;
             if let Some(expected_identity) = expected_identity
                 && identity != expected_identity
             {
@@ -1018,9 +1048,18 @@ impl HerdrCliAdapter {
                 })? {
                     return Err(error);
                 }
-                return value.get("result").cloned().ok_or_else(|| {
+                let result = value.get("result").cloned().ok_or_else(|| {
                     InspectionError::new("malformed_response", "Herdr response.result is required")
+                })?;
+                let stable_peer = peer_process.filter(|before| {
+                    let Ok(credentials) = reader.get_ref().peer_cred() else { return false };
+                    credentials.pid().and_then(|pid| u32::try_from(pid).ok()) == Some(before.pid)
+                        && credentials.uid() == nix::unistd::Uid::current().as_raw()
+                        && cockpit_core::process_identity::start_identity(before.pid as i32) == Some(before.start_ticks)
+                        && cockpit_core::process_identity::kernel_boot_id() == before.kernel_boot_id
+                        && matches!(cockpit_core::process_identity::incarnation_running(before.pid as i32, before.start_ticks), Ok(true))
                 });
+                return Ok((result, stable_peer));
             }
         })
         .await;
@@ -1046,13 +1085,14 @@ impl HerdrCliAdapter {
                 "Herdr response deadline expired",
             )),
         }?;
+        let (result, peer_process) = result;
         let actual_identity = actual_identity.ok_or_else(|| {
             InspectionError::new(
                 "endpoint_identity_unavailable",
                 "Herdr response peer identity was not checked",
             )
         })?;
-        Ok((result, actual_identity))
+        Ok((result, actual_identity, peer_process))
     }
 
     async fn start_server_and_wait(&self, session: Option<&str>) -> Result<Value, InspectionError> {
@@ -2573,6 +2613,36 @@ mod tests {
             .unwrap();
         drop(sender);
         assert_eq!(receiver.recv().await, Some(SessionChange::Changed));
+        server.await.unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn response_bound_peer_attestation_records_actual_pid_start_and_kernel_without_raw_boot() {
+        let path = std::env::temp_dir().join(format!("cockpit-peer-{}-{}.sock",
+            std::process::id(), NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)));
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let response = json!({"id": request["id"], "result": {"type":"snapshot", "snapshot":{}}});
+            reader.into_inner().write_all(format!("{response}\n").as_bytes()).await.unwrap();
+        });
+        let config = HerdrCliConfig::from_options(None, Some("fixture".into()), Some(path.clone())).unwrap();
+        let (result, identity, peer) = HerdrCliAdapter::new(config)
+            .socket_request_with_peer_process("fixture", "session.snapshot", json!({}), None).await.unwrap();
+        assert!(result["snapshot"].get("boot_id").is_none());
+        let peer = peer.expect("same-FD local server is physically attestable");
+        assert_eq!(peer.pid, std::process::id());
+        assert_eq!(Some(peer.start_ticks), cockpit_core::process_identity::start_identity(peer.pid as i32));
+        assert_eq!(peer.kernel_boot_id, cockpit_core::process_identity::kernel_boot_id());
+        assert!(peer.kernel_boot_id.is_some());
+        assert!(identity.contains(&format!(":pid={}:uid=", peer.pid)));
+        assert!(identity.ends_with(&format!(":start={}", peer.start_ticks)));
         server.await.unwrap();
         std::fs::remove_file(path).unwrap();
     }

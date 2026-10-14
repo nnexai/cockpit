@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use cockpit_core::project_adapter::{
-    ProjectHerdrAdapter, ProjectInventory, ProjectTerminalRequest, ProjectTerminalResult,
+    ProjectHerdrAdapter, ProjectInventory, ProjectSnapshot, ProjectTerminalRequest, ProjectTerminalResult,
     ProjectWorktreeEntry, ProjectWorktreeRemoveRequest, ProjectWorktreeRequest,
     ProjectWorktreeResult,
 };
@@ -469,6 +469,20 @@ fn parse_worktree_removed(
 
 #[async_trait]
 impl ProjectHerdrAdapter for HerdrCliAdapter {
+    async fn project_snapshot_at_endpoint(
+        &self, session_id: &str, expected_endpoint_identity: &str,
+    ) -> Result<ProjectSnapshot, InspectionError> {
+        let (result, endpoint_identity, peer_process) = self.socket_request_with_peer_process(
+            session_id, "session.snapshot", json!({}), Some(expected_endpoint_identity),
+        ).await?;
+        if endpoint_identity.contains(":pid=unknown") || endpoint_identity.contains(":start=unavailable") {
+            return Err(InspectionError::new("endpoint_identity_unavailable", "Snapshot peer incarnation is not verifiable"));
+        }
+        let boot_id = result.get("snapshot").and_then(|snapshot| snapshot.get("boot_id"))
+            .and_then(Value::as_str).map(str::to_owned);
+        let snapshot = super::parse_snapshot(json!({"result": result}), session_id, &endpoint_identity)?;
+        Ok(ProjectSnapshot { snapshot, endpoint_identity, boot_id, peer_process })
+    }
     async fn project_endpoint_identity(&self, session_id: &str) -> Result<String, InspectionError> {
         ensure_compatible(self.inspect_session(session_id).await?)?;
         let (_, endpoint_identity) = self

@@ -1,53 +1,45 @@
 //! Receipt-owned physical terminal cleanup, independent of logical assignment.
-use std::{collections::BTreeMap, time::{Duration, Instant}};
-use parking_lot::Mutex;
-use cockpit_protocol::orchestration::{NativeProcessIdentity, RetainReason, RetirementIdentity, RetirementState, RetirementStateKind, Run, RunRetirement, TerminalOutcome, WorkerCleanupPolicy};
-use super::{dispatch::Dispatcher, herdr::{OrchestrationHerdr, RuntimeView}, retirement::{self, TerminalDecision, OBSERVATION_RETRY_SECS}, now, OrchestrationService};
+use cockpit_protocol::orchestration::{NativeProcessIdentity, RetainReason, RetirementIdentity, RetirementState, RetirementStateKind, Run, TerminalOutcome, WorkerCleanupPolicy};
+use super::{dispatch::Dispatcher, herdr::{OrchestrationHerdr, RuntimeView}, retirement::{self, TerminalDecision}, now, OrchestrationService};
 use crate::{process_identity, InspectionError};
-
-#[derive(Default)]
-pub(super) struct ObservationBackoff(Mutex<BTreeMap<String, (String, Instant)>>);
-impl ObservationBackoff {
-    fn ready(&self, run: &Run, record: &RunRetirement) -> bool {
-        !self.0.lock().get(&run.run_id).is_some_and(|(id, after)| id == &record.retirement_id && Instant::now() < *after)
-    }
-    fn unavailable(&self, run: &Run, record: &RunRetirement) {
-        self.0.lock().insert(run.run_id.clone(), (record.retirement_id.clone(), Instant::now() + Duration::from_secs(OBSERVATION_RETRY_SECS)));
-    }
-    fn retain_queue(&self, queue: &[Run]) {
-        self.0.lock().retain(|run_id, (id, _)| queue.iter().any(|run| &run.run_id == run_id && run.retirement.as_ref().is_some_and(|record| &record.retirement_id == id)));
-    }
-}
 
 impl Dispatcher {
     pub(super) async fn retire(&self, run: &Run) -> Result<(), InspectionError> {
-        retire_run(&self.service, self.herdr.as_ref(), &self.retirement_observations, run).await
+        retire_run(&self.service, self.herdr.as_ref(), run).await
     }
-    pub(super) fn retain_retirement_observations(&self, queue: &[Run]) { self.retirement_observations.retain_queue(queue); }
 }
 
-pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn OrchestrationHerdr, observations: &ObservationBackoff, queued: &Run) -> Result<(), InspectionError> {
+pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn OrchestrationHerdr, queued: &Run) -> Result<(), InspectionError> {
     let Some(_lease) = service.execution_lease(&queued.run_id)? else { return Ok(()) };
     let mut run = service.run_for_review(&queued.session_id, &queued.run_id)?;
     let Some(record) = &run.retirement else { return Ok(()) };
     if queued.retirement.as_ref().is_none_or(|queued| queued.retirement_id != record.retirement_id) { return Ok(()) }
-    if !observations.ready(&run, record) { return Ok(()) }
     let expected = record.state.kind();
-    let reobserve = matches!(record.state, RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable, .. });
+    let reobserve = matches!(record.state, RetirementState::Retained {
+        reason: RetainReason::NativeProcessUnverifiable | RetainReason::ObservationUnavailable, ..
+    });
     if retirement::terminal(&record.state) && expected != RetirementStateKind::Unknown && !reobserve { return Ok(()) }
+    if !service.retirement_authorized(&run.run_id, record)?
+        && !matches!(expected, RetirementStateKind::CloseIntent | RetirementStateKind::Unknown) {
+        if expected == RetirementStateKind::Waiting {
+            service.record_retirement_exact(&run.run_id, record, RetirementState::Retained {
+                at: now(), reason: if retirement::record_shape(record) { RetainReason::IdentityChanged }
+                    else { RetainReason::IdentityIncomplete }, stopped: false,
+            })?;
+        }
+        return Ok(());
+    }
     let Some(identity) = &record.identity else { return Ok(()) };
     let runtime = match herdr.runtime(&identity.session_id).await {
         Ok(runtime) => runtime,
         Err(_) => {
-            observations.unavailable(&run, record);
             if expected == RetirementStateKind::CloseIntent {
                 service.record_retirement(&run.run_id, &record.retirement_id, expected,
                     retirement::classify_close(identity, None, None))?;
-            } else if expected == RetirementStateKind::Waiting
-                && super::parse_time(&record.created_at).is_none_or(|at|
-                    time::OffsetDateTime::now_utc() - at >= time::Duration::minutes(10)) {
-                service.record_retirement(&run.run_id, &record.retirement_id, expected,
-                    RetirementState::Retained { at: now(), reason: RetainReason::ObservationUnavailable, stopped: false })?;
+            } else if expected == RetirementStateKind::Waiting {
+                service.record_retirement_exact(&run.run_id, record, RetirementState::Retained {
+                    at: now(), reason: RetainReason::ObservationUnavailable, stopped: false,
+                })?;
             }
             return Ok(());
         }
@@ -57,7 +49,6 @@ pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn Orche
         if matches!(next, RetirementState::Retired { .. }) || expected == RetirementStateKind::CloseIntent {
             service.record_retirement(&run.run_id, &record.retirement_id, expected, next)?;
         }
-        observations.unavailable(&run, record);
         return Ok(()); // A recovered or uncertain close is never submitted again.
     }
     let blockers = service.retirement_blockers(&run.run_id)?;
@@ -65,18 +56,23 @@ pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn Orche
         if !reobserve && record.state != (RetirementState::Waiting { blockers: blockers.clone() }) {
             service.record_retirement(&run.run_id, &record.retirement_id, expected, RetirementState::Waiting { blockers })?;
         }
-        observations.unavailable(&run, record);
         return Ok(());
     }
     let next = match observe_terminal(&run, identity, &runtime, herdr).await {
         Ok(next) => next,
-        Err(_) => { observations.unavailable(&run, record); return Ok(()) }
+        Err(_) => {
+            if expected == RetirementStateKind::Waiting {
+                service.record_retirement_exact(&run.run_id, record, RetirementState::Retained {
+                    at: now(), reason: RetainReason::ObservationUnavailable, stopped: false,
+                })?;
+            }
+            return Ok(());
+        }
     };
     if reobserve {
         // Fresh physical proof, not a migration, is required to reopen the old
         // process-proof diagnosis. Other retained reasons are never overridden.
         if matches!(next, Some(RetirementState::Retained { .. })) {
-            observations.unavailable(&run, record);
             return Ok(());
         }
         service.retirement_waiting(&run.run_id, record, Vec::new())?;
@@ -85,7 +81,6 @@ pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn Orche
     let record = run.retirement.as_ref().expect("retirement");
     if record.state.kind() != RetirementStateKind::Waiting { return Ok(()) }
     if let Some(next) = next {
-        if matches!(next, RetirementState::Waiting { .. }) { observations.unavailable(&run, record); }
         if record.state != next {
             service.record_retirement(&run.run_id, &record.retirement_id, RetirementStateKind::Waiting, next)?;
         }
@@ -96,7 +91,7 @@ pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn Orche
     let submitted = service.run_for_review(&run.session_id, &run.run_id)?;
     let Some(saved) = &submitted.retirement else { return Ok(()) };
     if saved.retirement_id != record.retirement_id || saved.state != intent
-        || !retirement::identity_matches(&submitted, saved) { return Ok(()) }
+        || !retirement::identity_matches(&submitted, saved) || !service.retirement_authorized(&submitted.run_id, saved)? { return Ok(()) }
     let identity = saved.identity.as_ref().expect("identity");
     // Reobserve adjacent to the effect. This branch owns a newly saved intent
     // and knows no close has been submitted, so a busy/offline preflight can wait.
@@ -108,7 +103,6 @@ pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn Orche
     match final_check {
         Err(_) | Ok(Some(RetirementState::Waiting { .. })) => {
             service.retirement_waiting(&submitted.run_id, saved, blockers)?;
-            observations.unavailable(&submitted, saved);
             return Ok(());
         }
         Ok(Some(next)) => {
@@ -117,13 +111,13 @@ pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn Orche
         }
         Ok(None) if !blockers.is_empty() => {
             service.retirement_waiting(&submitted.run_id, saved, blockers)?;
-            observations.unavailable(&submitted, saved);
             return Ok(());
         }
         Ok(None) => {}
     }
     let current = service.run_for_review(&submitted.session_id, &submitted.run_id)?;
-    if current.retirement.as_ref() != Some(saved) || !retirement::identity_matches(&current, saved) {
+    if current.retirement.as_ref() != Some(saved) || !retirement::identity_matches(&current, saved)
+        || !service.retirement_authorized(&current.run_id, saved)? {
         service.record_retirement_exact(&submitted.run_id, saved,
             RetirementState::Retained { at: now(), reason: RetainReason::IdentityChanged, stopped: false })?;
         return Ok(());
@@ -132,7 +126,6 @@ pub(super) async fn retire_run(service: &OrchestrationService, herdr: &dyn Orche
     let fresh = herdr.runtime(&identity.session_id).await.ok();
     service.record_retirement_exact(&submitted.run_id, saved,
         retirement::classify_close(identity, Some(response), fresh.as_ref()))?;
-    observations.unavailable(&submitted, saved);
     Ok(())
 }
 
@@ -143,7 +136,7 @@ async fn observe_terminal(run: &Run, identity: &RetirementIdentity, runtime: &Ru
         || run.cleanup_policy != Some(WorkerCleanupPolicy::OwnedWhenSafe) || run.session_id != identity.session_id {
         return Ok(retained(RetainReason::IdentityChanged, false));
     }
-    let exact_absence = retirement::runtime_fence(identity, runtime).is_ok()
+    let exact_absence = retirement::server_fence(identity, runtime).is_ok()
         && !runtime.panes.iter().any(|pane| pane.pane_id == identity.pane_id || pane.terminal_id.as_deref() == Some(identity.terminal_id.as_str()));
     if exact_absence { return Ok(Some(RetirementState::Retired { at: now(), terminal: TerminalOutcome::AlreadyAbsent })); }
     if identity.process.is_none() || identity.shell.is_none() {

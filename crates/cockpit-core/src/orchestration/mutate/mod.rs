@@ -5,7 +5,7 @@ pub(super) mod tasks;
 pub(super) mod runs;
 pub(super) mod resume;
 pub(super) mod grants;
-mod ownership;
+pub(super) mod ownership;
 pub(super) mod intents;
 pub(super) mod reviewed;
 mod dispatch_records;
@@ -94,6 +94,8 @@ pub(super) fn apply(
         action @ OrchestrationAction::TaskUnassign { .. } => ownership::unassign(ctx, action),
         OrchestrationAction::RunAdopt { label, location } => runs::adopt(ctx, label, location),
         action @ OrchestrationAction::WorkerStart { .. } => runs::worker_start(ctx, action),
+        action @ (OrchestrationAction::TaskSchedule { .. } | OrchestrationAction::TaskScheduleCancel { .. }) => runs::schedule(ctx, action),
+        action @ OrchestrationAction::WorkerReplace { .. } => runs::worker_replace(ctx, action),
         action @ OrchestrationAction::TaskScopeUpdate { .. } => tasks::scope_update(ctx, action),
         action @ OrchestrationAction::IntegrationRecord { .. } => integration::apply(ctx, action),
         action @ (OrchestrationAction::ResourceRequest { .. }

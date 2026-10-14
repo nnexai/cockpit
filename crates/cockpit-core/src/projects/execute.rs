@@ -131,10 +131,16 @@ fn step_at_least(current: WorkspaceOperationStep, wanted: WorkspaceOperationStep
 }
 
 pub(super) fn pending_unknown(operation: &WorkspaceOperation) -> bool {
-    match setup_step(operation.step).1.receipt {
-        StepReceipt::WorkspaceId => operation.workspace_id.is_none(),
-        StepReceipt::PaneId => operation.pane_id.is_none(),
-        StepReceipt::None => false,
+    if operation.error.as_ref().is_some_and(|e| matches!(e.code.as_str(), "owned_checkout_git_pending" | "owned_attempt_directory_pending")) {
+        return true;
+    }
+    match operation.step {
+        WorkspaceOperationStep::CheckoutPrepared | WorkspaceOperationStep::SpaceBound => false,
+        _ => match setup_step(operation.step).1.receipt {
+            StepReceipt::WorkspaceId => operation.workspace_id.is_none(),
+            StepReceipt::PaneId => operation.pane_id.is_none(),
+            StepReceipt::None => false,
+        },
     }
 }
 
@@ -194,6 +200,9 @@ impl ProjectService {
         let lease = self
             .store
             .acquire_execution_lease(&operation.operation_id)?;
+        if self.store.owned_checkout(&operation.operation_id)?.is_some() {
+            return Err(InspectionError::new("invalid_operation_state", "actor placement is resumed only by its dispatcher"));
+        }
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(InspectionError::new(
                 "shutdown",
@@ -265,6 +274,9 @@ impl ProjectService {
         let lease = self
             .store
             .acquire_execution_lease(&operation.operation_id)?;
+        if self.store.owned_checkout(&operation.operation_id)?.is_some() {
+            return Err(InspectionError::new("invalid_operation_state", "actor placement is resumed only by its dispatcher"));
+        }
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(InspectionError::new(
                 "shutdown",
@@ -889,7 +901,7 @@ impl ProjectService {
         Ok(context_error)
     }
 
-    async fn materialize_context(
+    pub(super) async fn materialize_context(
         &self,
         session: &str,
         plan: &WorkspaceSetupPlan,

@@ -167,7 +167,7 @@ fn registration_promotes_root_and_worker_directly_without_herdr_or_omp() {
         assert!(run.attachment.as_ref().unwrap().location.is_none());
         assert!(run.attachment.as_ref().unwrap().process.is_none());
         assert_eq!(run.attachment.as_ref().unwrap().conversation.as_ref(),
-            match &actor { Actor::Agent(caller) => Some(&caller.conversation), _ => unreachable!() });
+            match &actor { Actor::Agent(caller) => caller.conversation.as_ref(), _ => unreachable!() });
         let kind = if worker { MessageKind::WorkBrief } else { MessageKind::SupervisorBrief };
         assert_eq!(fixture.state().messages.iter().filter(|message|
             message.to_run_id == run_id && message.kind == kind).count(), 1);
@@ -427,6 +427,7 @@ fn observed_root_pane(fixture: &Fixture, root: &str) -> herdr::RuntimePane {
     }
     let location = fixture.run(root).attachment.unwrap().location.unwrap();
     herdr::RuntimePane {
+        cwd: None,
         workspace_id: location.workspace_id,
         workspace_label: "Project".into(),
         tab_id: location.tab_id,
@@ -453,6 +454,9 @@ fn unstarted_unknown_launch_escalates_after_settle_and_recovers_once() {
         fixture.setup(&worker);
         fixture.service.record_dispatch(&worker, DispatchUpdate::LaunchIntent {
             launch_tag: format!("launch-{worker}-1"), launch_attempt: 1, endpoint_identity: "endpoint-one".into(),
+            scope_unit: None,
+            latch: None,
+            staging_workspace_id: None,
         }).unwrap();
         fixture.service.record_launch_review(&fixture.run(&worker), DispatchStep::LaunchUnknown, Some(ErrorResponse {
             code: "agent_start_unobserved".into(), message: "Agent start was not observed before its deadline".into(),
@@ -460,6 +464,8 @@ fn unstarted_unknown_launch_escalates_after_settle_and_recovers_once() {
         assert!(dispatch_events(&fixture, &root, "dispatch_failure").is_empty());
         let runtime = herdr::RuntimeView {
             endpoint_identity: "endpoint-one".into(), boot_id: Some("boot-one".into()),
+            peer_process: None,
+            focused_workspace_id: None,
             workspaces: Vec::new(), panes: vec![observed_root_pane(&fixture, &root)],
         };
         let bytes = fixture.state_bytes();
@@ -565,8 +571,11 @@ fn old_unknown_launch_with_fresh_bound_agent_proof_stays_quiet_before_reconcile(
         let location = fixture.run(&worker).attachment.unwrap().location.unwrap();
         let runtime = herdr::RuntimeView {
             endpoint_identity: location.endpoint_identity.clone(), boot_id: location.boot_id.clone(),
+            peer_process: None,
+            focused_workspace_id: None,
             workspaces: Vec::new(),
             panes: vec![herdr::RuntimePane {
+                cwd: None,
                 workspace_id: location.workspace_id.clone(), workspace_label: "Project".into(),
                 tab_id: location.tab_id.clone(), tab_label: "Worker".into(), pane_id: location.pane_id.clone(),
                 terminal_id: location.terminal_id.clone(),
@@ -593,5 +602,130 @@ fn old_unknown_launch_with_fresh_bound_agent_proof_stays_quiet_before_reconcile(
             fixture.service.record_observation(&runtime, SESSION).unwrap();
             assert_eq!(fixture.state_bytes(), bytes);
         }
+    }
+}
+
+#[test]
+fn move_and_latch_uncertainty_wake_liaison_once_without_replaying_physical_effects() {
+    for (step, latch, boundary, immediate) in [
+        (DispatchStep::MoveUnknown, AgentLatchState::Awaiting, "move_unresolved", true),
+        (DispatchStep::MoveIntent, AgentLatchState::Awaiting, "move_unresolved", false),
+        (DispatchStep::Placed, AgentLatchState::Unknown, "latch_unresolved", true),
+        (DispatchStep::Placed, AgentLatchState::ReleaseIntent, "latch_unresolved", false),
+    ] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let task = fixture.create_task(&root, "Preserve uncertain placement");
+        let worker = fixture.start(&root, &task);
+        fixture.setup(&worker);
+        fixture.launch_and_bind(&worker);
+        let mut state = fixture.state();
+        let index = run_index(&state, &worker).unwrap();
+        let location = state.runs[index].attachment.as_ref().unwrap().location.clone().unwrap();
+        let entered = time::OffsetDateTime::now_utc();
+        {
+            let dispatch = state.runs[index].dispatch.as_mut().unwrap();
+            dispatch.step = step;
+            dispatch.latch_state = Some(latch);
+            dispatch.move_operation_id = Some("exact-move-operation".into());
+            dispatch.source_location = Some(location.clone());
+            dispatch.error = Some(ErrorResponse { code: "effect_outcome_unknown".into(), message: "Exact physical outcome was not observed".into() });
+            dispatch.updated_at = entered.format(&time::format_description::well_known::Rfc3339).unwrap();
+        }
+        let runtime = herdr::RuntimeView {
+            endpoint_identity: location.endpoint_identity.clone(), boot_id: location.boot_id.clone(),
+            peer_process: None,
+            focused_workspace_id: None, workspaces: Vec::new(),
+            panes: vec![herdr::RuntimePane {
+                cwd: None, workspace_id: location.workspace_id.clone(), workspace_label: "Project".into(),
+                tab_id: location.tab_id.clone(), tab_label: "Worker".into(), pane_id: location.pane_id.clone(),
+                terminal_id: location.terminal_id.clone(), native_session_id: location.native_session_id.clone(),
+                native_session_file: None, agent_name: None, agent_kind: Some("service-test".into()),
+                launch_pending: false, agent_status: Some("working".into()), state_changed_at: None,
+            }],
+        };
+        assert_eq!(escalation::failure(&mut state, index).unwrap(), immediate);
+        assert!(!escalation::unresolved_launches(&mut state, SESSION, 1000, entered, &runtime).unwrap());
+        assert_eq!(escalation::unresolved_launches(&mut state, SESSION, 1000,
+            entered + time::Duration::seconds(2), &runtime).unwrap(), !immediate);
+        let notices = state.messages.iter().filter(|message|
+            message.to_run_id == root && message.message_id.ends_with(boundary)).collect::<Vec<_>>();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].kind, MessageKind::Observation);
+        let body: serde_json::Value = serde_json::from_str(&notices[0].text).unwrap();
+        assert_eq!(body["effect"], "unknown");
+        assert_eq!(body["next"], serde_json::json!(["show", "worker_replace"]));
+        assert_eq!(body["move_operation_id"], "exact-move-operation");
+        assert!(body["operator_reason"].as_str().unwrap().contains("Do not"));
+        for message in &mut state.messages {
+            if message.message_id.ends_with(boundary) {
+                message.stage = DeliveryStage::Acked;
+                message.acked_at = Some(now());
+            }
+        }
+        let dispatch = state.runs[index].dispatch.as_mut().unwrap();
+        dispatch.updated_at = (entered - time::Duration::seconds(10))
+            .format(&time::format_description::well_known::Rfc3339).unwrap();
+        if boundary == "move_unresolved" { dispatch.step = DispatchStep::MoveUnknown; }
+        else { dispatch.latch_state = Some(AgentLatchState::Unknown); }
+        let before = serde_json::to_value(&state).unwrap();
+        assert!(!escalation::failure(&mut state, index).unwrap());
+        assert!(!escalation::unresolved_launches(&mut state, SESSION, 1000,
+            entered + time::Duration::seconds(20), &runtime).unwrap());
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    }
+}
+
+#[test]
+fn diagnostic_root_result_keeps_real_schedule_reuse_and_recovery_consumers_available() {
+    for outcome in [ReportOutcome::Succeeded, ReportOutcome::Failed] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        fixture.setup(&root);
+        let supervisor = fixture.launch_and_bind(&root);
+        fixture.apply(&supervisor, report(ReportKind::Result, Some(outcome), None)).unwrap();
+
+        // Exercise the same credential through the real service action and scheduler.
+        let task = fixture.create_task(&root, "Next conversational batch");
+        let scheduled = fixture.apply(&supervisor, OrchestrationAction::TaskSchedule {
+            operation_id: id(), root_id: root.clone(), task_id: task.task_id.clone(),
+            target: Some(target()), brief: "Execute the next canonical task".into(),
+            cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe, label: None,
+            expected_task_revision: Some(task.task_revision.clone()), expected_doc_revision: None,
+        }).unwrap();
+        assert!(matches!(scheduled.result, OrchestrationActionResult::TaskScheduled { duplicate: false, .. }));
+        let candidate = fixture.service.schedule_candidates(4).unwrap().into_iter()
+            .find(|candidate| candidate.task_id == task.task_id).unwrap();
+        let worker = fixture.service.scheduled_start(&candidate, &ResolvedMutationInput {
+            project: Some(fixture.project()), ..Default::default()
+        }).unwrap().unwrap();
+        assert_eq!(fixture.run(&worker.run_id).root_id, root);
+
+        // Reuse must select the existing connected liaison, not manufacture a new root.
+        let observation = fixture.run(&root).attachment.unwrap();
+        let reused = fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+            OrchestrationMutationRequest {
+                session_id: SESSION.into(), expected_revision: Some(fixture.state().revision),
+                action: OrchestrationAction::SupervisorStart {
+                    operation_id: id(), mode: SupervisorStartMode::ReuseOrResume,
+                    target: Some(target()), label: None, selected_root_id: None,
+                    expected_project_key: Some(fixture.project().key),
+                },
+            }, &ResolvedMutationInput {
+                project: Some(fixture.project()), attachment_observation: Some(observation),
+                ..Default::default()
+            }).unwrap();
+        let OrchestrationActionResult::SupervisorStarted { start } = reused.result else { unreachable!() };
+        assert_eq!(start.root_id, root);
+        assert_eq!(start.outcome, SupervisorStartOutcome::Reused);
+        assert_eq!(fixture.state().runs.iter().filter(|run| run.parent_run_id.is_none()).count(), 1);
+
+        // This is durable recovery-candidate eligibility, not physical restart permission.
+        // Optional missing harness identity must not let a diagnostic Result block recovery.
+        let mut recoverable = fixture.run(&root);
+        recoverable.attachment.as_mut().unwrap().conversation = None;
+        assert!(dispatch::automatic_recovery_available(&recoverable));
+        assert_eq!(fixture.run(&root).stage, RunStage::Active);
+        assert!(fixture.run(&root).result.is_none());
     }
 }

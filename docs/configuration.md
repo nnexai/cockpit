@@ -54,67 +54,156 @@ catalog_depth = 3
 
 Herdr-addressed `widget`, `context`, `browser`, `notes` and orchestration commands share [endpoint.rs](../crates/cockpit-host/src/bin/cockpit/endpoint.rs). Explicit `--herdr-session`/`--herdr-socket` selectors take precedence; otherwise launch `COCKPIT_HERDR_SESSION` pairs with the pane's `HERDR_SOCKET_PATH`, then native Herdr inheritance. Socket layout identifies `herdr.sock` as `default` and `sessions/<name>/herdr.sock` as a named session. An explicit Herdr session never borrows another session's inherited socket; a stale selected socket fails rather than falling back. This physical session is separate from the agent conversation's `COCKPIT_SESSION_ID`.
 
-Agent launches receive the selected `COCKPIT_CLI_PATH` and configuration, not an ambient-PATH replacement. Host role may use itself. Native role selects sibling `cockpit-cli` when the installed GUI is named `cockpit`, never the GUI executable; debug `cockpit-tauri` may use the distinct sibling `cockpit` host. The installed pair needs no override. Direct agent CLI calls use an issued role capability and current conversation; physical commands separately require fresh target evidence.
+Agent launches receive an absolute selected `COCKPIT_CLI_PATH` and configuration, not a guessed worker-PATH replacement. Host role uses its actual executable; Native prefers sibling `cockpit-cli` rather than the installed GUI, with the distinct development `cockpit` host fallback retained. Bare `COCKPIT_CLI_EXECUTABLE` overrides and native PATH fallback resolve in the owner's environment before worker cwd/environment changes and must identify an executable regular file; otherwise `cockpit_cli_unavailable` is explicit. The installed pair needs no override. Agent coordination uses issued private credentials with optional actual conversation metadata; physical commands separately require fresh evidence.
 
 New context terminals receive `COCKPIT_LIBRARY_ROOT`. Existing terminals are not retrofitted: `cockpit-cli context --current` reports the originating Space, Library root, selected `items[].path`, `checkout_path` and `repository_paths` for direct reads. Explicit targeting uses `--herdr-session ID --herdr-socket PATH --space ID`; `--config PATH` selects configuration. Writable task notes belong in Space Notes, not managed Library content.
 
-## Supervisor launch and conversation identity
+## Supervisor launch and attempt authority
 
-The existing configuration file selects the supervisor/worker harness; the Start dialog does not add a per-launch picker. These are trusted local executable/argv values, not agent-provided shell text:
+The existing configuration file selects the supervisor/worker harness; startup has no per-launch harness picker. These are trusted local executable/argv values, not agent-provided shell text:
 
 ```toml
 [orchestration]
 harness_kind = "omp"
 command = "omp"
 extra_args = []
+max_parallel = 4
+process_scope = "auto"
 inbox_prompt_hints = false
-# Optional OMP same-chat resume; omit to leave resume launch unconfigured.
+# Optional custom initial-prompt argv; exactly one whole "{prompt}".
+# initial_prompt_args = ["--prompt", "{prompt}"]
+# OMP defaults to ["--hook", "{hook_path}"]; [] explicitly disables its hook.
+# hook_args = []
+# Optional same-chat resume; exactly one whole "{session_id}".
 # resume_args = ["--resume", "{session_id}"]
 ```
 
-`harness_kind` and `command` default to `omp`; fresh launches use literal `extra_args` (default empty). Optional `resume_args` replaces, rather than appends to, fresh-start arguments for same-chat resume. Exactly one argument must be the whole string `{session_id}`; only that argument is replaced by the opaque registered conversation ID. Missing, embedded or duplicate placeholders fail; there is no shell expansion, general interpolation, automatic `--continue` or fallback harness. `harness_kind` is nonempty printable and at most 512 bytes. Each argv list permits at most 16 nonempty printable arguments, each at most 4096 bytes; `command` is nonempty printable, at most 4096 bytes and not an option. NUL is rejected. For the default `omp` harness and `omp` command only, launch appends the stable per-run `--session-dir`; it never sets a fabricated conversation ID. Existing `routes` remain task-destination routing, not harness selection. Resolved launch settings are retained with each durable launch intent.
+| Field | Default / contract |
+|---|---|
+| `harness_kind`, `command` | `omp`; literal harness identity/executable, no shell interpolation. |
+| `extra_args` | Empty; literal fresh-launch arguments. |
+| `initial_prompt_args` | Absent: OMP gets the short bootstrap as a positional argument; other harnesses get no initial-prompt argument. When configured, exactly one argument is the whole `{prompt}`; embedded/missing/duplicate placeholders fail. |
+| `hook_args` | Absent: OMP uses `["--hook", "{hook_path}"]` for its materialized per-launch hook; other harnesses have no hook arguments. `[]` explicitly disables the hook. A nonempty list requires exactly one whole `{hook_path}`. |
+| `max_parallel` | `4`, inclusive range `1–64`; bounds concurrently live task attempts under a root, not canonical task count. |
+| `process_scope` | `"auto"`; new DirectProcess incarnations attempt a harness-neutral owned systemd user scope on supported Linux/cgroup-v2 hosts. `"off"` launches directly with no scope receipt. Unsupported/probe-failed auto launch remains uncontained, not blocked. |
+| `resume_args` | Absent: no same-chat resume launch. When configured, replaces fresh-start arguments and requires exactly one whole `{session_id}` argument with an actual registered conversation ID. |
+| `inbox_prompt_hints` | `false`; explicit opt-in counts-only supported terminal prompt hints, not required inbox delivery or bootstrap. |
 
-There is no mandatory OMP extension, `omp_extension`, `COCKPIT_OMP_EXTENSION`, orchestration `model` or OMP-only argument allowlist. This is a clean cutover, not configuration migration: obsolete aliases are unsupported and incompatible orchestration store schemas are rejected without discarding stored bytes. The separate [OMP quota executable](#omp-quota-executable) is unchanged.
+Placeholder replacement is whole-argument only; there is no general interpolation, shell expansion, guessed `--continue` or fallback harness. `harness_kind` is nonempty printable, at most 512 bytes; `command` is nonempty printable, at most 4096 bytes and not an option. Literal argv lists are bounded to 16 arguments, each nonempty printable and at most 4096 bytes; NUL is rejected. The explicit empty `hook_args` disable value is allowed. Default OMP launch retains a stable per-run `--session-dir`, never a fabricated conversation ID. Resolved configuration persists with durable launch intent; routing remains task placement, not harness selection.
 
-Project and checkout identity uses local filesystem evidence (canonical paths, device/inode and Git common/worktree directories), not an OS machine identifier. One orchestration store serves one trusted workstation; sharing its `state_root` across workstations is unsupported. Checkout claims conflict by checkout key or path overlap regardless of host. A missing OS machine identifier does not block project resolution, supervisor startup or ordinary checkout claims. OS machine and kernel-boot identity remain required physical evidence for process liveness, reboot recovery, build-process tracking and destructive cleanup; missing evidence fails those proofs closed.
+Core task/schedule/replacement/credential/messaging/cleanup authority is harness-neutral; OMP auth export, session files and native detection are not prerequisites. Herdr-supported agent interactions, credential CLI and optional harness hooks are allowed adapters. OMP's thin public-API hook is the first optional adapter, not exclusive support or a requirement for Claude Code, Copilot, Codex or other configured harnesses. It is per-launch, with no custom tool gates, global installs/settings, raw terminal typing or draft replacement. Extension-free credential CLI remains complete. A different harness can use configured literal prompt/hook argv only when that hook API is compatible; otherwise disable the OMP hook and use CLI. No obsolete `omp_extension`, `COCKPIT_OMP_EXTENSION` or orchestration `model` alias is supported. [OMP quota executable](#omp-quota-executable) selection remains separate.
 
-The CLI descriptor reports `orchestration_protocol: 4` and `store_schema: 4`; the orchestration store schema is **4**. Schema-3 state is rejected with `orchestration_state_incompatible` without migrating, deleting or rewriting its stored bytes. To start new orchestration state, select a fresh `state_root`; existing state is preserved, not converted or discarded.
+Project/checkout identity uses canonical local filesystem paths, device/inode and Git common/worktree directories, not a host machine identity. One orchestration store serves one trusted workstation; cross-workstation `state_root` sharing is unsupported. Checkout claims conflict by key/path overlap regardless of host. Missing OS machine identity does not block supervisor startup, project resolution or ordinary claims; physical process/reboot/build/cleanup proofs that require it fail closed.
 
-Every orchestration interaction resolves the actual current conversation through current identity metadata (an actual `COCKPIT_SESSION_ID` with its `COCKPIT_HARNESS`, or OMP's present `PI_SESSION_FILE`) or explicit `--harness=KIND` and `--session-id=ID`. `COCKPIT_HARNESS=omp` alone is not identity metadata and does not justify a bare-context attempt. Explicit selection never bypasses conflicting independently present sources. Prefer actual metadata without identity flags; otherwise prefer the optional bootstrap's populated JSON argv containing the freshly observed actual ID. If OMP advertises an exact absolute journal path before its first tool turn creates the file, bootstrap may instead provide populated JSON env+argv data: command-scoped `PI_SESSION_FILE` with `["run","context","--harness=omp","--json"]`. Execute that invocation on the tool call after reading the skill, only when current session ID metadata and `PI_SESSION_FILE` are absent. Never overwrite a present `PI_SESSION_FILE`, even empty, invalid or conflicting; resolve it normally and retain errors. File location is not a conversation ID, routing ID or role authority. Pass decoded env/argv separately to the selected CLI; shell-only tools must quote each value, never eval JSON. No journal hunt is required. The shared OMP reader uses a bounded 64 KiB prefix, not filenames or transcripts; an unreadable CLI file source remains an error even if still absent after the skill turn. Invalid or over-budget file hints are omitted, never truncated. Explicit non-OMP identity needs no detector, extension or OMP journal. With neither metadata nor a usable hint, report missing identity rather than inventing it. Re-resolve after switching conversations; launch never invents or freezes an ID.
+The CLI descriptor reports `orchestration_protocol: 4` and `store_schema: 4`. Schedule/generation metadata is additive and defaulted within schema 4; no converter is required. Incompatible schemas, including schema 3, fail with `orchestration_state_incompatible` without migrating, deleting or rewriting their bytes. A fresh `state_root` creates separate state, not permission to discard old resources.
 
-Read the bundled skill before registration; it needs no identity flags. Only with actual current identity metadata, use the issued capability to register without identity flags and inspect the returned role:
+### Credential activation and replaceable workers
+
+`COCKPIT_JOB_CREDENTIAL_FILE` supplies private attempt authority; `COCKPIT_CLI_PATH` names the paired executable. No skill-read or conversation-identity hunt is required before ordinary coordination:
 
 ```sh
-"${COCKPIT_CLI_PATH:-cockpit-cli}" skills show cockpit-cli-orchestration
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run context --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run brief --json
 ```
 
-Without current identity metadata, execute the bootstrap's populated JSON argv or command-scoped env+argv using `COCKPIT_CLI_PATH`, falling back to `cockpit-cli` only when absent. On every later task/run/inbox/route call, repeat the actual decoded `--harness=KIND` and `--session-id=ID`, or, if still file-derived, repeat the exact command-scoped `PI_SESSION_FILE` source and `--harness=omp`; the actual ID returned by context may replace file-derived guidance. Never overwrite an independently present file source. For variable-based later templates, first assign `HARNESS`/`SESSION_ID` from actual values in that same invocation/tool context; they are not preassigned, and a one-shot export does not configure later shells. Do not persist hints in profiles/global settings, clear conflicting sources or rotate IDs to bypass errors. Optional explicit `run register --operation-id UUID` uses the same identity sources; context already registers.
+The first credentialed context call activates the issued capability and atomically claims an authorized vacant worker generation. Current run/root/attachment epoch and pinned task generation fence later calls. Actual session metadata or explicit `--harness`/`--session-id`, when supplied, is recorded/revalidated and conflicting independent sources remain errors. An actual conversation is optional for normal coordination and required for same-chat resume; never infer an ID from a filename, pane label or launch acknowledgement.
 
-Context registers an unbound capability and returns run/root/role/conversation, assignment generation and pending inbox counts; later calls still verify identity. Root registration pins the root conversation. Worker registration atomically claims the authorized vacant task generation; a pending launch is not an owner. Implicit registration uses the credential UUID, so concurrent CLI calls do not create competing claims. Conflicts do not trigger a new UUID retry, and registration without an issued capability is unavailable. Worker commands use the credential's pinned generation, not a fresh task lookup.
+Tasks/schedules remain independent of attempts; schedules survive root credential/attachment rotation through immutable receipt/exact root/current binding validation. Revoked callers/removed schedule replay stay rejected. Atomic replacement preserves old work/claims; typed source evidence selects GitHead isolated worktree or a private no-copy Directory attempt retaining original project/context. Same-checkout reuse requires precise reboot or exact drained scope plus registered consumer proof/fresh Herdr inventory—not universal absence/main-process exit. Cancel leaves live attempts untouched.
 
-Only the owning active supervisor can perform:
+Same-project/repository accepted Code dispatch freezes an immutable candidate base SHA containing original output head/commits OR the exact current validated Integrated target/mapped commits with passed target checks. An explicit qualifying base is allowed; checked status or later HEAD changes cannot substitute stale inputs. Missing materialization stays queued with deduplicated `dependency_input_not_materialized`, waking on Git refs/integration even after old resource retirement. Publication rechecks accepted Result/task/source/integration and candidate fences. Cross-repository/conceptual/manual/no-source edges do not demand unrelated commits. NonCode actual Result/artifact references remain retained/read-only, not inferred published or deleted.
+
+Mutable ExistingSpace/Open targets are not retargeted to satisfy inputs. After setup, the actual fresh clean HEAD and same-repository original/integration proof reserve `base_commit`; immediately before latch release, HEAD/clean/input proof is checked again and publication CAS fences the reserved SHA/current accepted inputs. A changed checkout or prerequisite cannot silently release a stale writer. Scope capture/startup uncertainty is bounded by the 20-second startup path, not an unsupported 60-second idle probe loop.
+
+Read direct prerequisite scope and valid accepted source references without publishing or mutating:
 
 ```sh
-cockpit-cli task unassign TASK_ID --harness "$HARNESS" --session-id "$SESSION_ID" --operation-id UUID --expected-assignment-generation N
+cockpit-cli task inputs TASK_ID --json
+# Worker: omission or --self selects its assigned task.
+cockpit-cli task inputs --self --json
 ```
 
-This clears the exact current owner or pending authorization, increments generation and revokes semantic credentials/launch authorization. A stale generation conflicts; accepted tasks cannot be unassigned. Operator UI sends an instruction to the supervisor, not this mutation directly. Reports/history and physical checkout/resource claims remain: unassignment does not stop a worker or authorize same-checkout replacement or cleanup.
+`task inputs` is observational even when direct prerequisites are blocked, missing, ambiguous or unchecked: references remain null/diagnosed rather than requiring the graph to be runnable. Top-level `dependency_state` exposes existing `{state, unmet, problems}` readiness separately from `dependencies[]` references; Scheduler's launch gates remain authoritative. Accepted data is compact: run/attempt, Result ID/kind/outcome, source/integration, checkout/project and minimal setup—not plans/briefs/attachments/effects. Root/session/task/document fences remain; changed read identity returns `task_inputs_changed` for reread, while malformed accepted source fails explicitly. Artifact strings never prove paths/hashes/availability/publication/consumption; real output access/retention remains required.
 
-### Inbox pull, capture and optional prompt hints
+Directory replacements exclusively create private `state_root/orchestration/attempts/<run_id>` without source copies. `OwnedAttemptDirectoryIdentity` has exactly `creation_operation_id`, `root`, `device`, `inode`, bound to the immutable existing operation journal; no manifest/sentinel, redundant UUID or startup OS-machine-ID requirement. Space binding preserves this identity. `COCKPIT_SOURCE_PATH` names the original read-only-by-instruction root; outputs belong in the attempt directory. Remove only an exact accepted retired drained EMPTY directory under released-claim/physical-proof gates. Nonempty outputs stay `outputs_kept` until durable publication/move; NotApplicable never permits recursive deletion, superseded/cancelled/failed attempts stay kept and the borrowed source is never deleted.
 
-Pull/capture/ACK first, then act within the returned role: the supervisor delegates authorized runnable work with `run worker-start`, monitors and reviews Results before acceptance; task creation alone is not provisioning. Workers read their own WorkBrief/canonical task and execute autonomously within the authorized scope. Keep backlog-only work as backlog and inspect active/pending attempts before starting; a pending launch may still have vacant ownership. The bundled skill owns the exact ordered commands and revision/placement fences. CLI waiting is the baseline, including non-OMP harnesses, when nothing is runnable for that role:
+Private attempt creation rejects source overlap before effects and journals `directory_requested` before exclusive fd-relative `mkdir(0700)`. Unreceipted EEXIST/interrupted creation is protected, never adopted or replayed. Exact retained receipts revalidate identity without changing any output files; the saved source Library selections stay references to existing paths, with no Git or file copies.
+
+A root Directory/Open target without an explicit source Space resolves transport staging once before LaunchIntent from exactly one fresh authoritative Herdr workspace `focused` flag, persisted as `staging_workspace_id`. Empty/ambiguous selection fails with `staging_space_required`: “Open or select a Space, or pass --space.” This root-only transport choice never infers cwd/UI focus, retargets workers or creates an extra bootstrap shell. UI start still supplies explicit ExistingSpace; workers retain explicit project-source routing and source focus.
+
+Orchestration owned worktree setup uses local Git/filesystem preparation and its existing creation journal; borrowed-directory preparation neither initializes Git nor creates/deletes the user directory. After moving the same waiting terminal, exact fresh one-tab/pane/terminal/cwd and endpoint/session/generation evidence binds the new Space. Saved source Library IDs/repository paths retain direct selection, without companion copies or a context shell. Bind replay preserves its original move-operation identity; unproven Git creation is never adopted/replayed. Ordinary user Open/Create setup is unchanged.
+
+Space capture matches current setup workspace/session/checkout/move creator and repeats workspace/move/epoch CAS after async reads. Proved-exit WORKER resume retains original setup operation Some/None, generation, filesystem metadata and old receipts/data. Retained Space uses an exact guarded scoped tab in place, without FS setup/move. Genuine absence uses `bind_resumed_space` with new move/epoch binding on the verified EXISTING checkout: fresh source/destination peer/terminal/tag/cwd proof, original Git/branch or attempt-directory identity and current HEAD reinspection preserve prior commits/dirty files. Only the new Space becomes owned; borrowed None never invents FS ownership. Root recovery is unchanged.
+
+Automatic orchestration OwnedWorktree branches retain configured/review-source derivation, then append immutable `task-<task-or-root-UUID>-run-<run-UUID>-a<attempt>` before plan persistence and normal Git validation. This applies only when Create has no explicit branch, making concurrent attempts distinct even without issue/artifact metadata. Explicit branches, Open and ordinary user planning/templates remain unchanged; no name-based retry or truncation is introduced.
+
+The generic `agent-exec` launch wrapper waits on a private per-incarnation placement FIFO before running any harness/model/hook. A single monotonic 20-second deadline covers probe, scope entry and placement; timeout fails launch rather than bypassing authorization. FIFO parent/device/inode and nonce are receipt-fenced; a bounded length/SHA256-framed payload supplies only final placement/context keys and actual Herdr workspace/tab/pane IDs. It never rewrites PATH, authentication, harness settings, configuration or private credentials. Partial release is Unknown without blind replay. Literal scope arguments retain `--expand-environment=no`.
+
+The placement overlay permits exactly `COCKPIT_WORKSPACE_ID`, `COCKPIT_CONTEXT_PATH`, `COCKPIT_LIBRARY_ROOT`, `COCKPIT_REPOSITORY_KEY`, `COCKPIT_ARTIFACT_URL`, `COCKPIT_SOURCE_PATH`, `HERDR_WORKSPACE_ID`, `HERDR_TAB_ID`, `HERDR_PANE_ID`. Unsupported process-scope hosts remain explicitly uncontained; the placement FIFO itself grants no scope proof or source-write sandbox.
+
+Unknown move/latch effects produce one deterministic liaison Observation per launch incarnation; repeated acknowledgement, observation or error timestamps do not generate another. Interrupted intents use the existing settle deadline. A fresh occupant or generic recovery cannot hide unresolved placement. The liaison inspects and may replace the worker while preserving terminal, checkout, claims and source/destination; no blind move/latch replay, unproven same-checkout restart or dead UI retry is authorized.
+
+Unknown terminal creation may reconcile only a unique exact staging/tag/endpoint/native-PID match with positive original owned-unit evidence; it cannot recover from labels or a generic fresh occupant alone. Repeated unknown move is never resent. Missing/incomplete physical proof stays retained for the liaison.
+
+Scope wrapping preserves literal argv with `--expand-environment=no`; its bounded two-second probe uses a validated real-user-manager connection. Worker/root unit prefix derives from run kind, never description. Exact unit/InvocationID/cgroup/member capture stays uncontained if missing/raced; no retrofit. Accepted-worker stop requires retired owned receipts, canonical completion/code-or-noncode proof, no Held/Queued holder and sealing. Committed replacement authority separately permits narrow old Superseded retirement/stop while all old files remain Kept. Roots/cancelled/arbitrary scopes never stop; scope proof is not an escaped-daemon sandbox guarantee.
+
+Only probe/systemd-run clients receive the validated actual `/run/user/<uid>` XDG runtime directory (0700, same UID, no-follow path/private socket checks). Before FIFO readiness/harness exec, the wrapper restores the original `XDG_RUNTIME_DIR` exactly—including empty, absent or non-UTF-8 values—using literal arguments/PID-preserving exec. Authentication, PATH, session-directory, D-Bus and unrelated harness environment remain unchanged; no global environment/configuration/fixture rewrite is performed.
+
+Replacement retirement records the committed WorkerReplace operation and exact previous run/generation/successor, with no fake Result/task revision. Only the fresh exact old idle pane and same verified old scope may retire/stop, with no open descendants or Held/Queued resources. Foreign cwd consumers do not block isolated old-scope stop but do prevent claim release/deletion proof afterward; unresolved claims stay Quiescing/Kept. Never repeat stop without fresh same-InvocationID Populated evidence. All old checkout/worktree/branch/attempt-directory/output data remains Kept even if the claim releases. Under-ten-second retirement after actual idle is a target, not verified timing.
+
+Layout acknowledgement can precede scope entry. Exact private 0600 nonce/UID/no-follow `.ready` status is published before FIFO reader opening; reader-ready plus explicit Uncontained clears the planned unit promptly, with no 60-second unsupported capture loop. Scoped still needs genuine kernel/process/cgroup receipt capture; missing/malformed status is never fallback proof. The helper's single absolute 20-second deadline includes its ≤2-second probe. Exact owned-marker cleanup follows latch completion/timeout; replaced/unknown markers remain diagnosable. Registration can precede physical receipt without changing owner/stage/conversation. Startup status/deadlines confer no physical authority or launch/model-timing proof.
+
+Scope proof covers the exact owned runtime, registered descendants/consumer resources and fresh Herdr checkout-consumer inventory—not every possible writer. Arbitrary D-Bus services, Docker and deliberate self-cgroup migration can escape and require separate registered resources/proof. Clean integrated no-force Git removal remains mandatory; scope drain is not a universal sandbox guarantee.
+
+The code stop gate requires exact accepted source HEAD, clean actual target integration and Accepted/Retired DirectProcess/OwnedWhenSafe receipts; clean unaccepted commits do not qualify. Noncode requires exact accepted successful Report/source, Result/reason-bound NotApplicable, nonempty root-reviewed artifact identities and nonempty passed focused checks without limitations. Those artifact identities are attestations, not hashes or universal byte verification. Checkout preflight revalidates borrowed paths without Git or deletion authority. Current checked task/revision/attempt and Result/source/generation are fenced under lock before stopping; `scope_completion_unproven` retains resources with a concrete liaison cause. ScopeRelease CAS/journals never authorize a foreign recreated invocation.
+
+### Inbox and liaison workflow
+
+The short inline bootstrap and `run brief` supply role/task context and commands. Workers execute their authorized stages autonomously; the liaison handles questions, review/acceptance, target integration and cleanup blockers. Human decisions occur in its terminal conversation. `inbox next` combines durable waiting, pulling and capture bookkeeping internally, without a separate ACK model turn:
 
 ```sh
-cockpit-cli inbox wait --harness "$HARNESS" --session-id "$SESSION_ID" --after "$AFTER_SEQ" --timeout 300 --json
-cockpit-cli inbox list --harness "$HARNESS" --session-id "$SESSION_ID" --after "$AFTER_SEQ" --limit 100 --json
-# After retaining returned bodies and result.read_through_seq durably:
-cockpit-cli inbox ack --harness "$HARNESS" --session-id "$SESSION_ID" --through "$READ_THROUGH_SEQ" --json
+cockpit-cli task show --self --json
+# Extension-free / hook-disabled waiting only:
+cockpit-cli inbox next --wait 600 --deliverable --json
 ```
 
-Start `AFTER_SEQ` at 0 without a saved cursor and follow pages without skipping unread gaps. Never ACK the wait's notification cursor. ACK accepts an already Read prefix and records capture only, not model processing, an Answer, resumed work or ownership change. Answers still name the exact current NeedsInput question. Preserve original operation identity/payload on unknown outcomes and inspect saved receipts before another submission.
+`--deliverable` omits routine progress/initialized messages. Capture is not proof of model processing, resumed work or an Answer; Answers still link the exact current NeedsInput question. Unknown operations retain original identity/payload for receipt inspection rather than blind replay. The optional OMP hook coalesces queued delivery; extension-free harnesses use the same credential CLI path.
 
-`inbox_prompt_hints = false` is the default. A new owned-pane bootstrap points first to the bundled skill, then registration/pull/capture/ACK and role-specific next actions, after supported harness-ready observation. It may include the optional freshly observed identity hint described above; credential-scoped context remains role authority. Regular automatic counts-only hints still require explicit opt-in. Both use identity-checked Herdr `agent.prompt`, which submits text plus Enter to the owned pane; this is not a paste-only notice. Hints never contain inbox message bodies or target a name/focused pane. Busy, blocked, unready, departed or contradictory targets defer; unsupported transport is explicit and unknown submission is retained without blind replay or raw-key fallback. Where empty-draft evidence is unavailable, enabling hints authorizes terminal submission and does not guarantee preservation of an unknown draft. Waiting, registration and explicit ACK do not require hint transport.
+`COCKPIT_INBOX_HOOK=1` marks only effective materialized hook argv; `run context`/`run brief` expose `inbox_hook_configured`. This is configuration/consumer-coordination metadata, never active-runtime proof or semantic authority. Configured-hook agents stay responsive in the terminal and avoid competing manual long waits/capture; a concrete hook-unavailable report permits the full credential CLI baseline. Meaningful OMP busy delivery uses public safe-boundary `sendUserMessage(..., { deliverAs: "steer" })`, not whole-turn deferral, and never aborts tools, kills writers or submits drafts. Queue/capture does not prove model processing or first-response latency.
+
+Only the final child exec drops inherited parent conversation selectors `PI_SESSION_FILE`/`COCKPIT_SESSION_ID`; it preserves resume argv, capabilities/configuration, PATH and actual Herdr IDs. The launcher supplies fresh `COCKPIT_HARNESS` and `COCKPIT_INBOX_HOOK` (`1` only for effective hook argv, otherwise `0`). This is per-child metadata isolation, not global clearing or a new authority requirement. The optional OMP hook supplies its actual public-API session ID without synthesizing/waiting for a journal; its session-file value is spool/incarnation metadata only. The hook itself never clears independent current sources, and normal CLI source conflict/validation still applies.
+
+Every nonempty `inbox next` batch is fsynced to a private durable spool before internal capture bookkeeping, even without a hook or explicit `--capture-file`; empty timeouts need no spool. JSON returns `capture_file`, and later `run context` returns `inbox_capture_directory` for lost-stdout recovery. Capture still does not prove model delivery.
+
+After an actual human answer in the liaison chat, the root records its own exact unresolved question with `run answer`; do not fabricate an answer or clear waiting by reporting Progress. Answering a worker question remains a separate descendant message:
+
+```sh
+cockpit-cli run answer --in-reply-to ROOT_QUESTION_MESSAGE_ID --text "Actual human answer"
+cockpit-cli run message WORKER_RUN_ID --kind answer --in-reply-to WORKER_QUESTION_MESSAGE_ID --text "Answer for the worker"
+```
+
+The optional OMP hook silently captures same-sender/same-recipient root Answers and root NeedsInput/Result reports: it never echoes a human reply into another turn or wakes the liaison to answer itself while waiting for the human. Exact durable question linkage/history remains intact. Worker NeedsInput/Result and operator/parent-to-worker Answers still use meaningful delivery. Silent capture is receipt bookkeeping, not a model answer or acceptance.
+
+Role-scoped examples (UUIDs and paths come from actual task/run context):
+
+```sh
+# Liaison: defer launch until prerequisites and capacity permit.
+cockpit-cli task schedule TASK_ID --space-worktree SOURCE_SPACE_ID --brief-file instructions.txt
+cockpit-cli task schedule-cancel TASK_ID
+# CLI inspects current run/generation fences before the single replacement submission.
+cockpit-cli run worker-replace RUN_ID --reason "The current attempt cannot continue"
+# Worker: report actual source/check evidence, not a fabricated pass.
+cockpit-cli run done --summary "Completed the requested change" --check 'contract::actual-command::passed'
+```
+
+`run done` is worker-only; a root receives `actor_forbidden`. The liaison finishes the batch conversationally, remains Active/available, and reuses the same project root for new work. Low-level root Result reporting is diagnostic only, not retirement.
+
+An omitted schedule target requires the root project's explicit source Space (`project_space_missing` otherwise): Git selects an owned SpaceWorktree, Directory an OwnedAttemptDirectory without Git. Explicit `--space`, `--space-worktree`, `--path` or `--repository` chooses placement. Git replacement without a source Space must retain the original exact Setup/Create catalog repository/common-dir and frozen HEAD; a Directory root Space is staging transport, never an invented Git source. Generated operation IDs and internally read fences remove turns, not stale-state protection; durable capture/queue is not a model answer.
+
+Automatic pane retirement is capability-held for every primary-Git Space with `foreign_space_group_close_risk`; fresh snapshots cannot atomically exclude foreign grouped Spaces. Linked/non-Git retirement uses only exact `pane.close` under its normal authority/proof gates, never `workspace.close`. Concrete holds go to the liaison rather than a dead retry UI.
+
+For work authorized to run now, choose the stable task UUID and create then schedule it in the same tool invocation; ordinary task authoring never implicitly schedules backlog. Checklist step add/rename/check/move/remove and `dependencies-set` may omit `--revision`: CLI reads the current task revision before one fenced CAS submission, while explicit revisions remain honored. Dependency editing still requires `--doc-revision`; the internal read removes a model turn, not document/current-writer safeguards.
+
+Scheduling/waits/cleanup wake from registered durable notifications and relevant Herdr/ref events, with explicit pending-operation deadlines and quiet transient backoff. No perpetual full-snapshot idle tick is required. Launch acknowledgement, fresh physical readiness, credential activation and first model response must be measured separately: under-ten-second launch and under-five-second communication are desired targets, not current verified timings.
 
 ## Durable Space Notes
 

@@ -1,4 +1,5 @@
 use cockpit_protocol::orchestration::*;
+use super::super::DecisionProvenance;
 
 use super::{
     Actor, AuthorizedJob, JobRole, AppendMessage, OrchestrationState, agent, actor_ref, append, duplicate, error,
@@ -115,6 +116,15 @@ pub(super) fn apply(
     Ok(Some(result))
 }
 
+fn root_self_answer(state: &OrchestrationState, caller: Option<&AuthorizedJob>, target: usize) -> bool {
+    let Some(job) = caller else { return false };
+    let run = &state.runs[target];
+    job.role == JobRole::Root && job.run_index == target
+        && run.parent_run_id.is_none() && run.root_id == run.run_id
+        && matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)
+        && run.stage == RunStage::Active
+}
+
 fn recipient(
     state: &OrchestrationState,
     actor: &Actor,
@@ -147,13 +157,15 @@ fn recipient(
             }
             match kind {
                 MessageKind::Answer => {
-                    super::super::management_target(
-                        state,
-                        actor,
-                        caller.map(|job| job.run_index),
-                        &state.runs[index].session_id,
-                        to_run_id,
-                    )?;
+                    if !root_self_answer(state, caller, target) {
+                        super::super::management_target(
+                            state,
+                            actor,
+                            caller.map(|job| job.run_index),
+                            &state.runs[index].session_id,
+                            to_run_id,
+                        )?;
+                    }
                     Ok((to_run_id.to_owned(), None))
                 }
                 MessageKind::Instruction | MessageKind::CancelRequest => {
@@ -244,13 +256,30 @@ fn send(
                 "The answer must link to the open run's current NeedsInput report",
             ));
         }
-        Some(super::super::management_target(
-            state,
-            actor,
-            caller.map(|job| job.run_index),
-            &state.runs[target].session_id,
-            to_run_id,
-        )?.1)
+        if root_self_answer(state, caller, target) {
+            if text.trim().is_empty() {
+                return Err(error("invalid_message", "A root human answer requires the actual nonempty answer text"));
+            }
+            if state.messages.iter().any(|message| {
+                message.to_run_id == run.run_id && message.kind == MessageKind::Answer
+                    && !message.stale && message.in_reply_to == *in_reply_to
+            }) {
+                return Err(error("question_already_answered", "The root's current human question already has an explicit answer"));
+            }
+            Some(DecisionProvenance {
+                origin: DecisionOrigin::Supervisor,
+                supervisor_run_id: Some(run.run_id.clone()),
+                conversation: run.attachment.as_ref().and_then(|attachment| attachment.conversation.clone()),
+            })
+        } else {
+            Some(super::super::management_target(
+                state,
+                actor,
+                caller.map(|job| job.run_index),
+                &state.runs[target].session_id,
+                to_run_id,
+            )?.1)
+        }
     } else {
         if in_reply_to.is_some() {
             return Err(error(

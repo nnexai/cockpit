@@ -5,6 +5,11 @@ use cockpit_protocol::orchestration::ConversationIdentity;
 
 use super::{CliError, args::OrchestrationArgs, context::Context};
 
+/// Launch adapter configuration only: never proof of delivery or job authority.
+pub(super) fn inbox_hook_configured() -> bool {
+    std::env::var_os("COCKPIT_INBOX_HOOK").is_some_and(|value| value == std::ffi::OsStr::new("1"))
+}
+
 fn identity_value(value: &str) -> Result<(), CliError> {
     if value.is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
         return Err(CliError::new("conversation_invalid", "Conversation identity must be printable, nonempty and at most 512 bytes"));
@@ -22,23 +27,25 @@ fn agree(explicit: Option<String>, inherited: Option<String>) -> Result<Option<S
 pub(super) fn resolve_conversation(
     harness: Option<String>, session: Option<String>,
     inherited_harness: Option<String>, inherited_session: Option<String>, file: Option<&Path>,
-) -> Result<ConversationIdentity, CliError> {
-    let harness = agree(harness, inherited_harness)?
-        .ok_or_else(|| CliError::usage("Supply --harness or COCKPIT_HARNESS"))?;
-    identity_value(&harness)?;
+) -> Result<Option<ConversationIdentity>, CliError> {
+    let harness = agree(harness, inherited_harness)?;
     let mut session_id = agree(session, inherited_session)?;
-    if harness == "omp" {
-        if let Some(path) = file {
-            session_id = agree(session_id, Some(read_omp_session_file(path)?))?;
+    if let Some(harness) = &harness {
+        identity_value(harness)?;
+        if harness == "omp" {
+            if let Some(path) = file {
+                session_id = agree(session_id, Some(read_omp_session_file(path)?))?;
+            }
         }
     }
-    let session_id = session_id.ok_or_else(|| CliError::usage("Supply actual --session-id, COCKPIT_SESSION_ID or an OMP PI_SESSION_FILE header"))?;
+    let Some(session_id) = session_id else { return Ok(None); };
     identity_value(&session_id)?;
-    Ok(ConversationIdentity { harness, session_id })
+    let harness = harness.ok_or_else(|| CliError::usage("An actual session ID requires --harness or COCKPIT_HARNESS"))?;
+    Ok(Some(ConversationIdentity { harness, session_id }))
 }
 
 impl OrchestrationArgs {
-    pub(super) fn conversation(&self) -> Result<ConversationIdentity, CliError> {
+    pub(super) fn conversation(&self) -> Result<Option<ConversationIdentity>, CliError> {
         fn inherited(name: &str) -> Result<Option<String>, CliError> {
             std::env::var(name).map(Some).or_else(|error| match error {
                 std::env::VarError::NotPresent => Ok(None),

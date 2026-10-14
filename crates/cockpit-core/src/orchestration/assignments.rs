@@ -392,6 +392,7 @@ mod tests {
                     }),
                     process: None,
                     shell: None,
+                    process_scope: None,
                     machine_id: None,
                     launch_attempt: 0,
                     updated_at: super::super::now(),

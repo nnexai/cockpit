@@ -29,6 +29,7 @@ export function useWorkbenchActions(props: WorkbenchProps, runtime: WorkbenchSta
   // Selecting a Space keeps the Library open; selecting a tab, pane or agent closes it to show that pane.
   const focusSpace = (space: Space) => {
     if (modalOpen) return;
+    if (runtime.overviewOpen) leave("focus");
     setAttachFocusSuppressed(false);
     const tabId = allTabs.find((tab) => tab.space_id === space.id && tab.focused)?.id ?? null;
     const paneId = snapshot?.panes.find((pane) => pane.space_id === space.id && pane.focused)?.id ?? null;

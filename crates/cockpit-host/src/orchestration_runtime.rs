@@ -77,6 +77,7 @@ impl OrchestrationRuntime {
             herdr_socket,
             herdr_executable,
             extra_args: configuration.orchestration.extra_args.clone(),
+            max_parallel: configuration.orchestration.max_parallel,
             resume_args: configuration.orchestration.resume_args.clone(),
             inbox_prompt_hints: configuration.orchestration.inbox_prompt_hints,
         };
@@ -133,7 +134,10 @@ impl OrchestrationRuntime {
         &self,
         request: &OrchestrationWaitRequest,
     ) -> Result<OrchestrationWaitResponse, InspectionError> {
-        self.service.wait(request).await
+        match request.root_id.as_deref() {
+            Some(root_id) => self.service.wait_for_root(request, root_id).await,
+            None => self.service.wait(request).await,
+        }
     }
     pub async fn shutdown(&self) {
         self.shutdown.cancel();
@@ -179,6 +183,76 @@ async fn resolve_physical_mutation_input(
     match &request.action {
         OrchestrationAction::WorkerStart { target, .. } => {
             resolve_start_target(projects, herdr, &request.session_id, target).await
+        }
+        OrchestrationAction::WorkerReplace { expected_run_id, .. } => {
+            let run = service.run_for_review(&request.session_id, expected_run_id)?;
+            let project = run.project.as_ref().ok_or_else(|| InspectionError::new(
+                "replacement_source_unavailable", "The prior attempt has no authoritative project identity",
+            ))?;
+            let root = service.run_for_review(&request.session_id, &run.root_id)?;
+            let source = project.source_workspace_id.clone()
+                .or_else(|| run.setup.as_ref().and_then(|setup| setup.project_workspace_id.clone()))
+                .or_else(|| run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref())
+                    .map(|location| location.workspace_id.clone()))
+                .or_else(|| root.project.as_ref().and_then(|project| project.source_workspace_id.clone()));
+            let mut resolved = if run.checkout.is_some() {
+                let mut resolved = resolve_resume_input(service, herdr, &run).await?;
+                let (fresh_project, checkout) = service.resolve_run_checkout(&run).await?;
+                resolved.project = Some(fresh_project);
+                resolved.checkout = Some(checkout);
+                resolved
+            } else {
+                ResolvedMutationInput { project: Some(project.clone()), ..Default::default() }
+            };
+            match &project.source {
+                ProjectSource::Directory { root: source_root } => {
+                    let (fresh, _) = cockpit_core::orchestration::project_identity::resolve_owned_directory(Path::new(source_root))?;
+                    if fresh.key != project.key {
+                        return Err(InspectionError::new("project_identity_changed", "The original directory source changed"));
+                    }
+                    resolved.replacement_source = Some(cockpit_core::orchestration::ReplacementSource::Directory {
+                        root: source_root.clone(), source_workspace_id: source,
+                    });
+                }
+                ProjectSource::Git { common_dir } => {
+                    let runtime = herdr.runtime(&request.session_id).await?;
+                    let mut verified_space = None;
+                    let mut source_checkout = None;
+                    if let Some(source) = source.as_ref()
+                        && let Ok(workspace) = authoritative_workspace(&runtime, source)
+                        && let Ok(repository) = projects.space_repository(&request.session_id, source, &workspace.cwd).await
+                        && &repository.repository.common_dir == common_dir {
+                        verified_space = Some(source.clone());
+                        source_checkout = Some(workspace.cwd.clone());
+                    }
+                    if verified_space.is_none() {
+                        let Some(DispatchTarget::Setup { request: WorkspaceSetupRequest::Create { repository_id, .. } }) = run.target.as_ref() else {
+                            return Err(InspectionError::new("replacement_source_unavailable", "Git replacement has neither its exact repository Space nor an original explicit configured repository target"));
+                        };
+                        let repository = cockpit_core::repositories::RepositoryCatalog::new(projects.configuration())
+                            .resolve(repository_id).await?;
+                        if &repository.common_dir != common_dir || project.repository_id.as_ref() != Some(repository_id) {
+                            return Err(InspectionError::new("repository_identity_conflict", "Original configured Git target provenance changed"));
+                        }
+                        source_checkout = Some(repository.checkout_path);
+                    }
+                    let path = run.checkout.as_ref().map(|checkout| checkout.path.as_str())
+                        .or(source_checkout.as_deref())
+                        .ok_or_else(|| InspectionError::new("replacement_source_unavailable", "Git source has no authoritative checkout"))?;
+                    let output = tokio::time::timeout(Duration::from_secs(5), cockpit_core::space_git::git_output(
+                        Path::new(path), &["rev-parse", "--verify", "HEAD^{commit}"],
+                    )).await.map_err(|_| InspectionError::new("replacement_source_timeout", "Committed HEAD observation timed out"))??;
+                    let commit = String::from_utf8(output.stdout).map_err(runtime_error)?.trim().to_owned();
+                    if !output.status.success() || !matches!(commit.len(), 40 | 64)
+                        || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                        return Err(InspectionError::new("replacement_source_unavailable", "Prior checkout has no verified committed HEAD"));
+                    }
+                    resolved.replacement_source = Some(cockpit_core::orchestration::ReplacementSource::GitHead {
+                        commit, source_workspace_id: verified_space,
+                    });
+                }
+            }
+            Ok(resolved)
         }
         OrchestrationAction::SupervisorStart {
             target: Some(target), mode, selected_root_id, ..
@@ -237,6 +311,7 @@ async fn resolve_physical_mutation_input(
                 state: AttachmentState::Connecting, launch_mode: None,
                 location: Some(location.clone()), conversation: None, process: None,
                 shell: None, machine_id: None, launch_attempt: 0,
+                process_scope: None,
                 updated_at: time::OffsetDateTime::now_utc()
                     .format(&time::format_description::well_known::Rfc3339)
                     .map_err(runtime_error)?,
@@ -324,6 +399,11 @@ async fn resolve_start_target(
                 )),
             }
             // The source checkout is not the fresh worker's eventual checkout.
+            (project, None)
+        }
+        DispatchTarget::OwnedAttemptDirectory { source_root, source_workspace_id } => {
+            let (mut project, _) = cockpit_core::orchestration::project_identity::resolve_owned_directory(Path::new(source_root))?;
+            project.source_workspace_id = source_workspace_id.clone();
             (project, None)
         }
     };
@@ -444,17 +524,18 @@ async fn resolve_resume_input(
     }
     let proof = if let Some(checkout) = run.checkout.as_ref() {
         // Revalidate the exact saved checkout, never a current Space or target.
-        let (project, fresh) = resolve_directory(
-            Path::new(&checkout.path),
-            run.project.as_ref().and_then(|p| p.repository_id.clone()),
-            run.project.as_ref().and_then(|p| p.source_workspace_id.clone()),
-        ).await?;
+        let (project, fresh) = service.resolve_run_checkout(run).await?;
         if &fresh != checkout || run.project.as_ref().is_none_or(|p| p.key != project.key) {
             return Err(InspectionError::new(
                 "checkout_identity_changed", "The saved checkout no longer has its recorded physical identity",
             ));
         }
-        service.observe_writer_exit(run, checkout)
+        let scope = match run.attachment.as_ref().and_then(|attachment| attachment.process_scope.as_ref()) {
+            Some(receipt) => cockpit_core::process_scope::observe(receipt).await.ok(),
+            None => None,
+        };
+        let cwd_clear = cockpit_core::orchestration::project_identity::checkout_consumers_clear(herdr, run, checkout).await.unwrap_or(false);
+        service.observe_writer_exit(run, checkout, scope.as_ref(), cwd_clear)
     } else {
         Err(InspectionError::new("writer_exit_unproven", "Saved worker checkout identity is unavailable"))
     };
@@ -556,18 +637,42 @@ fn root_candidate(run: &Run, modern_binding: bool) -> ProjectRootCandidate {
 
 
 fn cli_path(role: CliProcessRole) -> Result<PathBuf, InspectionError> {
-    if let Some(path) = std::env::var_os("COCKPIT_CLI_EXECUTABLE") {
-        let path = PathBuf::from(path);
-        return if path.components().count() > 1 {
-            std::path::absolute(path)
-                .map_err(|error| InspectionError::new("orchestration_runtime_failed", error.to_string()))
-        } else {
-            Ok(path)
-        };
+    let selected = if let Some(path) = std::env::var_os("COCKPIT_CLI_EXECUTABLE") {
+        PathBuf::from(path)
+    } else {
+        let executable = std::env::current_exe()
+            .map_err(|error| InspectionError::new("orchestration_runtime_failed", error.to_string()))?;
+        resolve_cli_path(&executable, role)
+    };
+    resolve_literal_cli_path(&selected, std::env::var_os("PATH").as_deref())
+}
+
+/// Freeze PATH resolution in the owner, before workers change cwd or environment.
+fn resolve_literal_cli_path(selected: &Path, path: Option<&std::ffi::OsStr>) -> Result<PathBuf, InspectionError> {
+    let candidate = if selected.components().count() > 1 {
+        std::path::absolute(selected).map_err(runtime_error)?
+    } else {
+        path.and_then(|path| std::env::split_paths(path).find_map(|directory| {
+            let candidate = std::path::absolute(directory.join(selected)).ok()?;
+            cli_executable_file(&candidate).then_some(candidate)
+        })).ok_or_else(|| InspectionError::new("cockpit_cli_unavailable", "The exact Cockpit CLI executable was not found on the owner's PATH"))?
+    };
+    if !cli_executable_file(&candidate) {
+        return Err(InspectionError::new("cockpit_cli_unavailable", "The selected Cockpit CLI is not an executable regular file"));
     }
-    let executable = std::env::current_exe()
-        .map_err(|error| InspectionError::new("orchestration_runtime_failed", error.to_string()))?;
-    Ok(resolve_cli_path(&executable, role))
+    Ok(candidate)
+}
+
+fn cli_executable_file(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|metadata| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+        }
+        #[cfg(not(unix))]
+        { metadata.is_file() }
+    })
 }
 
 fn resolve_cli_path(executable: &Path, role: CliProcessRole) -> PathBuf {

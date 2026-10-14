@@ -281,7 +281,18 @@ fn project_board(
             for view in &mut board.tasks {
                 let current = current_task_run(state, root_id, &view.task.task_id);
                 view.current_run_id = current.map(|run| run.run_id.clone());
-                view.lane = lane(&view.task, current, &intent_runs);
+                view.lane = lane(&view.task, &view.dependencies, current, &intent_runs);
+                view.scheduled = state.task_ownership.iter().any(|record|
+                    record.root_id == root_id && record.task_id == view.task.task_id && record.schedule.is_some());
+                view.attempt = current.filter(|run| run.stage != RunStage::Closed).map(|run| AttemptBadge {
+                    run_id: run.run_id.clone(), attempt: run.attempt,
+                    state: if run.resume.as_ref().is_some_and(|resume| resume.phase == ResumePhase::Blocked)
+                        || run.dispatch.as_ref().is_some_and(|dispatch| matches!(dispatch.step, DispatchStep::NeedsReview | DispatchStep::LaunchUnknown | DispatchStep::SetupUnknown | DispatchStep::MoveUnknown)
+                            || dispatch.latch_state == Some(AgentLatchState::Unknown)) {
+                        AttemptState::Stalled
+                    } else if matches!(run.stage, RunStage::Queued | RunStage::Starting) { AttemptState::Starting }
+                    else { AttemptState::Running },
+                });
                 if let Some(code) = view.task.diagnostic.as_deref() {
                     if !board
                         .diagnostics
@@ -311,25 +322,18 @@ fn attempt_order(run: &Run) -> (bool, u32, &str, &str) {
     )
 }
 
-fn lane(task: &Task, run: Option<&Run>, intent_runs: &HashSet<&str>) -> TaskLane {
-    if task.checked {
-        return TaskLane::Accepted;
-    }
-    let Some(run) = run else {
-        return TaskLane::Queued;
-    };
-    match run.stage {
-        RunStage::Starting => TaskLane::Starting,
-        RunStage::Working => TaskLane::Working,
-        RunStage::Reported => TaskLane::Review,
-        RunStage::Closed
-            if run.close_reason == Some(CloseReason::Accepted)
-                && intent_runs.contains(run.run_id.as_str()) =>
-        {
-            TaskLane::Review
+fn lane(task: &Task, dependencies: &TaskDependencies, run: Option<&Run>, intent_runs: &HashSet<&str>) -> TaskLane {
+    if task.checked { return TaskLane::Accepted; }
+    if let Some(run) = run {
+        if run.stage == RunStage::Reported || (run.stage == RunStage::Closed
+            && run.close_reason == Some(CloseReason::Accepted) && intent_runs.contains(run.run_id.as_str())) {
+            return TaskLane::Review;
         }
-        _ => TaskLane::Queued,
+        if run.stage == RunStage::Working { return TaskLane::Working; }
     }
+    if matches!(dependencies.state, TaskDependencyState::Blocked | TaskDependencyState::Invalid) {
+        TaskLane::Blocked
+    } else { TaskLane::Ready }
 }
 
 fn observe(
@@ -652,6 +656,13 @@ mod tests {
             dispatch: Some(DispatchState {
                 launch_tag: Some("launch".into()),
                 endpoint_identity: Some("endpoint".into()),
+                scope_unit: None,
+                pre_move_scope: None,
+                staging_workspace_id: None,
+                latch: None,
+                latch_state: None,
+                source_location: None,
+                move_operation_id: None,
                 recovery: None,
                 agent_started: true,
                 step: DispatchStep::Launched,
@@ -671,6 +682,7 @@ mod tests {
             checkout: None,
             attachment: Some(ExecutionAttachment {
                 attachment_id: "44444444-4444-4444-8444-444444444444".into(),
+                process_scope: None,
                 epoch: 1,
                 state: AttachmentState::Connected,
                 launch_mode: None,
@@ -678,6 +690,7 @@ mod tests {
                     endpoint_identity: "endpoint".into(),
                     session_id: "session".into(),
                     boot_id: None,
+                    peer_process: None,
                     terminal_id: None,
                     native_session_id: None,
                     workspace_id: "old-space".into(),
@@ -718,9 +731,10 @@ mod tests {
             task_ownership: vec![TaskOwnership {
                 root_id: ROOT.into(), task_id: TASK.into(), generation: 1,
                 owner: Some(TaskOwner {
-                    run_id: WORKER.into(), conversation: conversation(),
+                    run_id: WORKER.into(), conversation: Some(conversation()),
                     claim_operation_id: "claim".into(),
                 }),
+                schedule: None,
             }],
             revision: 7,
             ..Default::default()
@@ -770,6 +784,8 @@ mod tests {
                 },
                 lane: TaskLane::Accepted,
                 current_run_id: None,
+                scheduled: false,
+                attempt: None,
                 dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: Vec::new(), problems: Vec::new() },
             }],
         }
@@ -778,9 +794,12 @@ mod tests {
     fn runtime(status: &str) -> RuntimeView {
         RuntimeView {
             endpoint_identity: "endpoint".into(),
+            focused_workspace_id: None,
             boot_id: None,
+            peer_process: None,
             workspaces: Vec::new(),
             panes: vec![RuntimePane {
+                cwd: None,
                 workspace_id: "live-space".into(),
                 workspace_label: "Live space".into(),
                 tab_id: "live-tab".into(),
@@ -1241,7 +1260,9 @@ mod tests {
                 .as_deref(),
             Some("55555555-5555-4555-8555-555555555555")
         );
-        assert_eq!(old.board.unwrap().tasks[0].lane, TaskLane::Starting);
+        let board = old.board.unwrap();
+        assert_eq!(board.tasks[0].lane, TaskLane::Ready);
+        assert_eq!(board.tasks[0].attempt.as_ref().unwrap().state, AttemptState::Starting);
         durable.runs[2].stage = RunStage::Working;
         assert_eq!(
             project(&durable, Ok(runtime("working")))
@@ -1271,7 +1292,7 @@ mod tests {
         assert!(current_task_run(&durable, ROOT, TASK).is_none());
         let projected = project(&durable, Ok(runtime("working")));
         assert!(projected.board.as_ref().unwrap().tasks[0].current_run_id.is_none());
-        assert_eq!(projected.board.unwrap().tasks[0].lane, TaskLane::Queued);
+        assert_eq!(projected.board.unwrap().tasks[0].lane, TaskLane::Ready);
     }
 
     #[test]
@@ -1285,7 +1306,7 @@ mod tests {
             let projected = project(&durable, Ok(runtime("working")));
             let task = &projected.board.as_ref().unwrap().tasks[0];
             assert!(task.current_run_id.is_none());
-            assert_eq!(task.lane, TaskLane::Queued);
+            assert_eq!(task.lane, TaskLane::Ready);
             assert_eq!(projected.runs.len(), 2);
             assert_eq!(projected.task_ownership[0].generation, 2);
             assert!(projected.task_ownership[0].owner.is_none());
@@ -1366,7 +1387,7 @@ mod tests {
         };
         assert!(runs[1].actual_agent);
         assert!(projected.board.as_ref().unwrap().tasks[0].current_run_id.is_none());
-        assert_eq!(projected.board.unwrap().tasks[0].lane, TaskLane::Queued);
+        assert_eq!(projected.board.unwrap().tasks[0].lane, TaskLane::Ready);
         assert!(projected.task_ownership[0].owner.is_none());
         assert_eq!(serde_json::to_value(&durable).unwrap(), before);
     }
@@ -1443,7 +1464,7 @@ mod tests {
         durable.runs.push(foreign);
         durable.task_ownership.push(TaskOwnership {
             root_id: "foreign-root".into(), task_id: "foreign-task".into(),
-            generation: 8, owner: None,
+            generation: 8, owner: None, schedule: None,
         });
         let mut foreign_message = brief(MessageKind::SupervisorBrief, DeliveryStage::Stored);
         foreign_message.to_run_id = "foreign-root".into();

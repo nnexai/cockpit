@@ -30,6 +30,14 @@ pub struct ProjectInventory {
 }
 
 #[derive(Debug, Clone)]
+pub struct ProjectSnapshot {
+    pub snapshot: cockpit_protocol::v1::SessionSnapshotResponse,
+    pub endpoint_identity: String,
+    pub boot_id: Option<String>,
+    pub peer_process: Option<cockpit_protocol::orchestration::NativeProcessIdentity>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ProjectWorktreeRequest {
     pub endpoint_identity: String,
     pub mode: WorkspaceSetupMode,
@@ -84,6 +92,12 @@ pub struct ProjectWorktreeRemoveRequest {
 #[async_trait]
 pub trait ProjectHerdrAdapter: HerdrAdapter {
     async fn project_endpoint_identity(&self, session_id: &str) -> Result<String, InspectionError>;
+    /// Snapshot facts and endpoint provenance must come from the same connection.
+    async fn project_snapshot_at_endpoint(
+        &self, _session_id: &str, _expected_endpoint_identity: &str,
+    ) -> Result<ProjectSnapshot, InspectionError> {
+        Err(InspectionError::new("project_snapshot_unsupported", "This adapter cannot attest snapshot endpoint provenance"))
+    }
 
     async fn project_inventory(
         &self,

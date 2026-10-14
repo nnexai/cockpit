@@ -288,12 +288,13 @@ function commandInput(): CommandInput {
       selectedLeaf: { t: "leaf", kind: "terminal", id: "pane-1", w: 1 }, selectedPane: source.panes[0], live: true, busy: false,
     },
     libraryOpen: false, notesOpen: false, browser: { open: false, reason: null },
+    liaison: { actionLabel: "Start supervisor", startAvailable: true, overviewAvailable: false, overviewOpen: false },
     git: { target: undefined, status: undefined, pending: undefined, blocked: undefined },
     widgets: { pending: false, dockTabId: null, list: [] },
     viewerSources: { status: "ready", options: viewerOptions() },
     local: {},
     run: {
-      herdr: vi.fn(), prefix: vi.fn(), supervisor: vi.fn(), git: vi.fn(), recovery: vi.fn(), toggleNotes: vi.fn(),
+      herdr: vi.fn(), prefix: vi.fn(), supervisor: vi.fn(), overview: vi.fn(), git: vi.fn(), recovery: vi.fn(), toggleNotes: vi.fn(),
       openBrowser: vi.fn(), closeBrowser: vi.fn(), retryBrowserCleanup: vi.fn(), showWidgets: vi.fn(),
       cycleWidget: vi.fn(), removeWidget: vi.fn(), goToWidget: vi.fn(), libraryAdd: vi.fn(), library: vi.fn(), openViewer: vi.fn(),
     },
@@ -308,22 +309,17 @@ describe("command consumers", () => {
     expect(buildCommands(input).find(row => row.id === "subscription-limits")).toBeDefined();
   });
 
-  it("routes observational Show separately from reuse/resume and distinct Start intents", () => {
+  it("offers only actionable liaison entrypoints and a read-only overview while tasks exist", () => {
     const input = commandInput();
-    input.view.selectedSpace = undefined;
-    input.view.selectedTab = undefined;
-    input.view.selectedLeaf = undefined;
-    input.view.selectedPane = undefined;
-    input.view.live = false;
+    const start = buildCommands(input).find(row => row.id === "start-supervisor")!;
+    start.run();
+    expect(input.run.supervisor).toHaveBeenCalledOnce();
+    expect(buildCommands(input).some(row => row.id === "show-overview")).toBe(false);
+    input.liaison = { actionLabel: null, startAvailable: false, overviewAvailable: true, overviewOpen: false };
     const rows = buildCommands(input);
-    for (const id of ["show-supervisor", "start-supervisor", "start-another-supervisor"]) {
-      expect(rows.find(row => row.id === id)?.disabled).not.toBe(true);
-      expect(rows.find(row => row.id === id)?.shortcut).toBeUndefined();
-    }
-    rows.find(row => row.id === "show-supervisor")!.run();
-    rows.find(row => row.id === "start-supervisor")!.run();
-    rows.find(row => row.id === "start-another-supervisor")!.run();
-    expect(vi.mocked(input.run.supervisor).mock.calls).toEqual([[], ["reuse_or_resume"], ["another"]]);
+    expect(rows.some(row => row.id === "start-supervisor")).toBe(false);
+    rows.find(row => row.id === "show-overview")!.run();
+    expect(input.run.overview).toHaveBeenCalledOnce();
   });
 
   it("gates missing selections and renderer capabilities without losing their details", () => {
@@ -392,45 +388,15 @@ describe("command consumers", () => {
 });
 
 describe("local workarea transitions", () => {
-  it("keeps the inactive Supervisor surface when switching among local views and terminals", () => {
-    const supervisor = workareaReducer(initialWorkareaState, { type: "supervisor/open", sessionId: "session-1", startIntent: "reuse_or_resume" });
-    const command = { kind: "refresh" as const, token: 1 };
-    const library = workareaReducer(supervisor, { type: "show", view: { kind: "library", command } });
-    const notes = workareaReducer(library, { type: "show", view: { kind: "notes" } });
-    const terminal = workareaReducer(notes, { type: "show", view: { kind: "terminal" } });
-    expect(library.view).toEqual({ kind: "library", command });
-    expect(notes.view.kind).toBe("notes");
-    expect(terminal.view.kind).toBe("terminal");
-    expect(library.supervisor).toEqual(supervisor.supervisor);
-    expect(notes.supervisor).toEqual(supervisor.supervisor);
-    expect(terminal.supervisor).toEqual(supervisor.supervisor);
-    const reopened = workareaReducer(terminal, { type: "supervisor/open", sessionId: "session-1" });
-    expect(reopened.view.kind).toBe("supervisor");
-    expect(reopened.supervisor).toEqual({ ...supervisor.supervisor, startSessionId: null, startIntent: undefined });
+  it("returns from the task overview to the conversation without retaining obsolete start or modal state", () => {
+    const overview = workareaReducer(initialWorkareaState, { type: "show", view: { kind: "overview" } });
+    expect(overview).toEqual({ view: { kind: "overview" } });
+    expect(workareaReducer(overview, { type: "show", view: { kind: "terminal" } })).toEqual(initialWorkareaState);
+    expect(workareaReducer(overview, { type: "session/reset" })).toEqual(initialWorkareaState);
   });
-
-  it("pairs explicit Start intents with monotonic tokens and cancels deferred intent on Show", () => {
-    const shown = workareaReducer(initialWorkareaState, { type: "supervisor/open", sessionId: "session-1" });
-    expect(shown.supervisor).toEqual({ modal: false, startSessionId: null, startToken: 0, startIntent: undefined });
-    const started = workareaReducer(shown, { type: "supervisor/open", sessionId: "session-1", startIntent: "reuse_or_resume" });
-    expect(started.supervisor).toEqual({ modal: false, startSessionId: "session-1", startToken: 1, startIntent: "reuse_or_resume" });
-    const another = workareaReducer(started, { type: "supervisor/open", sessionId: "session-1", startIntent: "another" });
-    expect(another.supervisor).toEqual({ modal: false, startSessionId: "session-1", startToken: 2, startIntent: "another" });
-    const shownAgain = workareaReducer(another, { type: "supervisor/open", sessionId: "session-1" });
-    expect(shownAgain.supervisor).toEqual({ modal: false, startSessionId: null, startToken: 2, startIntent: undefined });
-    expect(workareaReducer(shownAgain, { type: "supervisor/open", sessionId: "session-1", startIntent: "reuse_or_resume" }).supervisor)
-      .toEqual({ modal: false, startSessionId: "session-1", startToken: 3, startIntent: "reuse_or_resume" });
-  });
-
-  it("does not replay Library commands or carry a Supervisor start request into another session", () => {
+  it("does not replay Library commands after changing local views", () => {
     const library = workareaReducer(initialWorkareaState, { type: "show", view: { kind: "library", command: { kind: "tokens", token: 1 } } });
     const notes = workareaReducer(library, { type: "show", view: { kind: "notes" } });
     expect(workareaReducer(notes, { type: "show", view: { kind: "library", command: null } }).view).toEqual({ kind: "library", command: null });
-    const started = workareaReducer(notes, { type: "supervisor/open", sessionId: "session-1", startIntent: "another" });
-    const modal = workareaReducer(started, { type: "supervisor/modal", modal: true });
-    const reset = workareaReducer(modal, { type: "session/reset" });
-    expect(reset.view.kind).toBe("supervisor");
-    expect(reset.supervisor).toEqual({ modal: true, startSessionId: null, startToken: 0, startIntent: undefined });
-    expect(workareaReducer(reset, { type: "supervisor/open", sessionId: "session-2", startIntent: "reuse_or_resume" }).supervisor).toEqual({ modal: true, startSessionId: "session-2", startToken: 1, startIntent: "reuse_or_resume" });
   });
 });

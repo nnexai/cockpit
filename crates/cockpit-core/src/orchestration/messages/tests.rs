@@ -75,6 +75,7 @@ fn run(id: &str, parent: Option<&str>, stage: RunStage) -> Run {
             location: None,
             conversation: Some(conversation(id)),
             process: Some(native_process()),
+            process_scope: None,
             shell: None,
             machine_id: Some("test-machine".into()),
             launch_attempt: 1,
@@ -110,7 +111,7 @@ fn state() -> OrchestrationState {
 fn main_actor(run_id: &str) -> Actor {
     Actor::Agent(AgentCaller {
         auth: fixture_auth(run_id),
-        conversation: conversation(run_id),
+        conversation: Some(conversation(run_id)),
         assignment_generation: (run_id != "root").then_some(1),
         endpoint_identity: "endpoint".into(),
         session_id: "herdr-session".into(),
@@ -195,6 +196,113 @@ fn assert_error(
     );
 }
 
+
+fn root_answer(id: &str, question: Option<&str>) -> OrchestrationAction {
+    OrchestrationAction::MessageSend {
+        message_id: id.into(), to_run_id: "root".into(), kind: MessageKind::Answer,
+        text: "The human chose the scoped safe option.".into(),
+        in_reply_to: question.map(str::to_owned),
+        original_task_revision: None, original_claim_id: None,
+    }
+}
+
+#[test]
+fn root_relays_exact_human_answer_and_capture_receipts_do_not_rewrite_reports() {
+    let mut state = state();
+    let root = main_actor("root");
+    mutation(&mut state, &root, 0, &report("human-question", ReportKind::NeedsInput, None));
+    mutation(&mut state, &root, 0, &report("later-progress", ReportKind::Progress, None));
+    let answer = root_answer("human-answer", Some("human-question"));
+    let result = mutation(&mut state, &root, 0, &answer);
+    assert!(matches!(result, OrchestrationActionResult::Message { duplicate: false, .. }));
+    let delivered = state.messages.last().unwrap();
+    assert_eq!(delivered.to_run_id, "root");
+    assert!(matches!(&delivered.from, ActorRef::Run { run_id } if run_id == "root"));
+    assert_eq!(delivered.in_reply_to.as_deref(), Some("human-question"));
+    assert_eq!(delivered.text, "The human chose the scoped safe option.");
+    assert_eq!(state.runs[0].last_report.as_ref().unwrap().message_id, "later-progress");
+    assert_eq!(state.runs[0].stage, RunStage::Active);
+    let inbox = state.messages.iter().filter(|message| message.to_run_id == "root").collect::<Vec<_>>();
+    let question = super::super::projection::question_status(&state.runs[0], &inbox, &state.messages).unwrap();
+    assert!(matches!(question.receipt, QuestionReceipt::AnswerDelivered { .. }));
+    let OrchestrationActionResult::Inbox { read_through_seq, .. } =
+        mutation(&mut state, &root, 0, &OrchestrationAction::InboxPull { after_seq: 0, limit: 100 }) else { unreachable!() };
+    mutation(&mut state, &root, 0, &OrchestrationAction::InboxAck { through_seq: read_through_seq });
+    let inbox = state.messages.iter().filter(|message| message.to_run_id == "root").collect::<Vec<_>>();
+    let question = super::super::projection::question_status(&state.runs[0], &inbox, &state.messages).unwrap();
+    assert!(matches!(question.receipt, QuestionReceipt::AnswerAcknowledged { .. }));
+    assert_eq!(state.runs[0].last_report.as_ref().unwrap().message_id, "later-progress");
+}
+
+#[test]
+fn root_self_answer_requires_exact_unresolved_question_and_preserves_committed_replay() {
+    let mut state = state();
+    let root = main_actor("root");
+    let answer = root_answer("answer", Some("question"));
+    let before = serde_json::to_value(&state).unwrap();
+    assert_error(&mut state, &root, 0, &answer, "question_not_current");
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    mutation(&mut state, &root, 0, &report("question", ReportKind::Progress, None));
+    assert_error(&mut state, &root, 0, &answer, "question_not_current");
+    mutation(&mut state, &root, 0, &report("human-question", ReportKind::NeedsInput, None));
+    assert_error(&mut state, &root, 0, &root_answer("missing-link", None), "invalid_message");
+    assert_error(&mut state, &root, 0, &answer, "question_not_current");
+    let answer = root_answer("answer", Some("human-question"));
+    mutation(&mut state, &root, 0, &answer);
+    let before = serde_json::to_value(&state).unwrap();
+    assert_error(&mut state, &root, 0, &root_answer("second-answer", Some("human-question")), "question_already_answered");
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    assert!(matches!(mutation(&mut state, &root, 0, &answer), OrchestrationActionResult::Message { duplicate: true, .. }));
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    mutation(&mut state, &root, 0, &report("new-question", ReportKind::NeedsInput, None));
+    assert_error(&mut state, &root, 0, &root_answer("late-answer", Some("human-question")), "question_not_current");
+    assert!(matches!(mutation(&mut state, &root, 0, &answer), OrchestrationActionResult::Message { duplicate: true, .. }));
+}
+
+#[test]
+fn worker_self_answer_and_other_sender_question_do_not_gain_root_answer_authority() {
+    let mut state = state();
+    let root = main_actor("root");
+    let worker = main_actor("worker");
+    mutation(&mut state, &worker, 1, &report("worker-question", ReportKind::NeedsInput, None));
+    let before = serde_json::to_value(&state).unwrap();
+    assert_error(&mut state, &worker, 1, &send("worker-self-answer", MessageKind::Answer, Some("worker-question")), "actor_forbidden");
+    assert_error(&mut state, &root, 0, &root_answer("wrong-sender", Some("worker-question")), "question_not_current");
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
+    mutation(&mut state, &root, 0, &report("root-question", ReportKind::NeedsInput, None));
+    mutation(&mut state, &root, 0, &send("descendant-answer", MessageKind::Answer, Some("worker-question")));
+    assert_eq!(state.messages.last().unwrap().to_run_id, "worker");
+}
+
+#[test]
+fn root_batch_result_is_diagnostic_and_preserves_active_delegation() {
+    for outcome in [ReportOutcome::Succeeded, ReportOutcome::Failed] {
+        let mut state = state();
+        let root = main_actor("root");
+        let mut batch = report("batch-result", ReportKind::Result, None);
+        if let OrchestrationAction::Report { outcome: result_outcome, .. } = &mut batch {
+            *result_outcome = Some(outcome);
+        }
+        mutation(&mut state, &root, 0, &batch);
+        assert_eq!(state.runs[0].stage, RunStage::Active);
+        assert!(state.runs[0].result.is_none());
+        assert!(state.runs[0].source_output.is_none());
+        assert_eq!(state.runs[0].integration, Integration::Pending);
+        assert_eq!(state.runs[0].last_report.as_ref().unwrap().outcome, Some(outcome));
+        assert_eq!(state.messages.last().unwrap().to_run_id, "root");
+        let before = serde_json::to_value(&state).unwrap();
+        assert!(matches!(mutation(&mut state, &root, 0, &batch), OrchestrationActionResult::Message { duplicate: true, .. }));
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
+        mutation(&mut state, &root, 0, &send("next-batch-instruction", MessageKind::Instruction, None));
+        assert_eq!(state.messages.last().unwrap().to_run_id, "worker");
+        let worker = main_actor("worker");
+        mutation(&mut state, &worker, 1, &report("worker-result", ReportKind::Result, None));
+        assert_eq!(state.runs[1].stage, RunStage::Reported);
+        assert!(state.runs[1].result.is_some());
+        assert!(state.runs[1].source_output.is_some());
+        assert_eq!(state.runs[0].stage, RunStage::Active);
+    }
+}
 
 #[test]
 fn answers_require_explicit_links_and_other_messages_forbid_links() {
@@ -671,7 +779,8 @@ fn root_reports_to_operator_visible_self_inbox() {
             .all(|message| message.to_run_id == "root")
     );
     assert_eq!(state.runs[0].stage, RunStage::Active);
-    assert_eq!(state.runs[0].result.as_ref().unwrap().message_id, "result");
+    assert!(state.runs[0].result.is_none());
+    assert_eq!(state.runs[0].last_report.as_ref().unwrap().message_id, "result");
 }
 
 
@@ -962,8 +1071,8 @@ fn conversation_and_assignment_generation_fence_messages_and_ack() {
         let mut candidate = state.clone();
         let mut caller = worker.clone();
         match mismatch {
-            "harness" => caller.conversation.harness = "other-harness".into(),
-            "conversation" => caller.conversation.session_id = "another-chat".into(),
+            "harness" => caller.conversation.as_mut().unwrap().harness = "other-harness".into(),
+            "conversation" => caller.conversation.as_mut().unwrap().session_id = "another-chat".into(),
             "generation" => caller.assignment_generation = Some(2),
             _ => candidate.task_ownership.iter_mut()
                 .find(|record| record.task_id == "task-worker").unwrap().owner = None,

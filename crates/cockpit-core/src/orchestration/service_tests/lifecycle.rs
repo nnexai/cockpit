@@ -250,7 +250,7 @@ fn conversation_rollover_conflicts_without_replacing_credentials_or_checkout_cla
     let root = fixture.root();
     let (_, _, mut actor) = fixture.working(&root);
     let before = fixture.state_bytes();
-    caller_mut(&mut actor).conversation.session_id = "rolled-over-chat".into();
+    caller_mut(&mut actor).conversation.as_mut().unwrap().session_id = "rolled-over-chat".into();
     assert!(fixture.apply(&actor, OrchestrationAction::RunRegister { operation_id: id() }).is_err());
     assert!(fixture.apply(&actor, report(ReportKind::Progress, None, None)).is_err());
     assert_eq!(fixture.state_bytes(), before);
@@ -691,8 +691,10 @@ fn closing_root_retains_live_descendants_and_closed_root_evidence_inbox() {
                 .map(|task| TaskView {
                     dependencies: graph.evaluate(&task),
                     task,
-                    lane: TaskLane::Queued,
+                    lane: TaskLane::Ready,
                     current_run_id: None,
+                    scheduled: false,
+                    attempt: None,
                 })
                 .collect(),
         }
@@ -707,9 +709,12 @@ fn closing_root_retains_live_descendants_and_closed_root_evidence_inbox() {
         vec![board],
         Ok(herdr::RuntimeView {
             endpoint_identity: location.endpoint_identity.clone(),
+            focused_workspace_id: None,
             boot_id: location.boot_id.clone(),
+            peer_process: None,
             workspaces: Vec::new(),
             panes: vec![herdr::RuntimePane {
+                cwd: None,
                 workspace_id: location.workspace_id.clone(),
                 workspace_label: "Retained Space".into(),
                 tab_id: location.tab_id.clone(),

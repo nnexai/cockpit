@@ -8,6 +8,7 @@ export interface WireTypes {
   "ProjectProvider": V1.ProjectProvider;
   "ProjectConfiguration": V1.ProjectConfiguration;
   "OrchestrationConfiguration": V1.OrchestrationConfiguration;
+  "ScopeMode": V1.ScopeMode;
   "OrchestrationRoute": V1.OrchestrationRoute;
   "RepositoryCandidate": V1.RepositoryCandidate;
   "ProjectDiagnostic": V1.ProjectDiagnostic;
@@ -15,6 +16,10 @@ export interface WireTypes {
   "WorkspaceSetupMode": V1.WorkspaceSetupMode;
   "WorkspaceCheckoutOwnership": V1.WorkspaceCheckoutOwnership;
   "WorkspaceSetupRequest": V1.WorkspaceSetupRequest;
+  "OwnedCheckoutRequest": V1.OwnedCheckoutRequest;
+  "DirectoryCheckoutRequest": V1.DirectoryCheckoutRequest;
+  "BindMovedSpaceRequest": V1.BindMovedSpaceRequest;
+  "OwnedAttemptDirectoryRequest": V1.OwnedAttemptDirectoryRequest;
   "ProjectArtifact": V1.ProjectArtifact;
   "WorkspaceSetupPlan": V1.WorkspaceSetupPlan;
   "WorkspaceOperationRequest": V1.WorkspaceOperationRequest;
@@ -38,6 +43,10 @@ export interface WireOwners {
   "WorkspaceSetupRequest": V1.WorkspaceSetupRequest;
   "WorkspaceSetupRequest[create]": Extract<V1.WorkspaceSetupRequest, { "operation": "create" }>;
   "WorkspaceSetupRequest[open]": Extract<V1.WorkspaceSetupRequest, { "operation": "open" }>;
+  "OwnedCheckoutRequest": V1.OwnedCheckoutRequest;
+  "DirectoryCheckoutRequest": V1.DirectoryCheckoutRequest;
+  "BindMovedSpaceRequest": V1.BindMovedSpaceRequest;
+  "OwnedAttemptDirectoryRequest": V1.OwnedAttemptDirectoryRequest;
   "ProjectArtifact": V1.ProjectArtifact;
   "WorkspaceSetupPlan": V1.WorkspaceSetupPlan;
   "WorkspaceOperationRequest": V1.WorkspaceOperationRequest;
@@ -85,6 +94,10 @@ export interface WireFields {
   "OrchestrationConfiguration.command": (V1.OrchestrationConfiguration)["command"];
   "OrchestrationConfiguration.extra_args": (V1.OrchestrationConfiguration)["extra_args"];
   "OrchestrationConfiguration.resume_args": (V1.OrchestrationConfiguration)["resume_args"];
+  "OrchestrationConfiguration.initial_prompt_args": (V1.OrchestrationConfiguration)["initial_prompt_args"];
+  "OrchestrationConfiguration.hook_args": (V1.OrchestrationConfiguration)["hook_args"];
+  "OrchestrationConfiguration.max_parallel": (V1.OrchestrationConfiguration)["max_parallel"];
+  "OrchestrationConfiguration.process_scope": (V1.OrchestrationConfiguration)["process_scope"];
   "OrchestrationConfiguration.inbox_prompt_hints": (V1.OrchestrationConfiguration)["inbox_prompt_hints"];
   "OrchestrationConfiguration.routes": (V1.OrchestrationConfiguration)["routes"];
   "OrchestrationRoute.provider": (V1.OrchestrationRoute)["provider"];
@@ -121,6 +134,28 @@ export interface WireFields {
   "WorkspaceSetupRequest[open].label": (Extract<V1.WorkspaceSetupRequest, { "operation": "open" }>)["label"];
   "WorkspaceSetupRequest[open].task_name": (Extract<V1.WorkspaceSetupRequest, { "operation": "open" }>)["task_name"];
   "WorkspaceSetupRequest[open].focus": (Extract<V1.WorkspaceSetupRequest, { "operation": "open" }>)["focus"];
+  "OwnedCheckoutRequest.operation_id": (V1.OwnedCheckoutRequest)["operation_id"];
+  "OwnedCheckoutRequest.repository_checkout": (V1.OwnedCheckoutRequest)["repository_checkout"];
+  "OwnedCheckoutRequest.checkout_path": (V1.OwnedCheckoutRequest)["checkout_path"];
+  "OwnedCheckoutRequest.branch": (V1.OwnedCheckoutRequest)["branch"];
+  "OwnedCheckoutRequest.base": (V1.OwnedCheckoutRequest)["base"];
+  "OwnedCheckoutRequest.artifact": (V1.OwnedCheckoutRequest)["artifact"];
+  "OwnedCheckoutRequest.source_workspace_id": (V1.OwnedCheckoutRequest)["source_workspace_id"];
+  "DirectoryCheckoutRequest.operation_id": (V1.DirectoryCheckoutRequest)["operation_id"];
+  "DirectoryCheckoutRequest.checkout_path": (V1.DirectoryCheckoutRequest)["checkout_path"];
+  "DirectoryCheckoutRequest.source_workspace_id": (V1.DirectoryCheckoutRequest)["source_workspace_id"];
+  "BindMovedSpaceRequest.operation_id": (V1.BindMovedSpaceRequest)["operation_id"];
+  "BindMovedSpaceRequest.expected_generation": (V1.BindMovedSpaceRequest)["expected_generation"];
+  "BindMovedSpaceRequest.endpoint_identity": (V1.BindMovedSpaceRequest)["endpoint_identity"];
+  "BindMovedSpaceRequest.workspace_id": (V1.BindMovedSpaceRequest)["workspace_id"];
+  "BindMovedSpaceRequest.tab_id": (V1.BindMovedSpaceRequest)["tab_id"];
+  "BindMovedSpaceRequest.pane_id": (V1.BindMovedSpaceRequest)["pane_id"];
+  "BindMovedSpaceRequest.terminal_id": (V1.BindMovedSpaceRequest)["terminal_id"];
+  "BindMovedSpaceRequest.move_operation_id": (V1.BindMovedSpaceRequest)["move_operation_id"];
+  "OwnedAttemptDirectoryRequest.operation_id": (V1.OwnedAttemptDirectoryRequest)["operation_id"];
+  "OwnedAttemptDirectoryRequest.run_id": (V1.OwnedAttemptDirectoryRequest)["run_id"];
+  "OwnedAttemptDirectoryRequest.source_root": (V1.OwnedAttemptDirectoryRequest)["source_root"];
+  "OwnedAttemptDirectoryRequest.source_workspace_id": (V1.OwnedAttemptDirectoryRequest)["source_workspace_id"];
   "ProjectArtifact.provider_id": (V1.ProjectArtifact)["provider_id"];
   "ProjectArtifact.kind": (V1.ProjectArtifact)["kind"];
   "ProjectArtifact.canonical_id": (V1.ProjectArtifact)["canonical_id"];
@@ -171,7 +206,7 @@ export interface WireFieldNames {
   "ProjectLimits": "catalog_depth" | "catalog_entries" | "git_timeout_ms" | "git_output_bytes" | "operation_timeout_ms" | "context_preview_bytes" | "context_preview_lines" | "context_directory_entries" | "context_tree_depth" | "library_folder_files" | "library_folder_bytes" | "library_file_bytes" | "library_space_pages" | "library_attachment_bytes" | "library_item_attachment_bytes" | "library_max_items";
   "ProjectProvider": "id" | "kind" | "base_url" | "executable" | "login" | "deployment";
   "ProjectConfiguration": "version" | "repository_roots" | "worktree_root" | "state_root" | "cache_root" | "library_root" | "notes_root" | "branch_template" | "checkout_template" | "providers" | "limits" | "orchestration";
-  "OrchestrationConfiguration": "harness_kind" | "command" | "extra_args" | "resume_args" | "inbox_prompt_hints" | "routes";
+  "OrchestrationConfiguration": "harness_kind" | "command" | "extra_args" | "resume_args" | "initial_prompt_args" | "hook_args" | "max_parallel" | "process_scope" | "inbox_prompt_hints" | "routes";
   "OrchestrationRoute": "provider" | "instance" | "project_id_prefix" | "repository_id";
   "RepositoryCandidate": "repository_id" | "name" | "root" | "checkout_path" | "common_dir" | "branch" | "is_linked_worktree" | "is_detached" | "provenance";
   "ProjectDiagnostic": "code" | "message" | "path";
@@ -179,6 +214,10 @@ export interface WireFieldNames {
   "WorkspaceSetupRequest": "label" | "task_name" | "focus";
   "WorkspaceSetupRequest[create]": "repository_id" | "branch" | "base_ref" | "checkout_path" | "label" | "task_name" | "artifact_url" | "linked_artifact_urls" | "focus";
   "WorkspaceSetupRequest[open]": "path" | "label" | "task_name" | "focus";
+  "OwnedCheckoutRequest": "operation_id" | "repository_checkout" | "checkout_path" | "branch" | "base" | "artifact" | "source_workspace_id";
+  "DirectoryCheckoutRequest": "operation_id" | "checkout_path" | "source_workspace_id";
+  "BindMovedSpaceRequest": "operation_id" | "expected_generation" | "endpoint_identity" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "move_operation_id";
+  "OwnedAttemptDirectoryRequest": "operation_id" | "run_id" | "source_root" | "source_workspace_id";
   "ProjectArtifact": "provider_id" | "kind" | "canonical_id" | "original_url" | "canonical_url";
   "WorkspaceSetupPlan": "operation_id" | "generation" | "endpoint_identity" | "session_id" | "repository" | "mode" | "ownership" | "branch" | "base" | "checkout_path" | "label" | "focus" | "artifact" | "linked_artifacts" | "effects" | "warnings";
   "WorkspaceOperationRequest": "operation_id" | "expected_generation";
@@ -190,6 +229,7 @@ export interface WireFieldNames {
 export interface WireChildNames {
   "ProjectConfiguration.limits": "ProjectLimits";
   "ProjectConfiguration.orchestration": "OrchestrationConfiguration";
+  "OwnedCheckoutRequest.artifact": "ProjectArtifact";
   "WorkspaceSetupPlan.repository": "RepositoryCandidate";
   "WorkspaceSetupPlan.artifact": "ProjectArtifact";
   "WorkspaceOperation.plan": "WorkspaceSetupPlan";
@@ -206,7 +246,7 @@ export interface WireCheckpointFieldNames {
   "ProjectLimits": "catalog_depth" | "catalog_entries" | "git_timeout_ms" | "git_output_bytes" | "operation_timeout_ms" | "context_preview_bytes" | "context_preview_lines" | "context_directory_entries" | "context_tree_depth" | "library_folder_files" | "library_folder_bytes" | "library_file_bytes" | "library_space_pages" | "library_attachment_bytes" | "library_item_attachment_bytes" | "library_max_items";
   "ProjectProvider": "id" | "kind" | "base_url" | "executable" | "login" | "deployment";
   "ProjectConfiguration": "version" | "repository_roots" | "worktree_root" | "state_root" | "cache_root" | "library_root" | "notes_root" | "branch_template" | "checkout_template" | "providers" | "limits" | "orchestration";
-  "OrchestrationConfiguration": "harness_kind" | "command" | "extra_args" | "resume_args" | "inbox_prompt_hints" | "routes";
+  "OrchestrationConfiguration": "harness_kind" | "command" | "extra_args" | "resume_args" | "initial_prompt_args" | "hook_args" | "max_parallel" | "process_scope" | "inbox_prompt_hints" | "routes";
   "OrchestrationRoute": "provider" | "instance" | "project_id_prefix" | "repository_id";
   "RepositoryCandidate": "repository_id" | "name" | "root" | "checkout_path" | "common_dir" | "branch" | "is_linked_worktree" | "is_detached" | "provenance";
   "ProjectDiagnostic": "code" | "message" | "path";
@@ -214,6 +254,10 @@ export interface WireCheckpointFieldNames {
   "WorkspaceSetupRequest": "artifact_url" | "base_ref" | "branch" | "checkout_path" | "focus" | "label" | "linked_artifact_urls" | "operation" | "path" | "repository_id" | "task_name";
   "WorkspaceSetupRequest[create]": "repository_id" | "branch" | "base_ref" | "checkout_path" | "label" | "task_name" | "artifact_url" | "linked_artifact_urls" | "focus" | "operation";
   "WorkspaceSetupRequest[open]": "path" | "label" | "task_name" | "focus" | "operation";
+  "OwnedCheckoutRequest": "operation_id" | "repository_checkout" | "checkout_path" | "branch" | "base" | "artifact" | "source_workspace_id";
+  "DirectoryCheckoutRequest": "operation_id" | "checkout_path" | "source_workspace_id";
+  "BindMovedSpaceRequest": "operation_id" | "expected_generation" | "endpoint_identity" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "move_operation_id";
+  "OwnedAttemptDirectoryRequest": "operation_id" | "run_id" | "source_root" | "source_workspace_id";
   "ProjectArtifact": "provider_id" | "kind" | "canonical_id" | "original_url" | "canonical_url";
   "WorkspaceSetupPlan": "operation_id" | "generation" | "endpoint_identity" | "session_id" | "repository" | "mode" | "ownership" | "branch" | "base" | "checkout_path" | "label" | "focus" | "artifact" | "linked_artifacts" | "effects" | "warnings";
   "WorkspaceOperationRequest": "operation_id" | "expected_generation";
@@ -231,6 +275,10 @@ export type WireOmittableField =
   | "OrchestrationConfiguration.command"
   | "OrchestrationConfiguration.extra_args"
   | "OrchestrationConfiguration.resume_args"
+  | "OrchestrationConfiguration.initial_prompt_args"
+  | "OrchestrationConfiguration.hook_args"
+  | "OrchestrationConfiguration.max_parallel"
+  | "OrchestrationConfiguration.process_scope"
   | "OrchestrationConfiguration.inbox_prompt_hints"
   | "OrchestrationConfiguration.routes"
   | "RepositoryCandidate.branch"
@@ -246,6 +294,7 @@ export type WireOmittableField =
   | "WorkspaceSetupRequest[create].linked_artifact_urls"
   | "WorkspaceSetupRequest[open].label"
   | "WorkspaceSetupRequest[open].task_name"
+  | "OwnedCheckoutRequest.artifact"
   | "WorkspaceSetupPlan.repository"
   | "WorkspaceSetupPlan.branch"
   | "WorkspaceSetupPlan.base"
@@ -268,6 +317,8 @@ export type WireListField =
   | "ProjectConfiguration.providers"
   | "OrchestrationConfiguration.extra_args"
   | "OrchestrationConfiguration.resume_args"
+  | "OrchestrationConfiguration.initial_prompt_args"
+  | "OrchestrationConfiguration.hook_args"
   | "OrchestrationConfiguration.routes"
   | "RepositoryListResponse.repositories"
   | "RepositoryListResponse.diagnostics"

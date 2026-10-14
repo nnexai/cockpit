@@ -28,7 +28,7 @@ impl Fixture {
         let root = std::env::temp_dir().join(format!("cockpit-cleanup-{}", id()));
         let store = OrchestrationStore::open(&root).unwrap();
         let (revision, _) = watch::channel(0);
-        let service = OrchestrationService { store, revision, launch_config: Default::default() };
+        let service = OrchestrationService { store, revision, notifications: std::sync::Mutex::new(None), launch_config: Default::default() };
         let run = worker();
         let resource = {
             let locked = service.store.lock().unwrap();
@@ -188,6 +188,7 @@ fn terminal_identity() -> RetirementIdentity {
         session_id: "cleanup-test-session".into(), workspace_id: "space".into(),
         tab_id: "tab".into(), pane_id: "pane".into(), terminal_id: "terminal".into(),
         herdr_boot_id: Some("herdr-boot".into()), conversation: None,
+        herdr_peer: None,
         process: Some(NativeProcessIdentity { pid: 101, start_ticks: 102, kernel_boot_id: Some("kernel".into()) }),
         shell: Some(NativeShellIdentity {
             process: NativeProcessIdentity { pid: 201, start_ticks: 202, kernel_boot_id: Some("kernel".into()) },
@@ -200,7 +201,7 @@ fn terminal_run(identity: RetirementIdentity, state: RetirementState) -> Run {
     let mut run = worker();
     run.retirement = Some(RunRetirement {
         retirement_id: "retirement-effect".into(), trigger: RetirementTrigger::Accept,
-        result_message_id: "accepted-result".into(), task_revision: "accepted-revision".into(),
+        result_message_id: Some("accepted-result".into()), task_revision: Some("accepted-revision".into()), replacement: None,
         identity: Some(identity), state, created_at: "created".into(), updated_at: "updated".into(),
     });
     run
@@ -379,6 +380,7 @@ fn retired_pane_never_releases_claim_or_authorizes_checkout_resource_effects() {
             state: AttachmentState::Connected, launch_mode: identity.launch_mode,
             location: Some(RunLocation {
                 boot_id: identity.herdr_boot_id.clone(), terminal_id: Some(identity.terminal_id.clone()),
+                peer_process: identity.herdr_peer.clone(),
                 native_session_id: None, endpoint_identity: identity.endpoint_identity.clone(),
                 session_id: identity.session_id.clone(), workspace_id: identity.workspace_id.clone(),
                 tab_id: identity.tab_id.clone(), pane_id: identity.pane_id.clone(), launch_tag: identity.launch_tag.clone(),
@@ -386,6 +388,7 @@ fn retired_pane_never_releases_claim_or_authorizes_checkout_resource_effects() {
             conversation: Some(ConversationIdentity { harness: "omp".into(), session_id: "accepted-chat".into() }),
             process: identity.process.clone(), shell: identity.shell.clone(),
             machine_id: Some("test-machine".into()), launch_attempt: identity.launch_attempt, updated_at: now(),
+            process_scope: None,
         });
         run.source_output = Some(SourceOutput::NonCode {
             result_message_id: "accepted-result".into(), task_revision: "accepted-revision".into(),
@@ -468,4 +471,373 @@ fn retired_pane_never_releases_claim_or_authorizes_checkout_resource_effects() {
         assert_eq!(serde_json::to_value(after_attempts).unwrap(), serde_json::to_value(after_terminal).unwrap(),
             "refused resource cleanup must not change claims, resources or journal state");
     }
+}
+
+#[test]
+fn event_queue_keeps_superseded_resources_separate_from_working_successor() {
+    let fixture = Fixture::new();
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.runs[0].close_reason = Some(CloseReason::Superseded);
+        let mut successor = state.runs[0].clone();
+        successor.run_id = id();
+        successor.stage = RunStage::Working;
+        successor.close_reason = None;
+        successor.attempt += 1;
+        let next = insert_resource(&mut state.owned_resources, &successor, space()).unwrap();
+        state.owned_resources[next].cleanup.operation_id = Some(id());
+        state.runs.push(successor);
+        locked.save(&mut state).unwrap();
+    }
+    let queue = fixture.service.cleanup_queue().unwrap();
+    assert_eq!(queue.len(), 1);
+    assert_eq!(queue[0].run_id, fixture.run.run_id);
+    assert_eq!(queue[0].resource_id, fixture.resource.resource_id);
+}
+
+#[test]
+fn cleanup_hold_is_actionable_once_after_ack_and_owner_reopen() {
+    let fixture = Fixture::new();
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let mut root = worker();
+        root.run_id = fixture.run.root_id.clone();
+        root.root_id = root.run_id.clone();
+        root.kind = RunKind::Supervisor;
+        root.parent_run_id = None;
+        root.stage = RunStage::Active;
+        state.runs.push(root);
+        locked.save(&mut state).unwrap();
+    }
+    fixture.service.save_evaluation(&fixture.resource, CleanupEvaluation::Waiting(
+        reason(CleanupReasonClass::Reconcilable, "integration_pending", "Missing passed checks at the exact target commit"))).unwrap();
+    fixture.service.report_cleanup_holds().unwrap();
+    let initial = fixture.service.store.lock().unwrap().read().unwrap();
+    assert_eq!(initial.messages.len(), 1);
+    assert_eq!(initial.messages[0].kind, MessageKind::Observation);
+    assert!(matches!(initial.messages[0].from, ActorRef::Dispatcher));
+    assert!(initial.messages[0].text.contains("IntegrationRecord"));
+    assert!(initial.messages[0].text.contains(&fixture.run.run_id));
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.messages[0].stage = DeliveryStage::Acked;
+        state.messages[0].acked_at = Some(now());
+        locked.save(&mut state).unwrap();
+    }
+    let (revision, _) = watch::channel(0);
+    let reopened = OrchestrationService { store: OrchestrationStore::open(&fixture.root).unwrap(),
+        revision, notifications: std::sync::Mutex::new(None), launch_config: Default::default() };
+    let before = std::fs::read(reopened.base().join("state.json")).unwrap();
+    reopened.report_cleanup_holds().unwrap();
+    assert_eq!(std::fs::read(reopened.base().join("state.json")).unwrap(), before);
+    let saved = reopened.store.lock().unwrap().read().unwrap();
+    let resource = saved.owned_resources[0].clone();
+    reopened.save_evaluation(&resource, CleanupEvaluation::Unknown(
+        reason(CleanupReasonClass::Reconcilable, "effect_outcome_unknown", "Uncertain deletion preserved"))).unwrap();
+    reopened.report_cleanup_holds().unwrap();
+    let saved = reopened.store.lock().unwrap().read().unwrap();
+    assert_eq!(saved.messages.len(), 2);
+    assert!(saved.messages[1].text.contains("do not resubmit"));
+}
+
+#[test]
+fn transient_observation_retention_is_waiting_with_concrete_reconnection_action() {
+    let identity = terminal_identity();
+    let run = terminal_run(identity.clone(), RetirementState::Retained {
+        at: now(), reason: RetainReason::ObservationUnavailable, stopped: false,
+    });
+    let mut state = OrchestrationState::default();
+    let index = insert_resource(&mut state.owned_resources, &run,
+        OwnedResourceIdentity::WorkerTerminal { identity }).unwrap();
+    assert!(matches!(terminal_evaluation(&state.owned_resources[index], &run),
+        CleanupEvaluation::Waiting(why) if why.code == "terminal_observation_unavailable"));
+}
+
+#[test]
+fn explicit_supervisor_finish_replay_is_inert_and_preserves_unknown_effect() {
+    let fixture = Fixture::new();
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let mut root = worker();
+        root.run_id = fixture.run.root_id.clone();
+        root.root_id = root.run_id.clone();
+        root.kind = RunKind::Supervisor;
+        root.parent_run_id = None;
+        root.stage = RunStage::Active;
+        state.runs.push(root);
+        state.owned_resources[0].cleanup.state = CleanupState::Unknown;
+        state.owned_resources[0].cleanup.effects.push(CleanupEffectReceipt {
+            effect_id: id(), kind: OwnedResourceKind::Space, identity_digest: fixture.resource.resource_id.clone(),
+            state: CleanupEffectState::Unknown, evidence: None, updated_at: now(),
+        });
+        locked.save(&mut state).unwrap();
+    }
+    let action = OrchestrationAction::CleanupFinish { request: CleanupFinish {
+        operation_id: id(), root_id: fixture.run.root_id.clone(), run_id: Some(fixture.run.run_id.clone()),
+    }};
+    let mutate = || fixture.service.mutate(&Actor::Operator(OperatorOrigin::Browser),
+        OrchestrationMutationRequest { session_id: fixture.run.session_id.clone(), expected_revision: None,
+            action: action.clone() }).unwrap();
+    let first = mutate();
+    assert!(matches!(first.result, OrchestrationActionResult::CleanupFinished { cleanup }
+        if !cleanup.duplicate && cleanup.unknown_count == 1));
+    let before = std::fs::read(fixture.service.base().join("state.json")).unwrap();
+    let replay = mutate();
+    assert!(matches!(replay.result, OrchestrationActionResult::CleanupFinished { cleanup }
+        if cleanup.duplicate && cleanup.unknown_count == 1));
+    assert_eq!(std::fs::read(fixture.service.base().join("state.json")).unwrap(), before);
+    let saved = fixture.service.store.lock().unwrap().read().unwrap();
+    assert_eq!(saved.owned_resources[0].cleanup.state, CleanupState::Unknown);
+    assert_eq!(saved.owned_resources[0].cleanup.effects[0].state, CleanupEffectState::Unknown);
+}
+
+#[test]
+fn setup_capture_waits_for_its_exact_later_bound_space_receipt() {
+    let mut run = worker();
+    let mut source_space = space();
+    let OwnedResourceIdentity::Space { identity } = &mut source_space else { unreachable!() };
+    let operation = identity.creation_operation_id.clone();
+    identity.workspace_id = "initial-source".into();
+    run.setup = Some(SetupSummary { operation_id: Some(operation), generation: None, workspace_id: None,
+        checkout_path: "/owned/checkout".into(), repository_id: None, branch: None, base: None,
+        base_commit: None, ownership: None, effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None });
+    let mut resources = Vec::new();
+    insert_resource(&mut resources, &run, source_space).unwrap();
+    assert!(setup_resources_captured(&resources, &run));
+    run.setup.as_mut().unwrap().workspace_id = Some("bound-worker".into());
+    assert!(!setup_resources_captured(&resources, &run), "early setup resources cannot suppress later Space capture");
+    let mut bound = space();
+    let OwnedResourceIdentity::Space { identity } = &mut bound else { unreachable!() };
+    identity.workspace_id = "bound-worker".into();
+    assert_ne!(Some(identity.creation_operation_id.as_str()), run.setup.as_ref().unwrap().operation_id.as_deref());
+    insert_resource(&mut resources, &run, bound).unwrap();
+    assert!(setup_resources_captured(&resources, &run), "exact moved-Space association completes capture despite its distinct operation ID");
+    run.setup.as_mut().unwrap().ownership = Some(cockpit_protocol::projects::WorkspaceCheckoutOwnership::OwnedWorktree);
+    let space_only = [resources.last().unwrap().clone()];
+    assert!(!setup_resources_captured(&space_only, &run), "owned Git checkout capture still requires its original setup receipt");
+    run.setup.as_mut().unwrap().ownership = Some(cockpit_protocol::projects::WorkspaceCheckoutOwnership::BorrowedDirectory);
+    assert!(setup_resources_captured(&space_only, &run), "borrowed directory preparation owns only its exact new moved Space, never the directory or Git");
+    let old_receipts = serde_json::to_value(&resources).unwrap();
+    let original_creator = run.setup.as_ref().unwrap().operation_id.clone();
+    let resume_move = id();
+    run.dispatch = Some(dispatch(DispatchStep::Launched));
+    run.dispatch.as_mut().unwrap().move_operation_id = Some(resume_move.clone());
+    assert!(!setup_resources_captured(&resources, &run),
+        "a matching workspace from a different creation operation cannot mask a new epoch's move binding");
+    run.setup.as_mut().unwrap().workspace_id = Some("resumed-worker".into());
+    let mut resumed = space();
+    let OwnedResourceIdentity::Space { identity } = &mut resumed else { unreachable!() };
+    identity.workspace_id = "resumed-worker".into();
+    identity.creation_operation_id = resume_move.clone();
+    insert_resource(&mut resources, &run, resumed).unwrap();
+    assert!(setup_resources_captured(&resources, &run));
+    assert_eq!(run.setup.as_ref().unwrap().operation_id, original_creator,
+        "new Space binding never replaces the original filesystem creator");
+    assert_eq!(serde_json::to_value(&resources[..resources.len() - 1]).unwrap(), old_receipts,
+        "resumed capture appends new ownership without rewriting any old resource receipt");
+    assert_eq!(resources.last().unwrap().creation_operation_id.as_deref(), Some(resume_move.as_str()));
+}
+
+#[test]
+fn borrowed_resume_capture_grants_only_exact_new_space_without_filesystem_creator() {
+    let fixture = Fixture::new();
+    let (_, checkout) = project_identity::resolve_owned_directory(&fixture.root).unwrap();
+    let mut run = worker();
+    run.checkout = Some(checkout.clone());
+    run.setup = Some(SetupSummary { operation_id: None, generation: None, workspace_id: Some("new-borrowed-space".into()),
+        checkout_path: checkout.path.clone(), repository_id: None, branch: None, base: None, base_commit: None,
+        ownership: None, effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None });
+    run.dispatch = Some(dispatch(DispatchStep::Launched));
+    let move_operation = id();
+    run.dispatch.as_mut().unwrap().move_operation_id = Some(move_operation.clone());
+    let mut moved = space();
+    let OwnedResourceIdentity::Space { identity } = &mut moved else { unreachable!() };
+    identity.creation_operation_id = move_operation.clone();
+    identity.workspace_id = "new-borrowed-space".into();
+    identity.checkout_path = checkout.path.clone();
+    let mut resources = Vec::new();
+    assert!(!setup_resources_captured(&resources, &run));
+    insert_resource(&mut resources, &run, moved).unwrap();
+    assert!(setup_resources_captured(&resources, &run));
+    assert!(run.setup.as_ref().unwrap().operation_id.is_none(), "borrowed filesystem never receives a fabricated creator");
+    assert_eq!(resources.len(), 1);
+    assert_eq!(resources[0].kind, OwnedResourceKind::Space);
+    assert_eq!(resources[0].creation_operation_id.as_deref(), Some(move_operation.as_str()));
+    for changed in 0..3 {
+        let mut wrong = run.clone();
+        match changed {
+            0 => wrong.checkout.as_mut().unwrap().path = "/different-borrowed-checkout".into(),
+            1 => wrong.dispatch.as_mut().unwrap().move_operation_id = Some(id()),
+            _ => wrong.setup.as_mut().unwrap().workspace_id = Some("old-space".into()),
+        }
+        assert!(!setup_resources_captured(&resources, &wrong));
+    }
+    project_identity::revalidate_checkout(&checkout).unwrap();
+}
+
+#[tokio::test]
+async fn scheduled_inputs_keep_git_ref_wakes_after_predecessor_resources_are_removed() {
+    use crate::space_git::tests::git;
+    let fixture = Fixture::new();
+    let repository = fixture.root.join("source");
+    std::fs::create_dir(&repository).unwrap();
+    git(&repository, &["init", "-b", "main"]);
+    let project = project_identity::resolve_directory(&repository, None, None).await.unwrap().0;
+    let ProjectSource::Git { common_dir } = &project.source else { unreachable!() };
+    let expected = PathBuf::from(common_dir);
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.runs[0].project = Some(project);
+        state.runs[0].integration = Integration::NotApplicable { reason: "test completed".into(), result_message_id: "result".into() };
+        state.owned_resources[0].cleanup.state = CleanupState::Removed;
+        state.task_ownership.push(TaskOwnership { root_id: fixture.run.root_id.clone(), task_id: id(),
+            generation: 0, owner: None, schedule: Some(TaskSchedule { operation_id: id(), principal_key: "root".into(),
+                target: None, brief: "waiting on actual integrated input".into(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
+                label: None, scheduled_at: now() }) });
+        locked.save(&mut state).unwrap();
+    }
+    assert_eq!(fixture.service.cleanup_ref_watch_paths().unwrap(), vec![expected]);
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.task_ownership[0].schedule = None;
+        locked.save(&mut state).unwrap();
+    }
+    assert!(fixture.service.cleanup_ref_watch_paths().unwrap().is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn terminal_capture_defers_preexec_and_stale_cache_then_preserves_exact_postexec_creation() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    use super::super::herdr::{AgentTabRequest, OrchestrationHerdr, PaneProcessInfo, RuntimePane, RuntimeView};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct CaptureAdapter { runtime: RuntimeView, info: PaneProcessInfo, snapshots: AtomicUsize }
+    #[async_trait::async_trait]
+    impl OrchestrationHerdr for CaptureAdapter {
+        async fn runtime(&self, _: &str) -> Result<RuntimeView, InspectionError> {
+            self.snapshots.fetch_add(1, Ordering::SeqCst); Ok(self.runtime.clone())
+        }
+        async fn pane_process_info(&self, _: &str, endpoint: &str, pane: &str) -> Result<PaneProcessInfo, InspectionError> {
+            assert_eq!(endpoint, self.runtime.endpoint_identity); assert_eq!(pane, self.info.pane_id); Ok(self.info.clone())
+        }
+        async fn create_agent_tab(&self, _: &str, _: &AgentTabRequest) -> Result<RunLocation, InspectionError> { panic!("capture never launches") }
+        async fn close_pane(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> { panic!("capture never closes") }
+    }
+    struct OwnedChild(std::process::Child);
+    impl Drop for OwnedChild {
+        fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
+    }
+    // Same native transition fixture as process_identity's exec regression:
+    // the private latch shell execs without changing PID/start identity.
+    let mut child = OwnedChild(Command::new("sh")
+        .args(["-c", "printf 'ready\\n'; read line; exec sleep 60"])
+        .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap());
+    let mut ready = String::new();
+    BufReader::new(child.0.stdout.take().unwrap()).read_line(&mut ready).unwrap();
+    assert_eq!(ready, "ready\n");
+    let pid = i32::try_from(child.0.id()).unwrap();
+    let start = crate::process_identity::start_identity(pid).unwrap();
+    let preexec = crate::process_identity::executable_identity(pid, start).unwrap();
+    let peer_pid = std::process::id();
+    let peer = NativeProcessIdentity { pid: peer_pid,
+        start_ticks: crate::process_identity::start_identity(i32::try_from(peer_pid).unwrap()).unwrap(),
+        kernel_boot_id: crate::process_identity::kernel_boot_id() };
+    let mut run = worker();
+    run.stage = RunStage::Starting;
+    run.close_reason = None;
+    run.task_id = Some(id());
+    run.assignment_generation = Some(1);
+    run.dispatch = Some(dispatch(DispatchStep::Launched));
+    let dispatch = run.dispatch.as_mut().unwrap();
+    dispatch.launch_attempt = 1;
+    dispatch.launch_tag = Some("private-exec-transition".into());
+    dispatch.endpoint_identity = Some("endpoint".into());
+    run.attachment = Some(ExecutionAttachment {
+        attachment_id: id(), epoch: 1, state: AttachmentState::Connected,
+        launch_mode: Some(AttachmentLaunchMode::DirectProcess),
+        location: Some(RunLocation { endpoint_identity: "endpoint".into(), session_id: run.session_id.clone(),
+            workspace_id: "space".into(), tab_id: "tab".into(), pane_id: "pane".into(), terminal_id: Some("terminal".into()),
+            launch_tag: "private-exec-transition".into(), boot_id: None,
+            peer_process: Some(peer.clone()), native_session_id: None }),
+        conversation: None, process: Some(preexec.process.clone()), shell: Some(preexec.clone()),
+        machine_id: crate::process_identity::machine_id(), process_scope: None, launch_attempt: 1, updated_at: now(),
+    });
+    let mut state = OrchestrationState::default();
+    state.credentials.push(credentials::test_job_credential(&run, JobRole::Worker).0);
+    state.task_ownership.push(TaskOwnership { root_id: run.root_id.clone(), task_id: run.task_id.clone().unwrap(),
+        generation: 1, owner: Some(TaskOwner { run_id: run.run_id.clone(), conversation: None,
+            claim_operation_id: state.credentials[0].credential_id.clone() }), schedule: None });
+    assert!(retirement::identity_for(&run).is_some(), "the old ungated path could freeze the latch fingerprint");
+    assert!(OrchestrationService::terminal_capture_identity(&state, &run).is_none());
+    child.0.stdin.as_mut().unwrap().write_all(b"go\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let postexec = loop {
+        if let Ok(fresh) = crate::process_identity::executable_identity(pid, start) {
+            if fresh != preexec { break fresh; }
+        }
+        assert!(Instant::now() < deadline, "private child did not exec");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(postexec.process, preexec.process);
+    run.stage = RunStage::Working;
+    assert!(has_current_binding(&state, &run));
+    assert!(OrchestrationService::terminal_capture_identity(&state, &run).is_none(),
+        "active semantics do not excuse a stale preexec cached fingerprint");
+    run.attachment.as_mut().unwrap().shell = Some(postexec.clone());
+    let captured = OrchestrationService::terminal_capture_identity(&state, &run).unwrap();
+    assert_eq!(captured.shell.as_ref(), Some(&postexec));
+    let adapter = CaptureAdapter { runtime: RuntimeView { endpoint_identity: captured.endpoint_identity.clone(),
+        boot_id: None, peer_process: Some(peer), focused_workspace_id: None, workspaces: Vec::new(),
+        panes: vec![RuntimePane { workspace_id: captured.workspace_id.clone(), workspace_label: "space".into(),
+            tab_id: captured.tab_id.clone(), tab_label: captured.launch_tag.clone(), pane_id: captured.pane_id.clone(),
+            cwd: None, terminal_id: Some(captured.terminal_id.clone()), native_session_id: None, native_session_file: None,
+            agent_name: None, agent_kind: None, launch_pending: false, agent_status: Some("working".into()), state_changed_at: None }] },
+        info: PaneProcessInfo { pane_id: captured.pane_id.clone(), shell_pid: Some(postexec.process.pid),
+            foreground_pgid: Some(postexec.process.pid), processes: vec![(postexec.process.pid, "real exec child".into())],
+            shell_identity: Some(postexec.clone()) }, snapshots: AtomicUsize::new(0) };
+    assert!(OrchestrationService::terminal_capture_observed(&adapter, &run, &captured).await);
+    assert_eq!(adapter.snapshots.load(Ordering::SeqCst), 1, "one fresh frame for the pending capture");
+    for changed in 0..5 {
+        let mut bad = CaptureAdapter { runtime: adapter.runtime.clone(), info: adapter.info.clone(), snapshots: AtomicUsize::new(0) };
+        match changed {
+            0 => bad.runtime.endpoint_identity = "different endpoint".into(),
+            1 => bad.runtime.peer_process = None,
+            2 => bad.runtime.peer_process.as_mut().unwrap().start_ticks += 1,
+            3 => bad.runtime.panes[0].terminal_id = Some("different terminal".into()),
+            _ => bad.info.shell_identity = Some(preexec.clone()),
+        }
+        assert!(!OrchestrationService::terminal_capture_observed(&bad, &run, &captured).await);
+    }
+    insert_resource(&mut state.owned_resources, &run, OwnedResourceIdentity::WorkerTerminal { identity: captured.clone() }).unwrap();
+    child.0.kill().unwrap();
+    child.0.wait().unwrap();
+    assert!(crate::process_identity::executable_identity(pid, start).is_err());
+    run.stage = RunStage::Closed;
+    run.close_reason = Some(CloseReason::Accepted);
+    run.result = Some(Report { message_id: "actual-result".into(), kind: ReportKind::Result,
+        outcome: Some(ReportOutcome::Succeeded), summary: "actual completed test child".into(),
+        plan: None, source_output: None, at: now() });
+    run.retirement = retirement::retirement_for_accepted(&run, RetirementTrigger::Accept, "revision", &now());
+    run.retirement.as_mut().unwrap().state = RetirementState::Retired { at: now(), terminal: TerminalOutcome::AlreadyAbsent };
+    assert_eq!(OrchestrationService::terminal_capture_identity(&state, &run), Some(captured.clone()));
+    assert!(!OrchestrationService::terminal_capture_observed(&adapter, &run, &captured).await,
+        "closed attempts cannot adopt a still-present mutable pane");
+    let mut absent = adapter;
+    absent.runtime.panes.clear();
+    assert!(OrchestrationService::terminal_capture_observed(&absent, &run, &captured).await);
+    assert_eq!(terminal_evaluation(&state.owned_resources[0], &run), CleanupEvaluation::Absent);
+    run.attachment.as_mut().unwrap().shell = Some(preexec);
+    assert!(OrchestrationService::terminal_capture_identity(&state, &run).is_none(),
+        "closed capture cannot backfill the immutable pin from a different mutable attachment");
+    assert_eq!(state.owned_resources.len(), 1);
+    let OwnedResourceIdentity::WorkerTerminal { identity } = &state.owned_resources[0].identity else { unreachable!() };
+    assert_eq!(identity.shell.as_ref(), Some(&postexec));
 }

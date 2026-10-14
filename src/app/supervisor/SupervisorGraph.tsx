@@ -1,117 +1,44 @@
-import { useId, useMemo, type KeyboardEvent, type RefObject } from "react";
-import type { OrchestrationSnapshot } from "../../protocol/generated/v1";
-import { StateGlyph } from "../sidebar/StateGlyph";
-import { useRovingList } from "../sidebar/useRovingList";
-import { UiIcon } from "../UiIcon";
-import { agentState } from "./SupervisorActions";
-import { TIER_LABEL, type AttentionTier } from "./attention";
-import { edgePath, GRAPH_GEOMETRY } from "./graphLayout";
-import { revealNearest } from "./reveal";
-import { chainIds, firstChild, nodeFacts, nodeId, type SupervisorGraphModel, type TopologyNode } from "./topology";
-import { keptTaskCount } from "./retirementView";
+import { useId, useMemo, useState } from "react";
+import type { TaskView } from "../../protocol/generated/v1";
+import { dependencyLayout } from "./dependencyLayout";
+import { dependencySummary, uniqueTask } from "./dependencies";
+import { TaskRow, taskStage } from "./SupervisorTasks";
 
-export type SupervisorGraphProps = {
-  model: SupervisorGraphModel;
-  snapshot: OrchestrationSnapshot;
-  live: boolean; connected: boolean; runtimeLive: boolean;
-  selectedNodeId: string | null; highlightedRunId: string | null;
-  tierFor(node: TopologyNode): AttentionTier | null;
-  dimFor(node: TopologyNode): string | null;
-  sharedSpace: string | null | undefined;
-  bottomInset: number; scrollRef: RefObject<HTMLDivElement | null>;
-  onSelect(node: TopologyNode): void;
-  onHover(runId: string | null): void;
-  onEscape(): boolean;
-};
-
-/** Observation and selection only. No terminal or orchestration control callback is accepted. */
-export function SupervisorGraph({ model, snapshot, live, connected, runtimeLive, selectedNodeId, highlightedRunId, tierFor, dimFor,
-  sharedSpace, bottomInset, scrollRef, onSelect, onHover, onEscape }: SupervisorGraphProps) {
-  const headingId = useId();
-  const fresh = live && connected && runtimeLive && snapshot.runtime.status === "fresh";
-  const observations = useMemo(() => new Map(fresh && snapshot.runtime.status === "fresh" ? snapshot.runtime.runs.map(run => [run.run_id, run]) : []), [fresh, snapshot.runtime]);
-  const positions = useMemo(() => new Map(model.layout.positions.map(position => [position.id, position])), [model.layout]);
-  const highlighted = useMemo(() => {
-    const ids = new Set(selectedNodeId ? chainIds(model, selectedNodeId) : []);
-    if (highlightedRunId) for (const id of chainIds(model, nodeId.run(highlightedRunId))) ids.add(id);
-    return ids;
-  }, [model, selectedNodeId, highlightedRunId]);
-  const roving = useRovingList({ rowIds: model.layout.order, selectedId: selectedNodeId });
-  const connectedCount = model.nodes.filter(node => node.run && observations.get(node.run.run_id)?.presence === "present" && observations.get(node.run.run_id)?.actual_agent).length;
-  const kept = keptTaskCount(snapshot, snapshot.board?.tasks ?? []);
-  const onGraphKey = (event: KeyboardEvent<HTMLDivElement>) => {
-    const id = (event.target as HTMLElement).dataset.rowId;
-    if (id === undefined || event.ctrlKey || event.altKey || event.metaKey || event.nativeEvent.isComposing) return;
-    if (event.key === "Escape") {
-      if (onEscape()) { event.preventDefault(); event.stopPropagation(); }
-      return;
+/** Task prerequisites only: no agent topology or provenance relationships. */
+export function SupervisorGraph({ tasks }: { tasks: readonly TaskView[] }) {
+  const marker = useId().replaceAll(":", ""), [hover, setHover] = useState<string | null>(null);
+  const open = useMemo(() => tasks.filter(view => !view.task.checked), [tasks]);
+  const model = useMemo(() => dependencyLayout(open), [open]);
+  const positions = new Map(model.positions.map(position => [position.view.task.task_id, position]));
+  const highlighted = new Set<string>();
+  if (hover) {
+    highlighted.add(hover);
+    // Walk each direction separately; a shared prerequisite does not highlight siblings.
+    for (const upstream of [true, false]) {
+      const visited = new Set([hover]), remaining = [hover];
+      while (remaining.length) {
+        const id = remaining.pop()!;
+        for (const edge of model.edges) {
+          const next = upstream && edge.to === id ? edge.from : !upstream && edge.from === id ? edge.to : null;
+          if (next && !visited.has(next)) { visited.add(next); highlighted.add(next); remaining.push(next); }
+        }
+      }
     }
-    const order = model.layout.order, index = order.indexOf(id);
-    let target: string | null | undefined;
-    switch (event.key) {
-      case "ArrowLeft": target = model.layout.parentOf.get(id); break;
-      case "ArrowRight": target = firstChild(model, id); break;
-      case "ArrowUp": target = order[Math.max(0, index - 1)]; break;
-      case "ArrowDown": target = order[Math.min(order.length - 1, index + 1)]; break;
-      case "Home": target = order[0]; break;
-      case "End": target = order[order.length - 1]; break;
-      default: return;
-    }
-    event.preventDefault(); event.stopPropagation();
-    if (!target || !scrollRef.current) return;
-    const element = [...scrollRef.current.querySelectorAll<HTMLElement>("[data-row-id]")].find(row => row.dataset.rowId === target);
-    if (element) {
-      revealNearest(scrollRef.current, element, { top: GRAPH_GEOMETRY.headerHeight, bottom: bottomInset });
-      element.focus({ preventScroll: true });
-    }
-  };
-  const columnLabels = ["Supervisor", "Tasks", "Workers"];
-  return <section className="supervisor-graph-band" aria-labelledby={headingId}>
-    <div className="supervisor-graph-heading">
-      <h2 id={headingId} title="Up/Down moves through nodes, Left/Right along the chain">
-        Agents · {fresh ? `${connectedCount} connected` : "unobserved"} · {model.counts.tasks} tasks
-      </h2>
-      {model.hiddenCompletedTasks > 0 ? <span className="supervisor-graph-hidden-completed">{model.hiddenCompletedTasks} completed tasks hidden{kept ? ` · ${kept} kept` : ""}</span> : null}
+  }
+  return <div className="liaison-graph-wrap"><div className="liaison-task-graph" role="group" aria-label="Task dependency graph" tabIndex={0}>
+    <div className="liaison-graph-canvas" style={{ width: model.width, height: model.height }}>
+      <svg width={model.width} height={model.height} aria-hidden="true"><defs>{[false, true].map(active => <marker key={String(active)} id={`${marker}${active ? "-active" : ""}`} viewBox="0 0 8 8" markerWidth="7" markerHeight="7" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill={active ? "var(--accent)" : "var(--border-strong)"} /></marker>)}</defs>{model.edges.map(edge => {
+        const from = positions.get(edge.from)!, to = positions.get(edge.to)!, active = highlighted.has(edge.from) && highlighted.has(edge.to);
+        const x1 = from.x + 240, y1 = from.y + 24, x2 = to.x, y2 = to.y + 24;
+        return <path key={`${edge.from}:${edge.to}`} className={`liaison-graph-edge${active ? " is-highlighted" : ""}`} d={y1 === y2 ? `M${x1},${y1} L${x2},${y2}` : `M${x1},${y1} C${x1 + 16},${y1} ${x2 - 16},${y2} ${x2},${y2}`} markerEnd={`url(#${marker}${active ? "-active" : ""})`} />;
+      })}</svg>
+      {model.positions.map(({ view, x, y, cycle }) => {
+        const dependency = view.dependencies.state === "invalid" ? dependencySummary(view, tasks) : view.dependencies.unmet.map(item => uniqueTask(tasks, item.task_id)?.task.title ?? "Unreadable prerequisite").join(", ");
+        const detail = `${taskStage(view)}${view.dependencies.unmet.length ? ` · after ${view.dependencies.unmet.length}` : view.scheduled && view.lane === "ready" ? " · scheduled" : ""}${cycle ? " · prerequisite cycle" : ""}`;
+        return <div key={view.task.task_id} className={`liaison-graph-task lane-${view.lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}${hover === view.task.task_id ? " is-highlighted" : ""}`} style={{ left: x, top: y }} title={`${view.task.title}, ${detail}${dependency ? `, ${dependency}` : ""}`} aria-label={`${view.task.title}, ${detail}${dependency ? `, ${dependency}` : ""}`} onMouseEnter={() => setHover(view.task.task_id)} onMouseLeave={() => setHover(null)}><span className="liaison-task-dot" aria-hidden="true" /><span className="liaison-task-title">{view.task.title}</span><span className="liaison-task-stage">{detail}</span></div>;
+      })}
     </div>
-    {model.counts.workers === 0 && model.counts.supervisors > 0 ? <p className="supervisor-graph-empty">No worker agents yet</p> : null}
-    <div className="supervisor-graph-scroll" role="region" aria-label="Agent graph, scrollable" ref={element => { roving.listRef.current = element; scrollRef.current = element; }}
-      onFocus={roving.listProps.onFocus} onBlur={roving.listProps.onBlur} onKeyDown={onGraphKey}>
-      {model.nodes.length ? <>
-        <div className="supervisor-graph-columns" style={{ width: model.layout.width, height: GRAPH_GEOMETRY.headerHeight }} aria-hidden="true">
-          {Array.from({ length: model.layout.columns }, (_, column) => <span key={column} className="supervisor-graph-column" style={{
-            left: GRAPH_GEOMETRY.padding + column * (GRAPH_GEOMETRY.nodeWidth + GRAPH_GEOMETRY.columnGap) + 2, width: GRAPH_GEOMETRY.nodeWidth,
-          }}>{columnLabels[column] ?? "Nested"}</span>)}
-        </div>
-        <div className="supervisor-graph-canvas" role="group" aria-label="Agent relationships" style={{ width: model.layout.width, height: model.layout.height }}>
-          <svg className="supervisor-graph-edges" width={model.layout.width} height={model.layout.height} viewBox={`0 0 ${model.layout.width} ${model.layout.height}`} aria-hidden="true" focusable="false">
-            {model.layout.edges.map(edge => <path key={edge.to} className={`supervisor-graph-edge is-${model.byId.get(edge.to)!.edge ?? "delegated"}${highlighted.has(edge.from) && highlighted.has(edge.to) ? " is-highlighted" : ""}`} d={edge.path} />)}
-            {model.links.map(link => <path key={`${link.from}|${link.to}`} className={`supervisor-graph-edge is-assigned is-link${highlighted.has(link.from) && highlighted.has(link.to) ? " is-highlighted" : ""}`}
-              d={edgePath(positions.get(link.from)!, positions.get(link.to)!)} />)}
-          </svg>
-          {model.nodes.map(node => {
-            const position = positions.get(node.id)!;
-            const facts = nodeFacts(node, { model, snapshot, live, connected, runtimeLive });
-            const tier = tierFor(node), dim = dimFor(node), selected = selectedNodeId === node.id;
-            const observed = observations.get(node.run?.run_id ?? node.assignedRunId ?? "");
-            const shared = observed?.presence === "present" && !!sharedSpace && observed.workspace_id === sharedSpace;
-            const name = [facts.title, facts.role, facts.status, facts.provenance, facts.relation, tier ? TIER_LABEL[tier] : null, dim ? `dimmed by ${dim}` : null].filter(Boolean).join(", ");
-            const detail = node.run ? agentState(snapshot, node.run, connected, runtimeLive).detail : null;
-            return <button key={node.id} type="button" data-row-id={node.id} data-node-kind={node.kind} tabIndex={roving.tabIndexFor(node.id)}
-              aria-expanded={selected} aria-label={name} title={`${name}${detail ? `\n${detail}` : ""}`} className={`supervisor-graph-node is-${node.kind}${selected ? " is-selected" : ""}${highlighted.has(node.id) ? " is-highlighted" : ""}${node.unassigned ? " is-unassigned" : ""}${dim ? " is-dimmed" : ""}`}
-              style={{ left: position.x, top: position.y, width: position.width, height: position.height }}
-              onMouseEnter={() => onHover(node.run?.run_id ?? node.assignedRunId)} onMouseLeave={() => onHover(null)} onClick={() => onSelect(node)}>
-              <span className="supervisor-graph-node-icon" aria-hidden="true">{facts.glyph === "document" ? <UiIcon name="file" /> : <StateGlyph shape={facts.glyph} />}</span>
-              <strong className="supervisor-graph-node-title">{facts.title}</strong>
-              {tier ? <span className={`supervisor-tier is-${tier}`}><span className="supervisor-tier-glyph" aria-hidden="true">{tier === "decide" ? "?" : tier === "recover" ? "!" : "i"}</span><span className="supervisor-tier-label">{TIER_LABEL[tier]}</span></span> : null}
-              <span className={`supervisor-graph-node-metadata${shared ? " is-shared" : ""}`}>
-                <span className="supervisor-graph-node-status">{facts.status}</span>
-                <span className="supervisor-graph-node-provenance">{facts.provenance}</span>
-              </span>
-            </button>;
-          })}
-        </div>
-        {bottomInset > 0 ? <div className="supervisor-graph-bottom-inset" style={{ height: bottomInset }} aria-hidden="true" /> : null}
-      </> : <p className="supervisor-graph-empty">No agents in this task scope.</p>}
-    </div>
-  </section>;
+    <ul className="liaison-dependency-outline" role="list" aria-label="Task dependency outline">{model.positions.map(position => <li key={position.view.task.task_id} data-indented={position.level > 0 || undefined} style={{ paddingLeft: Math.min(position.level, 6) * 20 }}><TaskRow view={position.view} tasks={tasks} />{position.view.dependencies.unmet.length > 1 ? <p className="liaison-outline-after">also after {position.view.dependencies.unmet.slice(1).map(item => `“${uniqueTask(tasks, item.task_id)?.task.title ?? "Unreadable prerequisite"}”`).join(", ")}</p> : null}</li>)}</ul>
+    {open.some(view => !positions.has(view.task.task_id)) ? <p className="liaison-task-status">Some task identities are unreadable.</p> : null}
+  </div>{tasks.length > open.length ? <footer className="liaison-graph-footer">{tasks.length - open.length} done not shown</footer> : null}</div>;
 }

@@ -7,14 +7,14 @@ use cockpit_protocol::project_teardown::{
 };
 use cockpit_protocol::projects::{WorkspaceOperation, WorkspaceSetupMode};
 use cockpit_protocol::orchestration::{
-    CleanupEffectState, CleanupReason, CleanupReasonClass, OwnedResourceIdentity,
-    OwnedResourceRecord, OwnedSpaceIdentity, Run,
+    CleanupEffectState, CleanupReason, CleanupReasonClass, DispatchStep, OwnedResourceIdentity,
+    NativeProcessIdentity, OwnedResourceRecord, OwnedSpaceIdentity, Run,
 };
 use crate::orchestration::cleanup::{CleanupEffectOutcome, CleanupEvaluation};
 
 
 use crate::InspectionError;
-use crate::project_adapter::ProjectWorktreeRemoveRequest;
+use crate::project_adapter::{ProjectSnapshot, ProjectWorktreeRemoveRequest};
 use crate::project_store::{TeardownReceipt, TeardownReceiptState, timestamp};
 use crate::project_teardown::{
     self, WorkspaceTeardownCommand, WorkspaceTeardownEvidence, WorkspaceTeardownWorktree,
@@ -85,18 +85,57 @@ impl ProjectService {
             }
         }
         self.store.write_owned_creation(&crate::project_store::OwnedCreationReceipt {
-            operation_id: operation_id.into(), resources, git_capture_error,
+            operation_id: operation_id.into(), resources, git_capture_error, moved_space: None,
         })
     }
 
     pub async fn owned_resources_for_run(&self, run: &Run) -> Result<Vec<OwnedResourceIdentity>, InspectionError> {
-        let Some(operation_id) = run.setup.as_ref().and_then(|s| s.operation_id.as_deref()) else {
-            return Ok(Vec::new());
+        let creator = run.setup.as_ref().and_then(|setup| setup.operation_id.as_deref());
+        let mut resources = match creator {
+            Some(id) => {
+                let operation = self.load_teardown_operation(&run.session_id, id)?;
+                if self.store.owned_checkout(id)?.is_some_and(|journal| journal.resume_binding.is_some()) {
+                    return Err(InspectionError::new("association_conflict", "a Space-only resumed binding cannot become the original checkout creator"));
+                }
+                let Some(receipt) = self.store.read_owned_creation(id)? else { return Ok(Vec::new()); };
+                project_teardown::validate_creation_receipt(&receipt, &operation)?;
+                receipt.resources
+            }
+            None => Vec::new(),
         };
-        let operation = self.load_teardown_operation(&run.session_id, operation_id)?;
-        let Some(receipt) = self.store.read_owned_creation(operation_id)? else { return Ok(Vec::new()); };
+        if run.dispatch.as_ref().is_some_and(|dispatch| dispatch.move_operation_id.is_some()
+            && matches!(dispatch.step, DispatchStep::MoveIntent | DispatchStep::MoveUnknown))
+        {
+            // The move intent precedes the committed placement. Its setup can
+            // still name the predecessor Space while the new binding is in flight.
+            // Original filesystem receipts remain valid, but neither Space is
+            // granted by this uncommitted placement.
+            resources.retain(|resource| !matches!(resource, OwnedResourceIdentity::Space { .. }));
+            return Ok(resources);
+        }
+        let current_workspace = run.setup.as_ref().and_then(|setup| setup.workspace_id.as_deref());
+        let current_move = run.dispatch.as_ref().and_then(|dispatch| dispatch.move_operation_id.as_deref());
+        if resources.iter().any(|resource| matches!(resource, OwnedResourceIdentity::Space { identity }
+            if Some(identity.workspace_id.as_str()) == current_workspace
+                && current_move.is_none_or(|move_id| identity.creation_operation_id == move_id)))
+        {
+            return Ok(resources);
+        }
+        let Some(workspace) = current_workspace else { return Ok(resources); };
+        let Some(move_id) = current_move else {
+            if creator.is_some() { return Err(InspectionError::new("association_conflict", "changed owned Space has no exact current move receipt")); }
+            return Ok(resources);
+        };
+        let operation = self.load_teardown_operation(&run.session_id, move_id)?;
+        self.validate_resume_binding_for_run(&operation, run)?;
+        let receipt = self.store.read_owned_creation(move_id)?.ok_or_else(|| InspectionError::new("ownership_unproven", "resumed Space has no actual creation receipt"))?;
         project_teardown::validate_creation_receipt(&receipt, &operation)?;
-        Ok(receipt.resources)
+        if receipt.resources.len() != 1 || !matches!(&receipt.resources[0], OwnedResourceIdentity::Space { identity }
+            if identity.workspace_id == workspace && identity.creation_operation_id == move_id)
+        { return Err(InspectionError::new("association_conflict", "resumed binding did not create only the exact current Space")); }
+        resources.retain(|resource| !matches!(resource, OwnedResourceIdentity::Space { .. }));
+        resources.extend(receipt.resources);
+        Ok(resources)
     }
     pub async fn owned_creation_limitation_for_run(&self, run: &Run) -> Result<Option<String>, InspectionError> {
         let Some(operation_id) = run.setup.as_ref().and_then(|s| s.operation_id.as_deref()) else {
@@ -106,15 +145,28 @@ impl ProjectService {
         Ok(self.store.read_owned_creation(operation_id)?.and_then(|r| r.git_capture_error))
     }
 
+    fn validate_resume_binding_for_run(&self, operation: &WorkspaceOperation, run: &Run) -> Result<(), InspectionError> {
+        let journal = self.store.owned_checkout(&operation.operation_id)?.ok_or_else(|| InspectionError::new("ownership_unproven", "resumed Space journal is missing"))?;
+        let lineage = journal.resume_binding.as_ref().ok_or_else(|| InspectionError::new("association_conflict", "current move is not a resumed Space binding"))?;
+        let binding = journal.bind.as_ref().ok_or_else(|| InspectionError::new("association_conflict", "resumed Space has no retained move receipt"))?;
+        let setup = run.setup.as_ref().ok_or_else(|| InspectionError::new("association_conflict", "resumed run has no setup identity"))?;
+        if lineage.previous_operation_id.as_deref() != setup.operation_id.as_deref()
+            || run.checkout.as_ref() != Some(&lineage.expected_checkout)
+            || setup.checkout_path != lineage.expected_checkout.path || operation.plan.checkout_path != setup.checkout_path
+            || operation.session_id != run.session_id || binding.operation_id != operation.operation_id
+            || binding.move_operation_id != operation.operation_id
+            || run.dispatch.as_ref().and_then(|dispatch| dispatch.move_operation_id.as_deref()) != Some(operation.operation_id.as_str())
+            || setup.workspace_id.as_deref() != Some(binding.workspace_id.as_str())
+            || operation.workspace_id.as_deref() != Some(binding.workspace_id.as_str())
+        { return Err(InspectionError::new("association_conflict", "resumed Space lineage differs from the current run checkout/move/placement")); }
+        Ok(())
+    }
+
 
     pub async fn validate_owned_resource(&self, identity: &OwnedResourceIdentity) -> Result<(), InspectionError> {
-        let operation_id = match identity {
-            OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } => &identity.creation_operation_id,
-            OwnedResourceIdentity::Space { identity } => &identity.creation_operation_id,
-            _ => return Err(InspectionError::new("unsupported_resource", "not a project resource")),
-        };
-        let operation = self.store.load(operation_id)?;
-        let receipt = self.store.read_owned_creation(operation_id)?.ok_or_else(|| {
+        let setup_operation_id = self.resource_setup_operation(identity)?;
+        let operation = self.store.load(&setup_operation_id)?;
+        let receipt = self.store.read_owned_creation(&setup_operation_id)?.ok_or_else(|| {
             InspectionError::new("ownership_unproven", "no actual owned creation receipt")
         })?;
         project_teardown::validate_creation_receipt(&receipt, &operation)?;
@@ -124,11 +176,41 @@ impl ProjectService {
         Ok(())
     }
 
+    fn resource_setup_operation(&self, identity: &OwnedResourceIdentity) -> Result<String, InspectionError> {
+        let creation_operation_id = match identity {
+            OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } => return Ok(identity.creation_operation_id.clone()),
+            OwnedResourceIdentity::AttemptDirectory { identity } => return Ok(identity.creation_operation_id.clone()),
+            OwnedResourceIdentity::Space { identity } => &identity.creation_operation_id,
+            _ => return Err(InspectionError::new("unsupported_resource", "not a project resource")),
+        };
+        let mut matched = None;
+        for operation in self.store.list()? {
+            if self.store.owned_checkout(&operation.operation_id)?.and_then(|j| j.bind)
+                .is_some_and(|bind| bind.move_operation_id == *creation_operation_id)
+            {
+                if matched.replace(operation.operation_id).is_some() {
+                    return Err(InspectionError::new("association_conflict", "move operation belongs to multiple setup journals"));
+                }
+            }
+        }
+        Ok(matched.unwrap_or_else(|| creation_operation_id.clone()))
+    }
+
     pub async fn inspect_owned_resource(
         &self, resource: &OwnedResourceRecord, run: &Run,
+        proof: Option<&crate::orchestration::cleanup::OwnedConsumerProof<'_>>,
     ) -> Result<CleanupEvaluation, InspectionError> {
         self.validate_owned_resource(&resource.identity).await?;
-        project_teardown::owned_run_identity(resource, run)?;
+        let binding_operation_id = self.resource_setup_operation(&resource.identity)?;
+        let binding_operation = self.store.load(&binding_operation_id)?;
+        let journal = self.store.owned_checkout(&binding_operation_id)?;
+        let creator = if let Some(lineage) = journal.as_ref().and_then(|journal| journal.resume_binding.as_ref()) {
+            self.validate_resume_binding_for_run(&binding_operation, run)?;
+            lineage.previous_operation_id.as_deref()
+        } else {
+            Some(binding_operation_id.as_str())
+        };
+        project_teardown::owned_run_identity(resource, run, creator)?;
         match &resource.identity {
             OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } => {
                 let head = match project_teardown::integrated_owned_head(identity, run) {
@@ -144,7 +226,10 @@ impl ProjectService {
                     Ok(false) => Ok(CleanupEvaluation::Absent),
                     Err(error) => Ok(CleanupEvaluation::Kept(cleanup_reason(CleanupReasonClass::UserWork, error))),
                     Ok(true) => {
-                        if let Err(error) = project_teardown::owned_consumers_quiescent(resource) {
+                        if let Err(error) = project_teardown::owned_consumers_quiescent(resource, run, proof).await {
+                            return Ok(CleanupEvaluation::Unknown(cleanup_reason(CleanupReasonClass::Authority, error)));
+                        }
+                        if let Err(error) = self.validate_cleanup_incarnation(run).await {
                             return Ok(CleanupEvaluation::Unknown(cleanup_reason(CleanupReasonClass::Authority, error)));
                         }
                         if let Err(error) = self.current_git_terminals_quiescent(identity).await {
@@ -155,17 +240,35 @@ impl ProjectService {
                 }
             }
             OwnedResourceIdentity::Space { identity } => {
-                let snapshot = self.adapter.session_snapshot(&identity.session_id).await?;
-                if snapshot.session_id != identity.session_id {
-                    return Err(InspectionError::new("stale_identity", "Space snapshot belongs to another session"));
+                let captured = if let Some(retirement) = &run.retirement {
+                    retirement.identity.as_ref().ok_or_else(|| InspectionError::new(
+                        "space_incarnation_unproven", "retired Space has no captured placement identity",
+                    )).and_then(|location| captured_space_incarnation(identity, &location.session_id,
+                        &location.endpoint_identity, &location.workspace_id, location.herdr_boot_id.as_deref(),
+                        location.herdr_peer.as_ref()))
+                } else {
+                    run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref())
+                        .ok_or_else(|| InspectionError::new("space_incarnation_unproven", "Space has no captured placement identity"))
+                        .and_then(|location| captured_space_incarnation(identity, &location.session_id,
+                            &location.endpoint_identity, &location.workspace_id, location.boot_id.as_deref(),
+                            location.peer_process.as_ref()))
+                };
+                let captured = match captured {
+                    Ok(captured) => captured,
+                    Err(error) => return Ok(CleanupEvaluation::Unknown(cleanup_reason(CleanupReasonClass::Authority, error))),
+                };
+                let observed = match self.adapter.project_snapshot_at_endpoint(
+                    &identity.session_id, &identity.endpoint_identity,
+                ).await {
+                    Ok(observed) => observed,
+                    Err(error) => return Ok(CleanupEvaluation::Unknown(cleanup_reason(CleanupReasonClass::Authority, error))),
+                };
+                match fresh_owned_space_absence(identity, captured, &observed) {
+                    Ok(true) => return Ok(CleanupEvaluation::Absent),
+                    Ok(false) => {}
+                    Err(error) => return Ok(CleanupEvaluation::Unknown(cleanup_reason(CleanupReasonClass::Authority, error))),
                 }
-                if self.adapter.project_endpoint_identity(&identity.session_id).await? != identity.endpoint_identity {
-                    return Ok(CleanupEvaluation::Unknown(CleanupReason { class: CleanupReasonClass::Authority,
-                        code: "endpoint_changed".into(), message: "Space endpoint no longer matches its creation receipt".into() }));
-                }
-                if !snapshot.spaces.iter().any(|s| s.id == identity.workspace_id) {
-                    return Ok(CleanupEvaluation::Absent);
-                }
+                let snapshot = &observed.snapshot;
                 let notes = crate::notes::space_has_binding(
                     std::path::Path::new(&self.configuration.notes_root),
                     &identity.endpoint_identity, &identity.session_id, &identity.workspace_id,
@@ -187,7 +290,7 @@ impl ProjectService {
                     return Ok(CleanupEvaluation::Kept(CleanupReason { class: CleanupReasonClass::UserWork,
                         code: "space_consumers".into(), message: "current terminal, tab or agent consumers protect this Space".into() }));
                 }
-                if let Err(error) = project_teardown::owned_consumers_quiescent(resource) {
+                if let Err(error) = project_teardown::owned_consumers_quiescent(resource, run, proof).await {
                     return Ok(CleanupEvaluation::Unknown(cleanup_reason(CleanupReasonClass::Authority, error)));
                 }
                 Ok(CleanupEvaluation::Unknown(CleanupReason { class: CleanupReasonClass::Authority,
@@ -198,15 +301,52 @@ impl ProjectService {
         }
     }
 
+    /// Fence a cleanup effect against its immutable retired Herdr incarnation.
+    pub async fn validate_cleanup_incarnation(&self, run: &Run) -> Result<(), InspectionError> {
+        let retirement = run.retirement.as_ref().filter(|retirement| matches!(
+            retirement.state, cockpit_protocol::orchestration::RetirementState::Retired { .. },
+        )).ok_or_else(|| InspectionError::new("space_incarnation_unproven", "cleanup has no retired placement receipt"))?;
+        let identity = retirement.identity.as_ref().ok_or_else(|| InspectionError::new(
+            "space_incarnation_unproven", "cleanup has no immutable retirement identity",
+        ))?;
+        if identity.session_id != run.session_id || identity.endpoint_identity.is_empty()
+            || identity.workspace_id.is_empty() || identity.tab_id.is_empty() || identity.pane_id.is_empty()
+            || identity.terminal_id.is_empty()
+        {
+            return Err(InspectionError::new("space_placement_changed", "cleanup retirement placement is incomplete or belongs to another session"));
+        }
+        let captured = recorded_incarnation(identity.herdr_boot_id.as_deref(), identity.herdr_peer.as_ref())?;
+        let observed = self.adapter.project_snapshot_at_endpoint(
+            &identity.session_id, &identity.endpoint_identity,
+        ).await?;
+        response_bound_snapshot(&observed, &identity.session_id, &identity.endpoint_identity)?;
+        validate_server_incarnation(captured, &observed)
+    }
+
+    pub(super) fn validate_source_incarnation(
+        source: &cockpit_protocol::orchestration::RunLocation, observed: &ProjectSnapshot,
+    ) -> Result<(), InspectionError> {
+        response_bound_snapshot(observed, &source.session_id, &source.endpoint_identity)?;
+        validate_server_incarnation(recorded_incarnation(source.boot_id.as_deref(), source.peer_process.as_ref())?, observed)
+    }
+
     pub async fn apply_owned_resource(
         &self, resource: &OwnedResourceRecord, run: &Run,
+        proof: Option<&crate::orchestration::cleanup::OwnedConsumerProof<'_>>,
     ) -> Result<CleanupEffectOutcome, InspectionError> {
-        let evaluation = self.inspect_owned_resource(resource, run).await?;
+        let evaluation = self.inspect_owned_resource(resource, run, proof).await?;
         match evaluation {
             CleanupEvaluation::Absent => return Ok(CleanupEffectOutcome { state: CleanupEffectState::Absent, evidence: Some("fresh exact resource inspection confirms absence".into()), reason: None, effects: Vec::new() }),
             CleanupEvaluation::Ready => {}
             CleanupEvaluation::Waiting(reason) | CleanupEvaluation::Kept(reason) | CleanupEvaluation::Unknown(reason) =>
                 return Ok(CleanupEffectOutcome { state: CleanupEffectState::Refused, evidence: None, reason: Some(reason), effects: Vec::new() }),
+        }
+        if let OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } = &resource.identity {
+            self.validate_cleanup_incarnation(run).await?;
+            self.current_git_terminals_quiescent(identity).await?;
+            // Re-observe the exact sealed scope and private release CAS after
+            // other async inspections, adjacent to the non-force Git effect.
+            project_teardown::owned_consumers_quiescent(resource, run, proof).await?;
         }
         let result = match &resource.identity {
             OwnedResourceIdentity::Worktree { identity } => crate::project_adapter::remove_owned_worktree(
@@ -235,10 +375,9 @@ impl ProjectService {
         }
         let target = std::path::Path::new(&identity.checkout_path);
         for session in sessions.sessions.iter().filter(|s| s.running) {
-            let snapshot = self.adapter.session_snapshot(&session.id).await?;
-            if snapshot.session_id != session.id {
-                return Err(InspectionError::new("consumer_identity_changed", "terminal inventory belongs to a different session"));
-            }
+            let endpoint = self.adapter.project_endpoint_identity(&session.id).await?;
+            let observed = self.adapter.project_snapshot_at_endpoint(&session.id, &endpoint).await?;
+            let snapshot = current_physical_snapshot(&observed, &session.id, &endpoint)?;
             for pane in &snapshot.panes {
                 let cwd = pane.cwd.as_deref().ok_or_else(|| {
                     InspectionError::new("terminal_cwd_unknown", "a current terminal has no classified working directory")
@@ -646,3 +785,94 @@ impl ProjectService {
 fn cleanup_reason(class: CleanupReasonClass, error: InspectionError) -> CleanupReason {
     CleanupReason { class, code: error.code, message: error.message }
 }
+
+#[derive(Debug, Clone, Copy)]
+struct SpaceIncarnation<'a> {
+    boot: Option<&'a str>,
+    peer: Option<&'a NativeProcessIdentity>,
+}
+
+fn known_peer(peer: &NativeProcessIdentity) -> bool {
+    peer.pid > 0 && peer.start_ticks > 0
+        && peer.kernel_boot_id.as_deref().is_some_and(|boot| uuid::Uuid::parse_str(boot).is_ok())
+}
+
+fn captured_space_incarnation<'a>(
+    identity: &OwnedSpaceIdentity, session: &str, endpoint: &str, workspace: &str,
+    boot: Option<&'a str>, peer: Option<&'a NativeProcessIdentity>,
+) -> Result<SpaceIncarnation<'a>, InspectionError> {
+    if identity.session_id != session || identity.endpoint_identity != endpoint || identity.workspace_id != workspace {
+        return Err(InspectionError::new("space_placement_changed", "Space creation differs from its retained placement incarnation"));
+    }
+    recorded_incarnation(boot, peer)
+}
+
+fn recorded_incarnation<'a>(
+    boot: Option<&'a str>, peer: Option<&'a NativeProcessIdentity>,
+) -> Result<SpaceIncarnation<'a>, InspectionError> {
+    let captured = SpaceIncarnation { boot: boot.filter(|boot| !boot.is_empty()), peer: peer.filter(|peer| known_peer(peer)) };
+    if captured.boot.is_none() && captured.peer.is_none() {
+        return Err(InspectionError::new("space_incarnation_unproven", "cleanup has no recorded actual daemon boot or complete physical peer"));
+    }
+    Ok(captured)
+}
+
+fn fresh_owned_space_absence(
+    identity: &OwnedSpaceIdentity, captured: SpaceIncarnation<'_>, observed: &ProjectSnapshot,
+) -> Result<bool, InspectionError> {
+    response_bound_snapshot(observed, &identity.session_id, &identity.endpoint_identity)?;
+    validate_server_incarnation(captured, observed)?;
+    if observed.snapshot.spaces.iter().any(|space| space.id == identity.workspace_id) {
+        return Ok(false);
+    }
+    if observed.snapshot.panes.iter().any(|pane| pane.space_id == identity.workspace_id)
+        || observed.snapshot.tabs.iter().any(|tab| tab.space_id == identity.workspace_id)
+        || observed.snapshot.agents.iter().any(|agent| agent.space_id == identity.workspace_id)
+    {
+        return Err(InspectionError::new("space_snapshot_conflict", "missing Space still has terminal, tab or agent consumers in the same snapshot"));
+    }
+    Ok(true)
+}
+
+fn validate_server_incarnation(captured: SpaceIncarnation<'_>, observed: &ProjectSnapshot) -> Result<(), InspectionError> {
+    let fresh_boot = observed.boot_id.as_deref().filter(|boot| !boot.is_empty());
+    let fresh_peer = observed.peer_process.as_ref().filter(|peer| known_peer(peer));
+    if let (Some(recorded), Some(fresh)) = (captured.boot, fresh_boot)
+        && recorded != fresh
+    {
+        return Err(InspectionError::new("space_boot_changed", "response-bound daemon boot conflicts with the recorded cleanup placement"));
+    }
+    if let (Some(recorded), Some(fresh)) = (captured.peer, fresh_peer)
+        && recorded != fresh
+    {
+        return Err(InspectionError::new("space_peer_changed", "response-bound physical peer conflicts with the recorded cleanup placement"));
+    }
+    let boot_matches = captured.boot.is_some() && captured.boot == fresh_boot;
+    let peer_matches = captured.peer.is_some() && captured.peer == fresh_peer;
+    if !boot_matches && !peer_matches {
+        return Err(InspectionError::new("space_incarnation_unproven", "cleanup has no matching recorded daemon boot or proved physical peer"));
+    }
+    Ok(())
+}
+
+fn response_bound_snapshot<'a>(
+    observed: &'a ProjectSnapshot, session: &str, endpoint: &str,
+) -> Result<&'a cockpit_protocol::v1::SessionSnapshotResponse, InspectionError> {
+    if observed.endpoint_identity != endpoint || observed.snapshot.session_id != session {
+        return Err(InspectionError::new("endpoint_changed", "response-bound terminal inventory belongs to another peer or session"));
+    }
+    Ok(&observed.snapshot)
+}
+
+fn current_physical_snapshot<'a>(
+    observed: &'a ProjectSnapshot, session: &str, endpoint: &str,
+) -> Result<&'a cockpit_protocol::v1::SessionSnapshotResponse, InspectionError> {
+    let snapshot = response_bound_snapshot(observed, session, endpoint)?;
+    if !observed.peer_process.as_ref().is_some_and(known_peer) {
+        return Err(InspectionError::new("terminal_peer_unproven", "current terminal census requires a complete proved physical peer"));
+    }
+    Ok(snapshot)
+}
+
+#[cfg(test)]
+mod tests;
