@@ -352,7 +352,7 @@ fn owned_root_pane<'a>(runtime: &'a super::herdr::RuntimeView, run: &Run, allow_
 }
 
 impl OrchestrationService {
-    /// One observation path for explicit Resume and automatic root recovery.
+    /// Shared observation for explicit Resume and automatic live-main reattachment.
     /// It never closes a pane, signals a process or inspects worker consumers.
     pub async fn observe_root_resume(&self, herdr: &dyn super::herdr::OrchestrationHerdr, expected: &Run) -> ResolvedMutationInput {
         let mut input = ResolvedMutationInput { project: expected.project.clone(), checkout: expected.checkout.clone(), ..Default::default() };

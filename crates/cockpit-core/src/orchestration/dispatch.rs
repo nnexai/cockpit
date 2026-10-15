@@ -568,6 +568,9 @@ impl Dispatcher {
             let mut input = super::ResolvedMutationInput::default();
             if current.kind != RunKind::Worker {
                 input = self.service.observe_root_resume(self.herdr.as_ref(), &current).await;
+                // Automatic observation only reattaches a surviving main.
+                // A stopped root requires explicit Start/Resume, not exit proof or a refusal.
+                if input.attachment_observation.is_none() { continue; }
             } else if attachment.process.as_ref().is_some_and(|p|
                 crate::process_identity::verified_machine_id(p).as_ref() == attachment.machine_id.as_ref()
                     && attachment.machine_id.is_some()) {

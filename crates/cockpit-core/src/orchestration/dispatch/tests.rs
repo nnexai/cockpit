@@ -768,44 +768,93 @@ async fn root_main_exit_proof_is_same_boot_and_independent_of_worker_consumers()
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn automatic_root_observation_reserves_one_epoch_and_keeps_the_root_identity() {
-    let fixture = ReviewFixture::new(RunStage::Active);
-    fixture.change(|run| {
-        let attachment = test_attachment(run);
-        attachment.state = cockpit_protocol::orchestration::AttachmentState::Disconnected;
-        attachment.machine_id = crate::process_identity::machine_id();
-        attachment.launch_attempt = 1;
-        attachment.process = Some(cockpit_protocol::orchestration::NativeProcessIdentity {
-            pid: i32::MAX as u32, start_ticks: 1, kernel_boot_id: crate::process_identity::kernel_boot_id(),
+async fn automatic_root_observation_never_replaces_a_stopped_main() {
+    use cockpit_protocol::orchestration::{
+        AttachmentState, NativeProcessIdentity, OperatorOrigin, OrchestrationAction,
+        OrchestrationMutationRequest, ResumePhase,
+    };
+    for unavailable in [false, true] {
+        let fixture = ReviewFixture::new(RunStage::Active);
+        fixture.change(|run| {
+            let attachment = test_attachment(run);
+            attachment.state = AttachmentState::Disconnected;
+            attachment.machine_id = crate::process_identity::machine_id();
+            attachment.launch_attempt = 1;
+            attachment.process = Some(NativeProcessIdentity {
+                pid: i32::MAX as u32, start_ticks: 1, kernel_boot_id: crate::process_identity::kernel_boot_id(),
+            });
+            let dispatch = run.dispatch.as_mut().unwrap();
+            dispatch.step = DispatchStep::Launched;
+            dispatch.launch_attempt = 1;
+            run.target = Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() });
+            run.setup = Some(SetupSummary {
+                operation_id: None, generation: None, workspace_id: Some("space".into()), checkout_path: "/".into(),
+                repository_id: None, branch: None, base: None, base_commit: None, ownership: None,
+                effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
+            });
         });
-        let dispatch = run.dispatch.as_mut().unwrap();
-        dispatch.step = DispatchStep::Launched;
-        dispatch.launch_attempt = 1;
-        run.target = Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() });
-        run.setup = Some(SetupSummary {
-            operation_id: None, generation: None, workspace_id: Some("space".into()), checkout_path: "/".into(),
-            repository_id: None, branch: None, base: None, base_commit: None, ownership: None,
-            effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
-        });
-    });
-    let old = fixture.current().1;
-    let mut absent = runtime();
-    absent.panes.clear();
-    let herdr = Arc::new(CountingHerdr::new(absent, false, false));
-    let dispatcher = fixture.dispatcher(herdr.clone());
-    dispatcher.observe().await;
-    let recovered = fixture.current().1;
-    assert_eq!(recovered.resume.as_ref().unwrap().phase, cockpit_protocol::orchestration::ResumePhase::Launching,
-        "Automatic recovery refusal: {:?}", recovered.resume.as_ref().unwrap().cause);
-    assert_eq!(recovered.run_id, old.run_id);
-    assert_eq!(recovered.attachment.as_ref().unwrap().epoch, old.attachment.as_ref().unwrap().epoch + 1);
-    assert_eq!(recovered.dispatch.as_ref().unwrap().launch_attempt, old.dispatch.as_ref().unwrap().launch_attempt + 1);
-    assert_eq!(recovered.stage, RunStage::Starting);
-    let epoch = recovered.attachment.as_ref().unwrap().epoch;
-    dispatcher.observe().await;
-    assert_eq!(fixture.current().1.attachment.as_ref().unwrap().epoch, epoch);
-    assert_eq!(fixture.service.store.lock().unwrap().read().unwrap().runs.len(), 1);
-    herdr.assert_read_only();
+        let old = fixture.current().1;
+        fixture.staged_auth(&old);
+        let mut absent = runtime();
+        absent.panes.clear();
+        if !unavailable {
+            // Keep the ordinary missing-pane diagnostic outside the resume invariants.
+            fixture.service.record_observation(&absent, &old.session_id).unwrap();
+        }
+        let herdr = Arc::new(CountingHerdr::new(absent.clone(), unavailable, false));
+        let input = fixture.service.observe_root_resume(herdr.as_ref(), &old).await;
+        assert!(input.attachment_observation.is_none());
+        assert_eq!(input.root_main_recovery.is_some(), !unavailable);
+        assert_eq!(input.observation_cause.is_some(), unavailable);
+        let before = fixture.service.store.lock().unwrap().read().unwrap();
+        assert_eq!(before.runs.len(), 1);
+        assert!(before.operations.is_empty());
+        assert!(old.resume.is_none());
+        let credential_path = super::super::credentials::credential_path(
+            fixture.service.base(), &before.credentials[0],
+        ).unwrap();
+        let credential_bytes = std::fs::read(&credential_path).unwrap();
+        let before = serde_json::to_value(before).unwrap();
+        let dispatcher = fixture.dispatcher(herdr.clone());
+        for _ in 0..3 {
+            dispatcher.observe().await;
+            let stopped = fixture.current().1;
+            assert!(stopped.resume.is_none(), "automatic observation must not launch or block the root");
+            assert_eq!(stopped.stage, old.stage);
+            assert_eq!(stopped.attachment.as_ref().unwrap().epoch, old.attachment.as_ref().unwrap().epoch);
+            assert_eq!(stopped.dispatch.as_ref().unwrap().launch_attempt, old.dispatch.as_ref().unwrap().launch_attempt);
+            assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(), before,
+                "repeated observer cycles must preserve the root, session, conversation, credentials and operations");
+            assert_eq!(std::fs::read(&credential_path).unwrap(), credential_bytes);
+        }
+        herdr.assert_read_only();
+
+        // The same stopped root can still be restarted by an explicit operator action.
+        let available = CountingHerdr::new(absent, false, false);
+        let input = fixture.service.observe_root_resume(&available, &fixture.current().1).await;
+        assert!(input.root_main_recovery.is_some());
+        assert!(input.observation_cause.is_none());
+        fixture.service.mutate_resolved(&super::super::Actor::Operator(OperatorOrigin::Native),
+            OrchestrationMutationRequest {
+                session_id: old.session_id.clone(), expected_revision: None,
+                action: OrchestrationAction::RunResume {
+                    run_id: old.run_id.clone(), operation_id: uuid::Uuid::new_v4().to_string(),
+                    expected_attachment_epoch: Some(old.attachment.as_ref().unwrap().epoch),
+                },
+            }, &input).unwrap();
+        let restarted = fixture.current().1;
+        assert_eq!(restarted.resume.as_ref().unwrap().phase, ResumePhase::Launching,
+            "Explicit restart refusal: {:?}", restarted.resume.as_ref().unwrap().cause);
+        assert_eq!(restarted.run_id, old.run_id);
+        assert_eq!(restarted.root_id, old.root_id);
+        assert_eq!(restarted.session_id, old.session_id);
+        assert_eq!(restarted.attachment.as_ref().unwrap().conversation, old.attachment.as_ref().unwrap().conversation);
+        assert_eq!(restarted.attachment.as_ref().unwrap().epoch, old.attachment.as_ref().unwrap().epoch + 1);
+        assert_eq!(restarted.dispatch.as_ref().unwrap().launch_attempt, old.dispatch.as_ref().unwrap().launch_attempt + 1);
+        assert_eq!(restarted.stage, RunStage::Starting);
+        assert_eq!(fixture.service.store.lock().unwrap().read().unwrap().runs.len(), 1);
+        available.assert_read_only();
+    }
 }
 
 
