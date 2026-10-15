@@ -14,27 +14,31 @@ function nativeClipboard(): ClipboardAccess {
   };
 }
 
-async function withClipboardFallback<T>(primary: () => Promise<T>, fallback: ClipboardAccess | null, operation: (clipboard: ClipboardAccess) => Promise<T>): Promise<T> {
-  try {
-    return await primary();
-  } catch (error) {
-    if (!fallback) throw error;
-    return operation(fallback);
-  }
+function hasNativeClipboard(): boolean {
+  const userAgent = globalThis.navigator?.userAgent ?? "";
+  return isTauri() && /Linux|Mac OS X/i.test(userAgent);
 }
 
 /** Select the platform clipboard at the user gesture that invokes the operation. */
 export function createClipboardAccess(): ClipboardAccess {
+  if (hasNativeClipboard()) return nativeClipboard();
   const web = webClipboard();
-  const userAgent = globalThis.navigator?.userAgent ?? "";
-  const isNativePlatform = /Linux|Mac OS X/i.test(userAgent);
-  if (!isTauri() || !isNativePlatform) {
-    if (!web) throw new Error("Clipboard access is unavailable");
-    return web;
-  }
-  const native = nativeClipboard();
-  return {
-    readText: () => withClipboardFallback(() => native.readText(), web, (clipboard) => clipboard.readText()),
-    writeText: (text) => withClipboardFallback(() => native.writeText(text), web, (clipboard) => clipboard.writeText(text)),
-  };
+  if (!web) throw new Error("Clipboard access is unavailable");
+  return web;
+}
+
+/** Terminal paste may resolve native files/images without changing readText's text-only contract. */
+export async function readTerminalClipboardContent(): Promise<string> {
+  if (hasNativeClipboard()) return tauriInvoke<string>("cockpit_clipboard_read_terminal");
+  return createClipboardAccess().readText();
+}
+
+/** Browser File names are not paths: only the native host can stage usable terminal files. */
+export async function stageTerminalFiles(files: readonly File[]): Promise<string> {
+  if (!isTauri()) throw new Error("Dropping files into a terminal requires the native Cockpit app");
+  const payload = await Promise.all(files.map(async (file) => ({
+    name: file.name,
+    bytes: Array.from(new Uint8Array(await file.arrayBuffer())),
+  })));
+  return tauriInvoke<string>("cockpit_terminal_files_stage", { files: payload });
 }

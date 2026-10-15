@@ -105,11 +105,12 @@ const mocks = vi.hoisted(() => {
     }
   }
 
-  return { terminals, fits, observers, fitDimensions, fitProposals, MockTerminal, MockFitAddon, MockResizeObserver };
+  return { terminals, fits, observers, fitDimensions, fitProposals, MockTerminal, MockFitAddon, MockResizeObserver, native: { enabled: false, invoke: vi.fn() } };
 });
 
 vi.mock("@xterm/xterm", () => ({ Terminal: mocks.MockTerminal }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: mocks.MockFitAddon }));
+vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => mocks.native.enabled, invoke: mocks.native.invoke }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const request = {
@@ -189,6 +190,8 @@ afterEach(() => {
   mocks.observers.length = 0;
   mocks.fitDimensions.length = 0;
   mocks.fitProposals.length = 0;
+  mocks.native.enabled = false;
+  mocks.native.invoke.mockReset();
 });
 
 describe("TerminalPane fitting and pointer ownership", () => {
@@ -1152,6 +1155,231 @@ describe("TerminalPane fitting and pointer ownership", () => {
       expect(new TextDecoder().decode(terminal.write.mock.calls.at(-1)![0])).toBe("fresh baseline");
       terminal.dataHandler?.("new input");
       expect(sent.filter((command) => command.type === "terminal.input")).toEqual([{ type: "terminal.input", text: "new input", bytes: null }]);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+});
+
+function fileDrop(files: File[], types = ["Files"]) {
+  const event = new Event("drop", { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { files, types, items: [], dropEffect: "none" } });
+  return event;
+}
+
+async function renderFileDropPane(overrides: Partial<Parameters<typeof TerminalPane>[0]> = {}) {
+  const sent: TerminalCommand[] = [];
+  const messages: Array<(value: TerminalStreamMessage) => void> = [];
+  const { client } = makeClient(sent, messages);
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const render = async (next: Partial<Parameters<typeof TerminalPane>[0]> = {}) => {
+    await act(async () => {
+      root.render(<TerminalPane {...paneProps(client, false, { ...overrides, ...next })} />);
+      await settle();
+    });
+  };
+  await render();
+  return { host, root, messages, sent, render, terminal: mocks.terminals.at(-1)!, terminalHost: host.querySelector<HTMLElement>(".terminal-host")!, dispose: async () => { await act(async () => root.unmount()); host.remove(); } };
+}
+
+describe("TerminalPane native clipboard and file drop", () => {
+  it("uses the existing Cmd+C selection handler and rich Cmd+V read without adding Enter", async () => {
+    mocks.native.enabled = true;
+    vi.stubGlobal("navigator", { platform: "MacIntel", userAgent: "Mac OS X" });
+    mocks.native.invoke.mockResolvedValue("'/tmp/clipboard image.png'");
+    const pane = await renderFileDropPane();
+    try {
+      await act(async () => { pane.messages[0]!(message("owned")); });
+      pane.terminal.getSelection.mockReturnValue("actual selected text");
+      await act(async () => {
+        const copy = new KeyboardEvent("keydown", { key: "c", metaKey: true, cancelable: true });
+        expect(pane.terminal.keyHandler!(copy)).toBe(false);
+        expect(copy.defaultPrevented).toBe(true);
+        await settle();
+      });
+      expect(mocks.native.invoke).toHaveBeenCalledWith("cockpit_clipboard_write", { text: "actual selected text" });
+      await act(async () => {
+        pane.terminal.keyHandler!(new KeyboardEvent("keydown", { key: "v", metaKey: true, cancelable: true }));
+        await settle();
+      });
+      expect(mocks.native.invoke).toHaveBeenCalledWith("cockpit_clipboard_read_terminal");
+      expect(pane.terminal.paste).toHaveBeenCalledExactlyOnceWith("'/tmp/clipboard image.png'");
+      expect(pane.sent.filter((command) => command.type === "terminal.input")).toEqual([]);
+    } finally { await pane.dispose(); }
+  });
+
+  it("stages actual file bytes on the dropped pane and holds the paste until control is granted", async () => {
+    mocks.native.enabled = true;
+    mocks.native.invoke.mockResolvedValue("'/tmp/staged/image.png'");
+    const onRequestControl = vi.fn();
+    const onSelect = vi.fn();
+    const pane = await renderFileDropPane({ selected: false, controlAllowed: false, onRequestControl, onSelect });
+    const bytes = new Uint8Array([0, 128, 255]);
+    const file = new File([bytes], "image.png", { type: "image/png" });
+    Object.defineProperty(file, "arrayBuffer", { value: async () => bytes.buffer });
+    try {
+      const event = fileDrop([file]);
+      await act(async () => { pane.terminalHost.dispatchEvent(event); await settle(); });
+      expect(event.defaultPrevented).toBe(true);
+      expect(mocks.native.invoke).toHaveBeenCalledWith("cockpit_terminal_files_stage", { files: [{ name: "image.png", bytes: [0, 128, 255] }] });
+      expect(onRequestControl).toHaveBeenCalledOnce();
+      expect(onSelect).toHaveBeenCalledOnce();
+      expect(pane.terminal.paste).not.toHaveBeenCalled();
+      expect(pane.host.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe("Clipboard operation in progress");
+      await pane.render({ selected: true, controlPending: true, focusToken: 1 });
+      await pane.render({ selected: true, controlAllowed: true, controlPending: false, focusToken: 1 });
+      await act(async () => { pane.messages.at(-1)!(message("owned")); });
+      expect(pane.terminal.paste).toHaveBeenCalledExactlyOnceWith("'/tmp/staged/image.png'");
+      expect(pane.host.querySelector('[aria-label="Clipboard operation in progress"]')).toBeNull();
+      expect(pane.sent.filter((command) => command.type === "terminal.input")).toEqual([]);
+    } finally { await pane.dispose(); }
+  });
+
+  it.each(["refused", "epoch", "ownership"] as const)("discards staged data after %s invalidates the pending drop", async (reason) => {
+    mocks.native.enabled = true;
+    let finish!: (text: string) => void;
+    mocks.native.invoke.mockImplementation(() => new Promise<string>((resolve) => { finish = resolve; }));
+    const pane = await renderFileDropPane({ controlAllowed: false, controlPending: true });
+    const file = new File(["data"], "data.txt");
+    Object.defineProperty(file, "arrayBuffer", { value: async () => new Uint8Array([100]).buffer });
+    try {
+      await act(async () => { pane.terminalHost.dispatchEvent(fileDrop([file])); await settle(); });
+      if (reason === "refused") await pane.render({ controlAllowed: false, controlPending: false });
+      if (reason === "epoch") await pane.render({ focusEpoch: 2 });
+      if (reason === "ownership") await act(async () => { pane.messages.at(-1)!(message("lost")); });
+      await act(async () => { finish("'/tmp/stale.txt'"); await settle(); });
+      await pane.render({ controlAllowed: true, controlPending: false, focusEpoch: reason === "epoch" ? 2 : 1 });
+      await act(async () => { pane.messages.at(-1)!(message("owned")); });
+      expect(pane.terminal.paste).not.toHaveBeenCalled();
+      expect(pane.host.querySelector('[aria-label="Clipboard operation in progress"]')).toBeNull();
+    } finally { await pane.dispose(); }
+  });
+
+  it("ignores internal drags and advertised files with no actual File payload", async () => {
+    const onRequestControl = vi.fn();
+    const pane = await renderFileDropPane({ onRequestControl });
+    try {
+      const internal = fileDrop([], ["text/plain"]);
+      const empty = fileDrop([]);
+      await act(async () => { pane.terminalHost.dispatchEvent(internal); pane.terminalHost.dispatchEvent(empty); await settle(); });
+      expect(internal.defaultPrevented).toBe(false);
+      expect(empty.defaultPrevented).toBe(true);
+      expect(onRequestControl).not.toHaveBeenCalled();
+      expect(mocks.native.invoke).not.toHaveBeenCalled();
+      expect(pane.host.querySelector('[role="alert"]')).toBeNull();
+    } finally { await pane.dispose(); }
+  });
+
+  it("ignores a terminal behind a modal but accepts the terminal inside that modal", async () => {
+    mocks.native.enabled = true;
+    mocks.native.invoke.mockResolvedValue("'/tmp/staged/data.txt'");
+    const onRequestControl = vi.fn();
+    const pane = await renderFileDropPane({ onRequestControl });
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    document.body.append(modal);
+    const file = new File(["data"], "data.txt");
+    Object.defineProperty(file, "arrayBuffer", { value: async () => new Uint8Array([100]).buffer });
+    try {
+      await act(async () => { pane.terminalHost.dispatchEvent(fileDrop([file])); await settle(); });
+      expect(onRequestControl).not.toHaveBeenCalled();
+      expect(mocks.native.invoke).not.toHaveBeenCalled();
+      modal.append(pane.host);
+      await act(async () => { pane.messages[0]!(message("owned")); pane.terminalHost.dispatchEvent(fileDrop([file])); await settle(); });
+      expect(onRequestControl).toHaveBeenCalledOnce();
+      expect(pane.terminal.paste).toHaveBeenCalledExactlyOnceWith("'/tmp/staged/data.txt'");
+    } finally { await pane.dispose(); modal.remove(); }
+  });
+
+  it("reports browser drop errors without a clipboard retry, retaining browser text paste", async () => {
+    vi.stubGlobal("navigator", { clipboard: { readText: vi.fn(async () => "browser text"), writeText: vi.fn() } });
+    const pane = await renderFileDropPane();
+    try {
+      await act(async () => { pane.messages[0]!(message("owned")); pane.terminalHost.dispatchEvent(fileDrop([new File(["data"], "not-a-path.txt")])); await settle(); });
+      expect(pane.terminal.paste).not.toHaveBeenCalled();
+      expect(pane.host.querySelector('[role="alert"]')?.getAttribute("aria-label")).toContain("requires the native Cockpit app");
+      expect(pane.host.querySelector(".terminal-status-retry")).toBeNull();
+      await act(async () => {
+        pane.terminal.keyHandler!(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, shiftKey: true, cancelable: true }));
+        await settle();
+      });
+      expect(pane.terminal.paste).toHaveBeenCalledExactlyOnceWith("browser text");
+      expect(pane.host.querySelector('[role="alert"]')).toBeNull();
+    } finally { await pane.dispose(); }
+  });
+
+  it("keeps closed or inert terminals from accepting file drops", async () => {
+    const onRequestControl = vi.fn();
+    const pane = await renderFileDropPane({ onRequestControl });
+    try {
+      pane.host.setAttribute("inert", "");
+      await act(async () => { pane.terminalHost.dispatchEvent(fileDrop([new File(["data"], "data.txt")])); await settle(); });
+      pane.host.removeAttribute("inert");
+      await act(async () => {
+        pane.messages[0]!({ type: "closed", session_id: "session", pane_id: "pane", stream_id: "stream", reason: "exited" });
+        await settle();
+      });
+      expect(pane.terminalHost.dataset.closed).toBe("true");
+      await act(async () => { pane.terminalHost.dispatchEvent(fileDrop([new File(["data"], "data.txt")])); await settle(); });
+      expect(onRequestControl).not.toHaveBeenCalled();
+      expect(mocks.native.invoke).not.toHaveBeenCalled();
+      expect(pane.terminal.paste).not.toHaveBeenCalled();
+    } finally { await pane.dispose(); }
+  });
+
+  it("reports native staging failures on the target badge without re-reading the clipboard", async () => {
+    mocks.native.enabled = true;
+    mocks.native.invoke.mockRejectedValue("Could not read the dropped file");
+    const pane = await renderFileDropPane();
+    const file = new File(["data"], "data.txt");
+    Object.defineProperty(file, "arrayBuffer", { value: async () => new Uint8Array([100]).buffer });
+    try {
+      await act(async () => { pane.messages[0]!(message("owned")); pane.terminalHost.dispatchEvent(fileDrop([file])); await settle(); });
+      expect(pane.host.querySelector('[role="alert"]')?.getAttribute("aria-label")).toBe("Could not read the dropped file");
+      expect(pane.host.querySelector(".terminal-status-retry")).toBeNull();
+      expect(pane.terminal.paste).not.toHaveBeenCalled();
+      expect(mocks.native.invoke.mock.calls.map(([command]) => command)).toEqual(["cockpit_terminal_files_stage"]);
+    } finally { await pane.dispose(); }
+  });
+
+  it.each(["clipboard", "drop"] as const)("flushes pending %s when ownership arrives before the stream", async (operation) => {
+    const text = operation === "drop" ? "'/tmp/staged/data.txt'" : "text before attach";
+    mocks.native.enabled = operation === "drop";
+    mocks.native.invoke.mockResolvedValue(text);
+    vi.stubGlobal("navigator", { clipboard: { readText: vi.fn(async () => text), writeText: vi.fn() } });
+    const sent: TerminalCommand[] = [];
+    let receive!: (value: TerminalStreamMessage) => void;
+    let resolveStream!: (value: TerminalStream) => void;
+    const client = { openTerminal: vi.fn((_request: TerminalOpenRequest, onMessage: (value: TerminalStreamMessage) => void) => {
+      receive = onMessage;
+      return new Promise<TerminalStream>((resolve) => { resolveStream = resolve; });
+    }) } as unknown as CockpitClient;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
+      const terminal = mocks.terminals.at(-1)!;
+      await act(async () => { receive(message("owned")); });
+      await act(async () => {
+        if (operation === "clipboard") {
+          terminal.keyHandler!(new KeyboardEvent("keydown", { key: "v", ctrlKey: true, shiftKey: true, cancelable: true }));
+        } else {
+          const file = new File(["data"], "data.txt");
+          Object.defineProperty(file, "arrayBuffer", { value: async () => new Uint8Array([100]).buffer });
+          host.querySelector(".terminal-host")!.dispatchEvent(fileDrop([file]));
+        }
+        await settle();
+      });
+      expect(terminal.paste).not.toHaveBeenCalled();
+      expect(host.querySelector('[aria-label="Clipboard operation in progress"]')).not.toBeNull();
+      await act(async () => { resolveStream(stream(sent)); await settle(); });
+      expect(terminal.paste).toHaveBeenCalledExactlyOnceWith(text);
+      expect(host.querySelector('[aria-label="Clipboard operation in progress"]')).toBeNull();
     } finally {
       await act(async () => root.unmount());
       host.remove();

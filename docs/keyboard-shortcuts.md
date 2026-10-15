@@ -69,9 +69,15 @@ With a terminal or the browser surface focused, Cockpit takes only Ctrl+B and th
 
 | Keys | Action |
 | --- | --- |
-| Ctrl+Shift+C | Copy terminal selection. Sends no byte to the program, with or without a selection. |
-| Ctrl+Shift+V | Paste into terminal |
+| Ctrl+Shift+C; Cmd+C on macOS | Copy terminal selection. Ctrl+Shift+C sends no byte to the program, with or without a selection. |
+| Ctrl+Shift+V; Cmd+V on macOS | Paste into terminal |
 | Shift+Enter | Newline without submitting |
+
+In the native macOS and Linux apps, terminal paste prefers copied files, then images, then text. Copied files insert their shell-quoted absolute paths. Clipboard images are saved as PNGs and insert a quoted local path; neither file nor image paste presses Enter. Plain text retains its original content, including newlines.
+
+Drop files or images directly onto a terminal to insert quoted paths to staged copies. Drops outside terminals are ignored and cannot navigate away from Cockpit; tab and Space dragging is unchanged. File drops into browser-hosted Cockpit report that the native app is required.
+
+Staged dropped files and clipboard PNGs remain available for the current native app run and are removed on normal exit. Save them elsewhere if they must survive closing Cockpit. Original copied/dropped files are not modified. Paths containing control characters are rejected rather than sent to the terminal.
 
 ### Files, Review, Context and Library viewers
 

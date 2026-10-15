@@ -186,6 +186,7 @@ export function useTerminalAttachment({ client, request, deferAttachment, termin
       if (!cancelled && generation === attachmentGeneration.current && terminalRef.current === terminal
         && ownershipRef.current === "owned") sizing.requestViewportSizing();
       flushPending();
+      clipboard.flushPendingPaste();
       registerAttachment?.(opened, true);
     }, failFromCause);
     return () => {

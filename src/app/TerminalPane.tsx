@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import type { TerminalOwnershipState } from "../protocol/generated/v1";
 import { shortcutForms } from "./input/shortcuts";
+import { isExternalFileDrag, isTerminalFileDropTarget } from "./input/fileDrop";
 import { createCockpitTerminal, loadGpuRenderer, terminalCellGeometry } from "./terminal/cockpitTerminal";
 import { useTerminalRefs, type PaneError, type TerminalPaneRequest } from "./terminal/paneState";
 import { useTerminalControl } from "./terminal/useTerminalControl";
@@ -59,7 +60,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   const sizing = useTerminalResize(refs);
   const frames = useTerminalFrameQueue(refs, sizing, setFramePainted);
   const clipboard = useTerminalClipboard(refs, control);
-  const { clipboardError, clipboardBusy, terminalContextOpen, setTerminalContextOpen, terminalContextPosition, setTerminalContextPosition, contextSelectionRef, copySelection, pasteClipboard } = clipboard;
+  const { clipboardError, clipboardBusy, terminalContextOpen, setTerminalContextOpen, terminalContextPosition, setTerminalContextPosition, contextSelectionRef, copySelection, pasteClipboard, pasteFiles } = clipboard;
 
   useEffect(() => {
     if (!terminalContextOpen) return;
@@ -151,6 +152,28 @@ export function TerminalPane({ client, request, selected, presented = true, cont
       className="terminal-host"
       ref={hostRef}
       aria-label={accessibleLabel ?? `Terminal ${request.pane_id}`}
+      data-closed={closed ? "true" : undefined}
+      onDragOver={(event) => {
+        if (!isExternalFileDrag(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = isTerminalFileDropTarget(event.currentTarget) ? "copy" : "none";
+      }}
+      onDrop={(event) => {
+        if (!isExternalFileDrag(event)) return;
+        event.preventDefault();
+        if (!isTerminalFileDropTarget(event.currentTarget)) return;
+        const files = Array.from(event.dataTransfer.files);
+        if (files.length === 0) {
+          for (const item of Array.from(event.dataTransfer.items)) {
+            if (item.kind !== "file") continue;
+            const file = item.getAsFile();
+            if (file) files.push(file);
+          }
+        }
+        if (files.length === 0) return;
+        event.stopPropagation();
+        void pasteFiles(files);
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -164,7 +187,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
         <button type="button" role="menuitem" disabled={clipboardBusy || !(contextSelectionRef.current || terminalRef.current?.getSelection())} onClick={() => { setTerminalContextOpen(false); void copySelection(); }}>Copy<kbd>{shortcutForms("terminal-copy").at(-1)}</kbd></button>
         <button type="button" role="menuitem" disabled={clipboardBusy} onClick={() => { setTerminalContextOpen(false); void pasteClipboard(); }}>Paste<kbd>{shortcutForms("terminal-paste").at(-1)}</kbd></button>
       </div> : null}
-      {clipboardBusy ? <span className="terminal-status" role="status" aria-label="Clipboard operation in progress" title="Clipboard operation in progress">⟳</span> : clipboardError ? <span className="terminal-status terminal-status-error" role="alert" aria-label={clipboardError.message} title={clipboardError.message}><span aria-hidden="true">!</span><button type="button" className="terminal-status-retry" aria-label={`Retry ${clipboardError.operation}`} onClick={() => { void (clipboardError.operation === "copy" ? copySelection() : pasteClipboard()); }}>↻</button></span> : null}
+      {clipboardBusy ? <span className="terminal-status" role="status" aria-label="Clipboard operation in progress" title="Clipboard operation in progress">⟳</span> : clipboardError ? <span className="terminal-status terminal-status-error" role="alert" aria-label={clipboardError.message} title={clipboardError.message}><span aria-hidden="true">!</span>{clipboardError.operation !== "drop" ? <button type="button" className="terminal-status-retry" aria-label={`Retry ${clipboardError.operation}`} onClick={() => { void (clipboardError.operation === "copy" ? copySelection() : pasteClipboard()); }}>↻</button> : null}</span> : null}
       {closed ? (
         <div className="terminal-overlay" role="status">
           <span>The terminal process has closed.</span>

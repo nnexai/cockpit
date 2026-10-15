@@ -38,6 +38,7 @@ pub fn run() {
         .manage(service)
         .manage(browser_runtime)
         .manage(orchestration_runtime)
+        .manage(clipboard::TerminalFilesState::default())
         .manage(StreamRegistry::new())
         .setup(move |app| {
             let main_window = app
@@ -73,6 +74,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Cockpit Tauri application")
         .run(move |app, event| {
+            if matches!(&event, tauri::RunEvent::Exit) {
+                app.state::<clipboard::TerminalFilesState>().close();
+            }
             if matches!(
                 &event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit

@@ -1,7 +1,10 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
+import { installFileDropNavigationGuard } from "./app/input/fileDrop";
 import "./app/styles.css";
 import { selectClient } from "./client/select";
+
+installFileDropNavigationGuard();
 
 const rootElement = document.getElementById("root");
 

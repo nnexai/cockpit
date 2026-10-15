@@ -64,6 +64,8 @@ macro_rules! native_commands {
                 crate::streams::cockpit_widget_subscribe,
                 crate::streams::cockpit_widget_report,
                 crate::clipboard::cockpit_clipboard_read,
+                crate::clipboard::cockpit_clipboard_read_terminal,
+                crate::clipboard::cockpit_terminal_files_stage,
                 crate::clipboard::cockpit_clipboard_write,
             ]
         }
