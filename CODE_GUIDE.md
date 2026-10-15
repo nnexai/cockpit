@@ -340,13 +340,16 @@ For focused HTTP pacing scenarios use `cargo test -p cockpit-providers site_http
 Use the owned disposable fixture recipe, never the default session or manual gateway:
 
 ```sh
-python3 scripts/verify/ui_polish_runtime.py start <root>
-# Point browser/native clients at the reported owned session and configuration.
+ROOT=$(python3 scripts/verify/ui_polish_runtime.py start)
+GATEWAY_URL=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["gateway_url"])' "$ROOT/runtime.json")
+# Point browser/native clients at "$GATEWAY_URL" and the owned session/configuration.
 # Preserve evidence before stopping only the fixture's recorded resources.
-python3 scripts/verify/ui_polish_runtime.py stop <root>
+python3 scripts/verify/ui_polish_runtime.py stop "$ROOT"
 ```
 
 `scripts/verify/ui_polish_runtime.py` creates isolated runtime resources; `scripts/verify/resource_guard.py` checks executable/session/socket/ownership before Herdr commands. Both clients must address the same owned fixture. These are future-verification commands, not a claim that this documentation change exercised the product.
+
+`start` prints only the root after its own gateway serves HTTP. `runtime.json` records `gateway_url` as the exact loopback origin without a trailing slash, suitable for the browser URL and `Origin` header; `fixture_url` instead addresses the separate annotation test page. Startup failure exits nonzero, retains the root and logs, and prints the explicit `stop` command without automatically stopping any process.
 
 ### Changed-scope quality
 

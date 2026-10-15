@@ -2,6 +2,7 @@
 """Create an isolated Herdr/Cockpit fixture for the UI polish scenarios."""
 
 import argparse
+import http.client
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,9 @@ except ImportError:
     spec.loader.exec_module(fixture_resources)
 
 REPO = Path(__file__).resolve().parents[2]
+FIXTURE_PORT_SECONDS = 5
+HERDR_SOCKET_SECONDS = 10
+GATEWAY_READY_SECONDS = 30
 
 
 def environment(root):
@@ -68,7 +72,56 @@ def launch(root, name, argv, env):
                                  stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
     (root / (name + ".pid")).write_text(str(child.pid))
     fixture_resources.record_process(root, name, child.pid)
-    return child.pid
+    return child
+
+
+def log_tail(log, lines=20):
+    try:
+        return "\n".join(log.read_text(errors="replace").splitlines()[-lines:])
+    except FileNotFoundError:
+        return ""
+
+
+def wait_ready(child, log, description, seconds, probe):
+    deadline = time.monotonic() + seconds
+    last_error = None
+    while True:
+        if child.poll() is not None:
+            raise RuntimeError(
+                f"{description}: {log.stem} exited with {child.returncode} before readiness\n{log_tail(log)}")
+        try:
+            ready = probe()
+        except Exception as error:
+            last_error = error
+            ready = None
+        if child.poll() is not None:
+            raise RuntimeError(
+                f"{description}: {log.stem} exited with {child.returncode} before readiness\n{log_tail(log)}")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            detail = f" (last error: {last_error})" if last_error else ""
+            raise RuntimeError(
+                f"{description}: not ready after {seconds}s{detail}\n{log_tail(log)}")
+        if ready:
+            return ready
+        time.sleep(min(.1, remaining))
+
+
+def gateway_origin(text):
+    prefix = "listening http://127.0.0.1:"
+    for line in text.splitlines():
+        if line.startswith(prefix) and line[len(prefix):].isdigit():
+            return line.removeprefix("listening ")
+    return None
+
+
+def http_ok(origin):
+    connection = http.client.HTTPConnection(origin.removeprefix("http://"), timeout=1)
+    try:
+        connection.request("GET", "/")
+        return connection.getresponse().status == 200
+    finally:
+        connection.close()
 
 
 VIEWER_PLUGINS = ("herdr-file-viewer", "persiyanov.reviewr")
@@ -153,27 +206,36 @@ def start(with_plugins=False, with_action_launcher=False):
               "protected": ["default", "pre-existing sessions and gateways"], "fixture": str(fixture)}
     (root / "runtime.json").write_text(json.dumps(ledger, indent=2))
     fixture_resources.create(root, session)
-    env = environment(root)
-    launch(root, "fixture", [sys.executable, "-u", "-c",
-        "from http.server import ThreadingHTTPServer,SimpleHTTPRequestHandler; from functools import partial; import sys; "
-        "server=ThreadingHTTPServer(('127.0.0.1',0),partial(SimpleHTTPRequestHandler,directory=sys.argv[1])); "
-        "print(server.server_port,flush=True); server.serve_forever()", str(root / "www")], env)
-    for _ in range(50):
-        lines = (root / "fixture.log").read_text().splitlines()
-        if lines:
-            ledger["fixture_url"] = f"http://127.0.0.1:{int(lines[0])}/"
-            (root / "runtime.json").write_text(json.dumps(ledger, indent=2))
-            break
-        time.sleep(.1)
-    launch(root, "herdr", [shutil.which("herdr"), "--session", session, "server"], env)
-    for _ in range(100):
-        if Path(ledger["socket"]).exists():
-            break
-        time.sleep(.1)
-    result = rpc(root, "workspace.create", {"cwd": str(fixture), "label": "Polish sample", "focus": True})
-    (root / "workspace.json").write_text(json.dumps(result, indent=2))
-    launch(root, "gateway", [str(REPO / "target/debug/cockpit"), "serve", "--herdr-session", session,
-        "--herdr-socket", ledger["socket"], "--config", str(root / "cockpit.toml"), "--static-dir", str(REPO / "dist")], env)
+    try:
+        env = environment(root)
+        fixture_server = launch(root, "fixture", [sys.executable, "-u", "-c",
+            "from http.server import ThreadingHTTPServer,SimpleHTTPRequestHandler; from functools import partial; import sys; "
+            "server=ThreadingHTTPServer(('127.0.0.1',0),partial(SimpleHTTPRequestHandler,directory=sys.argv[1])); "
+            "print(server.server_port,flush=True); server.serve_forever()", str(root / "www")], env)
+        def fixture_port():
+            lines = (root / "fixture.log").read_text().splitlines()
+            return int(lines[0]) if lines else None
+        port = wait_ready(fixture_server, root / "fixture.log", "annotation fixture port",
+                          FIXTURE_PORT_SECONDS, fixture_port)
+        ledger["fixture_url"] = f"http://127.0.0.1:{port}/"
+        fixture_resources.atomic_json(root / "runtime.json", ledger)
+        herdr = launch(root, "herdr", [shutil.which("herdr"), "--session", session, "server"], env)
+        wait_ready(herdr, root / "herdr.log", "Herdr socket", HERDR_SOCKET_SECONDS,
+                   lambda: Path(ledger["socket"]).exists())
+        result = rpc(root, "workspace.create", {"cwd": str(fixture), "label": "Polish sample", "focus": True})
+        (root / "workspace.json").write_text(json.dumps(result, indent=2))
+        gateway = launch(root, "gateway", [str(REPO / "target/debug/cockpit"), "serve", "--herdr-session", session,
+            "--herdr-socket", ledger["socket"], "--config", str(root / "cockpit.toml"), "--static-dir", str(REPO / "dist")], env)
+        def gateway_ready():
+            origin = gateway_origin((root / "gateway.log").read_text(errors="replace"))
+            return origin if origin and http_ok(origin) else None
+        ledger["gateway_url"] = wait_ready(
+            gateway, root / "gateway.log", "Cockpit gateway", GATEWAY_READY_SECONDS, gateway_ready)
+        fixture_resources.atomic_json(root / "runtime.json", ledger)
+    except BaseException:
+        print(f"fixture start failed; evidence retained at {root}; stop recorded processes with: "
+              f"python3 {Path(__file__).resolve()} stop {root}", file=sys.stderr)
+        raise
     print(root)
 
 
