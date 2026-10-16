@@ -59,6 +59,16 @@ macro_rules! cockpit_operations {
                   limit = none; origin = none;
                   guard = none; status = service
             }
+            { id: space_service_status, ctx: service, out: ::cockpit_protocol::v1::SpaceServiceStatusResponse,
+              call: $crate::transport::operations::session::space_service_status,
+              native: cockpit_space_service_status(session_id: ::std::string::String)
+                  => $crate::transport::native_input::typed(),
+              http: get "/api/v1/sessions/{session_id}/space-services"
+                  (path: ::axum::extract::Path<::std::string::String>)
+                  => $crate::transport::http_input::session($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"));
+                  limit = none; origin = none;
+                  guard = none; status = service
+            }
             { id: space_git_action, ctx: service, out: ::cockpit_protocol::v1::SpaceGitActionResponse,
               call: $crate::transport::operations::session::space_git_action,
               native: cockpit_space_git_action(session_id: ::std::string::String, request: ::cockpit_protocol::v1::SpaceGitActionRequest)

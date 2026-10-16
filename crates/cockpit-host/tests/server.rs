@@ -820,6 +820,34 @@ async fn mutation_route_rejects_malformed_and_oversized_bodies() {
 }
 
 #[tokio::test]
+async fn space_service_status_route_uses_the_live_session_contract() {
+    let root = fixture_root();
+    let request = || Request::builder()
+        .uri("/api/v1/sessions/session-1/space-services")
+        .header("host", test_authority().to_string())
+        .body(axum::body::Body::empty())
+        .expect("service-status request");
+    let response = build_router(live_service(Ok(snapshot())), &root, test_authority())
+        .expect("router")
+        .oneshot(request())
+        .await
+        .expect("service-status response");
+    assert_eq!(response.status(), 200);
+    let bytes = axum::body::to_bytes(response.into_body(), 256 * 1024).await.unwrap();
+    let body: cockpit_protocol::v1::SpaceServiceStatusResponse =
+        serde_json::from_slice(&bytes).expect("typed service-status body");
+    assert_eq!(body.session_id, "session-1");
+
+    let response = build_router(service(), &root, test_authority())
+        .expect("router")
+        .oneshot(request())
+        .await
+        .expect("service-status inspection error");
+    assert_eq!(response.status(), 503);
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
 async fn space_git_action_route_reports_not_run_guards_and_conflicts() {
     let root = fixture_root();
     let authority = test_authority();

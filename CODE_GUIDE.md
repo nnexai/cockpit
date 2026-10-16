@@ -26,6 +26,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Terminal leaf and cleanup notices | `src/app/layout/TerminalLeaf.tsx`; `src/app/layout/BrowserCleanupNotices.tsx` |
 | Sidebar presentation | `src/app/sidebar/`; `src/app/sidebar.css` |
 | Git status/actions | `src/app/session/spaceGitStatus.ts`; `src/app/session/spaceGitActions.ts`; `src/app/sidebar/SpaceGitAction.tsx` |
+| Running services (read-only) | `src/app/session/spaceServiceStatus.ts`; `src/app/sidebar/Spaces.tsx`; plugin-owned rows focus their live Herdr pane/tab, with no lifecycle controls |
 | Keyboard registry and runtime aliases | `src/app/input/shortcuts.ts`; `src/app/input/herdrBindings.ts`; `src/app/input/keymap.ts` |
 | Modal/file picker input | `src/app/input/modal.ts`; `src/app/input/fileIndexCache.ts`; `src/app/input/fileNavigation.ts` |
 | Terminal and server popup | `src/app/TerminalPane.tsx`; `src/app/ServerPopup.tsx`; `src/app/terminal/cockpitTerminal.ts` |
@@ -114,6 +115,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Browser delivery/drafts | `crates/cockpit-core/src/browser/delivery.rs`; `crates/cockpit-core/src/browser/drafts.rs`; `crates/cockpit-core/src/browser/drafts/service.rs` |
 | Ephemeral owner reset/feedback | `crates/cockpit-core/src/ephemeral.rs`; `crates/cockpit-core/src/browser_feedback.rs` |
 | Git status/actions | `crates/cockpit-core/src/space_git.rs`; `crates/cockpit-core/src/space_git_action.rs` |
+| Plugin service status | `crates/cockpit-core/src/space_services.rs`; reads `nnex.action-launcher`'s `persistent-panes.json`, drops dead Herdr IDs and probes loopback health targets only |
 | Quota cache/services and display | `crates/cockpit-core/src/quota.rs`; `crates/cockpit-core/src/quota/`; `src/app/limits/` |
 | OMP quota parsing | `crates/cockpit-core/src/quota/parse.rs` |
 | Notes durable service/filesystem | `crates/cockpit-core/src/notes.rs`; `crates/cockpit-core/src/notes/registry.rs`; `crates/cockpit-core/src/notes/fs.rs` |

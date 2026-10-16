@@ -37,8 +37,8 @@ export type WorkbenchContentProps = WorkbenchProps & WorkbenchState & WorkbenchA
 export function WorkbenchContent(props: WorkbenchContentProps) {
   const {
     client, state, sessions, selection, terminalMouseInput, mutations, ctx, onSession, onReconnect, onRefreshSessions, onMutate, onRetryMutation, layoutError, onDismissLayoutError,
-    snapshot, shell, popup, popupPending, sidebarWidth, sidebarCollapsed, narrowViewport, drawerOpen, sidebarSession, sidebarCloseRef, spaces, spaceGit, gitBlocked, gitActions, gitPoll, editing, mutationBusy, modalOpen, allTabs,
-    closeDrawer, openSessionChooser, setEditing, focusSpace, openContext, setSetupOpen, focusAgent, updateSidebarWidth, openDrawer, toggleSidebarCollapsed,
+    snapshot, shell, popup, popupPending, sidebarWidth, sidebarCollapsed, narrowViewport, drawerOpen, sidebarSession, sidebarCloseRef, spaces, spaceGit, spaceServices, gitBlocked, gitActions, gitPoll, editing, mutationBusy, modalOpen, allTabs,
+    closeDrawer, openSessionChooser, setEditing, focusSpace, focusService, openContext, setSetupOpen, focusAgent, updateSidebarWidth, openDrawer, toggleSidebarCollapsed,
     overviewOpen, closeOverview, widgetDots, widgetsPending, showWidgets, tabs, browserOpen, browserReason, libraryOpen, notesOpen, closeNotes, openNotes, focusTab, toggleBrowser, closeLibrary, openLibrary, setCommandsOpen,
     liaison, supervisorNavigationError, librarySpace, captureLibraryInvoker, libraryCommand,
     lifecycleError, setLifecycleError, limits, limitsOpen, setLimitsOpen, commandsOpener, dialog, setDialog, panes, localLeaves, swap, lastTerminalMessage,
@@ -52,12 +52,15 @@ export function WorkbenchContent(props: WorkbenchContentProps) {
   const pendingPaneId = state.focusPending?.kind === "pane" || state.focusPending?.kind === "agent" ? state.focusPending.target_id : null;
   const sidebarSelectedSpaceId = state.focusPending ? snapshot?.focused_space_id ?? null : selection.spaceId;
   const sidebarSelectedPaneId = state.focusPending ? snapshot?.focused_pane_id ?? null : selection.paneId;
+  const pendingServiceKey = [...spaceServices.values()].flat().find(service =>
+    (service.tab_id !== null && state.focusPending?.kind === "tab" && state.focusPending.target_id === service.tab_id)
+    || (state.focusPending?.kind === "pane" && state.focusPending.target_id === service.pane_id))?.key ?? null;
   return <div className={`workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${narrowViewport && drawerOpen ? " drawer-open" : ""}`} style={workbenchStyle}>
     <div className="workbench-underlay" inert={Boolean(popup)}>
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
     <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport ? !drawerOpen : sidebarCollapsed}>
       <Sidebar session={sidebarSession} sync={state.sync} narrow={narrowViewport} onSession={openSessionChooser} onClose={() => closeDrawer()} closeRef={sidebarCloseRef} hasSession={state.sessionId !== null} hasSnapshot={snapshot !== null}
-        spaces={{ spaces, gitStatus: spaceGit, gitBlocked, gitEntry: gitActions.forStatus, gitStatusError: gitPoll.error, onRetryGitStatus: gitPoll.refresh, onGitAction: props.runGitAction, onDismissGitProblem: gitActions.dismiss, selectedSpaceId: sidebarSelectedSpaceId, pendingSpaceId, editingId: editing?.kind === "space" ? editing.id : null, busy: mutationBusy, notes: spaceNotesFromFailures(Object.values(mutations.errors)), onEdit: (id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }, onSelect: focusSpace, onContext: openContext, onSetup: () => setSetupOpen(true), setupEnabled: state.sync === "live" && !modalOpen, mutate: onMutate }}
+        spaces={{ spaces, services: spaceServices, pendingServiceKey, onSelectService: focusService, gitStatus: spaceGit, gitBlocked, gitEntry: gitActions.forStatus, gitStatusError: gitPoll.error, onRetryGitStatus: gitPoll.refresh, onGitAction: props.runGitAction, onDismissGitProblem: gitActions.dismiss, selectedSpaceId: sidebarSelectedSpaceId, pendingSpaceId, editingId: editing?.kind === "space" ? editing.id : null, busy: mutationBusy, notes: spaceNotesFromFailures(Object.values(mutations.errors)), onEdit: (id) => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "space", id } : null); }, onSelect: focusSpace, onContext: openContext, onSetup: () => setSetupOpen(true), setupEnabled: state.sync === "live" && !modalOpen, mutate: onMutate }}
         agents={{ agents: snapshot?.agents ?? [], spaces, tabs: allTabs, selectedPaneId: sidebarSelectedPaneId, pendingPaneId, onSelect: focusAgent }} />
     </aside>
     {!narrowViewport && !sidebarCollapsed ? <div className="sidebar-resizer" role="separator" tabIndex={sidebarCollapsed ? -1 : 0} aria-label="Resize sidebar" aria-orientation="vertical" aria-valuemin={SIDEBAR_MIN_WIDTH} aria-valuemax={SIDEBAR_MAX_WIDTH} aria-valuenow={sidebarWidth}

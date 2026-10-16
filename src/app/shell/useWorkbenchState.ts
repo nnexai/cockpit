@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import type { SpaceGitAction, SpaceGitStatus } from "../../protocol/generated/v1";
+import type { SpaceGitAction, SpaceGitStatus, SpaceServiceStatus } from "../../protocol/generated/v1";
 import { spaceCheckoutKey, useSpaceGitStatus } from "../session/spaceGitStatus";
+import { useSpaceServiceStatus } from "../session/spaceServiceStatus";
 import { gitActionReason, gitActionRequest, useSpaceGitActions, type SpaceGitActions } from "../session/spaceGitActions";
 import type { SessionSummary } from "../../protocol/generated/v1";
 import type { LibraryCommand } from "../context/ContextViewer";
@@ -22,6 +23,7 @@ export interface WorkbenchState extends WorkbenchView, WorkareaController, Sideb
   viewerSources: ViewerSourcesState; sidebarSession: SessionSummary | undefined;
   gitPoll: { spaces: ReadonlyMap<string, SpaceGitStatus>; error: string | undefined; refresh(): void };
   spaceGit: ReadonlyMap<string, SpaceGitStatus>; gitBlocked: string | undefined; gitActions: SpaceGitActions;
+  spaceServices: ReadonlyMap<string, readonly SpaceServiceStatus[]>;
   gitNotice: { sessionId: string | null; text: string } | null;
   runGitAction(spaceId: string, action: SpaceGitAction): void;
 }
@@ -44,6 +46,7 @@ export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
   const modalOpen = Boolean(popup || popupPending) || dialog !== null || commandsOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen;
   const gitPoll = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
   const spaceGit = gitPoll.spaces;
+  const spaceServices = useSpaceServiceStatus(client, state.sync === "live" ? state.sessionId : null, snapshot, narrowViewport ? drawerOpen : !sidebarCollapsed);
   const gitBlocked = state.sync !== "live" ? "Herdr is not live" : mutationBusy ? "Herdr is applying a change" : popup || popupPending ? "The popup owns keyboard input" : gitPoll.error ? `Git status unavailable: ${gitPoll.error}` : undefined;
   const [gitNotice, setGitNotice] = useState<{ sessionId: string | null; text: string } | null>(null);
   const gitActions = useSpaceGitActions(client, state.sessionId, spaceGit, gitPoll.refresh, (spaceId, problem) => {
@@ -74,5 +77,5 @@ export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
   return { ...view, ...workarea, ...ui, ...widget, ...navigation, ...sidebar, libraryOpen, notesOpen, overviewOpen, liaison,
     libraryCommand: workarea.view.kind === "library" ? workarea.view.command : null,
     mutationBusy, modalOpen, viewerSources, browserOpen, browserInputActive, browserReason,
-    sidebarSession: props.sessions.find(session => session.id === state.sessionId), gitPoll, spaceGit, gitBlocked, gitActions, gitNotice, runGitAction };
+    sidebarSession: props.sessions.find(session => session.id === state.sessionId), gitPoll, spaceGit, spaceServices, gitBlocked, gitActions, gitNotice, runGitAction };
 }

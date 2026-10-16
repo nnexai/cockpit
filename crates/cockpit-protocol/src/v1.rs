@@ -130,6 +130,33 @@ pub struct SpaceGitStatusResponse {
     pub spaces: Vec<SpaceGitStatus>,
 }
 
+/// Observed readiness of an action-launcher service.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceStatus {
+    Starting,
+    Healthy,
+    Unhealthy,
+}
+
+/// A live service mapped to its current Space through Herdr IDs.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct SpaceServiceStatus {
+    pub key: String,
+    pub space_id: String,
+    pub pane_id: String,
+    pub tab_id: Option<String>,
+    pub title: String,
+    pub status: ServiceStatus,
+    pub port: Option<u16>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct SpaceServiceStatusResponse {
+    pub session_id: String,
+    pub services: Vec<SpaceServiceStatus>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SpaceGitAction {

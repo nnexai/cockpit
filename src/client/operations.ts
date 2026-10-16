@@ -66,7 +66,7 @@ import {
   parseBrowserFeedbackSendRequest, parseBrowserFeedbackSendResponse, parseBrowserRequest, parseBrowserResponse, 
   parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest, parseFocusRequest, parseFocusResponse, 
   parseResourceMutationRequest, parseResourceMutationResponse, parseSessionListResponse, 
-  parseSessionSnapshotResponse, parseSpaceGitStatusResponse, matchSpaceGitActionResponse, parseStatusResponse, 
+  parseSessionSnapshotResponse, parseSpaceGitStatusResponse, parseSpaceServiceStatusResponse, matchSpaceGitActionResponse, parseStatusResponse,
   validateSessionId, validateResourceId, type CockpitClient,
 } from "./CockpitClient";
 import type { FocusRequest, ResourceMutationRequest, SpaceGitActionRequest } from "../protocol/generated/v1";
@@ -930,6 +930,18 @@ const operations: OperationTable = {
         tauri: { command: "cockpit_space_git_status", args: () => ({ sessionId }) },
         parse: parseSpaceGitStatusResponse,
         matchIdentity: (response) => { if (backend === "native") signal?.throwIfAborted(); if (response.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Space Git status belongs to another session"); return response; },
+      };
+    },
+  },
+  spaceServiceStatus: { direct: "both",
+    encode(backend, sessionId, signal) {
+      validateSessionId(sessionId); signal?.throwIfAborted();
+      return {
+        operation: "Space service status",
+        http: { method: "GET", route: () => `/api/v1/sessions/${encodeURIComponent(sessionId)}/space-services`, signal: () => signal },
+        tauri: { command: "cockpit_space_service_status", args: () => ({ sessionId }) },
+        parse: parseSpaceServiceStatusResponse,
+        matchIdentity: (response) => { if (backend === "native") signal?.throwIfAborted(); if (response.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Space service status belongs to another session"); return response; },
       };
     },
   },

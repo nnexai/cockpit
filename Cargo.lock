@@ -702,6 +702,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "pulldown-cmark",
+ "reqwest",
  "rustix",
  "serde",
  "serde_json",

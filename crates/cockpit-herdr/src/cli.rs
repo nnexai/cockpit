@@ -2122,6 +2122,10 @@ fn confirm_created_pane(
 
 #[async_trait]
 impl HerdrAdapter for HerdrCliAdapter {
+    fn session_socket_path(&self, session_id: &str) -> Option<PathBuf> {
+        self.socket_path(session_id).ok()
+    }
+
     async fn inspect(&self) -> Result<HerdrCompatibility, InspectionError> {
         self.inspect_with_server_autostart(self.config.session())
             .await

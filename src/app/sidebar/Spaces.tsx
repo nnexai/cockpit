@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent, type PointerEvent } from "react";
-import type { ResourceMutationRequest, SpaceGitAction, SpaceGitStatus } from "../../protocol/generated/v1";
+import type { ResourceMutationRequest, SpaceGitAction, SpaceGitStatus, SpaceServiceStatus } from "../../protocol/generated/v1";
 import { aheadBehindLabel, SPACE_GIT_POLL_MS } from "../session/spaceGitStatus";
 import { withShortcut } from "../input/shortcuts";
 import { InlineRename } from "../InlineRename";
@@ -19,9 +19,12 @@ type DropMark = { targetId: string; side: "before" | "after" } | null;
 /** A rejected Space mutation, shown directly under the row it concerns. */
 export type SpaceNote = { spaceId: string; id: string; message: string };
 
-export function Spaces({ spaces, gitStatus, gitBlocked, gitEntry, gitStatusError, onRetryGitStatus, onGitAction, onDismissGitProblem, selectedSpaceId, pendingSpaceId, editingId, busy, loading, hasSession, notes, onEdit, onSelect, onContext, onSetup, setupEnabled, mutate, focusRef }: {
+export function Spaces({ spaces, services, pendingServiceKey, onSelectService, gitStatus, gitBlocked, gitEntry, gitStatusError, onRetryGitStatus, onGitAction, onDismissGitProblem, selectedSpaceId, pendingSpaceId, editingId, busy, loading, hasSession, notes, onEdit, onSelect, onContext, onSetup, setupEnabled, mutate, focusRef }: {
   spaces: Space[];
   gitStatus: ReadonlyMap<string, SpaceGitStatus>;
+  services: ReadonlyMap<string, readonly SpaceServiceStatus[]>;
+  pendingServiceKey: string | null;
+  onSelectService(service: SpaceServiceStatus): void;
   gitBlocked?: string;
   gitEntry(status: SpaceGitStatus | undefined): GitActionState | undefined;
   onGitAction(spaceId: string, action: SpaceGitAction): void;
@@ -53,6 +56,7 @@ export function Spaces({ spaces, gitStatus, gitBlocked, gitEntry, gitStatusError
   const [staleDrag, setStaleDrag] = useState<{ spaceId: string; message: string } | null>(null);
   const [dismissedNotes, setDismissedNotes] = useState<ReadonlySet<string>>(() => new Set());
   const [gitReadProblemId, setGitReadProblemId] = useState<string | null>(null);
+  const focusedService = useRef<{ element: HTMLElement; spaceId: string } | null>(null);
   const rows = projectSpaceTree(spaces, collapsedRepositoryKeys, selectedSpaceId);
   const visibleNotes = notes.filter((note) => !dismissedNotes.has(note.id));
   const noteFor = (spaceId: string): string | null => (staleDrag?.spaceId === spaceId ? staleDrag.message : null) ?? visibleNotes.find((note) => note.spaceId === spaceId)?.message ?? null;
@@ -65,7 +69,7 @@ export function Spaces({ spaces, gitStatus, gitBlocked, gitEntry, gitStatusError
     });
   };
   const roving = useRovingList({
-    rowIds: rows.map((row) => row.space.id),
+    rowIds: rows.flatMap((row) => [row.space.id, ...(services.get(row.space.id) ?? []).map(service => `service:${row.space.id}:${service.key}`)]),
     selectedId: selectedSpaceId,
     onEscape: () => {
       const focusedId = document.activeElement?.closest<HTMLElement>("[data-space-id]")?.dataset.spaceId;
@@ -82,6 +86,7 @@ export function Spaces({ spaces, gitStatus, gitBlocked, gitEntry, gitStatusError
       return true;
     },
     onKey: (event, id) => {
+      if (id.startsWith("service:")) return false;
       const index = rows.findIndex((row) => row.space.id === id);
       const row = rows[index];
       if (!row) return false;
@@ -106,6 +111,14 @@ export function Spaces({ spaces, gitStatus, gitBlocked, gitEntry, gitStatusError
     },
   });
   focusRef.current = roving.focusTarget;
+
+  // A removed service must not strand keyboard focus on the page.
+  useEffect(() => {
+    const previous = focusedService.current;
+    if (!previous || previous.element.isConnected) return;
+    focusedService.current = null;
+    if (!document.activeElement || document.activeElement === document.body) roving.focusRow(previous.spaceId);
+  });
 
   // The rename input unmounts when a rename commits or cancels; give focus back to its row instead of dropping it to the page.
   const previousEditingId = useRef<string | null>(null);
@@ -147,7 +160,11 @@ export function Spaces({ spaces, gitStatus, gitBlocked, gitEntry, gitStatusError
       kind: "problem", unknown: false, summary: "Git status unavailable.",
       details: [`Last-known status is retained. Pull and Push are off until a read succeeds. Cockpit reads again every ${SPACE_GIT_POLL_MS / 1000} s.`, gitStatusError],
     }} onRetry={onRetryGitStatus} /> : null}
-    <div className="space-list" role="group" aria-label="Spaces" ref={roving.listRef} {...roving.listProps}>
+    <div className="space-list" role="group" aria-label="Spaces" ref={roving.listRef} {...roving.listProps} onFocusCapture={event => {
+      const element = event.target as HTMLElement;
+      const spaceId = element.closest<HTMLElement>("[data-space-id]")?.dataset.spaceId;
+      focusedService.current = element.dataset.rowId?.startsWith("service:") && spaceId ? { element, spaceId } : null;
+    }}>
       {loading ? <SidebarSkeleton rows={6} />
         : !hasSession ? <p className="empty-row">No session selected</p>
         : spaces.length === 0 ? <p className="empty-row">No Spaces in this session</p>
@@ -223,6 +240,20 @@ export function Spaces({ spaces, gitStatus, gitBlocked, gitEntry, gitStatusError
                 ? <button type="button" className={`space-chevron${hiddenGitProblem ? " has-git-problem" : ""}`} tabIndex={-1} aria-disabled={busy || undefined} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}${hiddenUrgency}${hiddenGitProblem ? " (worktree Git problem)" : ""}`} aria-expanded={row.expanded} onClick={() => { if (!busy) toggleRepository(row.repositoryKey!); }}><UiIcon name={row.expanded ? "down" : "right"} /></button>
                 : null}
             </div>
+            {services.get(space.id)?.length ? <div className="space-service-list" role="group" aria-label={`Services in ${space.label}`}>
+              {services.get(space.id)!.map(service => {
+                const id = `service:${space.id}:${service.key}`;
+                const label = [service.title, service.status, service.port === null ? null : `port ${service.port}`].filter(Boolean).join(", ");
+                const servicePending = pendingServiceKey === service.key;
+                return <button key={service.key} type="button" className="space-service-row" data-row-id={id} tabIndex={roving.tabIndexFor(id)}
+                  title={`${label}. Focus ${service.tab_id === null ? "pane" : "tab"}`} aria-label={label} aria-disabled={busy || undefined} aria-busy={servicePending || undefined}
+                  onClick={() => { if (!busy) onSelectService(service); }}>
+                  <span className={`space-service-dot is-${service.status}`} aria-hidden="true" />
+                  <span className="space-service-name">{service.title}</span>
+                  {service.port === null ? null : <span className="space-service-port">:{service.port}</span>}
+                </button>;
+              })}
+            </div> : null}
             <span className="sr-only" role="status">{entry?.pending ? `${entry.request.action === "push" ? "Pushing" : "Pulling"} ${space.label}: ${entry.request.expected_branch} ${entry.request.action === "push" ? "→" : "←"} ${entry.request.expected_upstream}` : entry?.result?.kind === "done" ? `${space.label}: ${entry.result.message}` : ""}</span>
             {note ? <p className="row-note" role="status">{note}</p> : null}
             {problem ? <GitProblemNotice key={entry!.token} problem={problem} child={Boolean(child)} onDismiss={() => {

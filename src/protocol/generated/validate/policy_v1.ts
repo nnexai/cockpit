@@ -19,6 +19,9 @@ export interface WireTypes {
   "SpaceGitActionResponse": V1.SpaceGitActionResponse;
   "SpaceGitActionOutcome": V1.SpaceGitActionOutcome;
   "SpaceGitRefusal": V1.SpaceGitRefusal;
+  "ServiceStatus": V1.ServiceStatus;
+  "SpaceServiceStatus": V1.SpaceServiceStatus;
+  "SpaceServiceStatusResponse": V1.SpaceServiceStatusResponse;
   "SpaceSummary": V1.SpaceSummary;
   "TabSummary": V1.TabSummary;
   "PaneSummary": V1.PaneSummary;
@@ -76,6 +79,8 @@ export interface WireOwners {
   "SpaceGitActionOutcome[updated]": Extract<V1.SpaceGitActionOutcome, { "result": "updated" }>;
   "SpaceGitActionOutcome[up_to_date]": Extract<V1.SpaceGitActionOutcome, { "result": "up_to_date" }>;
   "SpaceGitActionOutcome[refused]": Extract<V1.SpaceGitActionOutcome, { "result": "refused" }>;
+  "SpaceServiceStatus": V1.SpaceServiceStatus;
+  "SpaceServiceStatusResponse": V1.SpaceServiceStatusResponse;
   "SpaceSummary": V1.SpaceSummary;
   "TabSummary": V1.TabSummary;
   "PaneSummary": V1.PaneSummary;
@@ -185,6 +190,15 @@ export interface WireFields {
   "SpaceGitActionOutcome[updated].commits": (Extract<V1.SpaceGitActionOutcome, { "result": "updated" }>)["commits"];
   "SpaceGitActionOutcome[refused].reason": (Extract<V1.SpaceGitActionOutcome, { "result": "refused" }>)["reason"];
   "SpaceGitActionOutcome[refused].detail": (Extract<V1.SpaceGitActionOutcome, { "result": "refused" }>)["detail"];
+  "SpaceServiceStatus.key": (V1.SpaceServiceStatus)["key"];
+  "SpaceServiceStatus.space_id": (V1.SpaceServiceStatus)["space_id"];
+  "SpaceServiceStatus.pane_id": (V1.SpaceServiceStatus)["pane_id"];
+  "SpaceServiceStatus.tab_id": (V1.SpaceServiceStatus)["tab_id"];
+  "SpaceServiceStatus.title": (V1.SpaceServiceStatus)["title"];
+  "SpaceServiceStatus.status": (V1.SpaceServiceStatus)["status"];
+  "SpaceServiceStatus.port": (V1.SpaceServiceStatus)["port"];
+  "SpaceServiceStatusResponse.session_id": (V1.SpaceServiceStatusResponse)["session_id"];
+  "SpaceServiceStatusResponse.services": (V1.SpaceServiceStatusResponse)["services"];
   "SpaceSummary.id": (V1.SpaceSummary)["id"];
   "SpaceSummary.label": (V1.SpaceSummary)["label"];
   "SpaceSummary.number": (V1.SpaceSummary)["number"];
@@ -393,6 +407,8 @@ export interface WireFieldNames {
   "SpaceGitActionOutcome[updated]": "commits";
   "SpaceGitActionOutcome[up_to_date]": never;
   "SpaceGitActionOutcome[refused]": "reason" | "detail";
+  "SpaceServiceStatus": "key" | "space_id" | "pane_id" | "tab_id" | "title" | "status" | "port";
+  "SpaceServiceStatusResponse": "session_id" | "services";
   "SpaceSummary": "id" | "label" | "number" | "tab_count" | "pane_count" | "focused" | "agent_status" | "git";
   "TabSummary": "id" | "space_id" | "label" | "number" | "pane_count" | "focused" | "focused_pane_id";
   "PaneSummary": "id" | "terminal_id" | "space_id" | "tab_id" | "title" | "focused" | "agent" | "agent_status" | "revision" | "cwd";
@@ -547,6 +563,8 @@ export interface WireCheckpointFieldNames {
   "SpaceGitActionOutcome[updated]": "commits" | "result";
   "SpaceGitActionOutcome[up_to_date]": "result";
   "SpaceGitActionOutcome[refused]": "reason" | "detail" | "result";
+  "SpaceServiceStatus": "key" | "space_id" | "pane_id" | "tab_id" | "title" | "status" | "port";
+  "SpaceServiceStatusResponse": "session_id" | "services";
   "SpaceSummary": "id" | "label" | "number" | "tab_count" | "pane_count" | "focused" | "agent_status" | "git";
   "TabSummary": "id" | "space_id" | "label" | "number" | "pane_count" | "focused" | "focused_pane_id";
   "PaneSummary": "id" | "terminal_id" | "space_id" | "tab_id" | "title" | "focused" | "agent" | "agent_status" | "revision" | "cwd";
@@ -602,6 +620,8 @@ export type WireOmittableField =
   | "SpaceGitSummary.branch"
   | "SpaceGitCheckout[unavailable].root"
   | "SpaceGitActionOutcome[updated].commits"
+  | "SpaceServiceStatus.tab_id"
+  | "SpaceServiceStatus.port"
   | "SpaceSummary.git"
   | "TabSummary.focused_pane_id"
   | "PaneSummary.title"
@@ -644,6 +664,7 @@ export type WireOptionalField =
 
 export type WireListField =
   | "SpaceGitStatusResponse.spaces"
+  | "SpaceServiceStatusResponse.services"
   | "SessionSnapshotResponse.spaces"
   | "SessionSnapshotResponse.tabs"
   | "SessionSnapshotResponse.panes"

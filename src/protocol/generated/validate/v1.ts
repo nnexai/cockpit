@@ -135,6 +135,23 @@ export const wireSpaceGitActionOutcome: WireDescriptor<V1.SpaceGitActionOutcome>
 
 export const wireSpaceGitRefusal: WireDescriptor<V1.SpaceGitRefusal> = literal<V1.SpaceGitRefusal>("SpaceGitRefusal", ["not_fast_forward", "local_changes", "remote_rejected"]);
 
+export const wireServiceStatus: WireDescriptor<V1.ServiceStatus> = literal<V1.ServiceStatus>("ServiceStatus", ["starting", "healthy", "unhealthy"]);
+
+export const wireSpaceServiceStatus: WireDescriptor<V1.SpaceServiceStatus> = struct<V1.SpaceServiceStatus>("SpaceServiceStatus", {
+  "key": req(str),
+  "space_id": req(str),
+  "pane_id": req(str),
+  "tab_id": req(nullable(str), { fill: null }),
+  "title": req(str),
+  "status": req(named(() => wireServiceStatus)),
+  "port": req(nullable(u16), { fill: null }),
+});
+
+export const wireSpaceServiceStatusResponse: WireDescriptor<V1.SpaceServiceStatusResponse> = struct<V1.SpaceServiceStatusResponse>("SpaceServiceStatusResponse", {
+  "session_id": req(str),
+  "services": req(list(named(() => wireSpaceServiceStatus))),
+});
+
 export const wireSpaceSummary: WireDescriptor<V1.SpaceSummary> = struct<V1.SpaceSummary>("SpaceSummary", {
   "id": req(str),
   "label": req(str),

@@ -288,6 +288,7 @@ class AppFixture {
     sessions: this.sessionsCalls,
     sessionSnapshot: this.snapshotCalls,
     spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
+    spaceServiceStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, services: [] })),
     spaceGitAction: vi.fn(async () => { throw new Error("Unexpected Git action in terminal fixture"); }),
     focus: this.focusCalls,
     mutate: this.mutateCalls,

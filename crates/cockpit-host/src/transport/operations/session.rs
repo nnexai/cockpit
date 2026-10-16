@@ -5,6 +5,7 @@ use cockpit_protocol::{
         FocusRequest, FocusResponse, ResourceMutationRequest, ResourceMutationResponse,
         SessionListResponse, SessionSnapshotResponse, SpaceGitActionRequest,
         SpaceGitActionResponse, SpaceGitStatusResponse, StatusResponse,
+        SpaceServiceStatusResponse,
     },
 };
 
@@ -57,6 +58,17 @@ pub async fn space_git_status(
 ) -> Result<SpaceGitStatusResponse, OperationError> {
     service
         .space_git_status(&session_id)
+        .await
+        .map_err(Into::into)
+}
+
+pub async fn space_service_status(
+    service: &CockpitService,
+    _transport: Transport,
+    session_id: String,
+) -> Result<SpaceServiceStatusResponse, OperationError> {
+    service
+        .space_service_status(&session_id)
         .await
         .map_err(Into::into)
 }

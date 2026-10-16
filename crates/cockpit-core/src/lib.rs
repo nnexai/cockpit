@@ -30,6 +30,7 @@ pub mod review;
 pub mod sources;
 pub mod space_git;
 pub mod space_git_action;
+pub mod space_services;
 pub mod viewer;
 pub mod widget;
 
@@ -49,6 +50,7 @@ use cockpit_protocol::v1::{
     SessionSnapshotResponse, SpaceGitStatusResponse, StatusResponse, TerminalCommand,
     TerminalOpenRequest, TerminalStreamMessage,
     SpaceGitActionRequest, SpaceGitActionResponse,
+    SpaceServiceStatusResponse,
 };
 use tokio::sync::{RwLock, mpsc};
 
@@ -104,6 +106,11 @@ pub struct TerminalSession {
 /// Application-facing operations needed from a Herdr adapter.
 #[async_trait]
 pub trait HerdrAdapter: Send + Sync {
+    /// Selected API socket for endpoint-bound local plugin observations.
+    /// Adapters without a local socket do not expose plugin service state.
+    fn session_socket_path(&self, _session_id: &str) -> Option<std::path::PathBuf> {
+        None
+    }
     async fn inspect(&self) -> Result<HerdrCompatibility, InspectionError>;
     async fn inspect_session(
         &self,
@@ -152,6 +159,7 @@ pub struct CockpitService {
     credentials: Option<Arc<credentials::ProviderCredentials>>,
     quota: Option<Arc<quota::QuotaService>>,
     git_actions: Arc<space_git_action::SpaceGitActions>,
+    space_services: Arc<space_services::SpaceServices>,
 }
 
 #[derive(Default)]
@@ -221,6 +229,7 @@ impl CockpitService {
             credentials: None,
             quota: None,
             git_actions: Arc::new(space_git_action::SpaceGitActions::default()),
+            space_services: Arc::new(space_services::SpaceServices::default()),
         }
     }
 
@@ -422,6 +431,15 @@ impl CockpitService {
     ) -> Result<SpaceGitStatusResponse, InspectionError> {
         let snapshot = self.session_snapshot(session_id).await?;
         Ok(space_git::read(&snapshot).await)
+    }
+
+    /// Read live action-launcher services without waiting for health probes.
+    pub async fn space_service_status(
+        &self,
+        session_id: &str,
+    ) -> Result<SpaceServiceStatusResponse, InspectionError> {
+        let snapshot = self.session_snapshot(session_id).await?;
+        Ok(self.space_services.read(&snapshot, self.adapter.session_socket_path(session_id)).await)
     }
 
     /// Pull fast-forward-only or push the exact configured upstream of this Space.

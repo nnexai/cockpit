@@ -41,6 +41,7 @@ pub use v1::{
     SpaceGitStatusResponse, SpaceGitSummary, SpaceSummary, StatusResponse, TabSummary,
     SpaceGitSource, SpaceGitCheckout, SpaceGitUpstream, SpaceGitAction, SpaceGitActionRequest,
     SpaceGitActionResponse, SpaceGitActionOutcome, SpaceGitRefusal,
+    ServiceStatus, SpaceServiceStatus, SpaceServiceStatusResponse,
     TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalOwnershipState, TerminalTargetKind,
     TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
 };

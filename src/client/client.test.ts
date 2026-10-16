@@ -9,6 +9,7 @@ import {
   parseSessionSnapshotResponse,
   parseSpaceGitStatusResponse,
   parseSpaceGitActionResponse,
+  parseSpaceServiceStatusResponse,
   parseStatusResponse,
   parseTerminalCommand,
   parseTerminalOpenRequest,
@@ -156,6 +157,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     sessions: vi.fn(async () => sessions),
     sessionSnapshot: vi.fn(async () => snapshot),
     spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
+    spaceServiceStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, services: [] })),
     spaceGitAction: vi.fn(async () => { throw new Error("Unexpected Git action in terminal fixture"); }),
     focus: vi.fn(async () => ({ session_id: snapshot.session_id, kind: "pane" as const, target_id: "pane-1", accepted: true })),
     mutate: vi.fn(async () => ({ session_id: snapshot.session_id, snapshot, created: null })),
@@ -331,6 +333,35 @@ describe("Space Git contracts", () => {
     });
   }
 });
+describe("Space service status contracts", () => {
+  const service = { key: "/repo:dev", space_id: "space-1", pane_id: "pane-1", tab_id: null, title: "dev server", status: "healthy", port: 5173 } as const;
+  const response = { session_id: "session-1", services: [service] };
+
+  it("accepts status transitions and rejects malformed service targets", () => {
+    for (const status of ["starting", "healthy", "unhealthy"]) {
+      expect(parseSpaceServiceStatusResponse({ ...response, services: [{ ...service, status }] }).services[0].status).toBe(status);
+    }
+    for (const changed of [{ status: "stopped" }, { pane_id: undefined }, { port: -1 }, { port: 65536 }, { port: "5173" }]) {
+      expect(() => parseSpaceServiceStatusResponse({ ...response, services: [{ ...service, ...changed }] })).toThrow(CockpitClientError);
+    }
+  });
+
+  for (const transport of ["browser", "native"] as const) {
+    it(`${transport} rejects service status from another session`, async () => {
+      const client = transport === "browser"
+        ? createBrowserClient(vi.fn(async () => jsonResponse({ ...response, session_id: "other" })))
+        : createNativeClient(vi.fn(async () => ({ ...response, session_id: "other" })));
+      await expect(client.spaceServiceStatus("session-1")).rejects.toMatchObject({ code: "malformed_response" });
+    });
+    it(`${transport} preserves focus targets and health status`, async () => {
+      const client = transport === "browser"
+        ? createBrowserClient(vi.fn(async () => jsonResponse(response)))
+        : createNativeClient(vi.fn(async () => response));
+      await expect(client.spaceServiceStatus("session-1")).resolves.toEqual(response);
+    });
+  }
+});
+
 describe("session stream transition policy", () => {
   it("classifies the complete ordering corpus", () => {
     const initial = transitionSessionStream("session-1", null, streamSnapshot(1));

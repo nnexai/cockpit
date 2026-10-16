@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import type { SpaceServiceStatus } from "../../protocol/generated/v1";
 import type { ContextAnchor } from "../sidebar/Spaces";
 import { solveLayout } from "../layout/solveLayout";
 import { openViewerLeaf, closeViewerLeaf } from "../layout/viewerLifecycle";
@@ -14,6 +15,7 @@ export type PaneFocusDirection = "left" | "right" | "up" | "down";
 export interface WorkbenchActions {
   perform(operation: Promise<void>): void; openBrowser(): void; toggleBrowser(): void;
   focusSpace(space: Space): void; focusTab(tab: Tab): void; selectLeaf(leafId: string): void; focusAgent(agent: Agent): void;
+  focusService(service: SpaceServiceStatus): void;
   beginRename(target: ContextTarget | null): boolean; closeSpace(space: Space | undefined): boolean; closeTab(tab: Tab | undefined): boolean;
   lastTerminalMessage(pane: Pane, operation: "Closing" | "Moving"): string | null;
   closeLeaf(leafId: string): boolean; swap(source: string, target: string): void; zoom(leafId: string): void;
@@ -56,6 +58,15 @@ export function useWorkbenchActions(props: WorkbenchProps, runtime: WorkbenchSta
     leave("focus");
     if (narrowViewport) drawerFocusTarget.current = { spaceId: agent.space_id, paneId: agent.pane_id };
     onFocus({ kind: "agent", target_id: agent.pane_id }, { spaceId: agent.space_id, tabId: agent.tab_id, paneId: agent.pane_id });
+  };
+  const focusService = (service: SpaceServiceStatus) => {
+    if (modalOpen || mutationBusy || state.sync !== "live") return;
+    const pane = snapshot?.panes.find(candidate => candidate.id === service.pane_id && candidate.space_id === service.space_id);
+    const tab = pane ? allTabs.find(candidate => candidate.id === pane.tab_id && candidate.space_id === service.space_id) : undefined;
+    if (!pane || !tab || (service.tab_id !== null && service.tab_id !== tab.id)) return;
+    leave("focus");
+    if (narrowViewport) drawerFocusTarget.current = { spaceId: pane.space_id, paneId: pane.id };
+    onFocus({ kind: "pane", target_id: pane.id }, { spaceId: pane.space_id, tabId: pane.tab_id, paneId: pane.id });
   };
   const beginRename = (target: ContextTarget | null): boolean => {
     if (!target || mutationBusy) return false;
@@ -117,5 +128,5 @@ export function useWorkbenchActions(props: WorkbenchProps, runtime: WorkbenchSta
   const openContext = (event: ContextAnchor, target: ContextTarget) => { event.preventDefault(); event.stopPropagation(); if (!mutationBusy && !modalOpen) setMenu({ target, x: event.clientX, y: event.clientY }); };
   const dismissMenu = useCallback(() => setMenu(null), []);
   const menuAction = (action: () => boolean | void) => { if (action() !== false) dismissMenu(); };
-  return { perform, openBrowser, toggleBrowser, focusSpace, focusTab, selectLeaf, focusAgent, beginRename, closeSpace, closeTab, lastTerminalMessage, closeLeaf, swap, zoom, neighbour, viewerCapability, openViewer, openContext, dismissMenu, menuAction };
+  return { perform, openBrowser, toggleBrowser, focusSpace, focusTab, selectLeaf, focusAgent, focusService, beginRename, closeSpace, closeTab, lastTerminalMessage, closeLeaf, swap, zoom, neighbour, viewerCapability, openViewer, openContext, dismissMenu, menuAction };
 }

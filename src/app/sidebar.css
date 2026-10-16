@@ -14,6 +14,8 @@
   --sb-heading: 32px;
   --sb-trunk-x: 23px;
   --sb-conn: 34px;
+  --sb-svc-row: 24px;
+  --sb-svc-pad: 38px;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -569,6 +571,52 @@
 }
 
 .space-connector.is-last::after { display: none; }
+
+/* Read-only services share the Space tree's trunk, without another selection mark. */
+.space-service-list { margin: 0 0 var(--sb-row-gap); }
+
+.space-service-row {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: var(--sb-svc-row);
+  align-items: center;
+  gap: var(--sb-gap);
+  padding: 0 12px 0 var(--sb-svc-pad);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--font-size-control);
+  line-height: 16px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.space-service-row::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--sb-trunk-x);
+  border-left: 1px solid var(--border-strong);
+  content: "";
+  pointer-events: none;
+}
+
+.space-service-row:hover { background: var(--surface-hover); color: var(--text-primary); }
+.space-service-row:active { background: var(--surface-selected); }
+.space-service-row:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+.space-service-row[aria-busy="true"] { cursor: progress; }
+.space-service-row[aria-disabled="true"] { cursor: default; }
+.space-service-dot { width: 6px; height: 6px; flex: none; border-radius: 50%; }
+.space-service-dot.is-healthy { background: var(--idle); }
+.space-service-dot.is-starting { background: var(--working); animation: space-service-pulse 1.4s ease-in-out infinite; }
+.space-service-dot.is-unhealthy { background: var(--blocked); }
+.space-service-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.space-service-port { flex: none; color: var(--text-muted); font: var(--font-size-2xs) var(--font-mono); }
+@keyframes space-service-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .space-service-dot.is-starting { animation: none; } }
 
 /* A rejected mutation, directly under its row. */
 .row-note {

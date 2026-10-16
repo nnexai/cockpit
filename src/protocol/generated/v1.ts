@@ -237,6 +237,12 @@ export type SpaceGitActionOutcome = { "result": "updated", commits: number | nul
 
 export type SpaceGitRefusal = "not_fast_forward" | "local_changes" | "remote_rejected";
 
+export type ServiceStatus = "starting" | "healthy" | "unhealthy";
+
+export type SpaceServiceStatus = { key: string, space_id: string, pane_id: string, tab_id: string | null, title: string, status: ServiceStatus, port: number | null, };
+
+export type SpaceServiceStatusResponse = { session_id: string, services: Array<SpaceServiceStatus>, };
+
 export type SpaceSummary = { id: string, label: string, number: number, tab_count: number, pane_count: number, focused: boolean, agent_status: string, git: SpaceGitSummary | null, };
 
 export type TabSummary = { id: string, space_id: string, label: string, number: number, pane_count: number, focused: boolean, focused_pane_id: string | null, };
