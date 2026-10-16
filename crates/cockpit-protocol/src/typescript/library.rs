@@ -18,6 +18,7 @@ section!(
         LibraryItemSummary,
         LibraryFollowMode,
         LibraryFollowSource,
+        LibraryFollowSync,
         LibraryFollowSummary,
         LibraryListing,
         SpaceTarget,

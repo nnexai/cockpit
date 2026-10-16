@@ -181,12 +181,6 @@ impl LibraryService {
         query: JiraQueryInput,
         provider_id: String,
     ) -> Result<LibraryOperation, InspectionError> {
-        if request.target.is_some() {
-            return Err(error(
-                "source_capability_unavailable",
-                "A Jira query follow can't be added to a Space",
-            ));
-        }
         // Before any state or operation: an opt-in the provider can't honor
         // (no stored token, unavailable vault) refuses the whole add.
         if request.download_attachments {
@@ -213,12 +207,17 @@ impl LibraryService {
             last_refreshed_at: None,
             state: LibraryItemState::Unknown,
             reference_depth: (request.reference_depth > 0).then_some(request.reference_depth),
+            sync: None,
         };
         let handle = operations::runtime()?;
         let store = self.open()?;
         let lease = super::sync::manual_lease(&store, &follow.follow_id).await?;
         let (record, operation_lease) =
             operations::create(&store, LibraryOperationKind::Add, Some(0))?;
+        let record = match &request.target {
+            Some(target) => operations::set_target(&store, &record.operation_id, target.clone())?,
+            None => record,
+        };
         let service = self.clone();
         let id = record.operation_id.clone();
         let worker_store = store.clone();
@@ -383,7 +382,28 @@ impl LibraryService {
             &pass,
             &pipeline.listing,
             unverified,
-        )
+        )?;
+        if create {
+            let record = operations::get(store, operation)?;
+            if record.target.is_some() {
+                let confirmed = listed
+                    .keys()
+                    .chain(checked.keys())
+                    .map(|key| issue_item_id(&follow, key))
+                    .chain(pass.reached.iter().cloned())
+                    .collect();
+                // Related traversal saves even unchanged reached items, so only
+                // their operation receipts establish a successful publication.
+                let attempted = attempted
+                    .iter()
+                    .map(|key| issue_item_id(&follow, key))
+                    .chain(pass.reached.iter().cloned())
+                    .collect();
+                self.select_follow_items(store, &record, &follow, &confirmed, &attempted)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     async fn check_accumulated_missing(

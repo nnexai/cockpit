@@ -368,7 +368,9 @@ Canonical tasks retain durable stages and dependencies while schedules drive bou
 
 - Query-related items count toward follow membership with Follow plus follow-held reason; listed items become seeds and lose reason. Live drops unreached related only after complete seeds and related pass, accumulate never drops; unchanged seeds use stored references. Failure/cap/cancel/incomplete retains all members and one Partial row without marking whole follow partial. [Owner](crates/cockpit-core/src/library/related.rs). Rationale: Incomplete traversal cannot untag membership.
 
-- Jira collections remain global, individual issues selectable directly; reference refresh never fans out to Spaces. Add targeting a Space selects what that add saved, including Confluence follow items; later follow refresh alters live Library only. [Owner](crates/cockpit-core/src/library/space.rs). Rationale: A selected ID set is not a follow-copy state.
+- Jira collections remain global, individual issues selectable directly. Explicit add-with-target snapshots saved current Jira query members or Confluence pages into the Space's selected IDs, including unchanged saved members; later follow, reference or global refresh never fans out changes to Space-selected IDs. [Owner](crates/cockpit-core/src/library/space.rs). Rationale: A selected ID set is not a follow-copy state.
+
+- CLI `library add` uses the existing add-with-target operation in-process, waits for completion and selects only what that add saved; it has no select-only/remove/refresh surface, credential entry or provider writes. [Owner](crates/cockpit-host/src/bin/cockpit/library.rs). Rationale: Agents need the app's add path, not a second Library authority.
 
 ## Library synchronization and presentation
 
@@ -378,13 +380,15 @@ Canonical tasks retain durable stages and dependencies while schedules drive bou
 
 - Use Jira epoch-ms [lower,upper) and fixed Confluence lastmodified windows; unknown CQL timezone requires outward minute rounding and UTC ±14-hour safe-superset envelope. Equal revision/hierarchy skips body reads with inventories as backstop. [Owner](crates/cockpit-core/src/library/sync.rs). Rationale: Discovery must not miss changes through timezone assumptions.
 
-- Share per-origin manual/background pacer across instances with configuration defaults; queued/active manual work precedes background, Retry-After/cooldown holds both, and learned spacing never relaxes stricter background policy. Preserve import limits, local edits, refs and exclusions. [Owner](crates/cockpit-providers/src/site_http/pacing.rs). Rationale: Rate-limit handling must not weaken configured safety.
+- Share per-origin manual/background pacer across instances within each process with configuration defaults; queued/active manual work precedes background, Retry-After/cooldown holds both, and learned spacing never relaxes stricter background policy. Preserve import limits, local edits, refs and exclusions. [Owner](crates/cockpit-providers/src/site_http/pacing.rs). Rationale: Rate-limit handling must not weaken configured safety.
 
 - Quiet checks do not rewrite index/snapshots/history; incomplete attachment manifests preserve binaries. Recheck follow/exclusion authority under metadata lock after async fetch/download waits. [Owner](crates/cockpit-core/src/library/sync.rs). Rationale: A stale fetch cannot resurrect excluded members.
 
-- Visible Library/context lists probe bounded first-page generation roughly every sixty seconds; unchanged keeps listing/object without remaining pages, changed reuses first page and atomically replaces all pages. Preview follows primary item identity through rename and rereads only its changed snapshot; manual events still refresh bytes at same indexed revision. [Owner](src/app/library/useLibraryOperation.ts). Rationale: Unrelated generations must not reset preview selection.
+- Visible Library/context lists probe bounded first-page generation roughly every sixty seconds; unchanged keeps item/page identity without remaining-page reads, changed reuses first page and atomically replaces all pages. Preview follows primary item identity through rename and rereads only its changed snapshot; manual events still refresh bytes at same indexed revision. [Owner](src/app/library/useLibraryOperation.ts). Rationale: Unrelated generations must not reset preview selection.
 
 - Keep automatic notifications distinct from manual refresh, cancel stale responses and never retarget bound file/comment authority. [Owner](src/app/library/useLibraryOperation.ts). Rationale: Background freshness is not source reauthorization.
+
+- Followed rows show only allowlisted recorded sync reasons and last successful sync time projected from sync state at listing; no next-attempt time, provider error text or refresh-now action, and probes refresh follow status without rereading pages. [Owner](crates/cockpit-core/src/library/sync.rs). Rationale: Explaining waiting must not change pacing.
 
 - Group provider instance→container→item by provider ID and instance, not host; cross-provider referenced items stay in their own containers. Follow row uses query/space name with overflow tooltip and Following/count second line. Same-container Jira subtasks nest via stored parent reference/listing-only parent_item_id, otherwise top-level; disk parent_item_id stays empty and siblings newest-key-first; missing captured parent appears only after refetch. [Owner](src/app/library/libraryState.ts). Rationale: Visual nesting must not change on-disk identity.
 
@@ -418,7 +422,7 @@ Canonical tasks retain durable stages and dependencies while schedules drive bou
 
 - Dependencies is a separate canonical DAG, not worker hierarchy/checklist graph; keep accepted prerequisites as context, independent runnable components and actionable blocked/invalid paths, with follow-up provenance distinct and local cross-view links. [Owner](src/app/supervisor/SupervisorDependencies.tsx). Rationale: Dependency navigation must not redefine task truth.
 
-- One Decide/Recover/Notice projection drives counters/queue/badges/dim-only filters with source/real age; only root NeedsInput enters Decide, not routine supervisor approvals/worker questions, and blocked is attention overlay. [Owner](src/app/supervisor/attention.ts). Rationale: Operator attention must not become an approval bottleneck.
+- Supervisor has no attention counters, queue, badges or attention filters; routine approvals and worker questions stay with the liaison. Core still derives `attention`, `roots[].needs_you` and `unmanaged_agents` only as the public `run list --json` contract; removal requires an explicit CLI-contract decision. [Owner](crates/cockpit-core/src/orchestration/projection.rs). Rationale: Operator attention must not become an approval bottleneck.
 
 - Details are review-first Overview/Activity/Actions with Result/progress/path before description; Operator intervention collapses unless override/conflict, Diagnostics retains exact plans/bindings/receipts/guarded-ID repair. Measured attention/detail modes and local owning-scrollport reveal preserve independent offsets without terminal focus. [Owner](src/app/supervisor/useSupervisorLayout.ts). Rationale: Review navigation must remain observational.
 

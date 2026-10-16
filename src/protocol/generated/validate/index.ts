@@ -278,6 +278,7 @@ export const wireRegistry = {
   "LibraryItemSummary": D10.wireLibraryItemSummary,
   "LibraryFollowMode": D10.wireLibraryFollowMode,
   "LibraryFollowSource": D10.wireLibraryFollowSource,
+  "LibraryFollowSync": D10.wireLibraryFollowSync,
   "LibraryFollowSummary": D10.wireLibraryFollowSummary,
   "LibraryListing": D10.wireLibraryListing,
   "SpaceTarget": D10.wireSpaceTarget,

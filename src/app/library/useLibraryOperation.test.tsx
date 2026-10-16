@@ -258,6 +258,35 @@ describe("background Library listing visibility", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 
+  it("updates sync-only follows from one probe without replacing items, pagination or announcing a snapshot", async () => {
+    const { client, libraryListing } = fixture();
+    const first = page("g1", ["selected"], 256);
+    first.follows = [{
+      follow_id: "follow:j", provider_id: "jira", provider_instance: "https://jira.test",
+      source: { kind: "jira_query", jql: "project = OPS", mode: "live" },
+      include_attachments: false, item_count: 2, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh",
+    }];
+    libraryListing.mockResolvedValueOnce(first).mockResolvedValueOnce(page("g1", ["second"]));
+    const changed = observeChanges();
+    const display = await view(client);
+    const before = display.state.listing!;
+    for (const sync of [
+      { last_success_at: null, reason: "Sign-in needed" },
+      { last_success_at: "1790508884043", reason: null },
+    ]) {
+      const probe = { ...first, follows: first.follows.map((follow) => ({ ...follow, sync })) };
+      libraryListing.mockResolvedValueOnce(probe);
+      const calls = libraryListing.mock.calls.length;
+      await advance();
+      expect(libraryListing.mock.calls.slice(calls)).toEqual([[null]]);
+      expect(display.state.listing?.follows).toBe(probe.follows);
+      expect(display.state.listing?.items).toBe(before.items);
+      expect(display.state.listing?.next_offset).toBe(before.next_offset);
+      expect(display.state.listing?.generation).toBe(before.generation);
+      expect(changed).not.toHaveBeenCalled();
+    }
+  });
+
   it("reuses the changed probe page and atomically publishes all pages with one non-looping notification", async () => {
     const { client, libraryListing } = fixture();
     libraryListing.mockResolvedValueOnce(page("g1", ["old", "removed"]));

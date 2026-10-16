@@ -896,6 +896,7 @@ fn reference_added_between_snapshot_and_publish_survives_the_publish() {
                 last_refreshed_at: None,
                 state: LibraryItemState::Fresh,
                 reference_depth: Some(0),
+                sync: None,
             });
             Ok(())
         })

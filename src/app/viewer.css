@@ -50,15 +50,6 @@
     flex-wrap: wrap;
     overflow: hidden;
   }
-  .review-pane .review-toolbar {
-    height: auto;
-    overflow: hidden;
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-  }
-  .review-pane .review-toolbar::-webkit-scrollbar { display: none; }
 
   .context-viewer .context-body,
   .review-pane .review-body { display: flex; flex-direction: column; --viewer-document-inset: 8px; position: relative; }
@@ -144,16 +135,6 @@
     flex: 1 1 8rem;
   }
 
-  .review-pane .review-toolbar > .review-nav {
-    gap: 1px;
-  }
-
-  .review-pane .review-toolbar > .review-nav button {
-    width: 24px;
-    min-width: 24px;
-    flex: 0 0 24px;
-    padding-inline: 2px;
-  }
 
   .review-pane .review-toolbar > button:last-child {
     width: 28px;
@@ -374,9 +355,6 @@
 .context-viewer .context-markdown-body ul { padding-left: 19px; }
 .context-viewer .context-markdown-body pre { line-height: 1.6; padding: 10px 12px; }
 .review-pane .review-toolbar select { max-width: 165px; padding: 4px 8px 4px 0; border: 0; border-right: 1px solid var(--border); border-radius: 0; background: transparent; font-size: var(--font-size-2xs); color: var(--text-secondary); }
-.viewer-navigation { position: relative; }
-.viewer-navigation > summary { display: flex; align-items: center; justify-content: center; width: 26px; height: 28px; list-style: none; cursor: pointer; color: var(--text-muted); }
-.viewer-navigation .review-nav { position: absolute; z-index: var(--z-dropdown); top: 100%; left: 0; padding: 5px; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface-raised); box-shadow: 0 8px 24px var(--color-hex-0006); }
 .review-file > small { grid-column: 2; font-size: var(--font-size-2xs); }
 .review-pane .review-file-stats { grid-column: 3; grid-row: 1; display: flex; gap: 6px; overflow: visible; white-space: nowrap; }
 .review-file-stats em { font-style: normal; font-size: var(--font-size-2xs); }
@@ -406,9 +384,6 @@
   .review-pane .review-toolbar select { min-width: 72px; max-width: 125px; flex: 0 1 auto; }
   .review-pane .viewer-overview-label { display: none; }
 }
-@container (max-width: 380px) {
-  .review-pane .review-toolbar { flex-wrap: wrap; overflow: visible; }
-}
 .viewer-tree-search { color: var(--text-muted); border-bottom: 1px solid var(--border); font-size: var(--font-size-2xs); }
 .viewer-tree-search .context-search { padding: 8px; }
 .viewer-tree-search .context-search-form { display: grid; gap: 6px; }
@@ -436,6 +411,9 @@
 .review-viewer { --viewer-document-inset: 12px; }
 .context-viewer .context-toolbar,
 .review-pane .review-toolbar { height: 32px; min-height: 32px; gap: 2px; padding: 0 6px; }
+@container (max-width: 520px) {
+  .review-pane .review-toolbar { height: auto; flex-wrap: wrap; row-gap: 2px; }
+}
 .context-viewer .context-toolbar > button,
 .review-pane .review-toolbar > button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-color: transparent; background: transparent; color: var(--text-secondary); font-size: var(--font-size-control); min-height: 26px; padding: 4px 5px; }
 .viewer-wrap-toggle[aria-pressed="true"] { color: var(--text-primary); background: var(--surface-selected); }

@@ -1,5 +1,7 @@
 #[path = "cockpit/endpoint.rs"]
 mod endpoint;
+#[path = "cockpit/library.rs"]
+mod library_cli;
 #[path = "cockpit/notes.rs"]
 mod notes_cli;
 #[path = "cockpit/skills.rs"]
@@ -48,6 +50,7 @@ const ROOT_HELP: &str = "Agent workflows:
   cockpit-cli inbox --help       Read messages, then acknowledge processed mail
   cockpit-cli route --help       Read configured project-routing evidence
   cockpit-cli skills --help      Read or explicitly install portable CLI skills
+  cockpit-cli library --help     Save to the Library and select in the current Space
 
 Use <command> <subcommand> --help for payloads, selectors and examples.
 Prefer COCKPIT_CLI_PATH when supplied by a Cockpit-launched agent.
@@ -101,6 +104,9 @@ pass --pane, --tab or --space with --herdr-session and --herdr-socket.")]
     Widget(WidgetArgs),
     /// Print the live Library context selected by a Herdr Space.
     Context(ContextArgs),
+    /// Save provider/folder input to the Library and select it in the current Space.
+    #[command(after_long_help = library_cli::LIBRARY_HELP)]
+    Library(library_cli::LibraryArgs),
     /// Inspect the installed orchestration CLI protocol without a Herdr endpoint.
     Orchestration(cli_orchestration::ProtocolArgs),
     /// Read and edit canonical supervisor tasks.
@@ -535,6 +541,7 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
         Command::Widget(_) => unreachable!("widget commands use their own exit-status contract"),
         Command::Notes(_) => unreachable!("Notes commands use their own exit-status contract"),
         Command::Skills(_) => unreachable!("skills commands use their own exit-status contract"),
+        Command::Library(_) => unreachable!("Library commands use their own exit-status contract"),
         Command::Contain(_) => unreachable!("contain is a launch-only exec helper"),
         Command::AgentExec(_) => unreachable!("agent-exec is a launch-only waiting exec helper"),
         Command::Context(args) => run_context(args).await,
@@ -573,20 +580,51 @@ async fn current_pane_id(
         .ok_or_else(|| "Herdr current-pane response has no pane_id".to_owned())
 }
 
-async fn run_context(args: ContextArgs) -> Result<(), String> {
+struct SpaceContext {
+    library: LibraryService,
+    target: cockpit_protocol::library::SpaceTarget,
+    pane_id: Option<String>,
+    source_adapter: Arc<dyn cockpit_core::SourcePaneAdapter>,
+    evidence: Option<cockpit_core::SourcePaneEvidence>,
+}
+
+impl SpaceContext {
+    async fn verify_source_identity(&self, caller: &str) -> Result<(), String> {
+        if let (Some(pane_id), Some(before)) = (self.pane_id.as_deref(), self.evidence.as_ref()) {
+            let after = self.source_adapter.source_pane_evidence(&self.target.session_id, pane_id).await
+                .map_err(|error| error.to_string())?;
+            if before.pane_id != pane_id || after.pane_id != pane_id
+                || before.workspace_id != self.target.space_id || after.workspace_id != self.target.space_id
+                || before.endpoint_identity != after.endpoint_identity || before.tab_id != after.tab_id
+                || (caller == "library add" && before.terminal_id != after.terminal_id)
+            {
+                return Err(format!("current {caller} pane identity changed during lookup"));
+            }
+        }
+        Ok(())
+    }
+}
+
+async fn resolve_space_context(
+    herdr: HerdrArgs,
+    mut project: ProjectArgs,
+    current: bool,
+    space: Option<String>,
+    caller: &str,
+) -> Result<SpaceContext, String> {
     let endpoint = endpoint::resolve_endpoint(
-        args.herdr.herdr.clone(), args.herdr.herdr_session.clone(),
-        args.herdr.herdr_socket.clone(), &endpoint::AmbientEndpoint::from_process(),
+        herdr.herdr.clone(), herdr.herdr_session.clone(),
+        herdr.herdr_socket.clone(), &endpoint::AmbientEndpoint::from_process(),
     ).map_err(|error| match error.code.as_str() {
-        "session_required" => "context requires a resolvable Herdr session identity".to_owned(),
+        "session_required" => format!("{caller} requires a resolvable Herdr session identity"),
         "missing_socket_session" => error.message,
         _ => error.to_string(),
     })?;
-    if !args.current && (args.herdr.herdr_session.is_none() || args.herdr.herdr_socket.is_none()) {
-        return Err("explicit context targets require --herdr-session, --herdr-socket, and --space".to_owned());
+    if !current && (herdr.herdr_session.is_none() || herdr.herdr_socket.is_none()) {
+        return Err(format!("explicit {caller} targets require --herdr-session, --herdr-socket, and --space"));
     }
-    let pane_id = if args.current {
-        Some(current_pane_id(endpoint.executable(), endpoint.socket(), Some(&endpoint.session), "context").await?)
+    let pane_id = if current {
+        Some(current_pane_id(endpoint.executable(), endpoint.socket(), Some(&endpoint.session), caller).await?)
     } else {
         None
     };
@@ -599,8 +637,7 @@ async fn run_context(args: ContextArgs) -> Result<(), String> {
         None => None,
     };
     let space_id = evidence.as_ref().map(|source| source.workspace_id.clone())
-        .or(args.space).ok_or_else(|| "context has no current Space evidence".to_owned())?;
-    let mut project = args.project;
+        .or(space).ok_or_else(|| format!("{caller} has no current Space evidence"))?;
     project.config = project.config.or_else(|| std::env::var_os("COCKPIT_CONFIG_PATH")
         .filter(|value| !value.is_empty()).map(PathBuf::from));
     let project_config = project_configuration(&project)?;
@@ -614,24 +651,25 @@ async fn run_context(args: ContextArgs) -> Result<(), String> {
     ).map_err(|error| error.to_string())?);
     let library = LibraryService::new(project_config, sources).with_herdr(adapter);
     let target = cockpit_protocol::library::SpaceTarget { session_id: session, space_id };
-    let listing = library.space_listing(&target).await.map_err(|error| error.to_string())?;
-    if let (Some(pane_id), Some(before)) = (pane_id.as_deref(), evidence.as_ref()) {
-        let after = source_adapter.source_pane_evidence(&target.session_id, pane_id).await
-            .map_err(|error| error.to_string())?;
-        if before.pane_id != pane_id || after.pane_id != pane_id
-            || before.workspace_id != target.space_id || after.workspace_id != target.space_id
-            || before.endpoint_identity != after.endpoint_identity || before.tab_id != after.tab_id
-        {
-            return Err("current context pane identity changed during lookup".to_owned());
-        }
-    }
-    let root = std::path::Path::new(&listing.library_root);
-    let items = listing.items.iter().map(|item| serde_json::json!({
+    Ok(SpaceContext { library, target, pane_id, source_adapter, evidence })
+}
+
+fn context_item_json(root: &Path, item: &cockpit_protocol::library::LibraryItemSummary) -> serde_json::Value {
+    serde_json::json!({
         "item_id": item.item_id,
         "title": item.title,
         "kind": item.kind,
         "path": root.join(item.document_path.as_deref().unwrap_or(&item.item_path)),
-    })).collect::<Vec<_>>();
+    })
+}
+
+async fn run_context(args: ContextArgs) -> Result<(), String> {
+    let context = resolve_space_context(args.herdr, args.project, args.current, args.space, "context").await?;
+    let listing = context.library.space_listing(&context.target).await.map_err(|error| error.to_string())?;
+    context.verify_source_identity("context").await?;
+    let pane_id = context.pane_id;
+    let root = Path::new(&listing.library_root);
+    let items = listing.items.iter().map(|item| context_item_json(root, item)).collect::<Vec<_>>();
     println!("{}", serde_json::to_string_pretty(&serde_json::json!({
         "target": listing.target, "space_label": listing.space_label, "pane_id": pane_id,
         "library_root": listing.library_root, "items": items,
@@ -1083,6 +1121,7 @@ async fn main() -> ExitCode {
         Command::Route(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Notes(args) => return ExitCode::from(notes_cli::run(args).await),
         Command::Skills(args) => return ExitCode::from(skills_cli::run(args).await),
+        Command::Library(args) => library_cli::run(args).await.map_err(CliError::from),
         Command::Contain(args) => return ExitCode::from(contain::run(args).await),
         Command::AgentExec(args) => return ExitCode::from(agent_exec::run(args).await),
         command => run_legacy(Cli { command }).await.map(|()| 0).map_err(CliError::from),

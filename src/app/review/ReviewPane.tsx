@@ -12,7 +12,7 @@ import type {
 } from "../../protocol/generated/v1";
 import { FilePicker } from "../input/FilePicker";
 import { FILE_NAVIGATION_EVENT, fileNavigationAction, type FileNavigationCandidate } from "../input/fileNavigation";
-import { viewerShortcutAction } from "../input/shortcuts";
+import { ariaKeyShortcuts, viewerShortcutAction, withShortcut } from "../input/shortcuts";
 import { retainReviewScrollPosition, type ReviewViewState } from "../context/ContextViewer";
 import { highlightLines } from "../viewer/highlight";
 import { TreeSplitter, useTreeWidth, useWrapPreference } from "../viewer/ViewerLayout";
@@ -533,14 +533,16 @@ export function ReviewPane({ identity, sessionId, viewerId, bindingId, repositor
         {modes.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
       </select>
       {comparison === "branch" ? <label className="review-base" htmlFor={`${baseId}-base`}>Base ref <input id={`${baseId}-base`} value={draftBaseRef} onChange={(event) => editBaseRef(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.nativeEvent.isComposing && draftBaseRef.trim()) { event.preventDefault(); submitComparison(); } }} placeholder="main" /></label> : null}
-      <button type="button" className="viewer-overview-trigger" onClick={overview.toggle} aria-expanded={overview.open} aria-controls={`${baseId}-file-overview`} aria-label="Toggle file overview"><UiIcon name="sidebar" /><span className="viewer-overview-label">Files</span> <span className="viewer-count">{review?.files.length ?? 0}</span></button>
-      <button type="button" className="viewer-file-picker-trigger" onClick={() => setPickerOpen(true)} disabled={!review?.files.length} aria-label="Choose review file" title="Choose review file"><UiIcon name="search" /></button>
-      <details className="viewer-navigation"><summary aria-label="Review navigation" title="Review navigation"><UiIcon name="down" /></summary><div className="review-nav" aria-label="Review navigation">
-        <button type="button" aria-label="Previous file" title="Previous file (Alt+Left)" onClick={() => moveFile(-1)} disabled={!review?.files.length}>←</button>
-        <button type="button" aria-label="Next file" title="Next file (Alt+Right)" onClick={() => moveFile(1)} disabled={!review?.files.length}>→</button>
-        <button type="button" aria-label="Previous hunk" title="Previous hunk (Alt+Up)" onClick={() => moveHunk(-1)} disabled={!diff?.hunks.length}>↑</button>
-        <button type="button" aria-label="Next hunk" title="Next hunk (Alt+Down)" onClick={() => moveHunk(1)} disabled={!diff?.hunks.length}>↓</button>
-      </div></details>
+      <div className="review-nav-cluster" role="group" aria-label="Review navigation">
+        <button type="button" className="viewer-overview-trigger" onClick={overview.toggle} aria-expanded={overview.open} aria-controls={`${baseId}-file-overview`} aria-label="Toggle file overview"><UiIcon name="sidebar" /><span className="viewer-overview-label">Files</span> <span className="viewer-count">{review?.files.length ?? 0}</span></button>
+        <button type="button" className="viewer-file-picker-trigger" onClick={() => setPickerOpen(true)} disabled={!review?.files.length} aria-label="Choose review file" aria-keyshortcuts={ariaKeyShortcuts("open-file-picker")} title={withShortcut("Choose review file", "open-file-picker", undefined, "chord")}><UiIcon name="search" /></button>
+        <span className="review-nav-rule" aria-hidden="true" />
+        <button type="button" aria-label="Previous file" aria-keyshortcuts={ariaKeyShortcuts("review-previous-file")} title={withShortcut("Previous file", "review-previous-file")} onClick={() => moveFile(-1)} disabled={!review?.files.length}><UiIcon name="back" /></button>
+        <button type="button" aria-label="Next file" aria-keyshortcuts={ariaKeyShortcuts("review-next-file")} title={withShortcut("Next file", "review-next-file")} onClick={() => moveFile(1)} disabled={!review?.files.length}><UiIcon name="forward" /></button>
+        <span className="review-nav-rule" aria-hidden="true" />
+        <button type="button" aria-label="Previous hunk" aria-keyshortcuts={ariaKeyShortcuts("review-previous-hunk")} title={withShortcut("Previous hunk", "review-previous-hunk")} onClick={() => moveHunk(-1)} disabled={!diff?.hunks.length}><UiIcon name="up" /></button>
+        <button type="button" aria-label="Next hunk" aria-keyshortcuts={ariaKeyShortcuts("review-next-hunk")} title={withShortcut("Next hunk", "review-next-hunk")} onClick={() => moveHunk(1)} disabled={!diff?.hunks.length}><UiIcon name="down" /></button>
+      </div>
       <span className="review-toolbar-spacer" />{presentationControls}
       <button type="button" className="viewer-wrap-toggle" aria-pressed={wrap} onClick={toggleWrap} title={wrap ? "Long lines wrap (Alt+Z)" : "Long lines scroll (Alt+Z)"}><UiIcon name="wrap" /><span className="viewer-wrap-label">Wrap</span></button>
       <button type="button" onClick={submitComparison} disabled={pending || (comparison === "branch" && !draftBaseRef.trim())} aria-label={pending ? "Refreshing…" : "Refresh"} title="Refresh"><UiIcon name="refresh" /></button>

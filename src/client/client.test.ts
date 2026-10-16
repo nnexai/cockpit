@@ -571,6 +571,35 @@ describe("library client validation", () => {
       payload = [space];
     }
   });
+  it("accepts optional recorded follow sync in both transports and bounds its human-safe reason", async () => {
+    const follow = { follow_id: "follow:j", provider_id: "jira", provider_instance: "https://jira.test", source: { kind: "jira_query", jql: "project = OPS", mode: "live" }, include_attachments: false, item_count: 0, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh" };
+    let payload: unknown = { ...libraryListing, follows: [follow] };
+    const clients = [
+      createBrowserClient(vi.fn(async () => jsonResponse(payload))),
+      createNativeClient(vi.fn(async () => payload)),
+    ];
+    for (const client of clients) {
+      payload = { ...libraryListing, follows: [follow] };
+      const absent = await client.libraryListing();
+      expect(absent.follows[0]?.sync).toBeUndefined();
+      for (const sync of [
+        { last_success_at: null, reason: null },
+        { last_success_at: "1790508884043", reason: "Paused by provider rate limit" },
+        { last_success_at: null, reason: "x".repeat(256) },
+      ]) {
+        payload = { ...libraryListing, follows: [{ ...follow, sync }] };
+        expect((await client.libraryListing()).follows[0]?.sync).toEqual(sync);
+      }
+      for (const sync of [
+        { last_success_at: null, reason: "x".repeat(257) },
+        { last_success_at: null, reason: "unsafe\0text" },
+        { last_success_at: 1790508884043, reason: null },
+      ]) {
+        payload = { ...libraryListing, follows: [{ ...follow, sync }] };
+        await expect(client.libraryListing()).rejects.toMatchObject({ code: "malformed_response" });
+      }
+    }
+  });
   it("parses Jira query follows, item refs and dropped outcomes strictly", async () => {
     const jiraFollow = { follow_id: "follow:j", provider_id: "jira", provider_instance: "https://jira.test", source: { kind: "jira_query", jql: "project = OPS", mode: "live" }, include_attachments: false, item_count: 2, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh" };
     const issue = { ...unsafeLibraryItem, item_path: "jira/x/OPS/OPS-1", refs: [{ kind: "follow", follow_id: "follow:j" }, { kind: "space", space_context_id: "space:c" }], purge_after: "0", issue: { updated: "2026-01-01 10:00:00", fetched_updated: null, status: "Open", issue_type: "Task", assignee: null } };

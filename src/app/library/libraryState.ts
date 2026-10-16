@@ -369,6 +369,24 @@ export function timeDetail(value: string | null | undefined, now: number): TimeD
   return { text: formatDateTime(time), ago: age.recent ? age.text : null, iso: new Date(time).toISOString() };
 }
 
+export type FollowSyncNotice = {
+  reason: string | null;
+  blocked: boolean;
+  ago: string | null;
+  absolute: string | null;
+};
+
+/** Recorded successful sync time and safe row-local failure/deferral notice. */
+export function followSyncNotice(follow: LibraryFollowSummary, now: number): FollowSyncNotice {
+  const at = follow.sync?.last_success_at ?? follow.last_refreshed_at;
+  return {
+    reason: follow.sync?.reason ?? (follow.state === "failed" ? libraryStateChip("failed").word : null),
+    blocked: follow.state === "failed",
+    ago: relativeTime(at, now),
+    absolute: timeDetail(at, now)?.text ?? null,
+  };
+}
+
 /** The source clock of a page: `v3 edited 3 h ago by Konni Hartmann`; unknown parts are left out. */
 export function sourceEditPhrase({ version, editedAt, by }: { version: string | null; editedAt: string | null | undefined; by: string | null }, now: number): string | null {
   const edited = relativeTime(editedAt, now);

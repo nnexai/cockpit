@@ -381,7 +381,21 @@ export type LibraryFollowMode = "live" | "accumulate";
 
 export type LibraryFollowSource = { "kind": "confluence_space", space_key: string, space_name: string, } | { "kind": "jira_query", jql: string, mode: LibraryFollowMode, };
 
-export type LibraryFollowSummary = { follow_id: string, provider_id: string, provider_instance: string, source: LibraryFollowSource, include_attachments: boolean, item_count: number, partial: LibraryPartial | null, excluded_ids: Array<string>, last_refreshed_at: string | null, state: LibraryItemState, reference_depth?: number, };
+export type LibraryFollowSync = {
+/**
+ * Epoch-millisecond string of the last complete background sync, if any.
+ */
+last_success_at: string | null,
+/**
+ * Allowlisted, human-safe explanation; never provider error text.
+ */
+reason: string | null, };
+
+export type LibraryFollowSummary = { follow_id: string, provider_id: string, provider_instance: string, source: LibraryFollowSource, include_attachments: boolean, item_count: number, partial: LibraryPartial | null, excluded_ids: Array<string>, last_refreshed_at: string | null, state: LibraryItemState, reference_depth?: number,
+/**
+ * Listing-only projection of recorded background sync state.
+ */
+sync?: LibraryFollowSync, };
 
 export type LibraryListing = { root: ContextRoot, generation: string, items: Array<LibraryItemSummary>, follows: Array<LibraryFollowSummary>, next_offset: number | null, diagnostics: Array<ProjectDiagnostic>, };
 

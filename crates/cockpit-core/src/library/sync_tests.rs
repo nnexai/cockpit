@@ -676,6 +676,91 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn listing_projects_failed_sync_and_recovery_without_persisting_status() {
+    let f = Fixture::new();
+    f.jira.insert("OPS-1", 1);
+    f.jira.query(QUERY, &["OPS-1"]);
+    let id = f.add("jira", QUERY, true, Some(LibraryFollowMode::Live)).await.unwrap();
+    assert!(f.service().listing(None).await.unwrap().follows[0].sync.is_none());
+    f.quiet_audits();
+    f.due(&id, true, false);
+    f.jira.state().list_failure = true;
+    f.service().sync_tick(policy(), now()).await.unwrap();
+    let failed = f.service().listing(None).await.unwrap().follows.remove(0).sync.unwrap();
+    assert_eq!(failed.reason.as_deref(), Some("Last sync failed"));
+    assert_eq!(failed.last_success_at, None);
+
+    f.jira.state().list_failure = false;
+    f.jira.state().delta = Some(vec![]);
+    f.due(&id, true, false);
+    let success_at = now() + 10 * MINUTE;
+    f.restarted().sync_tick(policy(), success_at).await.unwrap();
+    let index_path = f.base.root.join("library/.cockpit/index.json");
+    let before = std::fs::read(&index_path).unwrap();
+    let state_before = std::fs::read(f.state_path()).unwrap();
+    let listing = f.service().listing(None).await.unwrap();
+    let sync = listing.follows[0].sync.as_ref().unwrap();
+    assert_eq!(sync.reason, None);
+    assert_eq!(sync.last_success_at, Some(success_at.to_string()));
+    assert_eq!(std::fs::read(&index_path).unwrap(), before);
+    assert_eq!(std::fs::read(f.state_path()).unwrap(), state_before);
+    let durable: Value = serde_json::from_slice(&before).unwrap();
+    assert!(durable["follows"][0].get("sync").is_none());
+    assert!(f.index().follows[0].sync.is_none());
+
+    std::fs::write(f.state_path(), b"not JSON: private provider response").unwrap();
+    assert!(f.service().listing(None).await.unwrap().follows[0].sync.is_none());
+}
+
+#[tokio::test]
+async fn listing_sync_reasons_are_allowlisted_and_respect_hold_and_origin_priority() {
+    let f = Fixture::new();
+    f.jira.query(QUERY, &[]);
+    let id = f.add("jira", QUERY, true, Some(LibraryFollowMode::Live)).await.unwrap();
+    f.due(&id, false, false);
+    for (code, expected) in [
+        (None, None),
+        (Some("source_rate_limited"), Some("Paused by provider rate limit")),
+        (Some("source_credential_required"), Some("Sign-in needed")),
+        (Some("source_auth_required"), Some("Sign-in needed")),
+        (Some("source_permission_denied"), Some("Access denied by provider")),
+        (Some("source_fetch_timeout"), Some("Sync timed out")),
+        (Some("source_metadata_timeout"), Some("Sync timed out")),
+        (Some("source_provider_timeout"), Some("Sync timed out")),
+        (Some("library_sync_partial"), Some("Last sync incomplete")),
+        (Some("library_sync_related_partial"), Some("Related items not fully synced")),
+        (Some("library_sync_yielded"), Some("Deferred to manual work")),
+        (Some("private-token-and-provider-response"), Some("Last sync failed")),
+    ] {
+        f.edit_state(|state| {
+            state["sources"][&id]["last_error"] = json!(code);
+            state["sources"][&id]["last_success_ms"] = json!(now());
+        });
+        let listing = f.service().listing(None).await.unwrap();
+        let sync = listing.follows[0].sync.as_ref().unwrap();
+        assert_eq!(sync.reason.as_deref(), expected);
+        assert_eq!(sync.last_success_at, Some(now().to_string()));
+        if let Some(code) = code {
+            assert!(!serde_json::to_string(sync).unwrap().contains(code));
+        }
+    }
+    for (until, held, expected) in [
+        (i64::MAX, None, "Paused by provider rate limit"),
+        (i64::MAX, Some("private removal details"), "Removal held for manual Refresh"),
+        (0, None, "Sign-in needed"),
+    ] {
+        f.edit_state(|state| {
+            state["origins"]["https://jira.example.test:443"] = json!(until);
+            state["sources"][&id]["held"] = json!(held);
+            state["sources"][&id]["last_error"] = json!("source_auth_required");
+        });
+        let sync = f.service().listing(None).await.unwrap().follows.remove(0).sync.unwrap();
+        assert_eq!(sync.reason.as_deref(), Some(expected));
+        assert!(!serde_json::to_string(&sync).unwrap().contains("private"));
+    }
+}
+
+#[tokio::test]
 async fn complete_and_empty_windows_checkpoint_but_partial_and_failed_windows_stay_uncommitted() {
     let f = Fixture::new();
     f.jira.insert("OPS-1", 1);
@@ -1443,6 +1528,11 @@ async fn mass_membership_loss_is_held_with_visible_partial_receipt_instead_of_dr
     let held = state["sources"][&id]["held"].as_str().unwrap();
     assert!(held.contains("30 of 100"));
     assert!(held.contains("manual Refresh"));
+    let listing = f.service().listing(None).await.unwrap();
+    assert_eq!(
+        listing.follows[0].sync.as_ref().unwrap().reason.as_deref(),
+        Some("Removal held for manual Refresh")
+    );
     let store = f.service().open().unwrap();
     let receipts = store
         .operations
@@ -1496,6 +1586,9 @@ async fn symlinked_and_sparse_oversized_sync_state_are_rejected_before_any_provi
                 .unwrap();
             file.set_len(64 * 1024 * 1024 + 1).unwrap();
         }
+        let listing = f.service().listing(None).await.unwrap();
+        assert!(listing.follows.iter().all(|follow| follow.sync.is_none()));
+        assert_eq!(listing.items.len(), 1);
         let error = f.restarted().sync_tick(policy(), now()).await.unwrap_err();
         assert_eq!(error.code, "library_corrupt");
         assert!(f.jira.state().calls.is_empty());

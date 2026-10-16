@@ -914,7 +914,7 @@ def main():
                        "native region tool selection", 3)
             gesture = webdriver.execute("(()=>{const c=document.querySelector('canvas.browser-frame'),s=document.querySelector('.browser-surface'),r=c.getBoundingClientRect(),x=r.left+100,y=r.top+35;for(const [type,dx,dy,buttons] of [['pointerdown',0,0,1],['pointerup',120,55,0]])s.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:19,pointerType:'mouse',clientX:x+dx,clientY:y+dy,button:0,buttons}));return {x,y}})()")
             def annotation_state():
-                return webdriver.execute("(()=>({notes:document.querySelector('.browser-annotation-notes')?.getAttribute('aria-label'),marks:document.querySelectorAll('.browser-annotation-region').length,status:document.querySelector('.browser-toolbar-status')?.textContent,retained:!!document.querySelector('[aria-label=\"Retry retained annotation changes\"]')}))()")
+                return webdriver.execute("(()=>({notes:document.querySelector('.browser-annotation-notes')?.getAttribute('aria-label'),marks:document.querySelectorAll('.browser-annotation-region').length,status:document.querySelector('.browser-toolbar-status')?.textContent,retained:!!document.querySelector('[aria-label=\"Retry saves for retained annotation changes\"]')}))()")
             try:
                 wait_until(lambda: (state if state["marks"] == 1 and state["notes"] == "Notes 1" and not state["retained"] else None)
                            if (state := annotation_state()) else None, "native region acknowledgement", 5)
@@ -953,7 +953,7 @@ def main():
                     and len(draft.get("annotations", [])) == 1
                     and draft["annotations"][0].get("comment") == note_text), None)
             saved_note = wait_until(note_saved, "durable native annotation note", 5)
-            wait_until(lambda: webdriver.execute("!document.querySelector('.browser-note-editor') && !document.querySelector('[aria-label=\"Retry retained annotation changes\"]')"),
+            wait_until(lambda: webdriver.execute("!document.querySelector('.browser-note-editor') && !document.querySelector('[aria-label=\"Retry saves for retained annotation changes\"]')"),
                        "native note acknowledgement and closed editor", 5)
             result["annotation"]["saved_note"] = {"draft_id": saved_note["draft_id"],
                 "revision": saved_note["revision"], "annotation_id": saved_note["annotations"][0]["id"],

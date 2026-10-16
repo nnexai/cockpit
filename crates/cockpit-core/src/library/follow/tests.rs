@@ -726,51 +726,84 @@ async fn resolves_and_browses_spaces_of_the_selected_provider() {
 }
 
 #[tokio::test]
-async fn follow_add_selects_only_items_saved_by_the_current_operation() {
+async fn targeted_follow_add_selects_new_and_unchanged_members_in_another_space() {
+    let f = fixture(CLOUD, true, 200);
+    let service = f.base.service.clone().with_herdr(adapter("space"));
+    let first = finished(
+        &service,
+        service.start_add(follow_request("SD", Some(target()))).await.unwrap(),
+    ).await;
+    assert!(first.phases.iter().all(|phase| phase.state == LibraryPhaseState::Done), "{first:?}");
+    let membership = pages(&service).await;
+    let expected = membership.values().map(|page| page.item_id.clone()).collect::<BTreeSet<_>>();
+    assert_eq!(expected.len(), 6);
+    assert_eq!(first.space.unwrap().item_ids.into_iter().collect::<BTreeSet<_>>(), expected);
+    f.provider.take_fetched();
+
+    let other = service.clone().with_herdr(adapter("other"));
+    let other_target = SpaceTarget { space_id: "other".into(), ..target() };
+    finished(
+        &other,
+        other.start_add(LibraryAddRequest {
+            follow: false,
+            ..follow_request("300", Some(other_target.clone()))
+        }).await.unwrap(),
+    ).await;
+    let unrelated = pages(&other).await["300"].clone();
+    f.provider.take_fetched();
+    // Re-adding an entirely unchanged follow must still select every member.
+    let added = finished(
+        &other,
+        other.start_add(follow_request("SD", Some(other_target.clone()))).await.unwrap(),
+    ).await;
+    assert!(added.phases.iter().all(|phase| phase.state == LibraryPhaseState::Done), "{added:?}");
+    assert!(added.item_ids.is_empty());
+    assert_eq!(added.space.unwrap().item_ids.into_iter().collect::<BTreeSet<_>>(), expected);
+    assert!(f.provider.take_fetched().is_empty());
+    let selected = other.space_listing(&other_target).await.unwrap();
+    let mut with_unrelated = expected.clone();
+    with_unrelated.insert(unrelated.item_id.clone());
+    assert_eq!(selected.items.iter().map(|item| item.item_id.clone()).collect::<BTreeSet<_>>(), with_unrelated);
+    assert!(selected.items.iter().all(|item| !item.item_path.is_empty() && item.document_path.is_some()));
+    assert_eq!(service.space_listing(&target()).await.unwrap().items.iter().map(|item| item.item_id.clone()).collect::<BTreeSet<_>>(), expected);
+    let listing = other.listing(None).await.unwrap();
+    assert_eq!(listing.items.len(), 7);
+    assert_eq!(listing.follows[0].item_count, 6);
+    assert!(listing.items.iter().find(|item| item.item_id == unrelated.item_id).unwrap().refs.contains(&LibraryItemRef::Manual));
+}
+
+#[tokio::test]
+async fn targeted_follow_add_keeps_failed_and_missing_pages_out_of_selection() {
     let f = fixture(CLOUD, true, 200);
     let service = f.base.service.clone().with_herdr(adapter("space"));
     let (_, follow_id) = follow(&service, "SD").await;
-    let membership = pages(&service).await;
-    assert_eq!(membership.len(), 6);
+    let before = pages(&service).await;
+    let failed_path = std::path::Path::new(&service.configuration.library_root)
+        .join(before["110"].document_path.as_ref().unwrap());
+    let original = std::fs::read(&failed_path).unwrap();
     f.provider.bump("110");
-
+    {
+        let mut site = f.provider.site();
+        site.pages.remove("112");
+        site.pages.insert("999".into(), page("SD", "New failing page", &[]));
+        site.fetch_failures.extend(["110".to_owned(), "999".to_owned()]);
+    }
     let added = finished(
         &service,
-        service
-            .start_add(follow_request("SD", Some(target())))
-            .await
-            .unwrap(),
-    )
-    .await;
-    let saved_ids = vec![membership["110"].item_id.clone()];
-    assert!(
-        added
-            .phases
-            .iter()
-            .all(|phase| phase.state == LibraryPhaseState::Done),
-        "{added:?}"
-    );
-    assert_eq!(added.item_ids, saved_ids);
-    assert_eq!(added.space.unwrap().item_ids, saved_ids);
-    let selected = service
-        .space_listing(&target())
-        .await
-        .unwrap()
-        .items
-        .into_iter()
-        .map(|item| item.item_id)
-        .collect::<Vec<_>>();
-    assert_eq!(selected, saved_ids);
-    let follow = service
-        .listing(None)
-        .await
-        .unwrap()
-        .follows
-        .into_iter()
-        .find(|follow| follow.follow_id == follow_id)
-        .unwrap();
-    assert_eq!(
-        follow.item_count, 6,
-        "selection leaves the global follow intact"
-    );
+        service.start_add(follow_request("SD", Some(target()))).await.unwrap(),
+    ).await;
+    assert_eq!(added.phases[0].state, LibraryPhaseState::Partial, "{added:?}");
+    assert_eq!(added.phases[1].state, LibraryPhaseState::Done, "{added:?}");
+    let report = added.report.unwrap();
+    assert_eq!((report.failed, report.removed_at_source, report.unchanged), (2, 1, 4));
+    let expected = ["100", "111", "200", "201"].map(|key| before[key].item_id.clone()).into_iter().collect::<BTreeSet<_>>();
+    assert_eq!(added.space.unwrap().item_ids.into_iter().collect::<BTreeSet<_>>(), expected);
+    assert_eq!(service.space_listing(&target()).await.unwrap().items.iter().map(|item| item.item_id.clone()).collect::<BTreeSet<_>>(), expected);
+    let after = pages(&service).await;
+    assert_eq!(std::fs::read(failed_path).unwrap(), original);
+    assert_eq!(after["110"].revision, before["110"].revision);
+    assert_eq!(after["110"].state, LibraryItemState::Failed);
+    assert_eq!(after["112"].state, LibraryItemState::RemovedAtSource);
+    assert!(!after.contains_key("999"));
+    assert!(after.values().all(|item| refs::has_follow(item, &follow_id)));
 }

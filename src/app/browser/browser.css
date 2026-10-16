@@ -263,6 +263,14 @@
   align-items: stretch;
 }
 
+.browser-retained { flex-wrap: wrap; row-gap: 4px; padding: 4px 6px; border: 1px solid color-mix(in srgb, var(--working) 60%, var(--border)); border-radius: var(--radius-control); background: color-mix(in srgb, var(--warning) 8%, transparent); }
+.browser-retained-text { flex: 1 1 16rem; min-width: 0; }
+.browser-retained-text strong { font-weight: 600; }
+.browser-retained-detail { color: var(--text-secondary); }
+.browser-retained button { flex: 0 0 auto; padding: 0 8px; }
+.browser-retained button:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-hover); }
+.browser-retained button:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: 1px; }
+
 .browser-capture-pending label {
   display: inline-flex;
   align-items: center;

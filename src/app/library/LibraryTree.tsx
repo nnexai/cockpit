@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import type { LibraryAttachment, LibraryAttachmentAction, LibraryAttachmentRequest, LibraryFollowSummary, LibraryItemSummary, LibraryRefreshRequest, ProjectProvider } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import { FollowRemoveDialog, type FollowRemoveMode } from "./LibraryConfirmDialog";
-import { attachmentTreeMeta, errorText, followCountText, followTitle, hasFollowRef, isConfluencePage, isKeepable, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, providerFamily, purgeNotice, type StateShape, type StateTone } from "./libraryState";
+import { attachmentTreeMeta, errorText, followCountText, followSyncNotice, followTitle, hasFollowRef, isConfluencePage, isKeepable, itemAccessibleName, itemTreeLabel, libraryStateChip, libraryTree, pageCount, partialText, providerFamily, purgeNotice, type StateShape, type StateTone } from "./libraryState";
 import { ProviderMark } from "./ProviderMark";
 import { PendingPill, StatePill } from "./StatePill";
 import type { ProviderCredentialActions } from "./useProviderCredentials";
@@ -179,8 +179,9 @@ export function itemMenuEntries(item: LibraryItemSummary, actions: LibraryItemAc
 type Menu = { x: number; y: number; row: Row };
 
 /** Row rendering shares the same model as the keyboard navigation. */
-function LibraryTreeRowView({ row, providers, selectedItemId, selectedAttachmentId, pendingItemIds, actions, tabStopKey, toggle, focusRow, onContextMenu }: {
+function LibraryTreeRowView({ row, now, providers, selectedItemId, selectedAttachmentId, pendingItemIds, actions, tabStopKey, toggle, focusRow, onContextMenu }: {
   row: Row;
+  now: number;
   providers: readonly ProjectProvider[];
   selectedItemId: string | null;
   selectedAttachmentId: string | null;
@@ -250,6 +251,7 @@ function LibraryTreeRowView({ row, providers, selectedItemId, selectedAttachment
   }
   const label = rowLabel(row);
   const follow = row.kind === "container" ? row.node.follow : null;
+  const notice = follow ? followSyncNotice(follow, now) : null;
   const folder = row.kind === "ancestor" && row.node.folder;
   // Pages added one by one read `Pages`; a followed space a `Following` pill, plus `N of M` while partial.
   const meta = row.kind === "container" && !follow && row.node.items.every((item) => isConfluencePage(item) && !hasFollowRef(item)) ? "Pages"
@@ -260,7 +262,8 @@ function LibraryTreeRowView({ row, providers, selectedItemId, selectedAttachment
   const instanceFamily = instanceNode ? providerFamily(providers, instanceNode.providerId) : null;
   return <div className="context-tree-node" style={depth} key={`${row.kind}:${row.key}`}>
     <button type="button" data-library-row={row.key} tabIndex={row.key === tabStopKey ? 0 : -1} className={`context-tree-row library-tree-row library-tree-group is-${row.kind}${follow ? " has-follow" : ""}`} aria-expanded={row.open}
-      aria-label={follow ? `${label}, following${partial ? `, partial: ${partial}` : ""}` : folder ? `${label}, folder` : undefined}
+      aria-label={follow ? `${label}, following${partial ? `, partial: ${partial}` : ""}${notice?.reason ? `, ${notice.reason}` : ""}${notice?.ago ? `, last synced ${notice.ago}` : ""}` : folder ? `${label}, folder` : undefined}
+      title={notice?.absolute ? `${notice.reason ? `${notice.reason}. ` : ""}Last synced ${notice.absolute}` : notice?.reason ?? undefined}
       onClick={() => toggle(row.key)} onContextMenu={onContextMenu(row)}>
       <span className="library-row-chevron" aria-hidden="true"><UiIcon name={row.open ? "down" : "right"} /></span>
       <span className={`library-row-icon${row.kind === "instance" ? " is-tile" : ""}`} aria-hidden="true">
@@ -273,6 +276,8 @@ function LibraryTreeRowView({ row, providers, selectedItemId, selectedAttachment
         <StatePill className="context-tree-meta" shape="dot-ring" word="Following" tone="idle" />
         {follow.source.kind === "jira_query" ? <span className="context-tree-meta library-state is-muted">{`${followCountText(follow)} · ${follow.source.mode === "live" ? "Live" : "Accumulate"}`}</span> : null}
         {follow.partial ? <StatePill className="context-tree-meta" shape="half-ring" word={`${follow.partial.have} of ${follow.partial.total ?? "?"}`} tone="working" title={partial ?? undefined} /> : null}
+        {notice?.reason ? <StatePill className="context-tree-meta" shape={notice.blocked ? "close" : "half-ring"} word={notice.reason} tone={notice.blocked ? "blocked" : "working"} title={notice.reason} /> : null}
+        {notice?.reason && notice.ago ? <span className="context-tree-meta library-state is-muted">{`Last synced ${notice.ago}`}</span> : null}
       </span> : null}
       {instanceNode?.unavailable ? <StatePill className="context-tree-meta" shape="close" word="Unavailable" tone="blocked" /> : null}
       {meta ? <span className="context-tree-meta library-state is-muted">{meta}</span> : null}
@@ -315,6 +320,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
   /** Follow outcomes go to the Library's status area, never above the rows. */
   onNotice: (notice: LibraryTreeNotice | null) => void;
 }) {
+  const now = Date.now();
   // Keys the user toggled: other rows start open, `Attachments (N)` groups start folded.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -390,7 +396,7 @@ export function LibraryTree({ items, follows = NO_FOLLOWS, providers, selectedIt
   };
   return <div className="library-tree" ref={listRef} onKeyDown={onKeyDown} onFocus={onFocus} onBlur={onBlur}>
     {rows.map((row) => <LibraryTreeRowView key={`${row.kind === "page" ? "item" : row.kind}:${row.key}`}
-      row={row} providers={providers} selectedItemId={selectedItemId} selectedAttachmentId={selectedAttachmentId}
+      row={row} now={now} providers={providers} selectedItemId={selectedItemId} selectedAttachmentId={selectedAttachmentId}
       pendingItemIds={pendingItemIds} actions={actions} tabStopKey={tabStopKey} toggle={toggle} focusRow={focusRow} onContextMenu={onContextMenu} />)}
     {menu ? <LibraryMenu x={menu.x} y={menu.y} label={`${rowLabel(menu.row)} actions`} entries={menuEntries(menu.row)} onDismiss={() => setMenu(null)} /> : null}
     {removing && removeFollow ? <FollowRemoveDialog follow={removing} onClose={() => setRemoving(null)} remove={async (mode) => {

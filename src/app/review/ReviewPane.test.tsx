@@ -75,7 +75,9 @@ it("opens the fzf-style picker from a focused review and selects with Ctrl+N the
   document.body.append(host);
   const mounted = createRoot(host);
   const second = { ...changedFile, file_id: "second", old_path: "docs/target.md", new_path: "docs/target.md" };
-  const loadFile = vi.fn(async () => diff);
+  const loadFile = vi.fn(async (request: ReviewFileRequest) => ({ ...diff, file: request.file_id === second.file_id ? second : changedFile }));
+  const animationFrames: FrameRequestCallback[] = [];
+  const animationFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { animationFrames.push(callback); return animationFrames.length; });
   try {
     await act(async () => mounted.render(<ReviewPane identity="picker" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={async () => ({ ...snapshot, files: [changedFile, second] })} file={loadFile} />));
     const surface = host.querySelector<HTMLElement>(".review-diff")!;
@@ -86,10 +88,23 @@ it("opens the fzf-style picker from a focused review and selects with Ctrl+N the
     await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "n", ctrlKey: true })));
     await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" })));
     await act(async () => { await Promise.resolve(); });
+    await act(async () => { for (const callback of animationFrames.splice(0)) callback(0); });
     expect(loadFile).toHaveBeenLastCalledWith(expect.objectContaining({ file_id: "second" }), expect.any(AbortSignal));
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe(second.file_id);
+    expect(document.activeElement).toBe(surface);
+    const picker = host.querySelector<HTMLButtonElement>('button[aria-label="Choose review file"]')!;
+    picker.focus();
+    await act(async () => picker.click());
+    const reopenedInput = host.querySelector<HTMLInputElement>(".file-picker input")!;
+    await act(async () => reopenedInput.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" })));
+    await act(async () => { for (const callback of animationFrames.splice(0)) callback(0); });
+    expect(host.querySelector(".file-picker")).toBeNull();
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe(second.file_id);
+    expect(document.activeElement).toBe(surface);
   } finally {
     await act(async () => mounted.unmount());
     host.remove();
+    animationFrame.mockRestore();
   }
 });
 
@@ -301,7 +316,7 @@ it("retains the reviewed file identity across a refreshed snapshot", async () =>
     await act(async () => mounted.render(<ReviewPane identity="refresh" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={loadSnapshot} file={loadFile} viewState={view} />));
     await act(async () => { await Promise.resolve(); });
     expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe("second");
-    await act(async () => host.querySelector<HTMLButtonElement>(".review-toolbar button:last-child")!.click());
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click());
     await act(async () => { await Promise.resolve(); });
     expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe("second");
   } finally {
@@ -440,6 +455,105 @@ it.each(["snapshot", "file"] as const)("rejects %s data belonging to another vie
     expect(host.querySelector(".review-line")).toBeNull();
     if (stage === "snapshot") expect(host.querySelector(".review-file")).toBeNull();
     if (stage === "file") expect(host.querySelector(".review-file")?.getAttribute("data-file-id")).toBe(changedFile.file_id);
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("keeps file navigation button focus and local Alt-arrow navigation after changing files", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const second = { ...changedFile, file_id: "second", old_path: "src/second.ts", new_path: "src/second.ts" };
+  const readSnapshot = async () => ({ ...snapshot, files: [changedFile, second] });
+  const readFile = async (request: ReviewFileRequest) => ({ ...diff, file: request.file_id === second.file_id ? second : changedFile });
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="navigation" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={readSnapshot} file={readFile} />));
+    const next = host.querySelector<HTMLButtonElement>('button[aria-label="Next file"]')!;
+    next.focus();
+    await act(async () => next.click());
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe(second.file_id);
+    expect(host.querySelector(".review-diff > header strong")?.textContent).toBe("second.ts");
+    expect(document.activeElement).toBe(next);
+    await act(async () => next.click());
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe(second.file_id);
+    expect(document.activeElement).toBe(next);
+
+    const surface = host.querySelector<HTMLElement>(".review-diff")!;
+    surface.focus();
+    await act(async () => surface.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowLeft", altKey: true })));
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe(changedFile.file_id);
+    expect(document.activeElement).toBe(surface);
+    await act(async () => surface.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowRight", altKey: true })));
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe(second.file_id);
+    expect(document.activeElement).toBe(surface);
+
+    const previous = host.querySelector<HTMLButtonElement>('button[aria-label="Previous file"]')!;
+    previous.focus();
+    await act(async () => previous.click());
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe(changedFile.file_id);
+    expect(document.activeElement).toBe(previous);
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+  }
+});
+
+it("continues keyboard hunk navigation from the visible hunk buttons without leaving the diff", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const thirdHunk = { old_path: "src/file.ts", new_path: "src/file.ts", old_start: 3, new_start: 3, lines: [{ kind: "context" as const, old_line: 3, new_line: 3, text: "three" }] };
+  const onSelectLines = vi.fn();
+  const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollIntoView");
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="hunk-buttons" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={async () => snapshot} file={async () => ({ ...diff, hunks: [...diff.hunks, thirdHunk] })} onSelectLines={onSelectLines} />));
+    const hunks = host.querySelectorAll<HTMLElement>(".review-hunk");
+    const next = host.querySelector<HTMLButtonElement>('button[aria-label="Next hunk"]')!;
+    await act(async () => next.click());
+    expect(document.activeElement).toBe(hunks[0]);
+    await act(async () => hunks[0].dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown", altKey: true })));
+    expect(document.activeElement).toBe(hunks[1]);
+    await act(async () => next.click());
+    expect(document.activeElement).toBe(hunks[2]);
+    expect(onSelectLines).toHaveBeenLastCalledWith(changedFile, "new", 3, 3, ["three"], false);
+    await act(async () => next.click());
+    expect(document.activeElement).toBe(hunks[2]);
+    await act(async () => host.querySelector<HTMLButtonElement>('button[aria-label="Previous hunk"]')!.click());
+    expect(document.activeElement).toBe(hunks[1]);
+    expect(onSelectLines).toHaveBeenLastCalledWith(changedFile, "new", 2, 2, ["two"], false);
+  } finally {
+    await act(async () => mounted.unmount());
+    host.remove();
+    if (originalScrollIntoView) Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
+  }
+});
+
+it("disables unavailable navigation for an empty comparison and enables it after Refresh finds changes", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const mounted = createRoot(host);
+  const readSnapshot = vi.fn(async () => snapshot).mockResolvedValueOnce({ ...snapshot, files: [] });
+  const readFile = vi.fn(async () => diff);
+  const actions = ["Choose review file", "Previous file", "Next file", "Previous hunk", "Next hunk"];
+  try {
+    await act(async () => mounted.render(<ReviewPane identity="empty-navigation" sessionId="session" viewerId="viewer" bindingId="binding" repositoryId="repo" snapshot={readSnapshot} file={readFile} />));
+    expect(host.querySelector(".review-empty[role=status]")).not.toBeNull();
+    for (const action of actions) {
+      const button = host.querySelector<HTMLButtonElement>(`button[aria-label="${action}"]`)!;
+      expect(button.disabled).toBe(true);
+      await act(async () => button.click());
+    }
+    expect(readFile).not.toHaveBeenCalled();
+    expect(host.querySelector(".file-picker")).toBeNull();
+    const refresh = host.querySelector<HTMLButtonElement>(".review-empty button")!;
+    await act(async () => refresh.click());
+    expect(host.querySelector(".review-empty[role=status]")).toBeNull();
+    expect(host.querySelector(".review-file.is-selected")?.getAttribute("data-file-id")).toBe(changedFile.file_id);
+    for (const action of actions) expect(host.querySelector<HTMLButtonElement>(`button[aria-label="${action}"]`)!.disabled).toBe(false);
   } finally {
     await act(async () => mounted.unmount());
     host.remove();

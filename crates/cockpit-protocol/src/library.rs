@@ -174,6 +174,13 @@ pub enum LibraryFollowSource {
         mode: LibraryFollowMode,
     },
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct LibraryFollowSync {
+    /// Epoch-millisecond string of the last complete background sync, if any.
+    pub last_success_at: Option<String>,
+    /// Allowlisted, human-safe explanation; never provider error text.
+    pub reason: Option<String>,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct LibraryFollowSummary {
     pub follow_id: String,
@@ -189,6 +196,10 @@ pub struct LibraryFollowSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reference_depth: Option<u32>,
+    /// Listing-only projection of recorded background sync state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sync: Option<LibraryFollowSync>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct LibraryListing {

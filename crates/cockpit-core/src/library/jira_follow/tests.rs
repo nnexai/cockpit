@@ -1,4 +1,7 @@
-use super::super::tests::{self as base, finished};
+use super::super::{
+    space::tests::{adapter, target},
+    tests::{self as base, finished},
+};
 use super::*;
 use crate::sources::{
     AttachmentRef, DownloadedAttachment, SourceAsset, SourceContainer, SourceFetchRequest,
@@ -372,6 +375,114 @@ fn held(item: &LibraryItemSummary, follow_id: &str) -> bool {
 }
 fn keys(set: &[&str]) -> BTreeSet<String> {
     set.iter().map(|key| (*key).to_owned()).collect()
+}
+
+#[tokio::test]
+async fn targeted_query_follow_selects_new_and_unchanged_members_in_another_space() {
+    let f = fixture();
+    let service = f.base.service.clone().with_herdr(adapter("space"));
+    f.provider.set(OPS, &["OPS-1", "OPS-2"]);
+    let first = finished(
+        &service,
+        service.start_add(LibraryAddRequest {
+            target: Some(target()),
+            ..follow_request(OPS, false)
+        }).await.unwrap(),
+    ).await;
+    assert!(first.phases.iter().all(|phase| phase.state == LibraryPhaseState::Done), "{first:?}");
+    let selected_target = first.target.as_ref().unwrap();
+    assert_eq!(selected_target.session_id, target().session_id);
+    assert_eq!(selected_target.space_id, target().space_id);
+    let before = issues(&service).await;
+    let expected = before.values().map(|item| item.item_id.clone()).collect::<BTreeSet<_>>();
+    assert_eq!(first.space.unwrap().item_ids.into_iter().collect::<BTreeSet<_>>(), expected);
+    assert_eq!(f.provider.take_fetched(), keys(&["OPS-1", "OPS-2"]));
+
+    let other = service.clone().with_herdr(adapter("other"));
+    let other_target = SpaceTarget { space_id: "other".into(), ..target() };
+    finished(
+        &other,
+        other.start_add(LibraryAddRequest {
+            follow: false,
+            input: format!("{BASE}/browse/OPS-4"),
+            target: Some(other_target.clone()),
+            ..follow_request("OPS-4", false)
+        }).await.unwrap(),
+    ).await;
+    let unrelated = issues(&other).await["OPS-4"].clone();
+    f.provider.take_fetched();
+    let added = finished(
+        &other,
+        other.start_add(LibraryAddRequest {
+            target: Some(other_target.clone()),
+            ..follow_request(OPS, false)
+        }).await.unwrap(),
+    ).await;
+    assert!(added.phases.iter().all(|phase| phase.state == LibraryPhaseState::Done), "{added:?}");
+    assert!(added.item_ids.is_empty());
+    assert_eq!(added.report.unwrap().unchanged, 2);
+    assert_eq!(added.space.unwrap().item_ids.into_iter().collect::<BTreeSet<_>>(), expected);
+    assert!(f.provider.take_fetched().is_empty());
+    let mut with_unrelated = expected.clone();
+    with_unrelated.insert(unrelated.item_id.clone());
+    let selected = other.space_listing(&other_target).await.unwrap();
+    assert_eq!(selected.items.iter().map(|item| item.item_id.clone()).collect::<BTreeSet<_>>(), with_unrelated);
+    assert!(selected.items.iter().all(|item| !item.item_path.is_empty() && item.document_path.is_some()));
+    assert_eq!(service.space_listing(&target()).await.unwrap().items.iter().map(|item| item.item_id.clone()).collect::<BTreeSet<_>>(), expected);
+    assert_eq!(issues(&other).await["OPS-1"].revision, before["OPS-1"].revision);
+    assert_eq!(other.listing(None).await.unwrap().follows[0].item_count, 2);
+    assert!(issues(&other).await["OPS-4"].refs.contains(&LibraryItemRef::Manual));
+}
+
+#[tokio::test]
+async fn targeted_query_follow_preserves_failures_and_does_not_select_dropped_members() {
+    let f = fixture();
+    let service = f.base.service.clone().with_herdr(adapter("space"));
+    f.provider.set(OPS, &["OPS-1", "OPS-2", "OPS-3"]);
+    let (_, follow_id) = follow(&service, OPS, LibraryFollowMode::Live).await;
+    let before = issues(&service).await;
+    let root = std::path::Path::new(&service.configuration.library_root);
+    let failed_path = root.join(before["OPS-2"].document_path.as_ref().unwrap());
+    let original = std::fs::read(&failed_path).unwrap();
+    f.provider.touch("OPS-2", 8);
+    f.provider.set(OPS, &["OPS-1", "OPS-2", "OPS-4"]);
+    f.provider.site().broken.extend(["OPS-2".to_owned(), "OPS-4".to_owned()]);
+    let added = finished(
+        &service,
+        service.start_add(LibraryAddRequest {
+            target: Some(target()),
+            ..follow_request(OPS, false)
+        }).await.unwrap(),
+    ).await;
+    assert_eq!(added.phases[0].state, LibraryPhaseState::Partial, "{added:?}");
+    assert_eq!(added.phases[1].state, LibraryPhaseState::Done, "{added:?}");
+    let report = added.report.unwrap();
+    assert_eq!((report.failed, report.dropped, report.unchanged), (2, 1, 1));
+    assert_eq!(added.space.unwrap().item_ids, [before["OPS-1"].item_id.clone()]);
+    let selected = service.space_listing(&target()).await.unwrap();
+    assert_eq!(selected.items.iter().map(|item| item.item_id.clone()).collect::<Vec<_>>(), [before["OPS-1"].item_id.clone()]);
+    let after = issues(&service).await;
+    assert_eq!(std::fs::read(failed_path).unwrap(), original);
+    assert_eq!(after["OPS-2"].revision, before["OPS-2"].revision);
+    assert_eq!(after["OPS-2"].state, LibraryItemState::Failed);
+    assert!(held(&after["OPS-2"], &follow_id));
+    assert!(!held(&after["OPS-3"], &follow_id));
+    assert!(!after.contains_key("OPS-4"));
+
+    // A failed enumeration must not publish a selection or change existing context.
+    f.provider.site().list_error = true;
+    let failed = finished(
+        &service,
+        service.start_add(LibraryAddRequest {
+            target: Some(target()),
+            ..follow_request(OPS, false)
+        }).await.unwrap(),
+    ).await;
+    assert_eq!(failed.phases[0].state, LibraryPhaseState::Failed, "{failed:?}");
+    assert_eq!(failed.phases[1].state, LibraryPhaseState::Cancelled, "{failed:?}");
+    assert!(failed.space.is_none());
+    assert_eq!(service.space_listing(&target()).await.unwrap().items[0].item_id, selected.items[0].item_id);
+    assert_eq!(issues(&service).await["OPS-2"].revision, before["OPS-2"].revision);
 }
 
 #[tokio::test]

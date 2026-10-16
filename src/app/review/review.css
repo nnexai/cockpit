@@ -37,8 +37,13 @@
 .review-toolbar button:hover,
 .review-source-controls button:hover { background: var(--surface-hover); }
 .review-toolbar-spacer { flex: 1; }
-.review-nav { display: flex; gap: 2px; }
-.review-nav button { min-width: 28px; padding: 3px 6px; }
+.review-nav-cluster { display: flex; flex: 0 0 auto; align-items: center; gap: 1px; }
+.review-nav-rule { width: 1px; height: 16px; flex: 0 0 1px; margin: 0 4px; background: var(--border); }
+.review-pane .review-toolbar .review-nav-cluster button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 26px; min-height: 26px; padding: 0 5px; border: 1px solid transparent; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font-size: var(--font-size-control); }
+.review-pane .review-toolbar .review-nav-cluster button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
+.review-pane .review-toolbar .review-nav-cluster button[aria-expanded="true"] { background: var(--surface-selected); color: var(--text-primary); }
+.review-pane .review-toolbar .review-nav-cluster button:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+.review-pane .review-toolbar .review-nav-cluster button:disabled { cursor: default; opacity: 0.55; }
 .review-base { display: flex; align-items: center; gap: 4px; color: var(--text-secondary); }
 .review-base input { width: 10rem; padding: 2px 5px; }
 

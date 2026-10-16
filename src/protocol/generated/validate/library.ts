@@ -138,6 +138,11 @@ export const wireLibraryFollowSource: WireDescriptor<V1.LibraryFollowSource> = t
   },
 });
 
+export const wireLibraryFollowSync: WireDescriptor<V1.LibraryFollowSync> = struct<V1.LibraryFollowSync>("LibraryFollowSync", {
+  "last_success_at": req(nullable(str), { fill: null }),
+  "reason": req(nullable(str), { fill: null }),
+});
+
 export const wireLibraryFollowSummary: WireDescriptor<V1.LibraryFollowSummary> = struct<V1.LibraryFollowSummary>("LibraryFollowSummary", {
   "follow_id": req(str),
   "provider_id": req(str),
@@ -150,6 +155,7 @@ export const wireLibraryFollowSummary: WireDescriptor<V1.LibraryFollowSummary> =
   "last_refreshed_at": req(nullable(str), { fill: null }),
   "state": req(named(() => wireLibraryItemState)),
   "reference_depth": opt(u32, OMIT, { fill: null, rustOmits: true }),
+  "sync": opt(named(() => wireLibraryFollowSync), OMIT, { fill: null, rustOmits: true }),
 });
 
 export const wireLibraryListing: WireDescriptor<V1.LibraryListing> = struct<V1.LibraryListing>("LibraryListing", {

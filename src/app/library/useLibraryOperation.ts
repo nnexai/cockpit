@@ -245,6 +245,10 @@ async function readAllPages(client: CockpitClient, seed: LibraryListing | null, 
   throw new Error("The Library changed while it was being read; reload it.");
 }
 
+function followSyncKey(listing: LibraryListing): string {
+  return JSON.stringify(listing.follows.map((follow) => [follow.follow_id, follow.sync?.last_success_at ?? null, follow.sync?.reason ?? null]));
+}
+
 /**
  * Reads the whole Library listing while `active`, plus the configured
  * providers used for labels. Nothing is requested while inactive, so a Context
@@ -322,7 +326,16 @@ export function useLibraryListing(client: CockpitClient, active: boolean): Libra
       const isCurrent = () => !stopped && id === newest.current;
       try {
         const first = await client.libraryListing(null);
-        if (!isCurrent() || first.generation === applied.current?.generation) return;
+        if (!isCurrent()) return;
+        const previous = applied.current;
+        if (previous && first.generation === previous.generation) {
+          if (followSyncKey(first) !== followSyncKey(previous)) {
+            const listing = { ...previous, follows: first.follows };
+            applied.current = listing;
+            setState({ status: "ready", listing, error: null });
+          }
+          return;
+        }
         id = ++newest.current;
         reading.current = id;
         const listing = await readAllPages(client, first, isCurrent);

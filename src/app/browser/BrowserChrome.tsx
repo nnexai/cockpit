@@ -159,14 +159,14 @@ export function BrowserAnnotationToolbar({ tool, color, hasDraft, hasSelection, 
     <button type="button" disabled={!hasDraft} aria-label="Remove selected annotation or Control-click to discard draft" title="Remove selected annotation · Control-click to discard draft" onClick={(event) => onRemove(event.ctrlKey)}><AnnotationIcon name="remove" /></button>
     <button type="button" disabled={!hasSelection} aria-label="Edit selected annotation note" title="Edit selected annotation note" onClick={onEditNote}><AnnotationIcon name="notes" /></button>
     <span className="browser-annotation-notes" aria-label={`Notes ${annotationCount}`} title={`Notes ${annotationCount}`}>{annotationCount}</span>
-    {retainedMutationCount > 0
-      ? <>
-        <span className="browser-capture-pending" role="status">Retained annotation changes need review; unknown delivery is not replayed automatically.</span>
-        <button type="button" aria-label="Retry retained annotation changes" title="Retry retained annotation changes" onClick={onRetryMutations}>Retry saves</button>
-        <button type="button" aria-label="Discard retained annotation changes" title="Discard retained annotation changes" onClick={onDiscardMutations}>Discard retry intent</button>
-      </>
-      : null}
     {!pendingCapture ? <button type="button" className="browser-send-annotations" disabled={!canCapture} aria-label="Send annotations" title="Send annotations" onClick={onCapture}><AnnotationIcon name="feedback" /></button> : null}
+    {retainedMutationCount > 0
+      ? <div className="browser-capture-pending browser-retained" role="group" aria-label="Unconfirmed annotation saves">
+        <span className="browser-retained-text" role="status"><strong>Save unconfirmed</strong> · {retainedMutationCount} {retainedMutationCount === 1 ? "change" : "changes"} <span className="browser-retained-detail">May already be saved. Not resent automatically.</span></span>
+        <button type="button" aria-label="Retry saves for retained annotation changes" title="Check what was saved, then save what is missing" onClick={onRetryMutations}>Retry saves</button>
+        <button type="button" aria-label="Discard retry intent for retained annotation changes" title="Stop retrying. Anything already saved stays; nothing is undone." onClick={onDiscardMutations}>Discard retry intent</button>
+      </div>
+      : null}
   </div>;
 }
 

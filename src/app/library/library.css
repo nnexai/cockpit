@@ -164,6 +164,7 @@
 .library-tree-group.has-follow .context-tree-name { grid-column: 3; grid-row: 1; }
 .library-follow-line { grid-column: 3; grid-row: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; min-width: 0; }
 .library-follow-line .context-tree-meta { max-width: none; }
+.library-follow-line .library-pill { max-width: 100%; }
 /* Page nodes: the chevron is its own 24×28 hit target over the row's chevron slot; the label opens the page. */
 .library-page-node { position: relative; }
 .library-page-disclosure {

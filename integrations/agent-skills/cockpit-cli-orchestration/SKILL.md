@@ -256,4 +256,4 @@ Structured files are bounded JSON (16 KiB). Read actual schema/help before use;
 never fabricate receipts, source identity or process ownership. `route resolve
 --artifact URL --json` selects configured project routing; top-level
 `context --current` reads Library/Space context (automatic JSON, no `--json`),
-not capability registration. Report typed failures and unknown outcomes honestly.
+not capability registration. `library add --current INPUT` (add `--follow` for a Jira query or Confluence space) saves to the Library and selects it in this Space; use it instead of copying files. Report typed failures and unknown outcomes honestly.

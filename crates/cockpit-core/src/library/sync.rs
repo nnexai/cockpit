@@ -146,6 +146,32 @@ struct AuditFailure {
     last_error: String,
 }
 
+fn follow_sync_status(source: &SourceState, cooldown: bool) -> LibraryFollowSync {
+    let reason = if source.held.is_some() {
+        Some("Removal held for manual Refresh")
+    } else if cooldown {
+        Some("Paused by provider rate limit")
+    } else {
+        match source.last_error.as_deref() {
+            Some("source_rate_limited") => Some("Paused by provider rate limit"),
+            Some("source_credential_required" | "source_auth_required") => Some("Sign-in needed"),
+            Some("source_permission_denied") => Some("Access denied by provider"),
+            Some("source_fetch_timeout" | "source_metadata_timeout" | "source_provider_timeout") => {
+                Some("Sync timed out")
+            }
+            Some("library_sync_partial") => Some("Last sync incomplete"),
+            Some("library_sync_related_partial") => Some("Related items not fully synced"),
+            Some("library_sync_yielded") => Some("Deferred to manual work"),
+            Some(_) => Some("Last sync failed"),
+            None => None,
+        }
+    };
+    LibraryFollowSync {
+        last_success_at: source.last_success_ms.map(|ms| ms.to_string()),
+        reason: reason.map(str::to_owned),
+    }
+}
+
 fn wall_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -397,6 +423,21 @@ fn absence_step(
 }
 
 impl LibraryService {
+    /// Enrich only listing clones; the index and scheduler state stay untouched.
+    pub(super) fn follow_sync(&self, store: &Store, follows: &mut [LibraryFollowSummary]) {
+        let state = load(store).ok();
+        let now = wall_ms();
+        for follow in follows {
+            follow.sync = state.as_ref().and_then(|state| {
+                let source = state.sources.get(&follow.follow_id)?;
+                let cooldown = self
+                    .sync_origin(&follow.provider_id)
+                    .and_then(|origin| state.origins.get(&origin))
+                    .is_some_and(|until| *until > now);
+                Some(follow_sync_status(source, cooldown))
+            });
+        }
+    }
     fn sync_origin(&self, provider_id: &str) -> Option<String> {
         let provider = self
             .configuration

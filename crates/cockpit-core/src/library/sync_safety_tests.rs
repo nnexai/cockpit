@@ -395,6 +395,7 @@ impl Fixture {
                     last_refreshed_at: None,
                     state: LibraryItemState::Unknown,
                     reference_depth: Some(1),
+                    sync: None,
                 });
                 Ok(())
             })

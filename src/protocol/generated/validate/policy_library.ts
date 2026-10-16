@@ -18,6 +18,7 @@ export interface WireTypes {
   "LibraryItemSummary": V1.LibraryItemSummary;
   "LibraryFollowMode": V1.LibraryFollowMode;
   "LibraryFollowSource": V1.LibraryFollowSource;
+  "LibraryFollowSync": V1.LibraryFollowSync;
   "LibraryFollowSummary": V1.LibraryFollowSummary;
   "LibraryListing": V1.LibraryListing;
   "SpaceTarget": V1.SpaceTarget;
@@ -72,6 +73,7 @@ export interface WireOwners {
   "LibraryFollowSource": V1.LibraryFollowSource;
   "LibraryFollowSource[confluence_space]": Extract<V1.LibraryFollowSource, { "kind": "confluence_space" }>;
   "LibraryFollowSource[jira_query]": Extract<V1.LibraryFollowSource, { "kind": "jira_query" }>;
+  "LibraryFollowSync": V1.LibraryFollowSync;
   "LibraryFollowSummary": V1.LibraryFollowSummary;
   "LibraryListing": V1.LibraryListing;
   "SpaceTarget": V1.SpaceTarget;
@@ -182,6 +184,8 @@ export interface WireFields {
   "LibraryFollowSource[confluence_space].space_name": (Extract<V1.LibraryFollowSource, { "kind": "confluence_space" }>)["space_name"];
   "LibraryFollowSource[jira_query].jql": (Extract<V1.LibraryFollowSource, { "kind": "jira_query" }>)["jql"];
   "LibraryFollowSource[jira_query].mode": (Extract<V1.LibraryFollowSource, { "kind": "jira_query" }>)["mode"];
+  "LibraryFollowSync.last_success_at": (V1.LibraryFollowSync)["last_success_at"];
+  "LibraryFollowSync.reason": (V1.LibraryFollowSync)["reason"];
   "LibraryFollowSummary.follow_id": (V1.LibraryFollowSummary)["follow_id"];
   "LibraryFollowSummary.provider_id": (V1.LibraryFollowSummary)["provider_id"];
   "LibraryFollowSummary.provider_instance": (V1.LibraryFollowSummary)["provider_instance"];
@@ -193,6 +197,7 @@ export interface WireFields {
   "LibraryFollowSummary.last_refreshed_at": (V1.LibraryFollowSummary)["last_refreshed_at"];
   "LibraryFollowSummary.state": (V1.LibraryFollowSummary)["state"];
   "LibraryFollowSummary.reference_depth": (V1.LibraryFollowSummary)["reference_depth"];
+  "LibraryFollowSummary.sync": (V1.LibraryFollowSummary)["sync"];
   "LibraryListing.root": (V1.LibraryListing)["root"];
   "LibraryListing.generation": (V1.LibraryListing)["generation"];
   "LibraryListing.items": (V1.LibraryListing)["items"];
@@ -320,7 +325,8 @@ export interface WireFieldNames {
   "LibraryFollowSource": never;
   "LibraryFollowSource[confluence_space]": "space_key" | "space_name";
   "LibraryFollowSource[jira_query]": "jql" | "mode";
-  "LibraryFollowSummary": "follow_id" | "provider_id" | "provider_instance" | "source" | "include_attachments" | "item_count" | "partial" | "excluded_ids" | "last_refreshed_at" | "state" | "reference_depth";
+  "LibraryFollowSync": "last_success_at" | "reason";
+  "LibraryFollowSummary": "follow_id" | "provider_id" | "provider_instance" | "source" | "include_attachments" | "item_count" | "partial" | "excluded_ids" | "last_refreshed_at" | "state" | "reference_depth" | "sync";
   "LibraryListing": "root" | "generation" | "items" | "follows" | "next_offset" | "diagnostics";
   "SpaceTarget": "session_id" | "space_id";
   "LibraryResolveRequest": "input" | "provider_id";
@@ -362,6 +368,7 @@ export interface WireChildNames {
   "LibraryItemSummary.folder": "LibraryFolderInfo";
   "LibraryFollowSummary.source": "LibraryFollowSource";
   "LibraryFollowSummary.partial": "LibraryPartial";
+  "LibraryFollowSummary.sync": "LibraryFollowSync";
   "LibraryListing.root": "ContextRoot";
   "LibraryAddRequest.target": "SpaceTarget";
   "LibraryPhase.error": "ErrorResponse";
@@ -417,7 +424,8 @@ export interface WireCheckpointFieldNames {
   "LibraryFollowSource": "jql" | "kind" | "mode" | "space_key" | "space_name";
   "LibraryFollowSource[confluence_space]": "space_key" | "space_name" | "kind";
   "LibraryFollowSource[jira_query]": "jql" | "mode" | "kind";
-  "LibraryFollowSummary": "follow_id" | "provider_id" | "provider_instance" | "source" | "include_attachments" | "item_count" | "partial" | "excluded_ids" | "last_refreshed_at" | "state" | "reference_depth";
+  "LibraryFollowSync": "last_success_at" | "reason";
+  "LibraryFollowSummary": "follow_id" | "provider_id" | "provider_instance" | "source" | "include_attachments" | "item_count" | "partial" | "excluded_ids" | "last_refreshed_at" | "state" | "reference_depth" | "sync";
   "LibraryListing": "root" | "generation" | "items" | "follows" | "next_offset" | "diagnostics";
   "SpaceTarget": "session_id" | "space_id";
   "LibraryResolveRequest": "input" | "provider_id";
@@ -479,9 +487,12 @@ export type WireOmittableField =
   | "LibraryItemSummary.folder"
   | "LibraryItemSummary.reference_depth"
   | "LibraryItemSummary.included_by"
+  | "LibraryFollowSync.last_success_at"
+  | "LibraryFollowSync.reason"
   | "LibraryFollowSummary.partial"
   | "LibraryFollowSummary.last_refreshed_at"
   | "LibraryFollowSummary.reference_depth"
+  | "LibraryFollowSummary.sync"
   | "LibraryListing.next_offset"
   | "LibraryResolveRequest.provider_id"
   | "LibraryResolution.provider_id"
@@ -524,6 +535,7 @@ export type WireOptionalField =
   | "LibraryItemSummary.reference_depth"
   | "LibraryItemSummary.included_by"
   | "LibraryFollowSummary.reference_depth"
+  | "LibraryFollowSummary.sync"
   | "LibraryResolution.reference_depth"
   | never;
 

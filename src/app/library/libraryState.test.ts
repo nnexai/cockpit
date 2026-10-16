@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LibraryFollowSummary, LibraryItemState, LibraryItemSummary, ProjectProvider, ProviderCredentialStatus } from "../../protocol/generated/v1";
-import { attachmentSummary, attachmentTreeMeta, confluencePageInput, confluenceProviders, confluenceSpaceInput, formatAgo, formatDateTime, itemKindLabel, itemTreeLabel, jiraAttachmentAccess, jiraProviders, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryFreshness, libraryInputUrl, libraryStateChip, libraryTree, lookupFailure, nestUnderParents, parseLibraryTime, providerFamily, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
+import { attachmentSummary, attachmentTreeMeta, confluencePageInput, confluenceProviders, confluenceSpaceInput, followSyncNotice, formatAgo, formatDateTime, itemKindLabel, itemTreeLabel, jiraAttachmentAccess, jiraProviders, jiraQueryInput, jiraQueryPresets, jiraQueryProject, libraryFreshness, libraryInputUrl, libraryStateChip, libraryTree, lookupFailure, nestUnderParents, parseLibraryTime, providerFamily, relativeTime, sourceEditPhrase, timeDetail } from "./libraryState";
 
 const providers: ProjectProvider[] = [
   { id: "gitlab", kind: "gitlab" as const, base_url: "https://gitlab.test", executable: "/usr/bin/glab" },
@@ -202,6 +202,21 @@ describe("Followed spaces in the tree", () => {
   const follow = (overrides: Partial<LibraryFollowSummary>): LibraryFollowSummary => ({
     follow_id: "follow:sd", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", source: { kind: "confluence_space", space_key: "SD", space_name: "Software Development" },
     include_attachments: false, item_count: 0, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh", ...overrides,
+  });
+
+  it("uses only successful sync times, falls back to manual success and keeps unknown times absent", () => {
+    const now = Date.parse("2026-09-27T14:34:44.043Z");
+    const last = "2026-09-27T11:34:44.043Z";
+    const synced = follow({ last_refreshed_at: "2026-09-27T13:34:44.043Z", sync: { last_success_at: last, reason: "Sign-in needed" } });
+    expect(followSyncNotice(synced, now)).toEqual({ reason: "Sign-in needed", blocked: false, ago: "3 h ago", absolute: timeDetail(last, now)!.text });
+    expect(followSyncNotice(follow({ last_refreshed_at: last, sync: { last_success_at: null, reason: null } }), now))
+      .toMatchObject({ reason: null, ago: "3 h ago" });
+    expect(followSyncNotice(follow({ state: "failed" }), now))
+      .toEqual({ reason: "Refresh failed", blocked: true, ago: null, absolute: null });
+    expect(followSyncNotice(follow({}), now))
+      .toEqual({ reason: null, blocked: false, ago: null, absolute: null });
+    expect(followSyncNotice(follow({ sync: { last_success_at: "invalid", reason: "Sync timed out" } }), now))
+      .toMatchObject({ reason: "Sync timed out", ago: null, absolute: null });
   });
 
   it("puts a follow's pages under its space container and lists a follow that holds no pages yet", () => {

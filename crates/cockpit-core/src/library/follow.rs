@@ -219,6 +219,7 @@ impl LibraryService {
             last_refreshed_at: None,
             state: LibraryItemState::Unknown,
             reference_depth: None,
+            sync: None,
         };
         let handle = operations::runtime()?;
         let store = self.open()?;
@@ -240,12 +241,6 @@ impl LibraryService {
             service
                 .refresh_follow(&worker_store, &id, follow, true)
                 .await?;
-            if let Some(target) = &request.target {
-                let saved = operations::get(&worker_store, &id)?.item_ids;
-                service
-                    .select_saved_items(&worker_store, &id, target, &saved)
-                    .await?;
-            }
             refs::purge_expired(&worker_store, &id)
         });
         Ok(record)
@@ -380,7 +375,61 @@ impl LibraryService {
                 Some(reason),
             )?;
         }
-        self.commit_follow(store, &follow, &listing.pages, partial, cancelled)
+        self.commit_follow(store, &follow, &listing.pages, partial, cancelled)?;
+        if create {
+            let record = operations::get(store, operation)?;
+            if record.target.is_some() {
+                let confirmed = pages
+                    .iter()
+                    .map(|page| page_item_id(&follow, &page.page_id))
+                    .collect();
+                let attempted = work.iter().map(|job| job.item_id.clone()).collect();
+                self.select_follow_items(store, &record, &follow, &confirmed, &attempted)
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Select only confirmed, successfully saved members of an explicit add.
+    /// Unchanged members need no operation row; attempted members must have one.
+    pub(super) async fn select_follow_items(
+        &self,
+        store: &Store,
+        operation: &LibraryOperation,
+        follow: &LibraryFollowSummary,
+        confirmed: &BTreeSet<String>,
+        attempted: &BTreeSet<String>,
+    ) -> Result<(), InspectionError> {
+        let Some(target) = &operation.target else {
+            return Ok(());
+        };
+        let saved = operation.item_ids.iter().collect::<BTreeSet<_>>();
+        let ids = {
+            let _lock = store.shared()?;
+            let index = store.index()?;
+            let record = index
+                .follows
+                .iter()
+                .find(|record| record.follow_id == follow.follow_id)
+                .ok_or_else(|| error("library_item_not_found", "Follow was removed"))?;
+            index
+                .items
+                .iter()
+                .map(|entry| &entry.summary)
+                .filter(|item| confirmed.contains(&item.item_id))
+                .filter(|item| !attempted.contains(&item.item_id) || saved.contains(&item.item_id))
+                .filter(|item| refs::has_follow(item, &follow.follow_id))
+                .filter(|item| {
+                    !record.excluded_ids.contains(&item.item_id)
+                        && !item.canonical_id.as_ref().is_some_and(|key| record.excluded_ids.contains(key))
+                })
+                .filter(|item| matches!(item.state, LibraryItemState::Fresh | LibraryItemState::Partial))
+                .map(|item| item.item_id.clone())
+                .collect::<Vec<_>>()
+        };
+        self.select_saved_items(store, &operation.operation_id, target, &ids)
+            .await
     }
 
     fn page_fetch_work<'a>(

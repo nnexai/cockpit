@@ -236,6 +236,56 @@ it("makes a page with attachments expandable, lists attachment metadata read-onl
   }
 });
 
+it("keeps sync notices row-local and selection stable through failure, unknown time and recovery", async () => {
+  const now = Date.parse("2026-09-27T14:34:44.043Z");
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const follow: LibraryFollowSummary = {
+    follow_id: "follow:sd", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki",
+    source: { kind: "confluence_space", space_key: "SD", space_name: "Software Development" },
+    include_attachments: false, item_count: 1, partial: { unit: "pages", have: 3, total: 5, reason: "page limit" },
+    excluded_ids: [], last_refreshed_at: null, state: "fresh",
+    sync: { last_success_at: "2026-09-27T11:34:44.043Z", reason: "Last sync incomplete" },
+  };
+  const selected = page({ refs: [{ kind: "follow", follow_id: follow.follow_id }] });
+  const actions = { open: vi.fn(), refresh: vi.fn(), remove: vi.fn(), copyLink: vi.fn(), canCopyLink: false, refreshBusy: false };
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const render = async (current: LibraryFollowSummary) => {
+    await act(async () => root.render(<LibraryTree items={[selected]} follows={[current]} providers={providers} selectedItemId={selected.item_id} pendingItemIds={new Set()} actions={actions} onNotice={onNotice} />));
+  };
+  try {
+    await render(follow);
+    const row = host.querySelector<HTMLButtonElement>(".has-follow")!;
+    const metas = () => [...row.querySelectorAll(".context-tree-meta")].map((meta) => meta.textContent);
+    expect(metas()).toEqual(["Following", "3 of 5", "Last sync incomplete", "Last synced 3 h ago"]);
+    expect(row.getAttribute("aria-label")).toBe("SD · Software Development, following, partial: 3 of 5 pages (page limit), Last sync incomplete, last synced 3 h ago");
+    expect(row.title).toMatch(/^Last sync incomplete\. Last synced \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    expect(host.querySelectorAll('[aria-current="true"]')).toHaveLength(1);
+    expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-library-row")).toBe(selected.item_id);
+
+    await render({ ...follow, partial: null, state: "failed", sync: { last_success_at: null, reason: null } });
+    expect(metas()).toEqual(["Following", "Refresh failed"]);
+    expect(row.querySelector(".is-blocked")).not.toBeNull();
+    expect(row.title).toBe("Refresh failed");
+    expect(row.getAttribute("aria-label")).not.toContain("last synced");
+
+    await render({ ...follow, partial: null, sync: { last_success_at: "2026-09-27T11:34:44.043Z", reason: null } });
+    expect(metas()).toEqual(["Following"]);
+    expect(row.title).toMatch(/^Last synced /);
+    expect(row.getAttribute("aria-label")).toBe("SD · Software Development, following, last synced 3 h ago");
+    expect(host.querySelector('[aria-current="true"]')?.getAttribute("data-library-row")).toBe(selected.item_id);
+    await render({ ...follow, partial: null, sync: undefined });
+    expect(metas()).toEqual(["Following"]);
+    expect(row.getAttribute("aria-label")).toBe("SD · Software Development, following");
+    expect(row.hasAttribute("title")).toBe(false);
+  } finally {
+    clock.mockRestore();
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
 it("shows followed spaces with their partial count and folder ancestors, and refreshes, stops following and removes a space from its menu", async () => {
   const follow = (overrides: Partial<LibraryFollowSummary>): LibraryFollowSummary => ({
     follow_id: "follow:sd", provider_id: "cloud", provider_instance: "https://nnexai.atlassian.net/wiki", source: { kind: "confluence_space", space_key: "SD", space_name: "Software Development" },

@@ -182,11 +182,15 @@ impl LibraryService {
             let offset = offset.unwrap_or(0) as usize;
             let end = offset.saturating_add(256).min(index.items.len());
             let items = jira_parent_projection(&index.items, offset, 256);
+            let mut follows = index.follows.clone();
+            if !follows.is_empty() {
+                service.follow_sync(&store, &mut follows);
+            }
             Ok(LibraryListing {
                 root: service.authorized_root(&store)?.summary(),
                 generation: index.generation.clone(),
                 items,
-                follows: index.follows.clone(),
+                follows,
                 next_offset: (end < index.items.len()).then_some(end as u32),
                 diagnostics: vec![],
             })
