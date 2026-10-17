@@ -235,17 +235,17 @@ impl Context {
         root: Option<String>,
     ) -> Result<OrchestrationSnapshot, CliError> {
         self.check_caller().await?;
-        let root = if let Some(Actor::Agent(caller)) = &self.actor {
+        let snapshot = if let Some(Actor::Agent(caller)) = &self.actor {
             let job = self.authenticated_run(caller)?;
             if root.as_ref().is_some_and(|root| *root != job.root_id) {
                 return Err(CliError::new("actor_forbidden", "Job reads are restricted to its task root; explicit local inspection may use --operator --root ROOT"));
             }
-            Some(job.root_id)
+            self.service.job_snapshot_saved(caller, &self.session)?
         } else {
-            root
+            self.service.snapshot_saved(&OrchestrationSnapshotRequest {
+                session_id: self.session.clone(), root_id: root,
+            })?
         };
-        let request = OrchestrationSnapshotRequest { session_id: self.session.clone(), root_id: root };
-        let snapshot = self.service.snapshot_saved(&request)?;
         self.check_caller().await?;
         Ok(snapshot)
     }
@@ -331,7 +331,8 @@ impl Context {
             resolve_mutation_input(&self.service, &projects, self.adapter.as_ref(), actor, &request).await?
         } else {
             let mut input = cockpit_core::orchestration::ResolvedMutationInput::default();
-            input.output_facts = self.service.resolve_output_facts(actor, &request).await?;
+            let catalog = cockpit_core::repositories::RepositoryCatalog::new(self.configuration.clone());
+            input.output_facts = self.service.resolve_output_facts(actor, &request, &catalog).await?;
             input.resource_source = self.service.resolve_resource_source(actor, &request).await?;
             input
         };

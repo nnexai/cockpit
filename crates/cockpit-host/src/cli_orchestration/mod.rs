@@ -31,12 +31,12 @@ pub(crate) const TASK_HELP: &str = r#"Canonical tasks live in the root's Markdow
    Checklist edits capture the current task revision internally; --revision
    preserves an explicit fence. Dependencies replace the full prerequisite
    array and still require the board's exact doc_revision.
-   Checking steps is not task acceptance. Accepted tasks are read-only;
-   a Working task's content belongs to its executing worker.
-   The managing root uses scope-update for a Working worker's title/prose:
-   stable --operation-id, explicit --run and exact task/doc revisions apply
-   canonical scope and its durable worker instruction together. The result's
-   state is applied, conflict or pending; inspect it before any retry.
+   Checking steps is not task acceptance. Accepted tasks are read-only.
+   Workers edit only their own current Working task. The active supervisor
+   may edit any mutable task in its root, including a Working checklist.
+   Working content changes coordinate the existing worker through the scope
+   journal; scope-update also accepts an explicit operation/run/doc fence.
+   Inspect applied, conflict or pending state before any retry.
 
 Examples:
   cockpit-cli task list --json
@@ -58,6 +58,9 @@ Caller and authority:
   Ordinary credentialed calls register/claim the pending attempt implicitly.
   Actual --harness/--session-id are optional resume metadata. Supplied sources
   must agree; OMP may use PI_SESSION_FILE's actual bounded header.
+  Agent reads include same-root task/run records, not other roots, sibling
+  private inbox bodies or launch capability bytes. Sibling messaging is a write
+  and remains forbidden; management operations remain supervisor-only.
   Use --operator for explicit local task/run management, including from an
   agent shell: stale/missing credential, run and attachment metadata are ignored.
   Session/socket still resolve from flags or the inherited Herdr endpoint.
@@ -108,6 +111,11 @@ pub(crate) const RUN_HELP: &str = r#"Credential-first, harness-neutral coordinat
   contained in the root's actual checkout, without an IntegrationRecord. That
   exception records neither integration nor passed checks. Borrowed resources,
   unmerged output, active consumers and uncertain effects remain protected.
+  A general-directory liaison can supply --repository-root /actual/repository
+  for integration-record. An accepted source's retired/released claim or removed
+  worktree does not require recreating it: core verifies immutable source objects
+  in the actual same-repository target. Exact Result/revision and target-ref/check
+  evidence still apply; supervisor permission never fabricates passed checks.
   run list/show read a saved durable snapshot, not fresh Herdr liveness.
   Empty attention is not proof of runtime health or process exit.
 
@@ -233,6 +241,13 @@ at the exact source revision. expected_result_message_id and
 expected_task_revision fence that exact Result/current task, not launch scope.
 Only the current active root job over that worker, or explicit --operator,
 may record integration. operation_id must be a stable UUID.
+Use --repository-root /actual/repository when the supervisor has a Directory
+project rather than a Git checkout. Core identifies the real target repository;
+cwd, source-worker placement and a released source claim are not target proof.
+After safe source retirement/removal, accepted source objects are verified in
+that same repository without recreating the worktree or acquiring write rights.
+Missing source objects, stale source/Result/task/ref or incomplete target checks
+still refuse verification or retain Pending; this command never runs checks.
 
 Required IntegrationRecord fields:
   operation_id, run_id, expected_result_message_id, expected_task_revision,
@@ -295,8 +310,9 @@ nonblank contracts; byte bounds: contract 1024, command_or_scenario 4096
 Integrated repeats the outer operation/Result/task fences exactly and retains
 the exact accepted source. Use source.repository_key as target_repository_key:
 cleanup/dependency use honors only matching keys. integrator_run_id must name
-the authenticated root run for agent calls; the target Git checkout must be
-known in its root. target_ref must pass git check-ref-format, start refs/heads/
+the authenticated root run for agent calls; core resolves the actual target
+from its root checkout or the explicit repository catalog, never the source
+worker's placement. target_ref must pass git check-ref-format, start refs/heads/
 and currently point at target_commit. Core re-verifies Git facts and sets
 verified_at itself; that required input string is not trusted proof.
 Only actual nonempty passed target checks covering every source check contract,

@@ -55,7 +55,7 @@ fn content_actions(root: &str, task: &Task) -> Vec<OrchestrationAction> {
 }
 
 #[test]
-fn all_content_actions_require_the_current_executed_task_owner_not_generic_root_scope() {
+fn content_actions_preserve_worker_ownership_and_operator_working_scope_gate() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let (task, worker, actor) = fixture.working(&root);
@@ -63,12 +63,10 @@ fn all_content_actions_require_the_current_executed_task_owner_not_generic_root_
     let path = fixture.service.base().join("tasks").join(format!("{root}.md"));
     let root_actor = fixture.launch_and_bind(&root);
     let operator = Actor::Operator(OperatorOrigin::Browser);
-    for manager in [&root_actor, &operator] {
-        for action in content_actions(&root, &task) {
-            let bytes = std::fs::read(&path).unwrap();
-            assert_code(fixture.apply(manager, action), "actor_forbidden");
-            assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        }
+    for action in content_actions(&root, &task) {
+        let bytes = std::fs::read(&path).unwrap();
+        assert_code(fixture.apply(&operator, action), "actor_forbidden");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
     }
     for action in content_actions(&root, &sibling) {
         let bytes = std::fs::read(&path).unwrap();

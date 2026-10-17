@@ -644,3 +644,223 @@ async fn explicit_artifact_result_from_git_worktree_and_directory_is_root_accept
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[tokio::test]
+#[ignore = "private CLI environment child, launched by the scoped snapshot boundary test"]
+async fn scoped_snapshot_cli_environment_child() {
+    use clap::Parser;
+    use super::{TestCli, TestCommand};
+    let command = std::env::var("COCKPIT_TEST_SNAPSHOT_COMMAND").unwrap();
+    let sibling = std::env::var("COCKPIT_TEST_SNAPSHOT_SIBLING").unwrap();
+    let foreign = std::env::var("COCKPIT_TEST_SNAPSHOT_FOREIGN").unwrap();
+    let foreign_root = std::env::var("COCKPIT_TEST_SNAPSHOT_FOREIGN_ROOT").unwrap();
+    let flags = match command.as_str() {
+        "list" => vec!["list", "--json"],
+        "operator" => vec!["--operator", "list", "--json"],
+        "self" => vec!["show", "--self", "--json"],
+        "sibling" => vec!["show", sibling.as_str(), "--json"],
+        "foreign" => vec!["show", foreign.as_str(), "--json"],
+        "foreign-root" => vec!["--root", foreign_root.as_str(), "list", "--json"],
+        _ => panic!("unknown private snapshot command"),
+    };
+    let TestCommand::Run(args) = TestCli::try_parse_from(
+        ["test", "run"].into_iter().chain(flags),
+    ).unwrap().command else { panic!("expected run") };
+    let result = args.run().await;
+    match command.as_str() {
+        "foreign" => assert_eq!(result.unwrap_err().code, "run_not_found"),
+        "foreign-root" => assert_eq!(result.unwrap_err().code, "actor_forbidden"),
+        _ => result.unwrap(),
+    }
+}
+
+#[tokio::test]
+async fn credentialed_cli_reads_are_root_scoped_private_and_inert() {
+    use base64::Engine;
+    use cockpit_protocol::orchestration::{DeliveryStage, MessageKind};
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = std::env::temp_dir().join(format!("cockpit-cli-scoped-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(directory.join("state/orchestration/tasks")).unwrap();
+    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::create_dir(directory.join("catalog")).unwrap();
+    let config = directory.join("config.toml");
+    let path = directory.to_str().unwrap();
+    std::fs::write(&config, format!(
+        "repository_roots = ['{path}/catalog']\nstate_root = '{path}/state'\ncache_root = '{path}/cache'\nworktree_root = '{path}/worktrees'\nlibrary_root = '{path}/library'\nnotes_root = '{path}/notes'\n"
+    )).unwrap();
+    let credentials_dir = directory.join("credentials");
+    std::fs::create_dir(&credentials_dir).unwrap();
+    std::fs::set_permissions(&credentials_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let root_id = uuid::Uuid::new_v4().to_string();
+    let worker_id = uuid::Uuid::new_v4().to_string();
+    let sibling_id = uuid::Uuid::new_v4().to_string();
+    let foreign_root_id = uuid::Uuid::new_v4().to_string();
+    let foreign_worker_id = uuid::Uuid::new_v4().to_string();
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let sibling_task_id = uuid::Uuid::new_v4().to_string();
+    let foreign_task_id = uuid::Uuid::new_v4().to_string();
+    let task_path = directory.join(format!("state/orchestration/tasks/{root_id}.md"));
+    let foreign_task_path = directory.join(format!("state/orchestration/tasks/{foreign_root_id}.md"));
+    std::fs::write(&task_path, format!(
+        "# Tasks\n\n- [ ] Own task <!-- cockpit-task: {task_id} -->\n- [ ] Sibling task <!-- cockpit-task: {sibling_task_id} -->\n"
+    )).unwrap();
+    std::fs::write(&foreign_task_path, format!(
+        "# Tasks\n\n- [ ] Foreign task <!-- cockpit-task: {foreign_task_id} -->\n"
+    )).unwrap();
+    let mut runs = Vec::new();
+    let mut credentials = Vec::new();
+    let mut capabilities = Vec::new();
+    let mut claims = Vec::new();
+    let mut ownership = Vec::new();
+    for (run_id, run_root, task) in [
+        (&root_id, &root_id, None),
+        (&worker_id, &root_id, Some(&task_id)),
+        (&sibling_id, &root_id, Some(&sibling_task_id)),
+        (&foreign_root_id, &foreign_root_id, None),
+        (&foreign_worker_id, &foreign_root_id, Some(&foreign_task_id)),
+    ] {
+        let attachment_id = uuid::Uuid::new_v4().to_string();
+        let role = if task.is_some() { "worker" } else { "root" };
+        let generation = task.map(|_| 1_u64);
+        let mut run = json!({
+            "session_id":"physical", "brief":"Snapshot fixture", "run_id":run_id,
+            "kind":if task.is_some() { "worker" } else { "supervisor" },
+            "label":role, "root_id":run_root, "attempt":1, "assignment_generation":generation,
+            "launch_config":{"harness_kind":"other","command":"other"},
+            "stage":if task.is_some() { "working" } else { "active" },
+            "annotations":[], "created_at":"2026-10-17T00:00:00Z", "updated_at":"2026-10-17T00:00:00Z",
+            "attachment":{"attachment_id":attachment_id,"epoch":1,"state":"connected",
+                "launch_attempt":1,"updated_at":"2026-10-17T00:00:00Z"},
+            "dispatch":{"agent_started":true,"step":"launched","launch_attempt":1,
+                "updated_at":"2026-10-17T00:00:00Z",
+                "latch":{"latch":format!("/private/launch-SECRET-NONCE-{run_id}.fifo"),"nonce":format!("SECRET-NONCE-{run_id}"),
+                    "latch_device":"1","latch_inode":"2"}}
+        });
+        if let Some(task) = task {
+            let checkout_path = directory.join(format!("checkout-{run_id}"));
+            std::fs::create_dir(&checkout_path).unwrap();
+            let (project, checkout) = cockpit_core::orchestration::project_identity::resolve_directory(
+                &checkout_path, None, None,
+            ).await.unwrap();
+            let claim_id = uuid::Uuid::new_v4().to_string();
+            run["parent_run_id"] = json!(run_root);
+            run["task_id"] = json!(task);
+            run["project"] = json!(project);
+            run["checkout"] = json!(checkout);
+            run["checkout_claim_id"] = json!(claim_id);
+            claims.push(json!({"claim_id":claim_id,"checkout":checkout,"revision":1,"state":"held",
+                "holder":{"run_id":run_id,"attachment_id":attachment_id,"attachment_epoch":1},
+                "transition_operation_id":null}));
+            ownership.push(json!({"root_id":run_root,"task_id":task,"generation":1,"schedule":null,
+                "owner":{"run_id":run_id,"conversation":null,
+                    "claim_operation_id":uuid::Uuid::new_v4().to_string()}}));
+        }
+        if run_id == &root_id || run_id == &worker_id {
+            let credential_id = uuid::Uuid::new_v4().to_string();
+            credentials.push(json!({"credential_id":credential_id,"run_id":run_id,"root_id":run_root,
+                "role":role,"assignment_generation":generation,"attachment_id":attachment_id,
+                "attachment_epoch":1,"secret_digest":format!("{:x}", Sha256::digest([7_u8;32])),
+                "state":"active","issued_at":"2026-10-17T00:00:00Z"}));
+            let credential = credentials_dir.join(format!("{attachment_id}-1-{credential_id}.json"));
+            std::fs::write(&credential, serde_json::to_vec(&json!({
+                "schema":2,"credential_id":credential_id,"run_id":run_id,"root_id":run_root,"role":role,
+                "assignment_generation":generation,"attachment_id":attachment_id,"attachment_epoch":1,
+                "secret":base64::engine::general_purpose::STANDARD.encode([7_u8;32])
+            })).unwrap()).unwrap();
+            std::fs::set_permissions(&credential, std::fs::Permissions::from_mode(0o600)).unwrap();
+            capabilities.push(credential);
+        }
+        runs.push(run);
+    }
+    let messages = [
+        super::message(&worker_id, 1, MessageKind::Instruction, DeliveryStage::Stored, "OWN-INBOX-MARKER"),
+        super::message(&sibling_id, 2, MessageKind::Instruction, DeliveryStage::Stored, "PRIVATE-SIBLING-INBOX"),
+        super::message(&root_id, 3, MessageKind::Observation, DeliveryStage::Stored, "PRIVATE-ROOT-INBOX"),
+        super::message(&foreign_worker_id, 4, MessageKind::Instruction, DeliveryStage::Stored, "PRIVATE-FOREIGN-INBOX"),
+    ];
+    let state = json!({"schema":4,"revision":1,"runs":runs,"credentials":credentials,
+        "messages":messages,"inbox_hints":[],"task_intents":[],"assignment_intents":[],
+        "scope_intents":[],"operations":[],"task_ownership":ownership,"checkout_claims":claims});
+    let state_path = directory.join("state/orchestration/state.json");
+    std::fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+    let state_before = std::fs::read(&state_path).unwrap();
+    let tasks_before = std::fs::read(&task_path).unwrap();
+    let foreign_tasks_before = std::fs::read(&foreign_task_path).unwrap();
+    for (role, run_id, credential) in [
+        ("worker", &worker_id, &capabilities[1]),
+        ("root", &root_id, &capabilities[0]),
+    ] {
+        for command in ["list", "self", "sibling", "foreign", "foreign-root", "operator"] {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "cli_orchestration::tests::identity::scoped_snapshot_cli_environment_child",
+                    "--ignored", "--nocapture"])
+                .env_clear()
+                .env("HOME", &directory)
+                .env("XDG_CACHE_HOME", directory.join("cache"))
+                .env("XDG_CONFIG_HOME", directory.join("config"))
+                .env("XDG_DATA_HOME", directory.join("data"))
+                .env("XDG_STATE_HOME", directory.join("state"))
+                .env("COCKPIT_CONFIG_PATH", &config)
+                .env("COCKPIT_JOB_CREDENTIAL_FILE", credential)
+                .env("COCKPIT_RUN_ID", run_id)
+                .env("COCKPIT_HERDR_SESSION", "physical")
+                .env("COCKPIT_HERDR_EXECUTABLE", "/definitely/absent/herdr")
+                .env("COCKPIT_TEST_SNAPSHOT_COMMAND", command)
+                .env("COCKPIT_TEST_SNAPSHOT_SIBLING", &sibling_id)
+                .env("COCKPIT_TEST_SNAPSHOT_FOREIGN", &foreign_worker_id)
+                .env("COCKPIT_TEST_SNAPSHOT_FOREIGN_ROOT", &foreign_root_id)
+                .output().unwrap();
+            assert!(output.status.success(), "{role} {command}\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert_eq!(std::fs::read(&state_path).unwrap(), state_before, "{role} {command} changed state");
+            assert_eq!(std::fs::read(&task_path).unwrap(), tasks_before);
+            assert_eq!(std::fs::read(&foreign_task_path).unwrap(), foreign_tasks_before);
+            if matches!(command, "foreign" | "foreign-root") { continue; }
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let value = stdout.lines().filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .find(|value| value.is_object()).expect("CLI JSON output");
+            let wire = serde_json::to_string(&value).unwrap();
+            if command == "operator" {
+                assert!(wire.contains(&foreign_root_id));
+                assert!(wire.contains(&foreign_worker_id));
+                assert!(wire.contains("SECRET-NONCE-"));
+                assert!(wire.contains("PRIVATE-SIBLING-INBOX"));
+                assert!(wire.contains("PRIVATE-FOREIGN-INBOX"));
+                continue;
+            }
+            for private in [&foreign_root_id, &foreign_worker_id, &foreign_task_id] {
+                assert!(!wire.contains(private), "{role} {command} leaked a foreign identity");
+            }
+            assert!(!wire.contains("SECRET-NONCE-"), "{role} {command} leaked a launch nonce");
+            assert!(!wire.contains("PRIVATE-FOREIGN-INBOX"));
+            if command == "list" {
+                assert_eq!(value["roots"].as_array().unwrap().len(), 1);
+                assert_eq!(value["runs"].as_array().unwrap().len(), 3);
+                assert!(wire.contains(&root_id));
+                assert!(wire.contains(&worker_id));
+                assert!(wire.contains(&sibling_id));
+                assert!(wire.contains("OWN-INBOX-MARKER"));
+                let recipients: Vec<_> = value["messages"].as_array().unwrap().iter()
+                    .map(|message| message["to_run_id"].as_str().unwrap()).collect();
+                if role == "worker" {
+                    assert_eq!(recipients, vec![worker_id.as_str()]);
+                    assert!(!wire.contains("PRIVATE-SIBLING-INBOX"));
+                    assert!(!wire.contains("PRIVATE-ROOT-INBOX"));
+                } else {
+                    assert_eq!(recipients.len(), 3);
+                    assert!(wire.contains("PRIVATE-SIBLING-INBOX"));
+                    assert!(wire.contains("PRIVATE-ROOT-INBOX"));
+                }
+            } else {
+                assert_eq!(value["run_id"].as_str().unwrap(),
+                    if command == "self" { run_id.as_str() } else { sibling_id.as_str() });
+                assert_eq!(value["dispatch"]["latch"]["nonce"], "[REDACTED]");
+                assert!(!wire.contains("PRIVATE-SIBLING-INBOX"));
+            }
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}

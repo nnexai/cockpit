@@ -5,18 +5,25 @@ use super::super::*;
 use crate::space_git;
 use super::super::store::DurableOperationKind;
 
-/// Core-created observations, bound to one semantic request and its current
-/// checkout holder. Neither wire fields nor the host can manufacture this proof.
+/// Core-created observations bound to one semantic request and source lifecycle.
+/// Neither wire fields nor the host can manufacture this proof.
 #[derive(Debug, Clone)]
 pub struct OutputFacts {
     request_digest: String,
     run_id: String,
     source_checkout: CheckoutIdentity,
-    source_claim_id: String,
-    source_claim_revision: u64,
-    source_holder: AttachmentReference,
+    source_binding: SourceBinding,
+    source_output: SourceOutput,
+    assignment_generation: Option<u64>,
     target_checkout: Option<CheckoutIdentity>,
+    target_refs: Option<RefSnapshot>,
     integration: Option<Integration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SourceBinding {
+    Live { claim_id: String, revision: u64, holder: AttachmentReference },
+    Released { claim_id: String, revision: u64 },
 }
 
 pub(crate) fn output_identity(output: &SourceOutput) -> (&str, &str) {
@@ -127,16 +134,37 @@ fn claim_for<'a>(state: &'a OrchestrationState, run: &Run) -> Result<&'a claims:
     Ok(claim)
 }
 
-fn validate_proof(state: &OrchestrationState, run: &Run, action: &OrchestrationAction, session_id: &str, proof: &OutputFacts) -> Result<(), InspectionError> {
+fn source_binding(state: &OrchestrationState, run: &Run, accepted: bool) -> Result<SourceBinding, InspectionError> {
+    if accepted && run.stage == RunStage::Closed && run.close_reason == Some(CloseReason::Accepted) {
+        if let Some(claim) = state.checkout_claims.iter().find(|claim|
+            Some(claim.claim_id.as_str()) == run.checkout_claim_id.as_deref()
+                && claim.state == claims::ClaimState::Released) {
+            if run.checkout.as_ref() != Some(&claim.checkout) || claim.holder.is_some() {
+                return Err(error("checkout_claim_conflict", "Released source claim no longer matches this accepted checkout"));
+            }
+            return Ok(SourceBinding::Released { claim_id: claim.claim_id.clone(), revision: claim.revision });
+        }
+    }
     let claim = claim_for(state, run)?;
+    Ok(SourceBinding::Live { claim_id: claim.claim_id.clone(), revision: claim.revision,
+        holder: claim.holder.clone().expect("verified holder") })
+}
+
+fn validate_proof(state: &OrchestrationState, run: &Run, action: &OrchestrationAction, session_id: &str, proof: &OutputFacts) -> Result<(), InspectionError> {
+    let accepted = matches!(action, OrchestrationAction::IntegrationRecord { .. });
     if proof.run_id != run.run_id || proof.request_digest != resume::request_digest(action, session_id)?
         || run.checkout.as_ref() != Some(&proof.source_checkout)
-        || claim.claim_id != proof.source_claim_id || claim.revision != proof.source_claim_revision
-        || claim.holder.as_ref() != Some(&proof.source_holder) {
-        return Err(error("source_output_conflict", "Git observations no longer match the request or current checkout holder"));
+        || run.assignment_generation != proof.assignment_generation
+        || source_binding(state, run, accepted).ok().as_ref() != Some(&proof.source_binding)
+        || (accepted && run.source_output.as_ref() != Some(&proof.source_output)) {
+        return Err(error("source_output_conflict", "Git observations no longer match the request or source lifecycle"));
     }
-    project_identity::revalidate_checkout(&proof.source_checkout)?;
+    source_identity(run, &proof.source_output)?;
+    if matches!(proof.source_binding, SourceBinding::Live { .. }) {
+        project_identity::revalidate_checkout(&proof.source_checkout)?;
+    }
     if let Some(target) = &proof.target_checkout { project_identity::revalidate_checkout(target)?; }
+    if let Some(refs) = &proof.target_refs { refs.revalidate()?; }
     Ok(())
 }
 
@@ -222,8 +250,11 @@ impl OrchestrationService {
     /// Host calls this for code Result / integration before mutate_resolved.
     /// Existing bounded local Git reads are the only executor; no shell, network
     /// operation or caller-provided command is run.
-    pub async fn resolve_output_facts(&self, actor: &Actor, request: &OrchestrationMutationRequest) -> Result<Option<OutputFacts>, InspectionError> {
-        let (state, run, source, target) = {
+    pub async fn resolve_output_facts(&self, actor: &Actor, request: &OrchestrationMutationRequest,
+        catalog: &crate::repositories::RepositoryCatalog) -> Result<Option<OutputFacts>, InspectionError> {
+        if matches!(request.action, OrchestrationAction::IntegrationRecord { .. })
+            && self.operation_replay(actor, request)?.is_some() { return Ok(None); }
+        let (state, run, source, target_spec) = {
             let locked = self.store.lock()?;
             let state = locked.read()?;
             let (index, source, target) = match &request.action {
@@ -245,10 +276,10 @@ impl OrchestrationService {
                             return Err(error("actor_forbidden", "Integrator identity must be the authenticated job"));
                         }
                     }
-                    let target = state.runs.iter().filter(|r| r.session_id == request.session_id && r.root_id == integrator.root_id)
-                        .find(|r| r.project.as_ref().is_some_and(|p| p.key == *target_repository_key) && r.checkout.as_ref().is_some_and(|c| c.git.is_some()))
-                        .and_then(|r| r.checkout.clone()).ok_or_else(|| error("integration_unverified", "Target repository has no known local checkout in the integrator's root"))?;
-                    (index, source, Some(target))
+                    if integrator.root_id != state.runs[index].root_id {
+                        return Err(error("actor_forbidden", "Integrator and accepted source must belong to the same root"));
+                    }
+                    (index, source, Some((integrator.root_id.clone(), target_repository_key.clone())))
                 }
                 _ => return Ok(None),
             };
@@ -256,17 +287,174 @@ impl OrchestrationService {
             let run = state.runs[index].clone();
             (state, run, source, target)
         };
-        let claim = claim_for(&state, &run)?;
-        let checkout = run.checkout.as_ref().expect("claim checkout");
-        verify_source(&run, &source).await?;
-        let integration = match (&request.action, &target) {
-            (OrchestrationAction::IntegrationRecord { record }, Some(target)) => Some(verify_integration(record, &source, checkout, target).await?),
-            _ => None,
+        let target = match target_spec {
+            Some((root, key)) => Some(integration_target(&state, &request.session_id, &root, &key,
+                run.checkout.as_ref().map(|checkout| checkout.key.as_str()), Some(catalog)).await?),
+            None => None,
         };
-        project_identity::revalidate_checkout(checkout)?;
+        let binding = source_binding(&state, &run, target.is_some())?;
+        let checkout = run.checkout.as_ref().expect("claim checkout");
+        let source_root = verify_bound_source(&run, &source, &binding, target.as_ref()).await?;
+        let (integration, target_refs) = match (&request.action, &target) {
+            (OrchestrationAction::IntegrationRecord { record }, Some(target)) => {
+                let refs = RefSnapshot::observe(record, target).await?;
+                let integration = verify_integration(record, &source, source_root, target).await?;
+                refs.revalidate()?;
+                (Some(integration), Some(refs))
+            }
+            _ => (None, None),
+        };
+        if matches!(binding, SourceBinding::Live { .. }) { project_identity::revalidate_checkout(checkout)?; }
         Ok(Some(OutputFacts { request_digest: resume::request_digest(&request.action, &request.session_id)?, run_id: run.run_id,
-            source_checkout: checkout.clone(), source_claim_id: claim.claim_id.clone(), source_claim_revision: claim.revision,
-            source_holder: claim.holder.clone().expect("verified holder"), target_checkout: target, integration }))
+            source_checkout: checkout.clone(), source_binding: binding, source_output: source,
+            assignment_generation: run.assignment_generation, target_checkout: target, target_refs, integration }))
+    }
+}
+
+/// A root's actual checkout or a primary checkout is a target. Arbitrary worker
+/// worktrees are not target locators, even when they share the object database.
+async fn integration_target(state: &OrchestrationState, session: &str, root: &str, key: &str,
+    source_key: Option<&str>, catalog: Option<&crate::repositories::RepositoryCatalog>) -> Result<CheckoutIdentity, InspectionError> {
+    let mut known = Vec::new();
+    for run in state.runs.iter().filter(|run| run.session_id == session && run.root_id == root
+        && run.project.as_ref().is_some_and(|project| project.key == key)) {
+        let Some(checkout) = run.checkout.as_ref().filter(|checkout| Some(checkout.key.as_str()) != source_key
+            && checkout.git.as_ref().is_some_and(|git| run.run_id == root || git.common_dir == git.worktree_git_dir)) else { continue };
+        if let Ok((project, actual)) = project_identity::resolve_directory(Path::new(&checkout.path), None, None).await {
+            if project.key == key && actual == *checkout { known.push(checkout.clone()); }
+        }
+    }
+    // A known root checkout is the explicit integrator location, before catalog discovery.
+    if let Some(checkout) = known.iter().find(|checkout| state.runs.iter().any(|run|
+        run.run_id == root && run.checkout.as_ref() == Some(*checkout))) { return Ok(checkout.clone()); }
+    if let Some(catalog) = catalog {
+        for candidate in catalog.list().await?.repositories.into_iter().filter(|candidate| !candidate.is_linked_worktree) {
+            let Ok((project, checkout)) = project_identity::resolve_directory(Path::new(&candidate.checkout_path), None, None).await else { continue };
+            if project.key == key && Some(checkout.key.as_str()) != source_key { known.push(checkout); }
+        }
+    }
+    known.sort_by(|a, b| a.key.cmp(&b.key));
+    known.dedup_by(|a, b| a.key == b.key);
+    match known.as_slice() {
+        [checkout] => Ok(checkout.clone()),
+        [] => Err(error("integration_unverified", "Target repository has no known main checkout or configured primary checkout")),
+        _ => Err(error("repository_identity_conflict", "Target repository has multiple primary checkout identities")),
+    }
+}
+
+/// Freeze only the storage Git uses for the exact target ref. Git, not a custom
+/// ref parser, resolves symbolic refs and selects paths. The existing bounded,
+/// no-follow file reader makes the observations cheap to recheck under the lock.
+#[derive(Debug, Clone)]
+struct RefSnapshot {
+    files: Vec<(std::path::PathBuf, Option<Vec<u8>>)>,
+    directories: Vec<(std::path::PathBuf, (u64, u64))>,
+}
+
+impl RefSnapshot {
+    fn directory_identity(path: &Path) -> Result<(u64, u64), InspectionError> {
+        use cap_std::fs::MetadataExt;
+        let directory = crate::project_store::open_dir_nofollow_absolute(path)
+            .map_err(|_| error("integration_conflict", "Target Git directory changed"))?;
+        let metadata = directory.dir_metadata()
+            .map_err(|_| error("integration_conflict", "Target Git directory is unavailable"))?;
+        Ok((metadata.dev(), metadata.ino()))
+    }
+
+    fn read(path: &Path) -> Result<Option<Vec<u8>>, InspectionError> {
+        match std::fs::symlink_metadata(path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(error("integration_conflict", "Target ref storage is unavailable")),
+            Ok(_) => {}
+        }
+        let parent = path.parent().ok_or_else(|| error("integration_conflict", "Target ref path is invalid"))?;
+        let name = path.file_name().and_then(|name| name.to_str()).ok_or_else(|| error("integration_conflict", "Target ref path is invalid"))?;
+        let directory = crate::project_store::open_dir_nofollow_absolute(parent)
+            .map_err(|_| error("integration_conflict", "Target ref directory changed"))?;
+        crate::project_store::read_bytes_bounded(&directory, name, 8 * 1024 * 1024).map(Some)
+    }
+
+    async fn observe(record: &IntegrationRecord, target: &CheckoutIdentity) -> Result<Self, InspectionError> {
+        let Integration::Integrated { target_ref, .. } = &record.integration else { unreachable!() };
+        let root = Path::new(&target.path);
+        if !target_ref.starts_with("refs/heads/") || target_ref.contains('\0')
+            || !space_git::git_output(root, &["check-ref-format", target_ref]).await?.status.success() {
+            return Err(error("integration_unverified", "Target must be an explicit valid local branch ref"));
+        }
+        if space_git::git_line(root, &["rev-parse", "--show-ref-format"]).await? != "files" {
+            return Err(error("integration_unverified", "Target ref storage backend cannot be fenced"));
+        }
+        let git = target.git.as_ref().expect("target Git checkout");
+        let initial = [
+            Path::new(&git.common_dir).join("config"),
+            Path::new(&git.worktree_git_dir).join("config.worktree"),
+            Path::new(&git.common_dir).join("packed-refs"),
+            Path::new(&git.worktree_git_dir).join("commondir"),
+        ];
+        let mut files = initial.into_iter().map(|path| Self::read(&path).map(|bytes| (path, bytes))).collect::<Result<Vec<_>, _>>()?;
+        let mut directories = Vec::new();
+        for path in [Path::new(&git.common_dir), Path::new(&git.worktree_git_dir)] {
+            directories.push((path.to_path_buf(), Self::directory_identity(path)?));
+        }
+        let dot_git = root.join(".git");
+        if dot_git != Path::new(&git.worktree_git_dir) {
+            files.push((dot_git.clone(), Self::read(&dot_git)?));
+        }
+        let mut reference = target_ref.clone();
+        for depth in 0..16 {
+            let path = std::path::PathBuf::from(space_git::git_line(root,
+                &["rev-parse", "--path-format=absolute", "--git-path", &reference]).await?);
+            let bytes = Self::read(&path)?;
+            files.push((path, bytes));
+            let symbolic = space_git::git_output(root, &["symbolic-ref", "--no-recurse", "-q", &reference]).await?;
+            if symbolic.status.code() == Some(1) { break; }
+            if !symbolic.status.success() || depth == 15 {
+                return Err(error("integration_unverified", "Target symbolic ref cannot be fenced"));
+            }
+            reference = std::str::from_utf8(&symbolic.stdout).map_err(|_| error("integration_unverified", "Invalid target ref"))?.trim().to_owned();
+        }
+        if space_git::git_line(root, &["rev-parse", "--show-ref-format"]).await? != "files" {
+            return Err(error("integration_unverified", "Target ref storage backend changed"));
+        }
+        let snapshot = Self { files, directories };
+        snapshot.revalidate()?;
+        Ok(snapshot)
+    }
+
+    fn revalidate(&self) -> Result<(), InspectionError> {
+        for (path, identity) in &self.directories {
+            if &Self::directory_identity(path)? != identity {
+                return Err(error("integration_conflict", "Target Git directory changed after verification"));
+            }
+        }
+        for (path, bytes) in &self.files {
+            if &Self::read(path)? != bytes {
+                return Err(error("integration_conflict", "Target ref storage changed after Git verification"));
+            }
+        }
+        Ok(())
+    }
+}
+
+async fn verify_bound_source<'a>(run: &'a Run, source: &SourceOutput, binding: &SourceBinding,
+    target: Option<&'a CheckoutIdentity>) -> Result<&'a Path, InspectionError> {
+    if matches!(binding, SourceBinding::Released { .. }) {
+        let target = target.ok_or_else(|| error("integration_unverified", "Released source requires the actual target checkout"))?;
+        source_identity(run, source)?;
+        let SourceOutput::Code { base_commit, head_commit, commits, .. } = source else { unreachable!() };
+        let source_git = run.checkout.as_ref().and_then(|checkout| checkout.git.as_ref());
+        if !matches!((source_git, &target.git), (Some(source), Some(target)) if source.common_dir == target.common_dir) {
+            return Err(error("integration_unverified", "Released source requires a target checkout of the same repository"));
+        }
+        repository(target).await?;
+        let root = Path::new(&target.path);
+        if &range(root, base_commit, head_commit).await? != commits {
+            return Err(error("source_output_conflict", "Source commits must enumerate the complete ordered base-to-head range"));
+        }
+        Ok(root)
+    } else {
+        verify_source(run, source).await?;
+        Ok(Path::new(&run.checkout.as_ref().expect("verified source checkout").path))
     }
 }
 
@@ -312,20 +500,25 @@ impl OrchestrationService {
             && run.result.as_ref().is_some_and(|result| result.outcome == Some(ReportOutcome::Succeeded))) {
             let Some(source) = run.source_output.as_ref() else { continue };
             let Some(checkout) = run.checkout.as_ref() else { continue };
-            let Ok(claim) = claim_for(&saved, run) else { continue };
-            if verify_source(run, source).await.is_err() { continue; }
+            let Ok(binding) = source_binding(&saved, run, true) else { continue };
             for checked_run in saved.runs.iter().filter(|checked| checked.root_id == run.root_id
                 && checked.session_id == run.session_id) {
                 let Some(record) = automatic_record(run, &checked_run.integration) else { continue };
                 let Integration::Integrated { target_repository_key, .. } = &record.integration else { unreachable!() };
-                let Some(target_run) = saved.runs.iter().find(|target| target.root_id == run.root_id
-                    && target.session_id == run.session_id
-                    && target.project.as_ref().is_some_and(|project| project.key == *target_repository_key)
-                    && target.checkout.as_ref().is_some_and(|target| target.git.is_some()
-                        && target.key != checkout.key)) else { continue };
-                let target = target_run.checkout.as_ref().expect("filtered checkout");
+                let Ok(target) = integration_target(&saved, &run.session_id, &run.root_id,
+                    target_repository_key, Some(&checkout.key), None).await else { continue };
+                let Ok(source_root) = verify_bound_source(run, source, &binding, Some(&target)).await else { continue };
+                let Ok(refs) = RefSnapshot::observe(&record, &target).await else { continue };
                 let Ok(integrated @ Integration::Integrated { .. }) =
-                    verify_integration(&record, source, checkout, target).await else { continue };
+                    verify_integration(&record, source, source_root, &target).await else { continue };
+                let action = OrchestrationAction::IntegrationRecord { record: record.clone() };
+                let proof = OutputFacts {
+                    request_digest: resume::request_digest(&action, &run.session_id)?,
+                    run_id: run.run_id.clone(), source_checkout: checkout.clone(),
+                    source_binding: binding.clone(), source_output: source.clone(),
+                    assignment_generation: run.assignment_generation,
+                    target_checkout: Some(target), target_refs: Some(refs), integration: Some(integrated.clone()),
+                };
                 let locked = self.store.lock()?;
                 let mut state = locked.read()?;
                 let index = run_index(&state, &run.run_id)?;
@@ -340,16 +533,10 @@ impl OrchestrationService {
                     || projection::current_task_run(&state, &run.root_id, task_id).is_none_or(|attempt| attempt.run_id != run.run_id)
                     || state.runs.iter().find(|checked| checked.run_id == checked_run.run_id)
                         .is_none_or(|checked| checked.integration != checked_run.integration)
-                    || state.runs.iter().find(|actual| actual.run_id == target_run.run_id)
-                        .is_none_or(|actual| actual.checkout.as_ref() != Some(target)) { continue; }
-                let Ok(current_claim) = claim_for(&state, current) else { continue };
-                if current_claim.claim_id != claim.claim_id || current_claim.revision != claim.revision
-                    || current_claim.holder != claim.holder { continue; }
+                    || validate_proof(&state, current, &action, &run.session_id, &proof).is_err() { continue; }
                 let document = locked.tasks(&run.root_id)?;
                 if !document.task(task_id)?.checked
                     || !document.checked_matches_revision(task_id, &record.expected_task_revision)? { continue; }
-                project_identity::revalidate_checkout(checkout)?;
-                project_identity::revalidate_checkout(target)?;
                 state.runs[index].integration = integrated;
                 state.runs[index].updated_at = now();
                 state.runs[index].annotations.push(Annotation { at: now(), by: ActorRef::Dispatcher,
@@ -405,8 +592,8 @@ async fn range(root: &Path, base: &str, head: &str) -> Result<Vec<String>, Inspe
     Ok(text.lines().map(str::to_owned).collect())
 }
 
-async fn verify_source(run: &Run, source: &SourceOutput) -> Result<(), InspectionError> {
-    let SourceOutput::Code { repository_key, checkout_key, base_commit, head_commit, commits, .. } = source else {
+fn source_identity(run: &Run, source: &SourceOutput) -> Result<(), InspectionError> {
+    let SourceOutput::Code { repository_key, checkout_key, base_commit, .. } = source else {
         return Err(error("integration_conflict", "Only code output can be Git-integrated"));
     };
     validate_checks(checks(source))?;
@@ -417,6 +604,13 @@ async fn verify_source(run: &Run, source: &SourceOutput) -> Result<(), Inspectio
         || !matches!((&project.source, &checkout.git), (ProjectSource::Git { common_dir }, Some(git)) if common_dir == &git.common_dir) {
         return Err(error("source_output_conflict", "Source must match the real repository, checkout and frozen pre-work baseline"));
     }
+    Ok(())
+}
+
+async fn verify_source(run: &Run, source: &SourceOutput) -> Result<(), InspectionError> {
+    source_identity(run, source)?;
+    let SourceOutput::Code { base_commit, head_commit, commits, .. } = source else { unreachable!() };
+    let checkout = run.checkout.as_ref().expect("verified source checkout");
     repository(checkout).await?;
     let root = Path::new(&checkout.path);
     let actual = range(root, base_commit, head_commit).await?;
@@ -465,7 +659,7 @@ fn mapped_paths(paths: &[String]) -> Result<BTreeSet<String>, InspectionError> {
     Ok(set)
 }
 
-async fn verify_integration(record: &IntegrationRecord, source: &SourceOutput, checkout: &CheckoutIdentity, target: &CheckoutIdentity) -> Result<Integration, InspectionError> {
+async fn verify_integration(record: &IntegrationRecord, source: &SourceOutput, source_root: &Path, target: &CheckoutIdentity) -> Result<Integration, InspectionError> {
     let Integration::Integrated { operation_id, accepted_result_message_id, accepted_task_revision,
         source: reported_source, target_ref, target_commit, method, mappings, checks: target_checks, .. } = &record.integration else { unreachable!() };
     if operation_id != &record.operation_id || accepted_result_message_id != &record.expected_result_message_id
@@ -487,7 +681,6 @@ async fn verify_integration(record: &IntegrationRecord, source: &SourceOutput, c
         return Err(error("integration_conflict", "Target branch does not point at the recorded target commit"));
     }
     let SourceOutput::Code { base_commit, head_commit, commits, .. } = source else { unreachable!() };
-    let source_root = Path::new(&checkout.path);
     match method {
         IntegrationMethod::Ancestor => {
             commit(target_root, head_commit).await?;
@@ -636,17 +829,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn released_source_uses_complete_same_repository_output_after_removal() {
+        let case = GitCase::new(false).await;
+        let mut run = new_run("worker", "session", RunKind::Worker, "worker".into(),
+            "root", Some("root".into()), Some("task".into()), 1);
+        run.project = Some(case.project.clone());
+        run.checkout = Some(case.source_checkout.clone());
+        run.setup = Some(SetupSummary {
+            operation_id: None, generation: None, workspace_id: None,
+            checkout_path: case.source_checkout.path.clone(), repository_id: None, branch: Some("worker".into()),
+            base: None, base_commit: Some(case.baseline.clone()), ownership: None,
+            effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
+        });
+        let binding = SourceBinding::Released { claim_id: "released".into(), revision: 4 };
+        git(&case.target_path, &["worktree", "remove", case.source_path.to_str().unwrap()]);
+        assert!(!case.source_path.exists());
+        let root = verify_bound_source(&run, &case.source, &binding, Some(&case.target_checkout)).await.unwrap();
+        let record = case.record(IntegrationMethod::PatchEquivalent, CheckStatus::Passed);
+        assert!(matches!(verify_integration(&record, &case.source, root, &case.target_checkout).await.unwrap(),
+            Integration::Integrated { .. }));
+        let mut partial = case.source.clone();
+        if let SourceOutput::Code { commits, .. } = &mut partial { commits.pop(); }
+        assert!(verify_bound_source(&run, &partial, &binding, Some(&case.target_checkout)).await.is_err());
+        let mut wrong_baseline = run.clone();
+        wrong_baseline.setup.as_mut().unwrap().base_commit = Some(case.target_commits[0].clone());
+        assert!(verify_bound_source(&wrong_baseline, &case.source, &binding, Some(&case.target_checkout)).await.is_err());
+        let foreign = GitCase::new(false).await;
+        assert!(verify_bound_source(&run, &case.source, &binding, Some(&foreign.target_checkout)).await.is_err());
+        assert!(!case.source_path.exists());
+        assert_eq!(git(&case.target_path, &["rev-parse", "HEAD"]).trim(), case.target_commits.last().unwrap());
+        assert!(git(&case.target_path, &["status", "--porcelain"]).is_empty());
+    }
+
+    #[tokio::test]
     async fn full_range_patch_equivalence_rejects_missing_commits_and_unmapped_paths() {
         let case = GitCase::new(false).await;
         let record = case.record(IntegrationMethod::PatchEquivalent, CheckStatus::Passed);
-        assert!(matches!(verify_integration(&record, &case.source, &case.source_checkout, &case.target_checkout).await.unwrap(),
+        assert!(matches!(verify_integration(&record, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.unwrap(),
             Integration::Integrated { method: IntegrationMethod::PatchEquivalent, .. }));
         let mut partial = record.clone();
         if let Integration::Integrated { mappings, .. } = &mut partial.integration { mappings[0].source_commits.pop(); }
-        assert!(verify_integration(&partial, &case.source, &case.source_checkout, &case.target_checkout).await.is_err());
+        assert!(verify_integration(&partial, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.is_err());
         let mut missing_path = record;
         if let Integration::Integrated { mappings, .. } = &mut missing_path.integration { mappings[0].target_paths.clear(); }
-        assert!(verify_integration(&missing_path, &case.source, &case.source_checkout, &case.target_checkout).await.is_err());
+        assert!(verify_integration(&missing_path, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.is_err());
     }
 
     #[test]
@@ -685,36 +911,36 @@ mod tests {
         let case = GitCase::new(false).await;
         let mut record = case.record(IntegrationMethod::Ancestor, CheckStatus::Passed);
         if let Integration::Integrated { mappings, .. } = &mut record.integration { mappings.clear(); }
-        assert!(verify_integration(&record, &case.source, &case.source_checkout, &case.target_checkout).await.is_err());
+        assert!(verify_integration(&record, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.is_err());
         git(&case.target_path, &["merge", "--no-ff", "worker", "-m", "integrate actual source ancestry"]);
         let integrated_head = git(&case.target_path, &["rev-parse", "HEAD"]).trim().to_owned();
         if let Integration::Integrated { target_commit, checks, .. } = &mut record.integration {
             *target_commit = integrated_head.clone();
             checks[0].evidence = Some(format!("Target scenario observed at {integrated_head}"));
         }
-        assert!(matches!(verify_integration(&record, &case.source, &case.source_checkout, &case.target_checkout).await.unwrap(),
+        assert!(matches!(verify_integration(&record, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.unwrap(),
             Integration::Integrated { method: IntegrationMethod::Ancestor, .. }));
         git(&case.target_path, &["commit", "--allow-empty", "-m", "advance target"]);
-        assert!(verify_integration(&record, &case.source, &case.source_checkout, &case.target_checkout).await.is_err());
+        assert!(verify_integration(&record, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.is_err());
     }
 
     #[tokio::test]
     async fn adaptation_requires_full_explanation_and_passed_target_bound_checks() {
         let case = GitCase::new(true).await;
         let equivalent = case.record(IntegrationMethod::PatchEquivalent, CheckStatus::Passed);
-        assert!(verify_integration(&equivalent, &case.source, &case.source_checkout, &case.target_checkout).await.is_err());
+        assert!(verify_integration(&equivalent, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.is_err());
         let mut adaptation = case.record(IntegrationMethod::RecordedAdaptation, CheckStatus::Passed);
-        assert!(matches!(verify_integration(&adaptation, &case.source, &case.source_checkout, &case.target_checkout).await.unwrap(),
+        assert!(matches!(verify_integration(&adaptation, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.unwrap(),
             Integration::Integrated { method: IntegrationMethod::RecordedAdaptation, .. }));
         if let Integration::Integrated { mappings, .. } = &mut adaptation.integration { mappings[0].explanation = None; }
-        assert!(verify_integration(&adaptation, &case.source, &case.source_checkout, &case.target_checkout).await.is_err());
+        assert!(verify_integration(&adaptation, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.is_err());
         for status in [CheckStatus::Failed, CheckStatus::NotRun] {
             let pending = case.record(IntegrationMethod::RecordedAdaptation, status);
-            assert_eq!(verify_integration(&pending, &case.source, &case.source_checkout, &case.target_checkout).await.unwrap(), Integration::Pending);
+            assert_eq!(verify_integration(&pending, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.unwrap(), Integration::Pending);
         }
         let mut wrong_target = case.record(IntegrationMethod::RecordedAdaptation, CheckStatus::Passed);
         if let Integration::Integrated { checks, .. } = &mut wrong_target.integration { checks[0].contract = "unrelated contract".into(); }
-        assert_eq!(verify_integration(&wrong_target, &case.source, &case.source_checkout, &case.target_checkout).await.unwrap(), Integration::Pending);
+        assert_eq!(verify_integration(&wrong_target, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.unwrap(), Integration::Pending);
     }
 
     #[tokio::test]
@@ -736,7 +962,7 @@ mod tests {
         });
         verify_source(&run, &case.source).await.unwrap();
         let record = case.record(IntegrationMethod::PatchEquivalent, CheckStatus::Passed);
-        assert!(matches!(verify_integration(&record, &case.source, &case.source_checkout, &case.target_checkout).await.unwrap(), Integration::Integrated { .. }));
+        assert!(matches!(verify_integration(&record, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.unwrap(), Integration::Integrated { .. }));
         assert_eq!(git(&case.source_path, &["rev-parse", "HEAD"]).trim(), later_head);
         assert_eq!(std::fs::read_to_string(case.source_path.join("draft.txt")).unwrap(), "preserved draft\n");
         assert_eq!(git(&case.target_path, &["rev-parse", "HEAD"]).trim(), case.target_commits.last().unwrap().as_str());
@@ -756,7 +982,7 @@ mod tests {
         let mut receipt = case.record(IntegrationMethod::PatchEquivalent, CheckStatus::Passed).integration;
         if let Integration::Integrated { verified_at, .. } = &mut receipt { *verified_at = now(); }
         let candidate = automatic_record(&run, &receipt).unwrap();
-        assert!(verify_integration(&candidate, &case.source, &case.source_checkout,
+        assert!(verify_integration(&candidate, &case.source, Path::new(&case.source_checkout.path),
             &case.target_checkout).await.is_err(), "patch equivalence is not ordinary ancestry");
         git(&case.target_path, &["merge", "--no-ff", "worker", "-m", "contain accepted head"]);
         let commit = git(&case.target_path, &["rev-parse", "HEAD"]).trim().to_owned();
@@ -765,8 +991,7 @@ mod tests {
             checks[0].evidence = Some(format!("Actual target scenario passed at {commit}"));
         }
         let candidate = automatic_record(&run, &receipt).unwrap();
-        let verified = verify_integration(&candidate, &case.source, &case.source_checkout,
-            &case.target_checkout).await.unwrap();
+        let verified = verify_integration(&candidate, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.unwrap();
         assert!(matches!(verified, Integration::Integrated { method: IntegrationMethod::Ancestor, .. }));
         for status in [CheckStatus::Failed, CheckStatus::NotRun] {
             let mut not_passed = receipt.clone();
@@ -779,7 +1004,7 @@ mod tests {
         }
         assert!(automatic_record(&run, &wrong_contract).is_none());
         git(&case.target_path, &["commit", "--allow-empty", "-m", "target changed after checks"]);
-        assert!(verify_integration(&candidate, &case.source, &case.source_checkout,
+        assert!(verify_integration(&candidate, &case.source, Path::new(&case.source_checkout.path),
             &case.target_checkout).await.is_err(), "checks cannot follow a moving ref");
     }
 }

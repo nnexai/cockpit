@@ -202,6 +202,18 @@ pub(crate) fn snapshot(
     })
 }
 
+/// Launch nonces are bearer capabilities, including on the caller's own run.
+/// Dispatcher/operator reads use durable state and are intentionally unchanged.
+pub(crate) fn redact_agent_capabilities(snapshot: &mut OrchestrationSnapshot) {
+    for run in &mut snapshot.runs {
+        if let Some(latch) = run.dispatch.as_mut().and_then(|dispatch| dispatch.latch.as_mut()) {
+            // The FIFO basename also embeds this nonce in real launch receipts.
+            latch.latch = "[REDACTED]".into();
+            latch.nonce = "[REDACTED]".into();
+        }
+    }
+}
+
 fn project_attention(
     runs: &[&Run],
     inboxes: &HashMap<&str, Vec<&Message>>,

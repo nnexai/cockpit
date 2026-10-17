@@ -155,7 +155,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 
 | Change | Current owner |
 | --- | --- |
-| Service/caller identity | `crates/cockpit-core/src/orchestration.rs`; `crates/cockpit-core/src/orchestration/caller.rs`; `crates/cockpit-core/src/orchestration/agent.rs` |
+| Service/caller identity and credentialed root-scoped read projection | `crates/cockpit-core/src/orchestration.rs` (`job_snapshot_saved`); `crates/cockpit-core/src/orchestration/caller.rs`; `crates/cockpit-core/src/orchestration/agent.rs` |
 | Canonical tasks/store/assignment | `crates/cockpit-core/src/orchestration/tasks_md.rs`; `crates/cockpit-core/src/orchestration/store.rs`; `crates/cockpit-core/src/orchestration/assignments.rs` |
 | Prerequisites/checklist parsing | `crates/cockpit-core/src/orchestration/dependencies.rs`; `crates/cockpit-core/src/orchestration/steps.rs`; `crates/cockpit-core/src/orchestration/steps/parser.rs` |
 | Direct prerequisite accepted references / input binding | `crates/cockpit-core/src/orchestration/dependency_inputs.rs` (`accepted_dependency_run_ids`); CLI `cli_orchestration/mod.rs`/`output.rs` (`task inputs` compact projection) |
@@ -164,7 +164,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Atomic activation/unassign/replacement generation fencing | `crates/cockpit-core/src/orchestration/mutate/ownership.rs`; `crates/cockpit-core/src/orchestration/mutate/runs.rs` |
 | Durable schedules and locked attempt creation | `crates/cockpit-core/src/orchestration/mutate/runs.rs` (`create_attempt`, `schedule_candidates`, `scheduled_start`, `worker_replace`) |
 | Role credentials/same-worker scope | `crates/cockpit-core/src/orchestration/credentials.rs`; `crates/cockpit-core/src/orchestration/scope_intents.rs`; `crates/cockpit-core/src/orchestration/mutate/tasks.rs` |
-| Source acceptance/integration/send-back | `crates/cockpit-core/src/orchestration/mutate/intents.rs`; `crates/cockpit-core/src/orchestration/mutate/integration.rs`; `crates/cockpit-core/src/orchestration/mutate/grants.rs` (send-back) |
+| Source acceptance/integration/send-back | `crates/cockpit-core/src/orchestration/mutate/intents.rs`; `crates/cockpit-core/src/orchestration/mutate/integration.rs` (live Result claim versus immutable accepted source, actual target catalog and proof CAS); `crates/cockpit-core/src/orchestration/mutate/grants.rs` (send-back) |
 | Scheduler/placement/input-aware dispatch/Herdr/escalation | `crates/cockpit-core/src/orchestration/dispatch.rs` (`resolve_schedule_target`, `render_run_bootstrap`); `crates/cockpit-core/src/orchestration/herdr.rs`; `crates/cockpit-core/src/orchestration/escalation.rs`; exact close capability guard in `crates/cockpit-herdr/src/cli/orchestration.rs` |
 | Messages/inbox/reports | `crates/cockpit-core/src/orchestration/messages.rs`; `crates/cockpit-core/src/orchestration/messages/inbox.rs`; `crates/cockpit-core/src/orchestration/messages/report.rs` |
 | Ownership projection/routing | `crates/cockpit-core/src/orchestration/projection.rs`; `crates/cockpit-core/src/orchestration/routing.rs` |
@@ -274,6 +274,8 @@ Four stream methods remain transport-local: `subscribeSession`, `openTerminal`, 
 ### Supervisor tasks, execution and messages
 
 Agent CLI → private attempt credential plus run/root/attachment epoch and pinned task generation → `Actor::Agent`; explicit local `--operator` CLI → `Actor::Operator` with named root/task/run targets, ignoring stale ambient job metadata. Both paths use canonical Markdown/store mutations → notifications/snapshot/inbox → shared host operation → frontend decoder. Supplied actual agent conversation metadata is recorded/revalidated; ordinary coordination needs no identity-hunt turn. Process labels, pane presence and focus grant no semantic authority; physical effects retain their separate fresh target proofs.
+
+Credentialed saved reads authenticate under the store lock and project only the caller's root; workers receive their own inbox bodies, with same-root task/run records for collaboration. Launch capability bytes are redacted from agent projections without changing durable launch state or generic operator/UI snapshots. Working task content writes by the root use the existing scope journal/instruction path; checklist writes retain ordinary canonical CAS. Neither grants sibling worker writes nor changes accepted-task immutability.
 
 `run context` claims pending generations. Schedules survive root credential/attachment rotation via immutable receipt/exact root/current binding checks. Atomic replacement preserves old work/claims and uses typed GitHead isolated worktree or Directory private no-copy attempt with original project/context. Same-checkout reuse requires precise reboot or exact drained scope plus registered consumer proof/fresh Herdr inventory. Directory outputs remain retained: acceptance/NotApplicable never permits recursive deletion, and only an accepted retired drained EMPTY private attempt directory can be removed after durable output publication/move.
 

@@ -135,6 +135,33 @@ pub(in crate::orchestration) fn update(
     task_content_target(state, actor, caller, session_id, &root_id, &task_id, &document)?;
     if let Some(t) = &title { bounded(t, 256)?; }
     if let Some(d) = &description { bounded(d, 16 * 1024)?; }
+    if matches!(actor, Actor::Agent(_)) {
+        if let Some(run) = projection::current_task_run(state, &root_id, &task_id)
+            .filter(|run| run.stage == RunStage::Working)
+            .filter(|_| caller.is_some_and(|index| state.runs[index].run_id == root_id))
+        {
+            if document.task(&task_id)?.task_revision != expected_task_revision {
+                return Err(error("task_revision_conflict", "Task changed"));
+            }
+            let action = OrchestrationAction::TaskScopeUpdate {
+                operation_id: id(), root_id: root_id.clone(), task_id: task_id.clone(),
+                run_id: run.run_id.clone(), expected_task_revision,
+                expected_doc_revision: document.doc_revision.clone(), title, description,
+            };
+            drop(document);
+            // Reuse the durable scope journal so a supervisor's ordinary edit
+            // cannot publish new scope without instructing the same current worker.
+            let Applied::Published(mut response) = scope_update(ctx, action)? else { unreachable!() };
+            if !matches!(&response.result, OrchestrationActionResult::TaskScopeUpdated { update }
+                if update.state == TaskScopeUpdateState::Applied) {
+                return Ok(Applied::Published(response));
+            }
+            response.result = OrchestrationActionResult::Task {
+                task: locked.tasks(&root_id)?.task(&task_id)?.clone(),
+            };
+            return Ok(Applied::Published(response));
+        }
+    }
     Ok(Applied::Document(OrchestrationActionResult::Task {
         task: document.update(&task_id, &expected_task_revision, title.as_deref(), description.as_deref())?,
     }))
@@ -395,9 +422,6 @@ pub(super) fn task_content_target(
     if run.run_id == root_id {
         if job.role != JobRole::Root {
             return Err(error("actor_forbidden", "Only the authenticated root may coordinate canonical tasks"));
-        }
-        if current.is_some_and(|run| run.stage == RunStage::Working) {
-            return Err(error("actor_forbidden", "Use TaskScopeUpdate to instruct the current Working worker"));
         }
         return Ok(());
     }
@@ -678,7 +702,7 @@ mod tests {
         other.stage = RunStage::Active;
         fixture.state.runs.push(other);
         assert!(task_root_authority(&fixture.state, &root, Some(0), "task-job-auth", &other_id).is_err());
-        assert!(fixture.content(&root, 0, &fixture.task).is_err());
+        fixture.content(&root, 0, &fixture.task).unwrap();
         fixture.state.runs[1].stage = RunStage::Reported;
         fixture.content(&root, 0, &fixture.task).unwrap();
     }

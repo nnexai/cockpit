@@ -235,43 +235,7 @@ impl OrchestrationService {
                 .iter()
                 .filter(|r| r.parent_run_id.is_none() && r.session_id == request.session_id)
             {
-                let document = locked.tasks(&root.root_id)?;
-                let graph = dependencies::DependencyGraph::new(&document.tasks);
-                let mut diagnostics = Vec::new();
-                let facts: Vec<TaskDependencies> = document.tasks.iter().map(|task| {
-                    if let Some(code) = &task.diagnostic {
-                        diagnostics.push(ErrorResponse {
-                            code: code.clone(), message: format!("Task {} is ambiguous", task.task_id),
-                        });
-                    }
-                    graph.evaluate(task)
-                }).collect();
-                drop(graph);
-                {
-                    let mut seen = std::collections::HashSet::new();
-                    for problem in facts.iter().flat_map(|facts| &facts.problems) {
-                        if seen.insert((problem.code.as_str(), problem.message.as_str())) {
-                            diagnostics.push(problem.clone());
-                        }
-                    }
-                }
-                let tasks = document.tasks.into_iter().zip(facts).map(|(task, dependencies)| TaskView {
-                    task, dependencies, lane: TaskLane::Ready, current_run_id: None, scheduled: false, attempt: None,
-                }).collect();
-                boards.push(TaskBoard {
-                    root_id: root.root_id.clone(),
-                    path: self
-                        .store
-                        .base()
-                        .join("tasks")
-                        .join(format!("{}.md", root.root_id))
-                        .to_string_lossy()
-                        .into_owned(),
-                    doc_revision: document.doc_revision,
-                    unidentified_items: document.unidentified_items,
-                    diagnostics,
-                    tasks,
-                });
+                boards.push(self.board_for_root(&locked, &root.root_id)?);
             }
             (state, boards)
         };
@@ -280,6 +244,38 @@ impl OrchestrationService {
             None => self.store.tasks_token()?,
         };
         Ok((state, boards, token))
+    }
+
+    fn board_for_root(&self, locked: &store::LockedStore<'_>, root_id: &str) -> Result<TaskBoard, InspectionError> {
+        let document = locked.tasks(root_id)?;
+        let graph = dependencies::DependencyGraph::new(&document.tasks);
+        let mut diagnostics = Vec::new();
+        let facts: Vec<TaskDependencies> = document.tasks.iter().map(|task| {
+            if let Some(code) = &task.diagnostic {
+                diagnostics.push(ErrorResponse {
+                    code: code.clone(), message: format!("Task {} is ambiguous", task.task_id),
+                });
+            }
+            graph.evaluate(task)
+        }).collect();
+        drop(graph);
+        let mut seen = std::collections::HashSet::new();
+        for problem in facts.iter().flat_map(|facts| &facts.problems) {
+            if seen.insert((problem.code.as_str(), problem.message.as_str())) {
+                diagnostics.push(problem.clone());
+            }
+        }
+        let tasks = document.tasks.into_iter().zip(facts).map(|(task, dependencies)| TaskView {
+            task, dependencies, lane: TaskLane::Ready, current_run_id: None, scheduled: false, attempt: None,
+        }).collect();
+        Ok(TaskBoard {
+            root_id: root_id.into(),
+            path: self.store.base().join("tasks").join(format!("{root_id}.md")).to_string_lossy().into_owned(),
+            doc_revision: document.doc_revision,
+            unidentified_items: document.unidentified_items,
+            diagnostics,
+            tasks,
+        })
     }
 
     pub async fn snapshot(
@@ -294,6 +290,54 @@ impl OrchestrationService {
         let (state, boards, token) = self.snapshot_records(request)?;
         projection::snapshot(request, &state, token, boards,
             Err(error("runtime_unavailable", "Durable snapshot does not consult Herdr")), &now(), self.store.identity())
+    }
+
+    /// Credentialed reads retain only the authenticated root and never expose launch capabilities.
+    /// Workers may inspect sibling tasks/runs, but only their own recipient inbox.
+    pub fn job_snapshot_saved(&self, caller: &AgentCaller, session_id: &str) -> Result<OrchestrationSnapshot, InspectionError> {
+        validate_identity(session_id)?;
+        let locked = self.store.lock()?;
+        let mut state = locked.read()?;
+        let job = credentials::validate_caller(&state, caller)?;
+        scope_run(&state, session_id, job.run_index)?;
+        let own_run_id = state.runs[job.run_index].run_id.clone();
+        let root_id = state.runs[job.run_index].root_id.clone();
+        state.runs.retain(|run| run.root_id == root_id && run.session_id == session_id);
+        if job.role == JobRole::Worker {
+            for run in state.runs.iter_mut().filter(|run| run.run_id != own_run_id) {
+                if let Some(report) = run.last_report.as_mut().filter(|report| report.kind == ReportKind::NeedsInput) {
+                    // NeedsInput is a private inbox body also cached on its author.
+                    // Keep timing/kind for run observations, not the question payload.
+                    report.summary = "[REDACTED]".into();
+                    report.plan = None;
+                    report.source_output = None;
+                }
+            }
+        }
+        let run_ids: std::collections::HashSet<_> = state.runs.iter().map(|run| run.run_id.clone()).collect();
+        let claim_ids: std::collections::HashSet<_> = state.runs.iter().filter_map(|run| run.checkout_claim_id.clone()).collect();
+        state.messages.retain(|message| run_ids.contains(&message.to_run_id)
+            && (job.role == JobRole::Root || message.to_run_id == own_run_id));
+        state.task_ownership.retain(|record| record.root_id == root_id);
+        state.task_intents.retain(|record| record.root_id == root_id);
+        state.assignment_intents.retain(|record| record.root_id == root_id);
+        state.scope_intents.retain(|record| record.root_id == root_id);
+        state.inbox_hints.retain(|record| run_ids.contains(&record.run_id)
+            && (job.role == JobRole::Root || record.run_id == own_run_id));
+        state.credentials.retain(|record| record.root_id == root_id);
+        state.checkout_claims.retain(|record| claim_ids.contains(&record.claim_id));
+        state.operations.retain(|record| record.root_id == root_id);
+        state.resource_requests.retain(|record| run_ids.contains(&record.holder.run_id));
+        state.owned_resources.retain(|record| record.root_id == root_id && run_ids.contains(&record.run_id));
+        let boards = vec![self.board_for_root(&locked, &root_id)?];
+        let token = self.store.tasks_token_for_root(&root_id)?;
+        let mut snapshot = projection::snapshot(
+            &OrchestrationSnapshotRequest { session_id: session_id.into(), root_id: Some(root_id) },
+            &state, token, boards,
+            Err(error("runtime_unavailable", "Durable snapshot does not consult Herdr")), &now(), self.store.identity(),
+        )?;
+        projection::redact_agent_capabilities(&mut snapshot);
+        Ok(snapshot)
     }
 
     pub fn recorded_runs(&self, session_id: &str) -> Result<(u64, Vec<Run>), InspectionError> {
