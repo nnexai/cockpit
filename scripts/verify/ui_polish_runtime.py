@@ -162,6 +162,12 @@ def configure_action_launcher(root):
         "command": ["sh", "-c", f"printf selected > {root}/evidence/launcher-selected"],
         "mode": "run",
         "cwd": "workspace",
+    }, {
+        "id": "fixture-service",
+        "title": "Fixture service tab",
+        "command": ["sh", "-c", "printf service-up; exec sleep 3600"],
+        "mode": "tab",
+        "cwd": "workspace",
     }]}
     (config_dir / "actions.json").write_text(json.dumps(actions, indent=2))
     (root / "config/herdr/config.toml").write_text(
@@ -257,7 +263,7 @@ if __name__ == "__main__":
     parser.add_argument("--with-plugins", action="store_true",
                         help="copy the owner's Files and Reviewr plugins into the fixture")
     parser.add_argument("--with-action-launcher", action="store_true",
-                        help="copy the owner's action launcher and configure harmless custom binding acceptance actions")
+                        help="copy the owner's action launcher and configure harmless marker and persistent tab actions")
     parser.add_argument("--creation-id")
     parser.add_argument("--scratch-path")
     args = parser.parse_args()

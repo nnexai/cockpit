@@ -168,11 +168,11 @@ impl SpaceServices {
         snapshot: &SessionSnapshotResponse,
         socket_path: Option<PathBuf>,
     ) -> SpaceServiceStatusResponse {
-        let entries = match (state_path(), socket_path) {
-            (Some(path), Some(socket)) => {
-                entries_for_endpoint(load_entries(&path).await, &snapshot.session_id, &socket).await
+        let entries = match socket_path {
+            Some(socket) => {
+                entries_for_endpoint(load_entries(&state_path()).await, &snapshot.session_id, &socket).await
             }
-            _ => Vec::new(),
+            None => Vec::new(),
         };
         self.observe(snapshot, entries)
     }
@@ -271,14 +271,22 @@ async fn probe(target: &ProbeTarget, client: Option<&reqwest::Client>) -> bool {
     }).await.unwrap_or(false)
 }
 
-fn state_path() -> Option<PathBuf> {
-    // Match HerdrCliAdapter's config-directory override precedence.
-    let root = std::env::var_os("HERDR_CONFIG_DIR").map(PathBuf::from)
-        .or_else(|| std::env::var_os("HERDR_CONFIG_PATH")
-            .and_then(|path| PathBuf::from(path).parent().map(PathBuf::from)))
-        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(|path| PathBuf::from(path).join("herdr")))
-        .or_else(|| std::env::var_os("HOME").map(|path| PathBuf::from(path).join(".config/herdr")))?;
-    Some(root.join("plugins/state/nnex.action-launcher/persistent-panes.json"))
+fn state_path() -> PathBuf {
+    state_path_from(
+        std::env::var("XDG_STATE_HOME").ok(),
+        std::env::var("HOME").ok(),
+        std::env::temp_dir(),
+    )
+}
+
+fn state_path_from(xdg_state_home: Option<String>, home: Option<String>, temp_dir: PathBuf) -> PathBuf {
+    // Match Herdr's config::state_dir() and plugin_paths::plugin_state_dir().
+    let root = match (xdg_state_home, home) {
+        (Some(path), _) => PathBuf::from(path).join("herdr"),
+        (None, Some(path)) => PathBuf::from(path).join(".local/state/herdr"),
+        (None, None) => temp_dir.join("herdr-state"),
+    };
+    root.join("plugins/nnex.action-launcher/persistent-panes.json")
 }
 
 async fn load_entries(path: &std::path::Path) -> Vec<PersistentPane> {
@@ -310,6 +318,24 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn state_path_follows_herdr_plugin_state_dir() {
+        let cases = [
+            (Some("/state"), Some("/home/test"), "/state/herdr/plugins/nnex.action-launcher/persistent-panes.json"),
+            (Some("/state"), None, "/state/herdr/plugins/nnex.action-launcher/persistent-panes.json"),
+            (None, Some("/home/test"), "/home/test/.local/state/herdr/plugins/nnex.action-launcher/persistent-panes.json"),
+            (None, None, "/temporary/herdr-state/plugins/nnex.action-launcher/persistent-panes.json"),
+            (Some(""), Some("/home/test"), "herdr/plugins/nnex.action-launcher/persistent-panes.json"),
+            (None, Some(""), ".local/state/herdr/plugins/nnex.action-launcher/persistent-panes.json"),
+        ];
+        for (xdg, home, expected) in cases {
+            assert_eq!(
+                state_path_from(xdg.map(String::from), home.map(String::from), PathBuf::from("/temporary")),
+                PathBuf::from(expected),
+            );
+        }
+    }
 
     fn snapshot() -> SessionSnapshotResponse {
         serde_json::from_value(json!({
