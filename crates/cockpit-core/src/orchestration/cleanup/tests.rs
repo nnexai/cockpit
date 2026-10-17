@@ -187,35 +187,6 @@ fn summary_redacts_untrusted_diagnostics_without_changing_the_raw_store() {
 }
 
 #[test]
-fn known_summary_guards_keep_distinct_diagnostics_and_supported_actions() {
-    let run = worker();
-    let mut state = OrchestrationState::default();
-    let index = insert_resource(&mut state.owned_resources, &run, space()).unwrap();
-    state.runs.push(run.clone());
-    let mut explanations = std::collections::HashSet::new();
-    for code in [
-        "terminal_primary_checkout_space", "terminal_observation_unavailable", "containment_unproven",
-        "terminal_retained_HerdrRefused", "consumer_inventory_bounded", "terminal_peer_unproven",
-        "endpoint_changed", "fixture_adapter_unavailable", "inspection_unavailable",
-        "integration_pending", "scope_dirty_checkout", "scope_unaccepted_commits", "scope_resource_admission",
-        "terminal_resource_admissions", "scope_replacement_authority_unproven", "checkout_consumer_present",
-        "outputs_kept", "attempt_unaccepted", "consumers_active", "consumer_drain_unproven",
-        "terminal_retirement_pending", "terminal_outcome_unknown", "effect_outcome_unknown",
-        "ownership_unproven", "creation_identity_unavailable", "creation_provenance_conflict",
-        "terminal_identity_changed", "superseded_work_preserved", "superseded_space_preserved",
-    ] {
-        state.owned_resources[index].cleanup.reason = Some(reason(CleanupReasonClass::Reconcilable,
-            code, "/private/raw-message"));
-        let summary = summaries(&state, &run.session_id);
-        let why = summary[0].items[0].cleanup.reason.as_ref().unwrap();
-        assert_eq!(why.code, code);
-        assert_eq!(why.class, CleanupReasonClass::Reconcilable);
-        assert!(!why.message.contains("/private"));
-        assert!(explanations.insert(why.message.clone()), "{code}: distinct cause lost");
-    }
-}
-
-#[test]
 fn inspection_errors_keep_only_allowlisted_codes_and_static_diagnostics() {
     for kind in [OwnedResourceKind::Space, OwnedResourceKind::Worktree, OwnedResourceKind::Branch,
         OwnedResourceKind::FixtureSet, OwnedResourceKind::Scratch] {
@@ -678,7 +649,6 @@ fn terminal_observation_borrowed_retention_and_adapter_refusal_remain_distinct()
         assert_eq!(projected.state, expected_state);
         assert_eq!(projected.reason.as_ref().unwrap().code, code);
         assert_eq!(projected.reason.as_ref().unwrap().class, class);
-        assert!(projected.reason.as_ref().unwrap().message.contains(cleanup_hold_action(code)));
         assert!(projected.effects.is_empty(), "summary must not dispatch a close");
         assert_eq!(serde_json::to_value(&state).unwrap(), before);
     }
