@@ -100,7 +100,6 @@ impl Fixture {
 
     fn no_herdr_creation(&self) {
         assert!(self.adapter.worktree_requests.lock().unwrap().is_empty());
-        assert!(self.adapter.terminal_requests.lock().unwrap().is_empty());
         assert!(self.adapter.closed_workspaces.lock().unwrap().is_empty());
         assert_eq!(self.adapter.inventory_calls.load(Ordering::SeqCst), 0);
     }

@@ -120,6 +120,10 @@ Local chords act when focus is inside the viewer and not in a text field or dial
 
 <!-- shortcuts:end -->
 
+### Space setup
+
+In **Set up a Space**, choose the visible **Open folder** option beside **New worktree**, then type a project name or checkout-path fragment in **Folder** to find discovered checkouts, including linked worktrees. Down or Ctrl+N opens the suggestions; Up/Down or Ctrl+P/N moves the highlight. Enter chooses the exact checkout path without opening it; a second Enter opens that folder as a Space without creating a worktree. Tab chooses a non-empty search result and moves on; Escape closes suggestions before the dialog. The chosen path stays editable. Paste an absolute path starting with `/` to open any folder directly, even while repository discovery is loading or unavailable.
+
 ### Notes
 
 Open **Notes** from the work-area header or **Open Notes** in Commands. This is a local whole-work-area surface for the selected Space, not a Herdr pane. Closing Notes restores its entry focus without changing Herdr focus; drafts remain associated with their durable Notes UUID.

@@ -64,7 +64,6 @@ impl Fixture {
     fn no_shells(&self) {
         assert!(self.adapter.worktree_requests.lock().unwrap().iter().all(|request|
             request.mode == WorkspaceSetupMode::Open && request.open_existing_worktree));
-        assert!(self.adapter.terminal_requests.lock().unwrap().is_empty());
         assert!(self.adapter.closed_workspaces.lock().unwrap().is_empty());
     }
     async fn registration_inventory(&self, checkout: &str, workspace: &str) {

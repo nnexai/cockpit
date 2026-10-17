@@ -64,7 +64,6 @@ impl ProjectHerdrAdapter for InspectionProjectAdapter {
         Ok(self.0.clone().expect("configured repository inventory"))
     }
     async fn project_worktree(&self, _: &str, _: &ProjectWorktreeRequest) -> Result<ProjectWorktreeResult, InspectionError> { panic!("resolution must not create a checkout") }
-    async fn project_terminal(&self, _: &str, _: &ProjectTerminalRequest) -> Result<ProjectTerminalResult, InspectionError> { panic!("resolution must not create a terminal") }
     async fn project_worktree_dirty(&self, _: &str, _: u32, _: u32) -> Result<cockpit_core::project_adapter::WorktreeStatus, InspectionError> { panic!("not inspected") }
     async fn project_close_workspace(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> { panic!("resolution must not close a workspace") }
     async fn project_remove_worktree(&self, _: &str, _: &ProjectWorktreeRemoveRequest) -> Result<(), InspectionError> { panic!("resolution must not delete a checkout") }

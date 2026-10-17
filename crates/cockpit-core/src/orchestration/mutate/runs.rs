@@ -542,9 +542,6 @@ pub(in crate::orchestration) fn reconcile(
     if ctx.state.runs[index].stage == RunStage::Closed {
         return Err(error("invalid_stage", "Closed runs cannot be reconciled"));
     }
-    if matches!(ctx.actor, Actor::Agent(_)) && recovery == Some(WorkspaceRecoveryAction::RetryEnvironment) {
-        return Err(error("actor_forbidden", "Only the operator may retry an environment with uncertain prior effects"));
-    }
     let by = actor_ref(ctx.actor, ctx.caller, ctx.state);
     let run = &mut ctx.state.runs[index];
     let d = run.dispatch.as_mut().ok_or_else(|| error("invalid_stage", "No setup to reconcile"))?;

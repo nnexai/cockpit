@@ -31,7 +31,7 @@ use cockpit_protocol::{
 use crate::{
     HerdrAdapter, ProjectHerdrAdapter, SessionSubscription, TerminalSession,
     project_adapter::{
-        ProjectInventory, ProjectTerminalRequest, ProjectTerminalResult,
+        ProjectInventory,
         ProjectWorktreeRemoveRequest, ProjectWorktreeRequest, ProjectWorktreeResult,
     },
     projects::ProjectService,
@@ -107,13 +107,6 @@ impl ProjectHerdrAdapter for NoopAdapter {
         _: &str,
         _: &ProjectWorktreeRequest,
     ) -> Result<ProjectWorktreeResult, InspectionError> {
-        unavailable()
-    }
-    async fn project_terminal(
-        &self,
-        _: &str,
-        _: &ProjectTerminalRequest,
-    ) -> Result<ProjectTerminalResult, InspectionError> {
         unavailable()
     }
     async fn project_worktree_dirty(

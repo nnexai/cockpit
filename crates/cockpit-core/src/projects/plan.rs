@@ -546,9 +546,6 @@ async fn plan_open(
 }
 
 fn plan_effects(checkout: &mut PlannedCheckout) {
-    checkout.effects.push(
-        "Create a new context-aware terminal with allowlisted COCKPIT_* environment".to_owned(),
-    );
     if checkout.mode == WorkspaceSetupMode::Create {
         checkout.effects.push(
             "Run configured repository actions automatically (trust_repository remains unset)"
@@ -1117,10 +1114,6 @@ mod tests {
         assert!(
             adapter.worktree_requests.lock().unwrap().is_empty(),
             "proof must not create a checkout"
-        );
-        assert!(
-            adapter.terminal_requests.lock().unwrap().is_empty(),
-            "proof must not create a terminal"
         );
         std::fs::remove_dir_all(&root).unwrap();
     }

@@ -64,23 +64,6 @@ pub struct ProjectWorktreeResult {
 }
 
 #[derive(Debug, Clone)]
-pub struct ProjectTerminalRequest {
-    pub endpoint_identity: String,
-    pub workspace_id: String,
-    pub cwd: String,
-    pub label: String,
-    pub focus: bool,
-    pub env: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ProjectTerminalResult {
-    pub workspace_id: String,
-    pub tab_id: String,
-    pub pane_id: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct ProjectWorktreeRemoveRequest {
     pub endpoint_identity: String,
     pub workspace_id: String,
@@ -119,12 +102,6 @@ pub trait ProjectHerdrAdapter: HerdrAdapter {
         session_id: &str,
         request: &ProjectWorktreeRequest,
     ) -> Result<ProjectWorktreeResult, InspectionError>;
-
-    async fn project_terminal(
-        &self,
-        session_id: &str,
-        request: &ProjectTerminalRequest,
-    ) -> Result<ProjectTerminalResult, InspectionError>;
 
     async fn project_worktree_dirty(
         &self,

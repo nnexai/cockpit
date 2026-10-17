@@ -555,13 +555,13 @@ export type WorkspaceSetupPlan = { operation_id: string, generation: number, end
 
 export type WorkspaceOperationRequest = { operation_id: string, expected_generation: number, };
 
-export type WorkspaceRecoveryAction = "accept_existing_worktree" | "retry_environment";
+export type WorkspaceRecoveryAction = "accept_existing_worktree";
 
 export type WorkspaceReconcileRequest = { operation_id: string, expected_generation: number, action: WorkspaceRecoveryAction, };
 
 export type WorkspaceOperationState = "planned" | "running" | "completed" | "partial" | "outcome_unknown" | "cancelled" | "needs_review";
 
-export type WorkspaceOperationStep = "planned" | "validated" | "herdr_requested" | "herdr_observed" | "worktree_ready" | "workspace_verified" | "context_preparing" | "context_ready" | "environment_requested" | "environment_ready" | "completed" | "checkout_prepared" | "space_bound";
+export type WorkspaceOperationStep = "planned" | "validated" | "herdr_requested" | "herdr_observed" | "worktree_ready" | "workspace_verified" | "context_preparing" | "context_ready" | "completed" | "checkout_prepared" | "space_bound";
 
 export type WorkspaceOwnedResource = { kind: string, path: string, created_by_operation: boolean, };
 

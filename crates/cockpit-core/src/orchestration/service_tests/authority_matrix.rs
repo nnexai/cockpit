@@ -331,9 +331,6 @@ fn operator_only_intents_never_gain_root_or_worker_authority() {
             operation_id: id(), attachment_id: attachment.attachment_id, expected_attachment_epoch: attachment.epoch,
             conversation: attachment.conversation.clone().unwrap(),
         },
-        OrchestrationAction::ReconcileRun {
-            run_id: matrix.worker.clone(), recovery: Some(cockpit_protocol::projects::WorkspaceRecoveryAction::RetryEnvironment),
-        },
     ];
     for (name, actor) in [("root", &matrix.root_actor), ("owner", &matrix.owner), ("sibling", &matrix.sibling), ("foreign root", &matrix.foreign_root)] {
         for action in &actions {

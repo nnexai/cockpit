@@ -6,7 +6,7 @@ use cockpit_protocol::{
         ResourceMutationResponse, SessionListResponse, SessionSnapshotResponse, TerminalOpenRequest},
 };
 use crate::{
-    project_adapter::{ProjectInventory, ProjectTerminalRequest, ProjectTerminalResult,
+    project_adapter::{ProjectInventory,
         ProjectWorktreeRemoveRequest, ProjectWorktreeRequest, ProjectWorktreeResult},
     HerdrAdapter, ProjectHerdrAdapter, SessionSubscription, TerminalSession,
 };
@@ -36,7 +36,6 @@ impl ProjectHerdrAdapter for ReadOnlyProjectAdapter {
         self.inventory.clone().map_or_else(unused_project_call, Ok)
     }
     async fn project_worktree(&self, _: &str, _: &ProjectWorktreeRequest) -> Result<ProjectWorktreeResult, InspectionError> { unused_project_call() }
-    async fn project_terminal(&self, _: &str, _: &ProjectTerminalRequest) -> Result<ProjectTerminalResult, InspectionError> { unused_project_call() }
     async fn project_worktree_dirty(&self, _: &str, _: u32, _: u32) -> Result<crate::project_adapter::WorktreeStatus, InspectionError> { unused_project_call() }
     async fn project_close_workspace(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> { unused_project_call() }
     async fn project_remove_worktree(&self, _: &str, _: &ProjectWorktreeRemoveRequest) -> Result<(), InspectionError> { unused_project_call() }

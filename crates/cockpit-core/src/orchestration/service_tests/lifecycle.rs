@@ -686,11 +686,6 @@ fn supervisor_recovers_only_strict_descendants() {
             }
         }
     }
-    let bytes = fixture.state_bytes();
-    assert_code(fixture.apply(&supervisor, OrchestrationAction::ReconcileRun {
-        run_id: nested.clone(), recovery: Some(cockpit_protocol::projects::WorkspaceRecoveryAction::RetryEnvironment),
-    }), "actor_forbidden");
-    assert_eq!(fixture.state_bytes(), bytes);
     fixture.resume_exited(&supervisor, &nested);
     let retried = fixture.run(&nested);
     assert_eq!(retried.dispatch.as_ref().unwrap().launch_attempt, reviewed.dispatch.as_ref().unwrap().launch_attempt + 1);

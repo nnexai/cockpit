@@ -7,7 +7,7 @@ use cockpit_protocol::projects::{
 };
 
 use crate::InspectionError;
-use crate::project_adapter::ProjectWorktreeRequest;
+use crate::project_adapter::{ProjectWorktreeRequest, ProjectWorktreeResult};
 use crate::project_store::ProjectStore;
 use crate::repositories::RepositoryCatalog;
 
@@ -58,10 +58,6 @@ impl ProjectService {
                 self.accept_existing_worktree(session, operation, &repository)
                     .await?
             }
-            WorkspaceRecoveryAction::RetryEnvironment => {
-                self.retry_environment(session, &operation, &repository)
-                    .await?
-            }
         };
         drop(lease);
         Ok(result)
@@ -110,8 +106,9 @@ impl ProjectService {
                 "existing checkout branch differs from reviewed plan",
             ));
         }
-        let workspace_id = if let Some(workspace_id) = entry.open_workspace_id.clone() {
-            workspace_id
+        let (workspace_id, tab_id, pane_id) = if let Some(workspace_id) = entry.open_workspace_id.clone() {
+            // Inventory proves the Space, not the identity of its original root pane.
+            (workspace_id, None, None)
         } else {
             // The checkout is known, but no workspace is open. Recovery
             // is an explicit Open dispatch; never redispatch Create.
@@ -122,14 +119,21 @@ impl ProjectService {
             if operation.state == WorkspaceOperationState::Cancelled {
                 return Err(InspectionError::new("cancelled", "operation was cancelled"));
             }
-            self.open_existing_checkout(session, &operation, repository)
-                .await?
+            let opened = self.open_existing_checkout(session, &operation, repository)
+                .await?;
+            (opened.workspace_id, opened.tab_id, opened.pane_id)
         };
         self.store.update(
             &operation.operation_id,
             Some(operation.generation),
             |operation| {
                 operation.workspace_id = Some(workspace_id.clone());
+                if operation.tab_id.is_none() {
+                    operation.tab_id = tab_id.clone();
+                }
+                if operation.pane_id.is_none() {
+                    operation.pane_id = pane_id.clone();
+                }
                 operation.owned_resources.push(WorkspaceOwnedResource {
                     kind: "worktree".to_owned(),
                     path: entry.checkout_path.clone(),
@@ -159,7 +163,7 @@ impl ProjectService {
         session: &str,
         operation: &WorkspaceOperation,
         repository: &RepositoryCandidate,
-    ) -> Result<String, InspectionError> {
+    ) -> Result<ProjectWorktreeResult, InspectionError> {
         let opened = self
             .adapter
             .project_worktree(
@@ -195,63 +199,7 @@ impl ProjectService {
                 "explicit Open did not prove the recovered workspace",
             ));
         }
-        Ok(opened.workspace_id)
-    }
-
-    async fn retry_environment(
-        &self,
-        session: &str,
-        operation: &WorkspaceOperation,
-        repository: &RepositoryCandidate,
-    ) -> Result<WorkspaceOperation, InspectionError> {
-        if operation.workspace_id.is_none()
-            || operation.pane_id.is_some()
-            || !matches!(
-                operation.step,
-                WorkspaceOperationStep::WorkspaceVerified
-                    | WorkspaceOperationStep::EnvironmentRequested
-            )
-        {
-            return Err(InspectionError::new(
-                "invalid_reconcile",
-                "environment retry requires a verified workspace",
-            ));
-        }
-        let inventory = self
-            .adapter
-            .project_inventory(session, &repository.checkout_path)
-            .await?;
-        verify_inventory(&inventory, repository)?;
-        if inventory.endpoint_identity != operation.plan.endpoint_identity
-            || !inventory.worktrees.iter().any(|entry| {
-                entry.checkout_path == operation.plan.checkout_path
-                    && entry.open_workspace_id.as_deref() == operation.workspace_id.as_deref()
-            })
-        {
-            return Err(InspectionError::new(
-                "stale_identity",
-                "workspace provenance changed while reconciling environment",
-            ));
-        }
-        self.store.update(
-            &operation.operation_id,
-            Some(operation.generation),
-            |operation| {
-                operation.step = WorkspaceOperationStep::WorkspaceVerified;
-                if operation.cancel_requested {
-                    operation.state = WorkspaceOperationState::Cancelled;
-                    operation.resume_allowed = false;
-                } else {
-                    operation.state = WorkspaceOperationState::Partial;
-                    operation.resume_allowed = true;
-                }
-                operation.error = Some(error_response(
-                    "environment_retry_acknowledged",
-                    "retry may create a new environment tab; prior uncertain panes are untouched",
-                ));
-                Ok(())
-            },
-        )
+        Ok(opened)
     }
 }
 
@@ -312,4 +260,95 @@ fn validate_reconcile_request(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::test_support::*;
+    use crate::library::LibraryService;
+    use crate::project_adapter::{ProjectInventory, ProjectWorktreeEntry};
+    use crate::sources::SourceService;
+    use cockpit_protocol::projects::{WorkspaceOperationRequest, WorkspaceSetupRequest};
+    use uuid::Uuid;
+
+    #[tokio::test]
+    async fn recovery_preserves_proven_root_receipts_without_replaying_create() {
+        for already_open in [false, true] {
+            let root = std::env::temp_dir().join(format!("cockpit-setup-recovery-{}", Uuid::new_v4()));
+            let repository = root.join("repository");
+            std::fs::create_dir_all(&repository).unwrap();
+            git(&repository, &["init"]);
+            git(&repository, &["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
+                "commit", "--allow-empty", "-m", "fixture"]);
+            let configuration = configuration(&root);
+            std::fs::create_dir_all(&configuration.worktree_root).unwrap();
+            let adapter = Arc::new(NestedDirectoryAdapter::default());
+            let service = Arc::new(ProjectService::new(configuration.clone(), adapter.clone()).unwrap());
+            let candidate = service.repositories().await.unwrap().repositories.into_iter()
+                .find(|candidate| candidate.checkout_path == repository.to_string_lossy()).unwrap();
+            adapter.repository.set(candidate.clone()).unwrap();
+            let plan = service.plan("session", &WorkspaceSetupRequest::Create {
+                repository_id: candidate.repository_id.clone(),
+                branch: Some("recovered".to_owned()), base_ref: None, checkout_path: None,
+                label: None, task_name: None, artifact_url: None, linked_artifact_urls: vec![],
+                focus: false,
+            }).await.unwrap();
+            *adapter.inventory.lock() = Some(ProjectInventory {
+                endpoint_identity: plan.endpoint_identity.clone(),
+                repository_key: candidate.common_dir.clone(),
+                repository_root: candidate.root.clone(),
+                supported_methods: vec![],
+                worktrees: vec![ProjectWorktreeEntry {
+                    checkout_path: plan.checkout_path.clone(), branch: plan.branch.clone(),
+                    open_workspace_id: already_open.then(|| "workspace".to_owned()),
+                    is_primary: false, is_linked_worktree: true, dirty: Some(false),
+                }],
+            });
+            let pending = service.mark_dispatch(&plan.operation_id, WorkspaceOperationStep::HerdrRequested).unwrap();
+            let library = Arc::new(LibraryService::new(configuration.clone(),
+                Arc::new(SourceService::new(&configuration, vec![]).unwrap())));
+            service.resume("session", &WorkspaceOperationRequest {
+                operation_id: plan.operation_id.clone(), expected_generation: pending.generation,
+            }, library.clone()).await.unwrap_err();
+            let retained = service.store.load(&plan.operation_id).unwrap();
+            assert_eq!(retained.generation, pending.generation);
+            assert_eq!(retained.state, pending.state);
+            assert_eq!(retained.step, pending.step);
+            assert!(pending_unknown(&retained));
+            assert!(retained.workspace_id.is_none());
+            assert!(retained.tab_id.is_none());
+            assert!(retained.pane_id.is_none());
+            assert!(adapter.worktree_requests.lock().unwrap().is_empty());
+
+            let recovered = service.reconcile("session", &WorkspaceReconcileRequest {
+                operation_id: plan.operation_id.clone(), expected_generation: pending.generation,
+                action: WorkspaceRecoveryAction::AcceptExistingWorktree,
+            }).await.unwrap();
+            assert_eq!(recovered.step, WorkspaceOperationStep::WorktreeReady);
+            assert_eq!(recovered.state, WorkspaceOperationState::Partial);
+            assert!(recovered.resume_allowed);
+            assert_eq!(recovered.workspace_id.as_deref(), Some("workspace"));
+            assert_eq!(recovered.tab_id.as_deref(), (!already_open).then_some("workspace:root"));
+            assert_eq!(recovered.pane_id.as_deref(), (!already_open).then_some("workspace:root-pane"));
+            assert!(recovered.owned_resources.iter().all(|resource| !resource.created_by_operation));
+            let dispatches = usize::from(!already_open);
+            {
+                let requests = adapter.worktree_requests.lock().unwrap();
+                assert_eq!(requests.len(), dispatches);
+                assert!(requests.iter().all(|request|
+                    request.mode == WorkspaceSetupMode::Open && request.open_existing_worktree));
+            }
+
+            service.resume("session", &WorkspaceOperationRequest {
+                operation_id: plan.operation_id.clone(), expected_generation: recovered.generation,
+            }, library).await.unwrap();
+            let completed = settled_setup(&service, &plan.operation_id).await;
+            assert_eq!(completed.state, WorkspaceOperationState::Completed, "{completed:?}");
+            assert_eq!(completed.tab_id, recovered.tab_id);
+            assert_eq!(completed.pane_id, recovered.pane_id);
+            assert_eq!(adapter.worktree_requests.lock().unwrap().len(), dispatches);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
 }

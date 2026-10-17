@@ -14,7 +14,7 @@ use cockpit_protocol::v1::{
 };
 
 use crate::project_adapter::{
-    ProjectInventory, ProjectTerminalRequest, ProjectTerminalResult, ProjectWorktreeRemoveRequest,
+    ProjectInventory, ProjectWorktreeRemoveRequest,
     ProjectWorktreeRequest, ProjectWorktreeResult, WorktreeStatus,
 };
 use crate::repositories;
@@ -36,7 +36,6 @@ pub(super) struct NestedDirectoryAdapter {
     pub(super) teardown_store: parking_lot::Mutex<Option<crate::project_store::ProjectStore>>,
     pub(super) receipts_at_remove: parking_lot::Mutex<Vec<crate::project_store::TeardownReceipt>>,
     pub(super) worktree_requests: StdMutex<Vec<ProjectWorktreeRequest>>,
-    pub(super) terminal_requests: StdMutex<Vec<ProjectTerminalRequest>>,
     pub(super) closed_workspaces: StdMutex<Vec<String>>,
     pub(super) repository: std::sync::OnceLock<RepositoryCandidate>,
     pub(super) inventory: parking_lot::Mutex<Option<ProjectInventory>>,
@@ -203,6 +202,21 @@ impl ProjectHerdrAdapter for NestedDirectoryAdapter {
             .lock()
             .expect("worktree requests")
             .push(request.clone());
+        if request.mode == WorkspaceSetupMode::Open && request.open_existing_worktree && self.snapshot.lock().is_none() {
+            if let Some(inventory) = self.inventory.lock().as_mut() {
+                let entry = inventory.worktrees.iter_mut().find(|entry| entry.checkout_path == request.checkout_path)
+                    .ok_or_else(|| InspectionError::new("test_adapter_unused", "checkout missing from fixture inventory"))?;
+                entry.open_workspace_id = Some("workspace".to_owned());
+                return Ok(ProjectWorktreeResult {
+                    workspace_id: "workspace".to_owned(),
+                    tab_id: Some("workspace:root".to_owned()),
+                    pane_id: Some("workspace:root-pane".to_owned()),
+                    checkout_path: entry.checkout_path.clone(),
+                    branch: entry.branch.clone(),
+                    already_open: false,
+                });
+            }
+        }
         if request.mode == WorkspaceSetupMode::Open && request.open_existing_worktree && self.snapshot.lock().is_some() {
             let inventory = self.inventory.lock().clone();
             if let Some(inventory) = inventory {
@@ -241,26 +255,10 @@ impl ProjectHerdrAdapter for NestedDirectoryAdapter {
         Ok(ProjectWorktreeResult {
             workspace_id: "workspace".to_owned(),
             tab_id: Some("workspace:root".to_owned()),
-            pane_id: None,
+            pane_id: Some("workspace:root-pane".to_owned()),
             checkout_path: request.checkout_path.clone(),
             branch: request.branch.clone(),
             already_open: false,
-        })
-    }
-
-    async fn project_terminal(
-        &self,
-        _: &str,
-        request: &ProjectTerminalRequest,
-    ) -> Result<ProjectTerminalResult, InspectionError> {
-        self.terminal_requests
-            .lock()
-            .expect("terminal requests")
-            .push(request.clone());
-        Ok(ProjectTerminalResult {
-            workspace_id: request.workspace_id.clone(),
-            tab_id: "workspace:context".to_owned(),
-            pane_id: "workspace:context-pane".to_owned(),
         })
     }
 

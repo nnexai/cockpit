@@ -15,7 +15,7 @@ use cockpit_protocol::v1::ErrorResponse;
 use crate::InspectionError;
 use crate::library::LibraryService;
 use crate::project_adapter::{
-    ProjectInventory, ProjectTerminalRequest, ProjectWorktreeRequest, ProjectWorktreeResult,
+    ProjectInventory, ProjectWorktreeRequest, ProjectWorktreeResult,
 };
 use crate::project_store::validate_project_root;
 use crate::repositories::RepositoryCatalog;
@@ -43,7 +43,6 @@ enum StepAction {
 enum StepReceipt {
     None,
     WorkspaceId,
-    PaneId,
 }
 
 struct SetupStep {
@@ -52,8 +51,7 @@ struct SetupStep {
     receipt: StepReceipt,
 }
 
-// Execution order, not protocol declaration order: Environment precedes Context.
-static SETUP_STEPS: [SetupStep; 11] = [
+static SETUP_STEPS: [SetupStep; 9] = [
     SetupStep {
         step: WorkspaceOperationStep::Planned,
         action: StepAction::Checkpoint,
@@ -84,19 +82,6 @@ static SETUP_STEPS: [SetupStep; 11] = [
     },
     SetupStep {
         step: WorkspaceOperationStep::WorkspaceVerified,
-        action: StepAction::Checkpoint,
-        receipt: StepReceipt::None,
-    },
-    SetupStep {
-        step: WorkspaceOperationStep::EnvironmentRequested,
-        action: StepAction::Dispatch {
-            code: "environment_dispatch_pending",
-            message: "awaiting terminal dispatch outcome",
-        },
-        receipt: StepReceipt::PaneId,
-    },
-    SetupStep {
-        step: WorkspaceOperationStep::EnvironmentReady,
         action: StepAction::Checkpoint,
         receipt: StepReceipt::None,
     },
@@ -138,7 +123,6 @@ pub(super) fn pending_unknown(operation: &WorkspaceOperation) -> bool {
         WorkspaceOperationStep::CheckoutPrepared | WorkspaceOperationStep::SpaceBound => false,
         _ => match setup_step(operation.step).1.receipt {
             StepReceipt::WorkspaceId => operation.workspace_id.is_none(),
-            StepReceipt::PaneId => operation.pane_id.is_none(),
             StepReceipt::None => false,
         },
     }
@@ -533,11 +517,6 @@ impl ProjectService {
         operation = self
             .verify_workspace(session, id, &plan, before.as_ref(), &result)
             .await?;
-        self.verify_environment_target(session, &plan, &result)
-            .await?;
-        operation = self
-            .ensure_environment(session, id, operation, &plan, &result, library)
-            .await?;
         let context_error = self
             .prepare_context(
                 session,
@@ -746,115 +725,6 @@ impl ProjectService {
         Ok(operation)
     }
 
-    async fn verify_environment_target(
-        &self,
-        session: &str,
-        plan: &WorkspaceSetupPlan,
-        result: &ProjectWorktreeResult,
-    ) -> Result<(), InspectionError> {
-        let repository = plan.repository.as_ref();
-        if plan.mode == WorkspaceSetupMode::Create {
-            let repository = repository.expect("Create plan has repository");
-            let env_inventory = self
-                .adapter
-                .project_inventory(session, &repository.checkout_path)
-                .await?;
-            verify_inventory(&env_inventory, repository)?;
-            if env_inventory.endpoint_identity != plan.endpoint_identity
-                || !env_inventory.worktrees.iter().any(|worktree| {
-                    worktree.checkout_path == plan.checkout_path
-                        && worktree.open_workspace_id.as_deref()
-                            == Some(result.workspace_id.as_str())
-                })
-            {
-                return Err(InspectionError::new(
-                    "stale_identity",
-                    "workspace provenance changed before environment dispatch",
-                ));
-            }
-        } else if self.adapter.project_endpoint_identity(session).await? != plan.endpoint_identity {
-            return Err(InspectionError::new(
-                "stale_identity",
-                "Herdr endpoint changed before environment dispatch",
-            ));
-        }
-        Ok(())
-    }
-
-    async fn ensure_environment(
-        &self,
-        session: &str,
-        id: &str,
-        mut operation: WorkspaceOperation,
-        plan: &WorkspaceSetupPlan,
-        result: &ProjectWorktreeResult,
-        library: &LibraryService,
-    ) -> Result<WorkspaceOperation, InspectionError> {
-        let repository = plan.repository.as_ref();
-        if operation.pane_id.is_none() {
-            let mut env = BTreeMap::new();
-            env.insert(
-                "COCKPIT_LIBRARY_ROOT".to_owned(),
-                library.root_path().to_owned(),
-            );
-            env.insert(
-                "COCKPIT_WORKSPACE_ID".to_owned(),
-                result.workspace_id.clone(),
-            );
-            if let Some(repository) = repository {
-                env.insert(
-                    "COCKPIT_REPOSITORY_KEY".to_owned(),
-                    repository.repository_id.clone(),
-                );
-            }
-            if let Some(artifact) = &plan.artifact {
-                env.insert(
-                    "COCKPIT_ARTIFACT_URL".to_owned(),
-                    artifact.canonical_url.clone(),
-                );
-            }
-            operation = self.mark_dispatch(id, WorkspaceOperationStep::EnvironmentRequested)?;
-            if operation.state == WorkspaceOperationState::Cancelled {
-                return Err(InspectionError::new("cancelled", "operation was cancelled"));
-            }
-            let terminal = self
-                .adapter
-                .project_terminal(
-                    session,
-                    &ProjectTerminalRequest {
-                        endpoint_identity: plan.endpoint_identity.clone(),
-                        workspace_id: result.workspace_id.clone(),
-                        cwd: result.checkout_path.clone(),
-                        label: format!("{} context", plan.label),
-                        focus: plan.focus,
-                        env,
-                    },
-                )
-                .await?;
-            if terminal.workspace_id != result.workspace_id {
-                return Err(InspectionError::new(
-                    "workspace_conflict",
-                    "terminal returned a different workspace",
-                ));
-            }
-            operation = self.store.update(id, None, |operation| {
-                operation.tab_id = Some(terminal.tab_id.clone());
-                operation.pane_id = Some(terminal.pane_id.clone());
-                operation.step = WorkspaceOperationStep::EnvironmentReady;
-                operation.error = None;
-                if operation.cancel_requested {
-                    operation.state = WorkspaceOperationState::Cancelled;
-                    operation.resume_allowed = false;
-                }
-                Ok(())
-            })?;
-            if operation.state == WorkspaceOperationState::Cancelled {
-                return Err(InspectionError::new("cancelled", "operation was cancelled"));
-            }
-        }
-        Ok(operation)
-    }
-
     async fn prepare_context(
         &self,
         session: &str,
@@ -1046,8 +916,13 @@ impl ProjectService {
     ) -> Result<ProjectWorktreeResult, InspectionError> {
         self.store.update(id, None, |operation| {
             operation.workspace_id = Some(result.workspace_id.clone());
-            // The worktree's root pane is not the context-bearing terminal.
-            // Only the environment dispatch may populate tab_id and pane_id.
+            // Setup keeps Herdr's default terminal; retries retain any recorded receipt.
+            if operation.tab_id.is_none() {
+                operation.tab_id = result.tab_id.clone();
+            }
+            if operation.pane_id.is_none() {
+                operation.pane_id = result.pane_id.clone();
+            }
             let resource_kind =
                 if operation.plan.ownership == WorkspaceCheckoutOwnership::OwnedWorktree {
                     "worktree"
@@ -1161,6 +1036,37 @@ mod tests {
     use cockpit_protocol::projects::{ProviderKind, WorkspaceSetupRequest};
     use std::sync::atomic::AtomicUsize;
     use uuid::Uuid;
+
+    #[tokio::test]
+    async fn root_receipt_merge_fills_only_missing_terminal_ids() {
+        let root = std::env::temp_dir().join(format!("cockpit-setup-root-receipt-{}", Uuid::new_v4()));
+        let directory = root.join("plain");
+        std::fs::create_dir_all(&directory).unwrap();
+        let configuration = configuration(&root);
+        std::fs::create_dir_all(&configuration.worktree_root).unwrap();
+        let service = ProjectService::new(configuration,
+            Arc::new(NestedDirectoryAdapter::default())).unwrap();
+        let plan = service.plan("session", &WorkspaceSetupRequest::Open {
+            path: directory.to_string_lossy().into_owned(), label: None, task_name: None, focus: false,
+        }).await.unwrap();
+        let mut result = ProjectWorktreeResult {
+            workspace_id: "workspace".to_owned(),
+            tab_id: Some("workspace:root".to_owned()), pane_id: None,
+            checkout_path: plan.checkout_path.clone(), branch: None, already_open: false,
+        };
+        service.merge_worktree_receipt(&plan.operation_id, &result, false).unwrap();
+        result.tab_id = Some("different-tab".to_owned());
+        result.pane_id = Some("workspace:root-pane".to_owned());
+        service.merge_worktree_receipt(&plan.operation_id, &result, false).unwrap();
+        result.pane_id = Some("different-pane".to_owned());
+        service.merge_worktree_receipt(&plan.operation_id, &result, false).unwrap();
+        let operation = service.store.load(&plan.operation_id).unwrap();
+        assert_eq!(operation.tab_id.as_deref(), Some("workspace:root"));
+        assert_eq!(operation.pane_id.as_deref(), Some("workspace:root-pane"));
+        assert_eq!(operation.owned_resources.len(), 1);
+        assert!(operation.owned_resources.iter().all(|resource| !resource.created_by_operation));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn setup_saves_primary_and_linked_artifacts_and_retries_selection_without_fetch() {
@@ -1336,12 +1242,9 @@ mod tests {
                 WorkspaceOperationState::Completed,
                 "{operation:?}"
             );
-            assert_eq!(
-                adapter.terminal_requests.lock().unwrap()[0]
-                    .env
-                    .get("COCKPIT_LIBRARY_ROOT"),
-                Some(&configuration.library_root),
-            );
+            assert_eq!(operation.tab_id.as_deref(), Some("workspace:root"));
+            assert_eq!(operation.pane_id.as_deref(), Some("workspace:root-pane"));
+            assert_eq!(adapter.worktree_requests.lock().unwrap().len(), 1);
             let items = library.listing(None).await.unwrap().items;
             let mut identities = items
                 .iter()
@@ -1372,15 +1275,6 @@ mod tests {
                     bytes.contains(&format!("Setup context body: fetch {expected_read}")),
                     "Library must contain the validated provider result"
                 );
-            }
-            {
-                let requests = adapter.terminal_requests.lock().expect("terminal requests");
-                let env = &requests[0].env;
-                assert_eq!(
-                    env.get("COCKPIT_WORKSPACE_ID").map(String::as_str),
-                    Some("workspace")
-                );
-                assert!(!env.contains_key("COCKPIT_CONTEXT_PATH"));
             }
             std::fs::remove_dir_all(root).unwrap();
         }
@@ -1439,10 +1333,8 @@ mod tests {
         assert_eq!(worktree_requests[0].source_cwd, nested_path);
         assert_eq!(worktree_requests[0].checkout_path, nested_path);
         drop(worktree_requests);
-        assert_eq!(
-            adapter.terminal_requests.lock().expect("terminal requests")[0].cwd,
-            nested_path
-        );
+        assert_eq!(operation.tab_id.as_deref(), Some("workspace:root"));
+        assert_eq!(operation.pane_id.as_deref(), Some("workspace:root-pane"));
 
         adapter.selection_available.store(true, Ordering::SeqCst);
         let mut snapshot = crate::HerdrAdapter::session_snapshot(adapter.as_ref(), "session")
@@ -1451,13 +1343,13 @@ mod tests {
         snapshot.spaces[0].tab_count = 1;
         snapshot.spaces[0].pane_count = 1;
         snapshot.tabs.push(cockpit_protocol::v1::TabSummary {
-            id: "workspace:context".to_owned(), space_id: "workspace".to_owned(),
-            label: "Context".to_owned(), number: 1, pane_count: 1, focused: false,
-            focused_pane_id: Some("workspace:context-pane".to_owned()),
+            id: "workspace:root".to_owned(), space_id: "workspace".to_owned(),
+            label: "Terminal".to_owned(), number: 1, pane_count: 1, focused: false,
+            focused_pane_id: Some("workspace:root-pane".to_owned()),
         });
         snapshot.panes.push(cockpit_protocol::v1::PaneSummary {
-            id: "workspace:context-pane".to_owned(), terminal_id: "context-terminal".to_owned(),
-            space_id: "workspace".to_owned(), tab_id: "workspace:context".to_owned(),
+            id: "workspace:root-pane".to_owned(), terminal_id: "root-terminal".to_owned(),
+            space_id: "workspace".to_owned(), tab_id: "workspace:root".to_owned(),
             title: None, focused: false, agent: None, agent_status: "none".to_owned(),
             revision: 1, cwd: Some(nested_path.clone()),
         });

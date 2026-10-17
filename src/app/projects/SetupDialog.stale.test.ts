@@ -207,6 +207,8 @@ describe("SetupDialog", () => {
     expect(startWorkspace).toHaveBeenCalledWith("session-1", { operation_id: "operation-1", expected_generation: 1 });
     expect(planWorkspace).toHaveBeenCalledTimes(1);
     expect($("#setup-branch")!.disabled).toBe(true);
+    expect(button("New worktree")!.disabled).toBe(true);
+    expect(button("Open folder")!.disabled).toBe(true);
   });
 
   it("waits for the plan of the latest input when Enter comes before it", async () => {
@@ -264,8 +266,12 @@ describe("SetupDialog", () => {
   it("opens an existing folder with only a path and name", async () => {
     const planWorkspace = planner();
     await renderDialog({ ...client, planWorkspace });
-    await act(async () => button("Open an existing folder instead")!.click());
+    expect(button("New worktree")!.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => button("Open folder")!.click());
     await settle();
+    expect(button("Open folder")!.getAttribute("aria-pressed")).toBe("true");
+    expect(button("New worktree")!.getAttribute("aria-pressed")).toBe("false");
+    expect(document.activeElement).toBe($("#setup-checkout"));
     expect($("#setup-repository")).toBeNull();
     expect($("#setup-artifact-url")).toBeNull();
     expect($("#setup-branch")).toBeNull();
@@ -274,6 +280,87 @@ describe("SetupDialog", () => {
     expect(planWorkspace.mock.calls.at(-1)![1]).toEqual({ operation: "open", path: "/tmp/borrowed", label: "borrowed", task_name: null, focus: true });
     expect(button("Open Space")).toBeDefined();
     expect(container!.textContent).toContain("as it is; Cockpit never deletes it");
+  });
+
+  it("chooses a discovered linked checkout by project name, then opens its exact editable path", async () => {
+    const linked = { ...repository, repository_id: "linked", checkout_path: "/worktrees/login-fix", branch: "fix/login", is_linked_worktree: true };
+    const planWorkspace = planner();
+    const startWorkspace = vi.fn(async (_session: string, request: { operation_id: string }) => workspaceOperation({ ...openPlan(), operation_id: request.operation_id }, "completed"));
+    await renderDialog({ ...client, repositories: async () => ({ repositories: [linked, repository], diagnostics: [] }), planWorkspace, startWorkspace }, { parent: false });
+    await act(async () => button("Open folder")!.click());
+    await settle();
+    const input = $("#setup-checkout")!;
+    expect(document.activeElement).toBe(input);
+    await act(async () => writeInput(input, "repo"));
+    const choices = [...container!.querySelectorAll<HTMLElement>("#setup-checkout-results [role='option']")];
+    expect(choices.map((choice) => choice.title)).toEqual([repository.checkout_path, linked.checkout_path]);
+    expect(choices[1].textContent).toContain("login-fix");
+    expect(choices[1].textContent).toContain("fix/login · worktree");
+    await act(async () => key(input, "ArrowDown"));
+    await act(async () => key(input, "Enter"));
+    expect(input.value).toBe(linked.checkout_path);
+    expect($("#setup-checkout-results")).toBeNull();
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(linked.checkout_path.length);
+    expect($("#setup-label")!.placeholder).toBe("login-fix");
+    expect(startWorkspace).not.toHaveBeenCalled();
+    await settle(400);
+    expect(planWorkspace).toHaveBeenCalledWith("session-1", { operation: "open", path: linked.checkout_path, label: "login-fix", task_name: null, focus: true });
+    await act(async () => writeInput(input, `${linked.checkout_path}/notes`));
+    expect($("#setup-checkout-results")).toBeNull();
+    await act(async () => key(input, "Enter"));
+    await settle(400);
+    expect(planWorkspace.mock.calls.at(-1)![1]).toMatchObject({ operation: "open", path: `${linked.checkout_path}/notes` });
+    expect(startWorkspace).toHaveBeenCalledWith("session-1", { operation_id: "operation-2", expected_generation: 1 });
+  });
+
+  it("keeps name searches out of planning and lets Escape close suggestions before setup", async () => {
+    const planWorkspace = planner();
+    await renderDialog({ ...client, planWorkspace }, { parent: false });
+    await act(async () => button("Open folder")!.click());
+    await settle();
+    const input = $("#setup-checkout")!;
+    await act(async () => writeInput(input, "zzz"));
+    await settle(400);
+    expect(planWorkspace).not.toHaveBeenCalled();
+    expect($("#setup-checkout-results")!.textContent).toContain("No matching repositories.");
+    await act(async () => key(input, "Enter"));
+    expect($("[role='alert']")).toBeNull();
+    await act(async () => key(input, "Escape"));
+    expect($("#setup-checkout-results")).toBeNull();
+    expect(input.value).toBe("zzz");
+    expect($("[role='dialog']")).not.toBeNull();
+    await act(async () => button("Open Space")!.click());
+    expect($("[role='alert']")!.textContent).toContain("Choose a repository from the list or enter a full path starting with /.");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(document.activeElement).toBe(input);
+    expect(planWorkspace).not.toHaveBeenCalled();
+    await act(async () => key(input, "Escape"));
+    expect($("[role='dialog']")).toBeNull();
+  });
+
+  it.each(["ready", "loading", "error"] as const)("opens a manual folder while repository discovery is %s", async (state) => {
+    const catalog = deferred<RepositoryListResponse>();
+    const planWorkspace = planner();
+    const startWorkspace = vi.fn(async () => workspaceOperation(openPlan(), "completed"));
+    const loadRepositories = vi.fn(() => catalog.promise);
+    await renderDialog({ ...client, repositories: loadRepositories, planWorkspace, startWorkspace }, { parent: false });
+    if (state === "ready") await act(async () => catalog.resolve(repositories));
+    if (state === "error") await act(async () => catalog.reject(new Error("Discovery unavailable")));
+    await act(async () => button("Open folder")!.click());
+    await settle();
+    const input = $("#setup-checkout")!;
+    expect(input.disabled).toBe(false);
+    expect(button("Open Space")!.disabled).toBe(false);
+    if (state === "loading") expect(input.placeholder).toBe("Loading repositories…");
+    if (state === "error") expect(container!.textContent).toContain("Discovery unavailable You can still enter a folder path.");
+    await act(async () => writeInput(input, "  /tmp/borrowed  "));
+    expect($("#setup-checkout-results")).toBeNull();
+    await act(async () => key(input, "Enter"));
+    await settle(400);
+    expect(planWorkspace).toHaveBeenCalledWith("session-1", { operation: "open", path: "/tmp/borrowed", label: "borrowed", task_name: null, focus: true });
+    expect(startWorkspace).toHaveBeenCalledWith("session-1", { operation_id: "operation-1", expected_generation: 1 });
+    expect($("[role='dialog']")).toBeNull();
   });
 
   it("asks for a fresh confirmation when the backend says the plan went stale", async () => {

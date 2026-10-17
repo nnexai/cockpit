@@ -1447,7 +1447,7 @@ mod review_checkout_tests {
         repositories::RepositoryCatalog,
         HerdrAdapter, ProjectHerdrAdapter, SessionSubscription, TerminalSession,
         project_adapter::{
-            ProjectInventory, ProjectTerminalRequest, ProjectTerminalResult,
+            ProjectInventory,
             ProjectWorktreeRemoveRequest, ProjectWorktreeRequest, ProjectWorktreeResult,
         },
     };
@@ -1829,13 +1829,6 @@ mod review_checkout_tests {
             _: &str,
             _: &ProjectWorktreeRequest,
         ) -> Result<ProjectWorktreeResult, InspectionError> {
-            unavailable()
-        }
-        async fn project_terminal(
-            &self,
-            _: &str,
-            _: &ProjectTerminalRequest,
-        ) -> Result<ProjectTerminalResult, InspectionError> {
             unavailable()
         }
         async fn project_worktree_dirty(

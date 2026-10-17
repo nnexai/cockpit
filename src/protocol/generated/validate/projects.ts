@@ -185,7 +185,7 @@ export const wireWorkspaceOperationRequest: WireDescriptor<V1.WorkspaceOperation
   "expected_generation": req(u32),
 });
 
-export const wireWorkspaceRecoveryAction: WireDescriptor<V1.WorkspaceRecoveryAction> = literal<V1.WorkspaceRecoveryAction>("WorkspaceRecoveryAction", ["accept_existing_worktree", "retry_environment"]);
+export const wireWorkspaceRecoveryAction: WireDescriptor<V1.WorkspaceRecoveryAction> = literal<V1.WorkspaceRecoveryAction>("WorkspaceRecoveryAction", ["accept_existing_worktree"]);
 
 export const wireWorkspaceReconcileRequest: WireDescriptor<V1.WorkspaceReconcileRequest> = struct<V1.WorkspaceReconcileRequest>("WorkspaceReconcileRequest", {
   "operation_id": req(str),
@@ -195,7 +195,7 @@ export const wireWorkspaceReconcileRequest: WireDescriptor<V1.WorkspaceReconcile
 
 export const wireWorkspaceOperationState: WireDescriptor<V1.WorkspaceOperationState> = literal<V1.WorkspaceOperationState>("WorkspaceOperationState", ["planned", "running", "completed", "partial", "outcome_unknown", "cancelled", "needs_review"]);
 
-export const wireWorkspaceOperationStep: WireDescriptor<V1.WorkspaceOperationStep> = literal<V1.WorkspaceOperationStep>("WorkspaceOperationStep", ["planned", "validated", "herdr_requested", "herdr_observed", "worktree_ready", "workspace_verified", "context_preparing", "context_ready", "environment_requested", "environment_ready", "completed", "checkout_prepared", "space_bound"]);
+export const wireWorkspaceOperationStep: WireDescriptor<V1.WorkspaceOperationStep> = literal<V1.WorkspaceOperationStep>("WorkspaceOperationStep", ["planned", "validated", "herdr_requested", "herdr_observed", "worktree_ready", "workspace_verified", "context_preparing", "context_ready", "completed", "checkout_prepared", "space_bound"]);
 
 export const wireWorkspaceOwnedResource: WireDescriptor<V1.WorkspaceOwnedResource> = struct<V1.WorkspaceOwnedResource>("WorkspaceOwnedResource", {
   "kind": req(str),

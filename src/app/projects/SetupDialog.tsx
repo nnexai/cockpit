@@ -155,9 +155,6 @@ export function operationStatusMessage(operation: Pick<WorkspaceOperation, "stat
     case "worktree_ready":
     case "workspace_verified":
       return "Preparing the Space…";
-    case "environment_requested":
-    case "environment_ready":
-      return "Opening the terminal…";
     case "context_preparing": return "Preparing Context…";
     case "context_ready": return "Context is ready. Finishing…";
     case "completed": return "Space and terminal are ready.";
@@ -198,7 +195,6 @@ export function resolveParentRepository(repositories: RepositoryCandidate[], par
 function recoveryActionFor(operation: WorkspaceOperation): WorkspaceRecoveryAction | null {
   if (operation.state !== "outcome_unknown") return null;
   if (operation.step === "herdr_requested") return "accept_existing_worktree";
-  if (operation.step === "environment_requested") return "retry_environment";
   return null;
 }
 
@@ -220,35 +216,59 @@ function artifactLabel(defaults: WorkspaceDefaults): string {
   return `${kind} ${id}${defaults.title ? ` · ${defaults.title}` : ""}`;
 }
 
-/** File-picker style repository choice: the field shows the chosen
- * repository; typing filters by fuzzy match, and Enter takes the highlighted
- * match (the best one unless the arrows moved). */
-function RepositoryPicker({ repositories, selected, loading, disabled, onChoose }: {
+/** Repository choice, or an editable folder path with discovered-checkout suggestions. */
+function RepositoryPicker({ repositories, selected, loading, disabled, onChoose, folder }: {
   repositories: readonly RepositoryCandidate[];
   selected: RepositoryCandidate | null;
   loading: boolean;
   disabled: boolean;
   onChoose: (repository: RepositoryCandidate) => void;
+  folder?: { path: string; onChange: (path: string) => void; state: LoadState; invalid: boolean };
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const chosenPath = useRef<string | null>(null);
   const [query, setQuery] = useState<string | null>(null);
   const [active, setActive] = useState(0);
-  const listOpen = query !== null;
-  const matches = useMemo(() => rankFuzzyMatches(query ?? "", repositories, (repository) => repository.name).slice(0, 50), [query, repositories]);
+  const listOpen = query !== null && !disabled;
+  const id = folder ? "setup-checkout" : "setup-repository";
+  const folderMode = folder !== undefined;
+  const folderState = folder?.state;
+  const candidates = useMemo(() => folderMode
+    ? [...repositories].sort((left, right) => shortPath(left.checkout_path).localeCompare(shortPath(right.checkout_path)))
+    : repositories, [repositories, folderMode]);
+  const matches = useMemo(() => {
+    if (!folderMode) return rankFuzzyMatches(query ?? "", candidates, (repository) => repository.name).slice(0, 50);
+    if (folderState !== "ready") return [];
+    const byPath = rankFuzzyMatches(query ?? "", candidates, (repository) => shortPath(repository.checkout_path));
+    const matchedIds = new Set(byPath.map((repository) => repository.repository_id));
+    // A worktree can live outside any directory named after its repository.
+    const byName = query ? rankFuzzyMatches(query, candidates, (repository) => repository.name)
+      .filter((repository) => !matchedIds.has(repository.repository_id))
+      .map((repository) => ({ ...repository, matchedIndices: [] })) : [];
+    return [...byPath, ...byName].slice(0, 50);
+  }, [query, candidates, folderState, folderMode]);
   const activeIndex = Math.min(active, Math.max(0, matches.length - 1));
 
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>(`[data-setup-repository-result-index="${activeIndex}"]`)?.scrollIntoView?.({ block: "nearest" });
   }, [activeIndex, listOpen]);
 
+  useEffect(() => {
+    if (chosenPath.current === null || chosenPath.current !== folder?.path) return;
+    inputRef.current?.setSelectionRange(chosenPath.current.length, chosenPath.current.length);
+    chosenPath.current = null;
+  }, [folder?.path, listOpen]);
+
   const close = () => { setQuery(null); setActive(0); };
   const choose = (repository: RepositoryCandidate | undefined) => {
     if (!repository || disabled) return;
+    if (folder) chosenPath.current = repository.checkout_path;
     onChoose(repository);
     close();
   };
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (disabled) return;
     if (event.nativeEvent.isComposing) return;
     const down = event.key === "ArrowDown" || (event.ctrlKey && event.key.toLowerCase() === "n");
     const up = event.key === "ArrowUp" || (event.ctrlKey && event.key.toLowerCase() === "p");
@@ -259,27 +279,43 @@ function RepositoryPicker({ repositories, selected, loading, disabled, onChoose 
     if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(); return; }
     if (event.key === "Enter") { event.preventDefault(); event.stopPropagation(); choose(matches[activeIndex]); return; }
     if (event.key === "Tab") { if (query) choose(matches[activeIndex]); else close(); return; }
-    if (down) { event.preventDefault(); setActive(Math.min(matches.length - 1, activeIndex + 1)); return; }
+    if (down) { event.preventDefault(); setActive(Math.max(0, Math.min(matches.length - 1, activeIndex + 1))); return; }
     if (up) { event.preventDefault(); setActive(Math.max(0, activeIndex - 1)); }
   };
   const status = loading ? "Loading repositories…" : repositories.length === 0 ? "No repositories found" : undefined;
+  const emptyMessage = !folder ? (!loading && matches.length === 0 ? "No matching repositories." : null)
+    : folder.state === "loading" ? "Loading repositories…"
+      : folder.state === "error" ? "Repositories unavailable. Enter a folder path to open any folder."
+        : folder.state === "empty" ? "No repositories found. Enter a folder path to open any folder."
+          : matches.length === 0 ? "No matching repositories. Enter a full path to open any folder." : null;
 
   return <div className="task-setup-picker">
-    <input ref={inputRef} id="setup-repository" type="text" role="combobox" aria-label="Repository" aria-expanded={listOpen} aria-controls={listOpen ? "setup-repository-results" : undefined} aria-autocomplete="list"
-      aria-activedescendant={listOpen && matches[activeIndex] ? `setup-repository-result-${activeIndex}` : undefined}
-      value={query ?? selected?.name ?? ""} placeholder={status ?? "Type to find a repository"} autoComplete="off" spellCheck={false} disabled={disabled}
-      onChange={(event) => { setQuery(event.target.value); setActive(0); }}
+    <input ref={inputRef} id={id} type="text" role="combobox" aria-label={folder ? "Folder" : "Repository"} aria-expanded={listOpen} aria-controls={listOpen ? `${id}-results` : undefined} aria-autocomplete="list"
+      aria-activedescendant={listOpen && matches[activeIndex] ? `${id}-result-${activeIndex}` : undefined} aria-invalid={folder?.invalid}
+      value={folder ? folder.path : query ?? selected?.name ?? ""} placeholder={folder ? (loading ? "Loading repositories…" : "Find a repository or enter a folder path") : status ?? "Type to find a repository"} autoComplete="off" spellCheck={false} disabled={disabled}
+      onChange={(event) => {
+        const value = event.target.value;
+        folder?.onChange(value);
+        setQuery(folder && /^[\/~]/.test(value.trimStart()) ? null : value);
+        setActive(0);
+      }}
       onFocus={(event) => event.currentTarget.select()}
       onBlur={() => close()}
       onKeyDown={onKeyDown} />
-    {listOpen ? <div ref={listRef} id="setup-repository-results" className="task-setup-results" role="listbox" aria-label="Matching repositories">
-      {matches.map((repository, index) => <div key={repository.repository_id} id={`setup-repository-result-${index}`} data-setup-repository-result-index={index} role="option" aria-selected={index === activeIndex}
-        className={`task-setup-result${index === activeIndex ? " is-active" : ""}`}
-        onMouseMove={() => setActive(index)} onMouseDown={(event) => { event.preventDefault(); choose(repository); }}>
-        <strong>{Array.from(repository.name, (character, characterIndex) => repository.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character)}</strong>
-        <code>{shortPath(repository.root)}</code>
-      </div>)}
-      {!loading && matches.length === 0 ? <p>No matching repositories.</p> : null}
+    {listOpen ? <div ref={listRef} id={`${id}-results`} className="task-setup-results" role="listbox" aria-label="Matching repositories">
+      {matches.map((repository, index) => {
+        const text = folder ? shortPath(repository.checkout_path) : repository.name;
+        const characters = Array.from(text);
+        const nameStart = folder ? characters.lastIndexOf("/") + 1 : 0;
+        const highlighted = characters.map((character, characterIndex) => repository.matchedIndices.includes(characterIndex) ? <mark key={characterIndex}>{character}</mark> : character);
+        return <div key={repository.repository_id} id={`${id}-result-${index}`} data-setup-repository-result-index={index} role="option" aria-selected={index === activeIndex}
+          className={`task-setup-result${index === activeIndex ? " is-active" : ""}`} title={folder ? repository.checkout_path : undefined}
+          onMouseMove={() => setActive(index)} onMouseDown={(event) => { event.preventDefault(); choose(repository); }}>
+          <strong>{highlighted.slice(nameStart)}</strong>
+          <code>{folder ? <>{highlighted.slice(0, Math.max(0, nameStart - 1))} · {repository.branch ?? "detached"}{repository.is_linked_worktree ? " · worktree" : ""}</> : shortPath(repository.root)}</code>
+        </div>;
+      })}
+      {emptyMessage ? <p>{emptyMessage}</p> : null}
     </div> : null}
   </div>;
 }
@@ -330,7 +366,6 @@ function Progress({ operation, readError, busy, onCancel, onResume, onReview }: 
 }) {
   const failed = operation.state === "partial" || operation.state === "needs_review";
   const recoveryAction = recoveryActionFor(operation);
-  const recoveryLabel = recoveryAction === "accept_existing_worktree" ? "Recover existing checkout" : recoveryAction === "retry_environment" ? "Retry terminal" : null;
   const running = operation.state === "running" || operation.state === "planned";
   return <section className={`task-setup-progress${running ? " is-running" : ""}`} aria-live="polite" aria-busy={busy} aria-label="Space setup progress">
     <p role="status">{operationStatusMessage(operation)}</p>
@@ -340,7 +375,7 @@ function Progress({ operation, readError, busy, onCancel, onResume, onReview }: 
     <div className="task-setup-progress-actions">
       {running ? <button type="button" onClick={onCancel} disabled={busy}>Cancel</button> : null}
       {failed && operation.resume_allowed ? <button type="button" className="setup-primary" onClick={onResume} disabled={busy}>{sourceRetry(operation) ? "Retry source import" : "Resume failed step"}</button> : null}
-      {recoveryAction && recoveryLabel ? <button type="button" className="setup-primary" onClick={() => onReview(recoveryAction)} disabled={busy}>{recoveryLabel}</button> : null}
+      {recoveryAction ? <button type="button" className="setup-primary" onClick={() => onReview(recoveryAction)} disabled={busy}>Recover existing checkout</button> : null}
     </div>
   </section>;
 }
@@ -390,7 +425,7 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, pa
     .map((linked) => linked.artifact.canonical_url), [linkedChoice, sourceState.defaults]);
   // The request the form currently describes, or null while it is incomplete.
   const requestKey = useMemo(() => {
-    if (form.mode === "open") return form.openPath.trim() ? JSON.stringify(makeRequest(form)) : null;
+    if (form.mode === "open") return form.openPath.trim().startsWith("/") ? JSON.stringify(makeRequest(form)) : null;
     if (!form.repositoryId || sourceState.pending) return null;
     return JSON.stringify(makeRequest(form, linkedUrls));
   }, [form, linkedUrls, sourceState.pending]);
@@ -681,6 +716,11 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, pa
       dialogRef.current?.querySelector<HTMLElement>("#setup-checkout")?.focus();
       return;
     }
+    if (form.mode === "open" && !form.openPath.trim().startsWith("/")) {
+      setFormError("Choose a repository from the list or enter a full path starting with /.");
+      dialogRef.current?.querySelector<HTMLElement>("#setup-checkout")?.focus();
+      return;
+    }
     if (form.mode === "create" && !form.repositoryId) {
       setFormError(sourceState.pending ? null : "Choose a repository.");
       if (sourceState.pending) { setStartRequested(true); return; }
@@ -774,6 +814,10 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, pa
     <section className="setup-dialog task-setup" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={onDialogKeyDown}>
       <header className="task-setup-header"><h2 id={titleId}>{form.mode === "open" ? "Open a folder as a Space" : "New Space"}</h2><button type="button" className="task-setup-close" onClick={handleClose} aria-label="Close setup dialog"><UiIcon name="close" /></button></header>
       <div className="task-setup-body">
+        <div className="task-setup-mode viewer-segmented" role="group" aria-label="Space setup type">
+          <button type="button" aria-pressed={form.mode === "create"} onClick={() => { if (form.mode !== "create") setMode("create"); }} disabled={locked}>New worktree</button>
+          <button type="button" aria-pressed={form.mode === "open"} onClick={() => { if (form.mode !== "open") setMode("open"); }} disabled={locked}>Open folder</button>
+        </div>
         {form.mode === "create" ? <>
           <Row label="Link" htmlFor="setup-artifact-url">
             <input id="setup-artifact-url" type="url" value={form.artifactUrl} onChange={onText("artifactUrl")} placeholder="GitLab MR, issue or Jira link (optional)" autoComplete="off" spellCheck={false} disabled={locked} />
@@ -787,7 +831,11 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, pa
           </Row>
           <Row label="Branch" htmlFor="setup-branch"><input id="setup-branch" value={form.branch} onChange={onText("branch", true)} placeholder={currentPlan?.branch ?? "From the link or branch pattern"} autoComplete="off" spellCheck={false} disabled={locked} /></Row>
         </> : <Row label="Folder" htmlFor="setup-checkout">
-          <input id="setup-checkout" value={form.openPath} onChange={onText("openPath", true)} placeholder="/path/to/folder" aria-invalid={Boolean(formError)} autoComplete="off" spellCheck={false} disabled={locked} />
+          <RepositoryPicker repositories={repositories} selected={null} loading={loadState === "loading"} disabled={locked}
+            onChoose={(repository) => updateText("openPath", repository.checkout_path, true)}
+            folder={{ path: form.openPath, onChange: (path) => updateText("openPath", path, true), state: loadState, invalid: Boolean(formError) }} />
+          {loadState === "error" ? <p className="task-setup-note is-error">{loadError} You can still enter a folder path. <button type="button" className="task-setup-link" onClick={() => setRequestRefresh((value) => value + 1)}>Reload</button></p> : null}
+          {catalogNote ? <p className="task-setup-note">{catalogNote}</p> : null}
         </Row>}
         <Row label="Name" htmlFor="setup-label"><input id="setup-label" value={form.label} onChange={onText("label", true)} placeholder={currentPlan?.label ?? (form.mode === "open" ? directoryName(form.openPath) || "Folder name" : form.branch || "Branch name")} autoComplete="off" spellCheck={false} disabled={locked} /></Row>
         <details className="task-setup-more">
@@ -797,7 +845,6 @@ export function SetupDialog({ client, sessionId, open, selectedParent = null, pa
             <Row label="Destination" htmlFor="setup-destination"><input id="setup-destination" value={form.checkoutPath} onChange={onText("checkoutPath", true)} placeholder="Automatic" autoComplete="off" spellCheck={false} disabled={locked} /></Row>
           </> : null}
           <label className="task-setup-check"><input type="checkbox" checked={form.focus} onChange={(event) => { if (!dispatchRef.current) setForm((current) => ({ ...current, focus: event.target.checked })); }} disabled={locked} /> Switch to the new Space</label>
-          <button type="button" className="task-setup-link" onClick={() => setMode(form.mode === "open" ? "create" : "open")} disabled={locked}>{form.mode === "open" ? "Create a new worktree instead" : "Open an existing folder instead"}</button>
         </details>
         {operation ? <Progress operation={operation} readError={operationReadError} busy={actionPending} onCancel={cancel} onResume={resume} onReview={reconcile} />
           : <div className="task-setup-status" aria-live="polite">

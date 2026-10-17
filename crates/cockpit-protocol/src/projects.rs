@@ -324,7 +324,6 @@ pub struct BindMovedSpaceRequest {
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceRecoveryAction {
     AcceptExistingWorktree,
-    RetryEnvironment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -358,8 +357,6 @@ pub enum WorkspaceOperationStep {
     WorkspaceVerified,
     ContextPreparing,
     ContextReady,
-    EnvironmentRequested,
-    EnvironmentReady,
     Completed,
     CheckoutPrepared,
     SpaceBound,

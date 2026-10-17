@@ -204,7 +204,7 @@ const snapshot: OrchestrationSnapshot = {
     assignment_generation: 1, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null,
       initial_prompt_args: null, hook_args: null, max_parallel: 4, process_scope: "auto", inbox_prompt_hints: false, routes: [] },
     dispatch: { step: "launched", launch_attempt: 1, error: { code: "launch_unknown", message: "Review" }, updated_at: at,
-      launch_tag: "launch", endpoint_identity: "endpoint", recovery: "retry_environment", agent_started: true, scope_unit: null, pre_move_scope: null,
+      launch_tag: "launch", endpoint_identity: "endpoint", recovery: null, agent_started: true, scope_unit: null, pre_move_scope: null,
       latch: null, latch_state: null, source_location: null, move_operation_id: null, staging_workspace_id: null },
     target, setup: { operation_id: "operation", generation: 1, workspace_id: "space", checkout_path: "/repo", repository_id: "repo",
       branch: "task", base: "main", base_commit: baseCommit, ownership: "owned_worktree", effects: ["Create"], warnings: ["Warning"], project_workspace_id: null },

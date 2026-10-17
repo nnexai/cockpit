@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use cockpit_core::project_adapter::{
-    ProjectHerdrAdapter, ProjectInventory, ProjectSnapshot, ProjectTerminalRequest, ProjectTerminalResult,
+    ProjectHerdrAdapter, ProjectInventory, ProjectSnapshot,
     ProjectWorktreeEntry, ProjectWorktreeRemoveRequest, ProjectWorktreeRequest,
     ProjectWorktreeResult, WorktreeStatus,
 };
@@ -632,59 +632,6 @@ impl ProjectHerdrAdapter for HerdrCliAdapter {
             ),
             WorkspaceSetupMode::Open => parse_workspace_result(&result, &request.checkout_path),
         }
-    }
-
-    async fn project_terminal(
-        &self,
-        session_id: &str,
-        request: &ProjectTerminalRequest,
-    ) -> Result<ProjectTerminalResult, InspectionError> {
-        ensure_endpoint_identity(&request.endpoint_identity)?;
-        let methods = self.project_methods(session_id).await?;
-        if !methods.contains("tab.create") {
-            return Err(unsupported("Herdr method tab.create is unavailable"));
-        }
-        ensure_text(&request.workspace_id, "workspace_id")?;
-        ensure_text(&request.cwd, "cwd")?;
-        ensure_text(&request.label, "label")?;
-        if !valid_pane_id(&request.workspace_id) || !Path::new(&request.cwd).is_absolute() {
-            return Err(invalid("workspace_id/cwd"));
-        }
-        let params = json!({
-            "workspace_id": request.workspace_id,
-            "cwd": request.cwd,
-            "label": request.label,
-            "focus": request.focus,
-            "env": sanitized_env(&request.env)?,
-        });
-        let (result, _) = self
-            .socket_request_with_identity(
-                session_id,
-                "tab.create",
-                params,
-                Some(&request.endpoint_identity),
-            )
-            .await?;
-        let tab_id = parse_tab_result(&result, &request.workspace_id)?;
-        let snapshot = self
-            .read_snapshot_with_identity(session_id, Some(&request.endpoint_identity))
-            .await?;
-        let panes: Vec<_> = snapshot
-            .panes
-            .iter()
-            .filter(|pane| pane.space_id == request.workspace_id && pane.tab_id == tab_id)
-            .collect();
-        if panes.len() != 1 || !valid_pane_id(&panes[0].id) {
-            return Err(InspectionError::new(
-                "malformed_identity",
-                "tab.create did not yield exactly one authoritative root pane",
-            ));
-        }
-        Ok(ProjectTerminalResult {
-            workspace_id: request.workspace_id.clone(),
-            tab_id,
-            pane_id: panes[0].id.clone(),
-        })
     }
 
     async fn project_worktree_dirty(

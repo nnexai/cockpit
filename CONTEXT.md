@@ -46,7 +46,7 @@ Only confirmed authoritative tab or final-real-terminal loss retires a layout an
 
 ## Projects and durable stores
 
-Project setup is plan-driven: repository discovery, artifact validation, Herdr creation, exact ownership receipt, optional Library save/selection, and context-aware subsequent terminals. Opening an existing directory borrows that exact path; it does not establish teardown ownership. Setup operation identity and creation receipts connect uncertain dispatch to reconciliation.
+Project setup is plan-driven: repository discovery, artifact validation, Herdr creation with its default root terminal, exact ownership receipt, and optional shared Library save/selection. Open/Create adds no context tab or companion folder. Opening an existing directory borrows that exact path; it does not establish teardown ownership. Setup operation identity and creation receipts connect uncertain dispatch to reconciliation. The initial terminal is not retrofitted with Cockpit context environment; `cockpit-cli context --current` discovers the Space's Library selection and existing paths.
 
 | Store | Meaning and lifetime |
 | --- | --- |
