@@ -48,8 +48,8 @@ pub struct ProjectWorktreeRequest {
     pub label: String,
     pub focus: bool,
     pub env: BTreeMap<String, String>,
-    /// Recovery-only: reopen an already created Git worktree. Ordinary setup
-    /// Open operations always create a Space for the supplied directory.
+    /// Reopen a created Git worktree for recovery or register a moved Space.
+    /// Ordinary setup Open operations always create a Space for the directory.
     pub open_existing_worktree: bool,
 }
 

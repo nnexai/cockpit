@@ -3,12 +3,13 @@ use std::sync::{Arc, atomic::Ordering};
 
 use cockpit_protocol::library::{LibraryAddRequest, SpaceRepositoriesRequest};
 use cockpit_protocol::projects::{ProjectConfiguration, WorkspaceSetupRequest};
-use cockpit_protocol::v1::{PaneSummary, SpaceSummary, TabSummary};
+use cockpit_protocol::v1::{PaneSummary, SpaceGitSummary, SpaceSummary, TabSummary};
 
 use super::*;
 use crate::HerdrAdapter;
 use crate::library::LibraryService;
 use crate::projects::test_support::{NestedDirectoryAdapter, git};
+use crate::project_adapter::{ProjectInventory, ProjectWorktreeEntry, ProjectWorktreeResult};
 use crate::sources::SourceService;
 
 struct Fixture {
@@ -58,10 +59,29 @@ impl Fixture {
             space_id: "moved".into(), tab_id: "moved:worker".into(), title: None, focused: false,
             agent: None, agent_status: "none".into(), revision: 1, cwd: Some(checkout.into()) });
         *self.adapter.snapshot.lock() = Some(snapshot);
+        self.registration_inventory(checkout, "moved").await;
     }
     fn no_shells(&self) {
-        assert!(self.adapter.worktree_requests.lock().unwrap().is_empty());
+        assert!(self.adapter.worktree_requests.lock().unwrap().iter().all(|request|
+            request.mode == WorkspaceSetupMode::Open && request.open_existing_worktree));
         assert!(self.adapter.terminal_requests.lock().unwrap().is_empty());
+        assert!(self.adapter.closed_workspaces.lock().unwrap().is_empty());
+    }
+    async fn registration_inventory(&self, checkout: &str, workspace: &str) {
+        let repository = RepositoryCatalog::new(self.config.clone()).list().await.unwrap()
+            .repositories.into_iter().find(|repository| !repository.is_linked_worktree).unwrap();
+        *self.adapter.inventory.lock() = Some(ProjectInventory {
+            endpoint_identity: "endpoint".into(), repository_key: repository.common_dir,
+            repository_root: repository.root.clone(), supported_methods: vec!["worktree.open".into()],
+            worktrees: vec![
+                ProjectWorktreeEntry { checkout_path: repository.root, branch: None,
+                    open_workspace_id: Some("workspace".into()), is_primary: true,
+                    is_linked_worktree: false, dirty: Some(false) },
+                ProjectWorktreeEntry { checkout_path: checkout.into(), branch: Some("worker".into()),
+                    open_workspace_id: Some(workspace.into()), is_primary: false,
+                    is_linked_worktree: true, dirty: Some(false) },
+            ],
+        });
     }
 }
 impl Drop for Fixture { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.root); } }
@@ -82,6 +102,7 @@ async fn owned_prep_is_filesystem_only_idempotent_and_retains_resolved_base() {
     assert_eq!(second.generation, first.generation);
     let mut foreign = fixture.request.clone(); foreign.branch = "foreign".into();
     assert_eq!(fixture.service.prepare_owned_checkout("session", &foreign, &fixture.library).await.unwrap_err().code, "association_conflict");
+    assert!(fixture.adapter.worktree_requests.lock().unwrap().is_empty());
     fixture.no_shells();
 }
 
@@ -206,6 +227,8 @@ async fn headless_open_borrows_non_git_directory_and_owns_only_moved_space() {
     assert!(matches!(receipt.resources[0], OwnedResourceIdentity::Space { .. }));
     assert_eq!(std::fs::read_to_string(file).unwrap(), "user data");
     assert!(!directory.join(".git").exists());
+    assert_eq!(fixture.adapter.inventory_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.adapter.worktree_requests.lock().unwrap().is_empty());
     fixture.no_shells();
 }
 
@@ -270,7 +293,7 @@ async fn default_orchestration_workers_and_replacement_create_distinct_real_owne
     let mut first_request = None;
     for (task_id, attempt) in [(&first_task, 1), (&second_task, 1), (&first_task, 2)] {
         let run_id = uuid::Uuid::new_v4().to_string();
-        let suffix = format!("task-{task_id}-run-{run_id}-a{attempt}");
+        let suffix = format!("{task_id}-run-{run_id}-a{attempt}");
         let plan = service.plan_orchestration("session", &request, &suffix).await.unwrap();
         let checkout = OwnedCheckoutRequest {
             operation_id: plan.operation_id.clone(), repository_checkout: repository.checkout_path.clone(),
@@ -375,6 +398,7 @@ impl Fixture {
             snapshot, endpoint_identity: source.endpoint_identity.clone(),
             boot_id: None, peer_process: source.peer_process.clone(),
         });
+        self.registration_inventory(checkout, &request.workspace_id).await;
         (source, request)
     }
 }
@@ -650,6 +674,8 @@ async fn resumed_binding_borrowed_without_original_operation_never_adopts_filesy
     assert_eq!(restarted.owned_resources_for_run(&run).await.unwrap(), receipt.resources);
     assert_eq!(serde_json::to_value(restarted.store.owned_checkout(&request.operation_id).unwrap().unwrap()).unwrap(),
         serde_json::to_value(resumed_journal).unwrap());
+    assert_eq!(fixture.adapter.inventory_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.adapter.worktree_requests.lock().unwrap().is_empty());
     fixture.no_shells();
 }
 
@@ -955,4 +981,278 @@ async fn resumed_binding_borrowed_same_path_replacement_is_not_adopted_after_res
     assert_eq!(std::fs::read_to_string(directory.join("foreign.txt")).unwrap(), "replacement user directory\n");
     assert!(!directory.join(".git").exists());
     fixture.no_shells();
+}
+
+#[tokio::test]
+async fn moved_git_space_registers_existing_worktree_provenance_and_retries_without_new_resources() {
+    let fixture = Fixture::new().await;
+    let prepared = fixture.service.prepare_owned_checkout("session", &fixture.request, &fixture.library).await.unwrap();
+    fixture.move_snapshot(&prepared.plan.checkout_path).await;
+    let before = fixture.adapter.snapshot.lock().clone().unwrap();
+    let binding = fixture.bind(&prepared);
+    let completed = fixture.service.bind_moved_space("session", &binding, &fixture.library).await.unwrap();
+    assert_eq!(completed.state, WorkspaceOperationState::Completed);
+    let after = fixture.adapter.session_snapshot("session").await.unwrap();
+    assert_eq!((after.spaces.len(), after.tabs.len(), after.panes.len()),
+        (before.spaces.len(), before.tabs.len(), before.panes.len()));
+    assert_eq!(after.tabs, before.tabs);
+    assert_eq!(after.panes, before.panes);
+    let space = after.spaces.iter().find(|space| space.id == binding.workspace_id).unwrap();
+    assert_eq!(space.label, "Worker");
+    assert!(moved_space_registered(space, prepared.plan.repository.as_ref().unwrap(), &prepared.plan.checkout_path));
+    {
+        let requests = fixture.adapter.worktree_requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        let request = &requests[0];
+        assert_eq!(request.mode, WorkspaceSetupMode::Open);
+        assert!(request.open_existing_worktree);
+        assert_eq!(request.endpoint_identity, binding.endpoint_identity);
+        assert_eq!(request.source_cwd, fixture.request.repository_checkout);
+        assert_eq!(request.checkout_path, prepared.plan.checkout_path);
+        assert_eq!(request.label, "Worker");
+        assert!(!request.focus);
+        assert!(request.branch.is_none() && request.base.is_none() && request.env.is_empty());
+    }
+    let repeated = fixture.service.bind_moved_space("session", &binding, &fixture.library).await.unwrap();
+    assert_eq!(repeated.generation, completed.generation);
+    // Crash after registration but before completion needs no new mutation or journal field.
+    fixture.service.store.update(&prepared.operation_id, None, |operation| {
+        operation.state = WorkspaceOperationState::Partial;
+        operation.step = WorkspaceOperationStep::SpaceBound;
+        Ok(())
+    }).unwrap();
+    *fixture.adapter.inventory.lock() = None;
+    let restarted = ProjectService::new(fixture.config.clone(), fixture.adapter.clone()).unwrap();
+    assert_eq!(restarted.bind_moved_space("session", &binding, &fixture.library).await.unwrap().state,
+        WorkspaceOperationState::Completed);
+    assert_eq!(fixture.adapter.worktree_requests.lock().unwrap().len(), 1);
+    fixture.no_shells();
+}
+
+#[tokio::test]
+async fn unprovable_registration_preflight_is_partial_without_herdr_mutation() {
+    for case in ["wrong-target", "closed-primary-wrong-target", "missing-target", "duplicate-target", "stale-primary-space", "missing-primary",
+        "duplicate-primary", "foreign-repository", "foreign-root", "foreign-endpoint", "unavailable-inventory",
+        "ambiguous-cwd", "empty-label", "nonlinked-target"]
+    {
+        let fixture = Fixture::new().await;
+        let prepared = fixture.service.prepare_owned_checkout("session", &fixture.request, &fixture.library).await.unwrap();
+        fixture.move_snapshot(&prepared.plan.checkout_path).await;
+        let binding = fixture.bind(&prepared);
+        {
+            let mut retained = fixture.adapter.inventory.lock();
+            let inventory = retained.as_mut().unwrap();
+            match case {
+                "wrong-target" | "closed-primary-wrong-target" => {
+                    inventory.worktrees[1].open_workspace_id = Some("foreign-space".into());
+                    if case == "closed-primary-wrong-target" { inventory.worktrees[0].open_workspace_id = None; }
+                },
+                "missing-target" => { inventory.worktrees.pop(); },
+                "duplicate-target" => inventory.worktrees.push(inventory.worktrees[1].clone()),
+                "stale-primary-space" => inventory.worktrees[0].open_workspace_id = Some("missing-space".into()),
+                "missing-primary" => { inventory.worktrees.remove(0); },
+                "duplicate-primary" => inventory.worktrees.push(inventory.worktrees[0].clone()),
+                "foreign-repository" => inventory.repository_key = "/foreign/.git".into(),
+                "foreign-root" => inventory.repository_root = "/foreign".into(),
+                "foreign-endpoint" => inventory.endpoint_identity = "foreign-endpoint".into(),
+                "unavailable-inventory" => *retained = None,
+                "nonlinked-target" => inventory.worktrees[1].is_linked_worktree = false,
+                "ambiguous-cwd" => {
+                    let mut snapshot = fixture.adapter.snapshot.lock();
+                    let snapshot = snapshot.as_mut().unwrap();
+                    snapshot.panes.push(PaneSummary {
+                        id: "workspace:foreign:p1".into(), terminal_id: "foreign-terminal".into(),
+                        space_id: "workspace".into(), tab_id: "workspace:foreign".into(),
+                        title: None, focused: false, agent: None, agent_status: "none".into(), revision: 1,
+                        cwd: Some(prepared.plan.checkout_path.clone()),
+                    });
+                },
+                "empty-label" => fixture.adapter.snapshot.lock().as_mut().unwrap().spaces
+                    .iter_mut().find(|space| space.id == binding.workspace_id).unwrap().label.clear(),
+                _ => unreachable!(),
+            }
+        }
+        let error = fixture.service.bind_moved_space("session", &binding, &fixture.library).await.unwrap_err();
+        assert_eq!(error.code, if case == "unavailable-inventory" { "test_adapter_unused" } else { "association_conflict" }, "{case}");
+        let operation = fixture.service.store.load(&prepared.operation_id).unwrap();
+        assert_eq!(operation.state, WorkspaceOperationState::Partial, "{case}");
+        assert_eq!(operation.step, WorkspaceOperationStep::SpaceBound, "{case}");
+        assert!(!operation.resume_allowed, "{case}");
+        assert!(fixture.adapter.worktree_requests.lock().unwrap().is_empty(), "{case}");
+        assert!(fixture.adapter.remove_requests.lock().is_empty(), "{case}");
+        assert!(Path::new(&prepared.plan.checkout_path).is_dir(), "{case}");
+        fixture.no_shells();
+    }
+}
+
+#[tokio::test]
+async fn contradicting_registration_result_is_partial_without_cleanup() {
+    for case in ["new-space", "wrong-space", "wrong-tab", "wrong-pane", "wrong-checkout",
+        "wrong-git-key", "wrong-git-checkout", "not-linked"]
+    {
+        let fixture = Fixture::new().await;
+        let prepared = fixture.service.prepare_owned_checkout("session", &fixture.request, &fixture.library).await.unwrap();
+        fixture.move_snapshot(&prepared.plan.checkout_path).await;
+        let binding = fixture.bind(&prepared);
+        let repository = prepared.plan.repository.as_ref().unwrap();
+        let mut result = ProjectWorktreeResult {
+            workspace_id: binding.workspace_id.clone(), tab_id: Some(binding.tab_id.clone()),
+            pane_id: Some(binding.pane_id.clone()), checkout_path: prepared.plan.checkout_path.clone(),
+            branch: Some(fixture.request.branch.clone()), already_open: true,
+        };
+        let mut git = SpaceGitSummary {
+            repository_key: repository.common_dir.clone(), repository: repository.name.clone(),
+            branch: Some(fixture.request.branch.clone()), checkout_path: prepared.plan.checkout_path.clone(),
+            is_linked_worktree: true,
+        };
+        match case {
+            "new-space" => result.already_open = false,
+            "wrong-space" => result.workspace_id = "foreign-space".into(),
+            "wrong-tab" => result.tab_id = Some("foreign-tab".into()),
+            "wrong-pane" => result.pane_id = Some("foreign-pane".into()),
+            "wrong-checkout" => result.checkout_path = fixture.request.repository_checkout.clone(),
+            "wrong-git-key" => git.repository_key = "/foreign/.git".into(),
+            "wrong-git-checkout" => git.checkout_path = fixture.request.repository_checkout.clone(),
+            "not-linked" => git.is_linked_worktree = false,
+            _ => unreachable!(),
+        }
+        *fixture.adapter.open_existing.lock() = Some((result, git));
+        assert_eq!(fixture.service.bind_moved_space("session", &binding, &fixture.library).await.unwrap_err().code,
+            "association_conflict", "{case}");
+        let partial = fixture.service.store.load(&prepared.operation_id).unwrap();
+        assert_eq!(partial.state, WorkspaceOperationState::Partial, "{case}");
+        assert_eq!(partial.step, WorkspaceOperationStep::SpaceBound, "{case}");
+        assert!(!partial.resume_allowed, "{case}");
+        assert_eq!(fixture.adapter.worktree_requests.lock().unwrap().len(), 1, "{case}");
+        assert!(fixture.adapter.remove_requests.lock().is_empty(), "{case}");
+        let receipt = fixture.service.store.read_owned_creation(&prepared.operation_id).unwrap().unwrap();
+        assert_eq!(receipt.moved_space.as_ref(), Some(&binding), "{case}");
+        assert!(Path::new(&prepared.plan.checkout_path).is_dir(), "{case}");
+        fixture.no_shells();
+    }
+}
+
+#[tokio::test]
+async fn resumed_git_space_registers_existing_checkout_despite_borrowed_directory_journal() {
+    let fixture = Fixture::new().await;
+    let original = fixture.original_bound_checkout().await;
+    let original_receipt = fixture.service.store.read_owned_creation(&original.operation_id).unwrap().unwrap();
+    fixture.adapter.worktree_requests.lock().unwrap().clear();
+    let (_, checkout) = crate::orchestration::project_identity::resolve_directory(
+        Path::new(&original.plan.checkout_path), None, None,
+    ).await.unwrap();
+    let (source, request) = fixture.resumed_move(&checkout.path).await;
+    let completed = fixture.service.bind_resumed_space(
+        "session", Some(&original.operation_id), &checkout, &source, &request, &fixture.library,
+    ).await.unwrap();
+    assert_eq!(completed.state, WorkspaceOperationState::Completed);
+    assert!(fixture.service.store.owned_checkout(&completed.operation_id).unwrap().unwrap().borrowed_directory);
+    let snapshot = &fixture.adapter.bound_snapshot.lock().clone().unwrap().snapshot;
+    assert!(snapshot.spaces.iter().any(|space| space.id == request.workspace_id
+        && moved_space_registered(space, original.plan.repository.as_ref().unwrap(), &checkout.path)));
+    let requests = fixture.adapter.worktree_requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].source_cwd, fixture.request.repository_checkout);
+    assert_eq!(requests[0].checkout_path, checkout.path);
+    assert_eq!(requests[0].label, "Resumed worker");
+    drop(requests);
+    assert_eq!(fixture.service.store.read_owned_creation(&original.operation_id).unwrap().unwrap(), original_receipt);
+    fixture.no_shells();
+}
+
+#[tokio::test]
+async fn primary_and_unrelated_git_placements_do_not_register_worktrees() {
+    let fixture = Fixture::new().await;
+    // Git directories borrowed without a Git-owning predecessor remain unrelated:
+    // their resumed placement must not infer new repository associations.
+    let (_, checkout) = crate::orchestration::project_identity::resolve_directory(
+        Path::new(&fixture.request.repository_checkout), None, None,
+    ).await.unwrap();
+    let (source, request) = fixture.resumed_move(&checkout.path).await;
+    let completed = fixture.service.bind_resumed_space(
+        "session", None, &checkout, &source, &request, &fixture.library,
+    ).await.unwrap();
+    assert_eq!(completed.state, WorkspaceOperationState::Completed);
+    assert_eq!(fixture.adapter.inventory_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.adapter.worktree_requests.lock().unwrap().is_empty());
+    // A retained primary repository plan is also a non-registration placement.
+    let repository = RepositoryCatalog::new(fixture.config.clone()).list().await.unwrap()
+        .repositories.into_iter().find(|repository| !repository.is_linked_worktree).unwrap();
+    let mut primary = completed.clone();
+    primary.plan.repository = Some(repository);
+    let journal = fixture.service.store.owned_checkout(&completed.operation_id).unwrap().unwrap();
+    let observed = fixture.adapter.snapshot.lock().clone().unwrap();
+    fixture.service.register_moved_worktree("session", &primary, &journal, &request, &observed).await.unwrap();
+    assert_eq!(fixture.adapter.inventory_calls.load(Ordering::SeqCst), 0);
+    assert!(fixture.adapter.worktree_requests.lock().unwrap().is_empty());
+    fixture.no_shells();
+}
+
+#[tokio::test]
+async fn isolated_git_placement_without_open_primary_skips_only_registration_without_new_resources() {
+    for source in ["unrelated-staging-space", "linked-only", "linked-with-open-primary"] {
+        let fixture = Fixture::new().await;
+        let prepared = fixture.service.prepare_owned_checkout("session", &fixture.request, &fixture.library).await.unwrap();
+        fixture.move_snapshot(&prepared.plan.checkout_path).await;
+        let binding = fixture.bind(&prepared);
+        let repository = prepared.plan.repository.as_ref().unwrap();
+        fixture.adapter.inventory.lock().as_mut().unwrap().worktrees[0].open_workspace_id = None;
+        if source != "unrelated-staging-space" {
+            let linked_path = fixture.root.join("worktrees/source-linked");
+            git(Path::new(&repository.checkout_path), &["worktree", "add", "--detach",
+                linked_path.to_str().unwrap(), &fixture.request.base]);
+            let linked_path = linked_path.to_string_lossy().into_owned();
+            let mut snapshot = fixture.adapter.snapshot.lock();
+            let snapshot = snapshot.as_mut().unwrap();
+            let source_space = snapshot.spaces.iter_mut().find(|space| space.id == "workspace").unwrap();
+            source_space.git = Some(SpaceGitSummary {
+                repository_key: repository.common_dir.clone(), repository: repository.name.clone(),
+                branch: None, checkout_path: linked_path.clone(), is_linked_worktree: true,
+            });
+            source_space.tab_count = 1;
+            source_space.pane_count = 1;
+            snapshot.tabs.push(TabSummary { id: "workspace:source".into(), space_id: "workspace".into(),
+                label: "Source".into(), number: 1, pane_count: 1, focused: false,
+                focused_pane_id: Some("workspace:source:p1".into()) });
+            snapshot.panes.push(PaneSummary { id: "workspace:source:p1".into(), terminal_id: "source-terminal".into(),
+                space_id: "workspace".into(), tab_id: "workspace:source".into(), title: None, focused: false,
+                agent: None, agent_status: "none".into(), revision: 1, cwd: Some(linked_path.clone()) });
+            let mut inventory = fixture.adapter.inventory.lock();
+            let inventory = inventory.as_mut().unwrap();
+            inventory.worktrees.push(ProjectWorktreeEntry {
+                checkout_path: linked_path, branch: None, open_workspace_id: Some("workspace".into()),
+                is_primary: false, is_linked_worktree: true, dirty: Some(false),
+            });
+            if source == "linked-with-open-primary" {
+                snapshot.spaces.push(SpaceSummary { id: "primary".into(), label: "Primary".into(), number: 3,
+                    tab_count: 0, pane_count: 0, focused: false, agent_status: "none".into(),
+                    git: Some(SpaceGitSummary {
+                        repository_key: repository.common_dir.clone(), repository: repository.name.clone(),
+                        branch: None, checkout_path: repository.root.clone(), is_linked_worktree: false,
+                    }) });
+                inventory.worktrees[0].open_workspace_id = Some("primary".into());
+            }
+        }
+        let before = fixture.adapter.snapshot.lock().clone().unwrap();
+        let completed = fixture.service.bind_moved_space("session", &binding, &fixture.library).await.unwrap();
+        assert_eq!(completed.state, WorkspaceOperationState::Completed, "{source}");
+        let after = fixture.adapter.session_snapshot("session").await.unwrap();
+        assert_eq!((after.spaces.len(), after.tabs.len(), after.panes.len()),
+            (before.spaces.len(), before.tabs.len(), before.panes.len()), "{source}");
+        assert_eq!(after.tabs, before.tabs, "{source}");
+        assert_eq!(after.panes, before.panes, "{source}");
+        assert_eq!(fixture.adapter.inventory_calls.load(Ordering::SeqCst), 1, "{source}");
+        assert_eq!(&*fixture.adapter.inventory_requests.lock(), &[repository.checkout_path.clone()], "{source}");
+        let registration_count = usize::from(source == "linked-with-open-primary");
+        assert_eq!(fixture.adapter.worktree_requests.lock().unwrap().len(), registration_count, "{source}");
+        if registration_count == 0 {
+            assert_eq!(after.spaces, before.spaces, "{source}");
+        } else {
+            assert!(after.spaces.iter().any(|space| space.id == binding.workspace_id
+                && moved_space_registered(space, repository, &prepared.plan.checkout_path)));
+        }
+        assert!(fixture.adapter.remove_requests.lock().is_empty(), "{source}");
+        assert!(Path::new(&prepared.plan.checkout_path).is_dir(), "{source}");
+        fixture.no_shells();
+    }
 }

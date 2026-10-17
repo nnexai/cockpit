@@ -2369,6 +2369,82 @@ fn retained_space_restart_requires_exact_resumed_epoch_and_journalled_retained_l
     }
 }
 
+#[tokio::test]
+async fn owned_branch_generation_preserves_templates_and_full_attempt_identity() {
+    let mut fixture = ReviewFixture::new(RunStage::Starting);
+    let checkout = fixture.root.join("cockpit");
+    std::fs::create_dir_all(&checkout).unwrap();
+    fixture.config.repository_roots = vec![checkout.to_string_lossy().into_owned()];
+    fixture.config.checkout_template = "{task_id}".into();
+    for args in [
+        vec!["init", "-q"],
+        vec!["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "commit", "-q", "--allow-empty", "-m", "source"],
+    ] {
+        assert!(tokio::process::Command::new("git").current_dir(&checkout)
+            .args(args).status().await.unwrap().success());
+    }
+    let repository = crate::repositories::RepositoryCatalog::new(fixture.config.clone())
+        .list().await.unwrap().repositories.into_iter().next().unwrap();
+    assert_eq!(repository.name, "cockpit");
+    let adapter = Arc::new(ReadOnlyProjectAdapter { inventory: Some(ProjectInventory {
+        endpoint_identity: "endpoint".into(),
+        repository_key: repository.common_dir.clone(),
+        repository_root: repository.root.clone(),
+        supported_methods: vec![],
+        worktrees: vec![],
+    }) });
+    let request = WorkspaceSetupRequest::Create {
+        repository_id: repository.repository_id.clone(), branch: None, base_ref: None,
+        checkout_path: None, label: None, task_name: None, artifact_url: None,
+        linked_artifact_urls: vec![], focus: false,
+    };
+    let mut worker = fixture.run.clone();
+    worker.kind = RunKind::Worker;
+    worker.task_id = Some(uuid::Uuid::new_v4().to_string());
+    let mut other_task = worker.clone();
+    other_task.task_id = Some(uuid::Uuid::new_v4().to_string());
+    let mut replacement = worker.clone();
+    replacement.run_id = uuid::Uuid::new_v4().to_string();
+    let mut next_attempt = worker.clone();
+    next_attempt.attempt += 1;
+    let owners = [
+        (fixture.run.clone(), fixture.run.root_id.clone()),
+        (worker.clone(), worker.task_id.clone().unwrap()),
+        (other_task.clone(), other_task.task_id.clone().unwrap()),
+        (replacement, worker.task_id.clone().unwrap()),
+        (next_attempt, worker.task_id.clone().unwrap()),
+    ];
+    for (template, derived_branch) in [
+        ("cockpit/{repo}/{task_id}", "cockpit/cockpit/task"),
+        ("custom/{repo}/task-{task_id}", "custom/cockpit/task-task"),
+    ] {
+        fixture.config.branch_template = template.into();
+        let service = ProjectService::new(fixture.config.clone(), adapter.clone()).unwrap();
+        let ordinary = service.plan(&fixture.run.session_id, &request).await.unwrap();
+        assert_eq!(ordinary.branch.as_deref(), Some(derived_branch));
+        let mut branches = std::collections::HashSet::new();
+        for (run, owner) in &owners {
+            let plan = service.plan_orchestration(
+                &run.session_id, &request, &owned_branch_suffix(run),
+            ).await.unwrap();
+            let expected = format!("{derived_branch}-{owner}-run-{}-a{}", run.run_id, run.attempt);
+            assert_eq!(plan.branch.as_deref(), Some(expected.as_str()));
+            assert_eq!(plan.label, expected);
+            assert!(branches.insert(plan.branch.unwrap()),
+                "Task, run and attempt changes must each retain distinct ownership");
+        }
+        let mut explicit = request.clone();
+        if let WorkspaceSetupRequest::Create { branch, .. } = &mut explicit {
+            *branch = Some("task-requested-exact-branch".into());
+        }
+        let plan = service.plan_orchestration(
+            &fixture.run.session_id, &explicit, &owned_branch_suffix(&fixture.run),
+        ).await.unwrap();
+        assert_eq!(plan.branch.as_deref(), Some("task-requested-exact-branch"));
+    }
+}
+
 async fn path_schedule_fixture(mode: &str) -> (ReviewFixture, Arc<Dispatcher>) {
     use cockpit_protocol::orchestration::{OrchestrationActionResult, TaskOwnership, TaskSchedule};
     use super::super::store::{DurableOperationKind, DurableOperationRecord};

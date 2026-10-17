@@ -5,11 +5,11 @@ use cockpit_protocol::orchestration::{OwnedResourceIdentity, OwnedSpaceIdentity}
 use cockpit_protocol::projects::{BindMovedSpaceRequest, DirectoryCheckoutRequest, OwnedCheckoutRequest, WorkspaceCheckoutOwnership,
     WorkspaceOperation, WorkspaceOperationState, WorkspaceOperationStep, WorkspaceOwnedResource,
     WorkspaceSetupMode, WorkspaceSetupPlan};
-use cockpit_protocol::v1::SessionSnapshotResponse;
+use cockpit_protocol::v1::{SessionSnapshotResponse, SpaceSummary};
 
-use crate::{InspectionError, library::LibraryService, project_store::{OwnedCheckoutJournal, OwnedCreationReceipt},
-    repositories::RepositoryCatalog};
-use super::{ProjectService, error_response, validate_session, validate_text};
+use crate::{InspectionError, library::LibraryService, project_adapter::ProjectWorktreeRequest,
+    project_store::{OwnedCheckoutJournal, OwnedCreationReceipt}, repositories::RepositoryCatalog};
+use super::{ProjectService, error_response, validate_session, validate_text, verify_inventory};
 
 impl ProjectService {
 
@@ -269,7 +269,7 @@ impl ProjectService {
         } else if operation.generation != request.expected_generation || operation.step != WorkspaceOperationStep::CheckoutPrepared {
             return Err(InspectionError::new("stale_generation", "bind requires the exact prepared operation generation"));
         }
-        self.verify_moved_checkout(session, &operation, &journal, request).await?;
+        let observed = self.verify_moved_checkout(session, &operation, &journal, request).await?;
         let creation = self.store.read_owned_creation(&request.operation_id)?;
         if !journal.borrowed_directory && creation.is_none() {
             return Err(unknown("prepared checkout has no captured creation proof"));
@@ -309,7 +309,10 @@ impl ProjectService {
             self.store.write_owned_creation(&receipt)?;
         }
         if operation.state == WorkspaceOperationState::Completed { return self.store.load(&request.operation_id); }
-        let result = self.select_checkout_context(session, &operation, &journal, request, library).await;
+        let result = async {
+            self.register_moved_worktree(session, &operation, &journal, request, &observed).await?;
+            self.select_checkout_context(session, &operation, &journal, request, library).await
+        }.await;
         if let Err(error) = result {
             self.store.update(&request.operation_id, None, |o| {
                 o.state = WorkspaceOperationState::Partial; o.step = WorkspaceOperationStep::SpaceBound;
@@ -326,7 +329,7 @@ impl ProjectService {
     }
 
     async fn verify_moved_checkout(&self, session: &str, operation: &WorkspaceOperation,
-        journal: &OwnedCheckoutJournal, request: &BindMovedSpaceRequest) -> Result<(), InspectionError>
+        journal: &OwnedCheckoutJournal, request: &BindMovedSpaceRequest) -> Result<SessionSnapshotResponse, InspectionError>
     {
         if let Some(resume) = &journal.resume_binding {
             let observed = self.adapter.project_snapshot_at_endpoint(session, &request.endpoint_identity).await?;
@@ -337,7 +340,7 @@ impl ProjectService {
             }
             self.validate_resume_checkout(resume.previous_operation_id.as_deref(),
                 &resume.expected_checkout, operation.plan.base.as_deref()).await?;
-            return Ok(());
+            return Ok(observed.snapshot);
         }
         if self.adapter.project_endpoint_identity(session).await? != request.endpoint_identity {
             return Err(conflict("move endpoint changed"));
@@ -347,6 +350,70 @@ impl ProjectService {
         if self.adapter.project_endpoint_identity(session).await? != request.endpoint_identity {
             return Err(conflict("move endpoint changed during fresh receipt inspection"));
         }
+        Ok(snapshot)
+    }
+
+    async fn register_moved_worktree(&self, session: &str, operation: &WorkspaceOperation,
+        journal: &OwnedCheckoutJournal, request: &BindMovedSpaceRequest, observed: &SessionSnapshotResponse)
+        -> Result<(), InspectionError>
+    {
+        if journal.attempt_directory.is_some() { return Ok(()); }
+        let Some(repository) = &operation.plan.repository else { return Ok(()); };
+        let checkout = &operation.plan.checkout_path;
+        if checkout == &repository.checkout_path || checkout == &repository.root { return Ok(()); }
+        let space = observed.spaces.iter().find(|space| space.id == request.workspace_id)
+            .ok_or_else(|| conflict("moved Space disappeared before worktree registration"))?;
+        if moved_space_registered(space, repository, checkout) { return Ok(()); }
+        let inventory = self.adapter.project_inventory(session, &repository.checkout_path).await?;
+        if inventory.endpoint_identity != request.endpoint_identity || verify_inventory(&inventory, repository).is_err() {
+            return Err(conflict("worktree registration inventory has a foreign endpoint or repository"));
+        }
+        let mut targets = inventory.worktrees.iter().filter(|entry| entry.checkout_path == *checkout);
+        let target = match (targets.next(), targets.next()) {
+            (Some(target), None) => target,
+            _ => return Err(conflict("worktree registration requires one exact checkout inventory entry")),
+        };
+        if target.is_primary || !target.is_linked_worktree {
+            return Err(conflict("isolated Git checkout is not a non-primary linked worktree"));
+        }
+        let mut primaries = inventory.worktrees.iter().filter(|entry| entry.is_primary);
+        let primary = match (primaries.next(), primaries.next()) {
+            (Some(primary), None) if primary.checkout_path == repository.root && !primary.is_linked_worktree => primary,
+            _ => return Err(conflict("worktree registration has no exact primary repository entry")),
+        };
+        if target.open_workspace_id.as_deref() != Some(request.workspace_id.as_str()) || space.label.trim().is_empty() {
+            return Err(conflict("worktree registration cannot reuse the exact moved Space and label"));
+        }
+        // Herdr reuses the first Space matching membership or cwd. A second match
+        // makes that selection unsafe even when inventory currently names our Space.
+        if observed.spaces.iter().any(|candidate| candidate.id != request.workspace_id
+            && candidate.git.as_ref().is_some_and(|git| git.checkout_path == *checkout))
+            || observed.panes.iter().any(|pane| pane.space_id != request.workspace_id
+                && pane.cwd.as_deref().and_then(|cwd| std::fs::canonicalize(cwd).ok()).as_deref() == Some(Path::new(checkout)))
+        {
+            return Err(conflict("worktree registration checkout matches ambiguous Spaces"));
+        }
+        // Herdr worktree.open creates a primary Space (and shell) when none is
+        // open. Until it offers registration without that side effect, retain
+        // supported isolated placement without registering in that one case.
+        let Some(primary_workspace_id) = primary.open_workspace_id.as_deref() else { return Ok(()); };
+        if primary_workspace_id == request.workspace_id
+            || observed.spaces.iter().filter(|space| space.id == primary_workspace_id).count() != 1
+        { return Err(conflict("worktree registration cannot prove the existing primary Space")); }
+        let result = self.adapter.project_worktree(session, &ProjectWorktreeRequest {
+            endpoint_identity: request.endpoint_identity.clone(), mode: WorkspaceSetupMode::Open,
+            source_cwd: repository.checkout_path.clone(), branch: None, base: None,
+            checkout_path: checkout.clone(), label: space.label.clone(), focus: false,
+            env: Default::default(), open_existing_worktree: true,
+        }).await?;
+        if !result.already_open || result.workspace_id != request.workspace_id
+            || result.tab_id.as_deref() != Some(request.tab_id.as_str())
+            || result.pane_id.as_deref() != Some(request.pane_id.as_str()) || result.checkout_path != *checkout
+        { return Err(conflict("worktree registration did not reuse the exact moved Space, tab, pane and checkout")); }
+        let registered = self.verify_moved_checkout(session, operation, journal, request).await?;
+        if !registered.spaces.iter().any(|space| space.id == request.workspace_id
+            && moved_space_registered(space, repository, checkout))
+        { return Err(conflict("worktree registration did not persist the moved Space repository provenance")); }
         Ok(())
     }
 
@@ -400,6 +467,13 @@ pub(super) fn validate_moved_geometry(snapshot: &SessionSnapshotResponse, sessio
         || pane.cwd.as_deref().and_then(|p| std::fs::canonicalize(p).ok()).as_deref() != Some(Path::new(checkout_path))
     { return Err(conflict("fresh move receipt has a foreign terminal, tab, pane or checkout")); }
     Ok(())
+}
+
+fn moved_space_registered(space: &SpaceSummary, repository: &cockpit_protocol::projects::RepositoryCandidate,
+    checkout: &str) -> bool
+{
+    space.git.as_ref().is_some_and(|git| git.repository_key == repository.common_dir
+        && git.checkout_path == checkout && git.is_linked_worktree)
 }
 
 fn same_binding(a: &BindMovedSpaceRequest, b: &BindMovedSpaceRequest) -> bool {
