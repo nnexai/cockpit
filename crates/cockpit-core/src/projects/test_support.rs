@@ -43,6 +43,7 @@ pub(super) struct NestedDirectoryAdapter {
     pub(super) selection_available: AtomicBool,
     pub(super) snapshot: parking_lot::Mutex<Option<SessionSnapshotResponse>>,
     pub(super) bound_snapshot: parking_lot::Mutex<Option<crate::project_adapter::ProjectSnapshot>>,
+    pub(super) open_existing: parking_lot::Mutex<Option<(ProjectWorktreeResult, cockpit_protocol::v1::SpaceGitSummary)>>,
 }
 
 pub(super) fn unused<T>() -> Result<T, InspectionError> {
@@ -202,6 +203,41 @@ impl ProjectHerdrAdapter for NestedDirectoryAdapter {
             .lock()
             .expect("worktree requests")
             .push(request.clone());
+        if request.mode == WorkspaceSetupMode::Open && request.open_existing_worktree && self.snapshot.lock().is_some() {
+            let inventory = self.inventory.lock().clone();
+            if let Some(inventory) = inventory {
+                let entry = inventory.worktrees.iter().find(|entry| entry.checkout_path == request.checkout_path)
+                    .ok_or_else(|| InspectionError::new("test_adapter_unused", "checkout missing from fixture inventory"))?;
+                let workspace_id = entry.open_workspace_id.as_ref()
+                    .ok_or_else(|| InspectionError::new("test_adapter_unused", "fixture checkout has no open Space"))?;
+                let mut snapshot = self.snapshot.lock();
+                let snapshot = snapshot.as_mut()
+                    .ok_or_else(|| InspectionError::new("test_adapter_unused", "worktree-open requires a runtime fixture"))?;
+                let result = ProjectWorktreeResult {
+                    workspace_id: workspace_id.clone(),
+                    tab_id: snapshot.tabs.iter().find(|tab| tab.space_id == *workspace_id).map(|tab| tab.id.clone()),
+                    pane_id: snapshot.panes.iter().find(|pane| pane.space_id == *workspace_id).map(|pane| pane.id.clone()),
+                    checkout_path: entry.checkout_path.clone(), branch: entry.branch.clone(), already_open: true,
+                };
+                let git = cockpit_protocol::v1::SpaceGitSummary {
+                    repository_key: inventory.repository_key,
+                    repository: Path::new(&inventory.repository_root).file_name().unwrap().to_string_lossy().into_owned(),
+                    branch: entry.branch.clone(), checkout_path: entry.checkout_path.clone(),
+                    is_linked_worktree: entry.is_linked_worktree,
+                };
+                let (result, git) = self.open_existing.lock().clone().unwrap_or((result, git));
+                for space in &mut snapshot.spaces {
+                    if space.id == *workspace_id {
+                        space.git = Some(git.clone());
+                        space.label = request.label.clone();
+                    }
+                }
+                if let Some(bound) = self.bound_snapshot.lock().as_mut() {
+                    bound.snapshot = snapshot.clone();
+                }
+                return Ok(result);
+            }
+        }
         Ok(ProjectWorktreeResult {
             workspace_id: "workspace".to_owned(),
             tab_id: Some("workspace:root".to_owned()),

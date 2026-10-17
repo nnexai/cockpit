@@ -1419,7 +1419,7 @@ fn immutable_commit(value: &str) -> bool {
 }
 
 fn owned_branch_suffix(run: &Run) -> String {
-    format!("task-{}-run-{}-a{}", run.task_id.as_deref().unwrap_or(&run.root_id), run.run_id, run.attempt)
+    format!("{}-run-{}-a{}", run.task_id.as_deref().unwrap_or(&run.root_id), run.run_id, run.attempt)
 }
 
 fn resumed_checkout_epoch(run: &Run) -> bool {
