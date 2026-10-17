@@ -138,22 +138,125 @@ fn local_checkout_writers_protect_owned_git_by_path_or_directory_fingerprint() {
 }
 
 #[test]
-fn summary_redacts_effect_output_and_reason_text_without_losing_states() {
+fn summary_redacts_untrusted_diagnostics_without_changing_the_raw_store() {
+    let fixture = Fixture::new();
+    for code in [
+        "creation_identity_unavailable",
+        "unknown_cleanup_guard",
+        "private_token_Secret42",
+        "/private/token\n\u{1b}[31m<script>secret</script>",
+        "terminal_retained_HerdrRefused_private_token",
+    ] {
+        let stored = {
+            let locked = fixture.service.store.lock().unwrap();
+            let mut state = locked.read().unwrap();
+            let resource = &mut state.owned_resources[0];
+            resource.cleanup.state = CleanupState::Unknown;
+            resource.cleanup.reason = Some(reason(CleanupReasonClass::Authority, code,
+                "/private/path token=Secret42\n\u{1b}[31m<script>secret</script>"));
+            resource.cleanup.effects = vec![CleanupEffectReceipt { effect_id: id(), kind: resource.kind,
+                identity_digest: resource.resource_id.clone(), state: CleanupEffectState::Unknown,
+                evidence: Some("/private/process/evidence token=Secret42".into()), updated_at: now() }];
+            locked.save(&mut state).unwrap();
+            state
+        };
+        let before = std::fs::read(fixture.service.base().join("state.json")).unwrap();
+        let summary = summaries(&stored, &fixture.run.session_id);
+        assert_eq!(summary[0].unknown_count, 1);
+        let projected = &summary[0].items[0];
+        let why = projected.cleanup.reason.as_ref().unwrap();
+        assert_eq!(why.code, if code == "creation_identity_unavailable" {
+            code
+        } else { "cleanup_diagnostic_unavailable" });
+        let serialized = serde_json::to_string(&summary).unwrap();
+        for private in ["/private", "Secret42", "script", "\\u001b", "unknown_cleanup_guard", "private_token"] {
+            assert!(!serialized.contains(private), "{code}: {private}");
+        }
+        let mut expected = stored.owned_resources[0].cleanup.clone();
+        expected.reason = Some(why.clone());
+        expected.effects[0].evidence = None;
+        assert_eq!(projected.cleanup, expected);
+        assert_eq!(why.class, CleanupReasonClass::Authority);
+        assert_eq!(projected.ownership, stored.owned_resources[0].ownership);
+        assert_eq!(projected.kind, stored.owned_resources[0].kind);
+        assert_eq!(projected.resource_id, stored.owned_resources[0].resource_id);
+        assert_eq!(std::fs::read(fixture.service.base().join("state.json")).unwrap(), before);
+        let reopened = OrchestrationStore::open(&fixture.root).unwrap().lock().unwrap().read().unwrap();
+        assert_eq!(serde_json::to_value(reopened).unwrap(), serde_json::to_value(stored).unwrap());
+    }
+}
+
+#[test]
+fn known_summary_guards_keep_distinct_diagnostics_and_supported_actions() {
     let run = worker();
     let mut state = OrchestrationState::default();
     let index = insert_resource(&mut state.owned_resources, &run, space()).unwrap();
     state.runs.push(run.clone());
-    let resource = &mut state.owned_resources[index];
-    resource.cleanup.state = CleanupState::Unknown;
-    resource.cleanup.reason = Some(reason(CleanupReasonClass::Authority, "creation_identity_unavailable", "/private/path diagnostic"));
-    resource.cleanup.effects.push(CleanupEffectReceipt { effect_id: id(), kind: resource.kind,
-        identity_digest: resource.resource_id.clone(), state: CleanupEffectState::Unknown,
-        evidence: Some("/private/process/evidence".into()), updated_at: now() });
-    let summary = summaries(&state, &run.session_id);
-    assert_eq!(summary[0].unknown_count, 1);
-    assert!(summary[0].items[0].cleanup.effects[0].evidence.is_none());
-    assert!(!summary[0].items[0].cleanup.reason.as_ref().unwrap().message.contains("/private"));
-    assert_eq!(state.owned_resources[index].cleanup.effects[0].evidence.as_deref(), Some("/private/process/evidence"));
+    let mut explanations = std::collections::HashSet::new();
+    for code in [
+        "terminal_primary_checkout_space", "terminal_observation_unavailable", "containment_unproven",
+        "terminal_retained_HerdrRefused", "consumer_inventory_bounded", "terminal_peer_unproven",
+        "endpoint_changed", "fixture_adapter_unavailable", "inspection_unavailable",
+        "integration_pending", "scope_dirty_checkout", "scope_unaccepted_commits", "scope_resource_admission",
+        "terminal_resource_admissions", "scope_replacement_authority_unproven", "checkout_consumer_present",
+        "outputs_kept", "attempt_unaccepted", "consumers_active", "consumer_drain_unproven",
+        "terminal_retirement_pending", "terminal_outcome_unknown", "effect_outcome_unknown",
+        "ownership_unproven", "creation_identity_unavailable", "creation_provenance_conflict",
+        "terminal_identity_changed", "superseded_work_preserved", "superseded_space_preserved",
+    ] {
+        state.owned_resources[index].cleanup.reason = Some(reason(CleanupReasonClass::Reconcilable,
+            code, "/private/raw-message"));
+        let summary = summaries(&state, &run.session_id);
+        let why = summary[0].items[0].cleanup.reason.as_ref().unwrap();
+        assert_eq!(why.code, code);
+        assert_eq!(why.class, CleanupReasonClass::Reconcilable);
+        assert!(!why.message.contains("/private"));
+        assert!(explanations.insert(why.message.clone()), "{code}: distinct cause lost");
+    }
+}
+
+#[test]
+fn inspection_errors_keep_only_allowlisted_codes_and_static_diagnostics() {
+    for kind in [OwnedResourceKind::Space, OwnedResourceKind::Worktree, OwnedResourceKind::Branch,
+        OwnedResourceKind::FixtureSet, OwnedResourceKind::Scratch] {
+        for code in [
+            "consumer_inventory_bounded", "terminal_peer_unproven", "endpoint_changed",
+            "fixture_adapter_unavailable", "inspection_unavailable",
+            "unknown_inspection_code", "private_token_Secret42", "/private/secret\n\u{1b}[31m",
+            "consumer_inventory_bounded_private_token",
+        ] {
+            let evaluation = cleanup_inspection_error(kind, error(code, "/private/raw-message token=Secret42"));
+            let CleanupEvaluation::Unknown(why) = evaluation else { panic!("inspection error must remain unknown") };
+            let known = matches!(code, "consumer_inventory_bounded" | "terminal_peer_unproven"
+                | "endpoint_changed" | "fixture_adapter_unavailable" | "inspection_unavailable");
+            assert_eq!(why.code, if known { code } else { "inspection_unavailable" });
+            assert_eq!(why.class, CleanupReasonClass::Transient);
+            assert!(!why.message.contains("/private"));
+            assert!(!why.message.contains("Secret42"));
+            assert_eq!(cleanup_inspection_error(kind, error(code, "different raw error")),
+                CleanupEvaluation::Unknown(why));
+        }
+    }
+}
+
+#[test]
+fn attempt_directory_inspection_errors_keep_raw_authority_storage() {
+    for code in ["consumer_inventory_bounded", "unknown_private_guard_Secret42", "/private/code\n\u{1b}[31m"] {
+        let fixture = Fixture::new();
+        let raw_message = "/private/raw-message token=Secret42";
+        let evaluation = cleanup_inspection_error(OwnedResourceKind::AttemptDirectory, error(code, raw_message));
+        assert_eq!(evaluation, CleanupEvaluation::Unknown(reason(CleanupReasonClass::Authority, code, raw_message)));
+        fixture.service.save_evaluation(&fixture.resource, evaluation).unwrap();
+        let saved = fixture.service.store.lock().unwrap().read().unwrap();
+        let raw = saved.owned_resources[0].cleanup.reason.as_ref().unwrap();
+        assert_eq!(raw.code, code);
+        assert_eq!(raw.message, raw_message);
+        assert_eq!(raw.class, CleanupReasonClass::Authority);
+        assert_eq!(saved.owned_resources[0].cleanup.state, CleanupState::Unknown);
+        assert!(saved.owned_resources[0].cleanup.effects.is_empty());
+        let summary = summaries(&saved, &fixture.run.session_id);
+        assert!(!serde_json::to_string(&summary).unwrap().contains("Secret42"));
+    }
 }
 
 #[test]
@@ -544,10 +647,12 @@ fn cleanup_hold_is_actionable_once_after_ack_and_owner_reopen() {
 }
 
 #[test]
-fn transient_observation_retention_is_waiting_with_concrete_reconnection_action() {
-    for (retained, code) in [
-        (RetainReason::ObservationUnavailable, "terminal_observation_unavailable"),
-        (RetainReason::ForegroundProcess, "terminal_retirement_pending"),
+fn terminal_observation_borrowed_retention_and_adapter_refusal_remain_distinct() {
+    for (retained, code, expected_state, class) in [
+        (RetainReason::ObservationUnavailable, "terminal_observation_unavailable", CleanupState::Waiting, CleanupReasonClass::Transient),
+        (RetainReason::ForegroundProcess, "terminal_retirement_pending", CleanupState::Waiting, CleanupReasonClass::Transient),
+        (RetainReason::PrimaryCheckoutSpace, "terminal_primary_checkout_space", CleanupState::Kept, CleanupReasonClass::Authority),
+        (RetainReason::HerdrRefused, "terminal_retained_HerdrRefused", CleanupState::Kept, CleanupReasonClass::UserWork),
     ] {
         let identity = terminal_identity();
         let run = terminal_run(identity.clone(), RetirementState::Retained {
@@ -556,8 +661,26 @@ fn transient_observation_retention_is_waiting_with_concrete_reconnection_action(
         let mut state = OrchestrationState::default();
         let index = insert_resource(&mut state.owned_resources, &run,
             OwnedResourceIdentity::WorkerTerminal { identity }).unwrap();
-        assert!(matches!(terminal_evaluation(&state.owned_resources[index], &run),
-            CleanupEvaluation::Waiting(why) if why.code == code));
+        let (actual_state, why) = match terminal_evaluation(&state.owned_resources[index], &run) {
+            CleanupEvaluation::Waiting(why) => (CleanupState::Waiting, why),
+            CleanupEvaluation::Kept(why) => (CleanupState::Kept, why),
+            other => panic!("unexpected retained terminal evaluation: {other:?}"),
+        };
+        assert_eq!(actual_state, expected_state);
+        assert_eq!(why.code, code);
+        assert_eq!(why.class, class);
+        state.owned_resources[index].cleanup.state = actual_state;
+        state.owned_resources[index].cleanup.reason = Some(why);
+        state.runs.push(run.clone());
+        let before = serde_json::to_value(&state).unwrap();
+        let summary = summaries(&state, &run.session_id);
+        let projected = &summary[0].items[0].cleanup;
+        assert_eq!(projected.state, expected_state);
+        assert_eq!(projected.reason.as_ref().unwrap().code, code);
+        assert_eq!(projected.reason.as_ref().unwrap().class, class);
+        assert!(projected.reason.as_ref().unwrap().message.contains(cleanup_hold_action(code)));
+        assert!(projected.effects.is_empty(), "summary must not dispatch a close");
+        assert_eq!(serde_json::to_value(&state).unwrap(), before);
     }
 }
 
