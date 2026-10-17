@@ -333,7 +333,10 @@ pub(crate) fn summaries(state: &OrchestrationState, session_id: &str) -> Vec<Run
             // Diagnostic effect evidence may contain private filesystem paths.
             for effect in &mut cleanup.effects { effect.evidence = None; }
             if let Some(why) = &mut cleanup.reason {
-                why.message = format!("Resource cleanup status: {}.", why.code);
+                let (code, explanation) = cleanup_reason_explanation(&why.code)
+                    .unwrap_or(("cleanup_diagnostic_unavailable", "Cleanup is held by an unrecognized guard."));
+                if why.code != code { why.code = code.into(); }
+                why.message = format!("{explanation} {}", cleanup_hold_action(code));
             }
             CleanupResourceSummary { resource_id: r.resource_id.clone(), kind: r.kind, ownership: r.ownership, cleanup }
         }).collect();
@@ -824,9 +827,7 @@ impl OrchestrationService {
                         projects.inspect_owned_resource(&resource, &run, proof.as_ref(), merged.as_ref()).await
                     },
                 };
-                inspection.unwrap_or_else(|why| if resource.kind == OwnedResourceKind::AttemptDirectory {
-                    CleanupEvaluation::Unknown(reason(CleanupReasonClass::Authority, &why.code, why.message))
-                } else { CleanupEvaluation::Unknown(reason(CleanupReasonClass::Transient, "inspection_unavailable", "Actual resource outcome could not be inspected")) })
+                inspection.unwrap_or_else(|why| cleanup_inspection_error(resource.kind, why))
             };
             let uncertain = resource.cleanup.effects.iter().any(|e| matches!(e.state, CleanupEffectState::Intent | CleanupEffectState::Unknown));
             // The supported fixture adapter's Ready result identifies untouched
@@ -1030,11 +1031,67 @@ fn git_integration_eligible(run: &Run) -> bool {
             (Integration::NotApplicable { .. }, Some(SourceOutput::NonCode { .. })))
 }
 
+/// Only static, explicitly recognized diagnostics may leave the raw resource
+/// journal through the session summary. A code is untrusted storage too.
+fn cleanup_reason_explanation(code: &str) -> Option<(&'static str, &'static str)> {
+    Some(match code {
+        "terminal_primary_checkout_space" => ("terminal_primary_checkout_space", "This explicitly borrowed primary checkout Space was intentionally retained before a close was dispatched."),
+        "terminal_observation_unavailable" => ("terminal_observation_unavailable", "Fresh terminal observation is unavailable; this is an observation hold, not a close refusal."),
+        "containment_unproven" => ("containment_unproven", "The exact owned process scope has not proved consumer containment and drain."),
+        "terminal_retained_HerdrRefused" => ("terminal_retained_HerdrRefused", "The runtime adapter refused the guarded terminal close."),
+        "integration_pending" => ("integration_pending", "Accepted output still needs exact target integration evidence."),
+        "scope_dirty_checkout" => ("scope_dirty_checkout", "Uncommitted checkout changes protect this attempt."),
+        "scope_unaccepted_commits" => ("scope_unaccepted_commits", "Unaccepted commits protect this attempt."),
+        "scope_resource_admission" => ("scope_resource_admission", "This exact scope still holds an unresolved resource admission."),
+        "terminal_resource_admissions" => ("terminal_resource_admissions", "An unresolved resource admission protects the old worker terminal."),
+        "scope_replacement_authority_unproven" => ("scope_replacement_authority_unproven", "Authority to retire the replaced worker's exact scope is unproven."),
+        "checkout_consumer_present" => ("checkout_consumer_present", "A checkout consumer still protects the exact claim."),
+        "outputs_kept" => ("outputs_kept", "Unique private attempt outputs are retained."),
+        "attempt_unaccepted" => ("attempt_unaccepted", "This unaccepted attempt and its outputs are retained."),
+        "consumers_active" => ("consumers_active", "Known run or checkout consumers remain active."),
+        "consumer_drain_unproven" => ("consumer_drain_unproven", "Independent consumer drain has not been proved."),
+        "terminal_retirement_pending" => ("terminal_retirement_pending", "Guarded retirement of this exact terminal is pending."),
+        "terminal_outcome_unknown" => ("terminal_outcome_unknown", "The previous terminal retirement outcome is unconfirmed."),
+        "effect_outcome_unknown" => ("effect_outcome_unknown", "The previous cleanup effect outcome is unconfirmed."),
+        "ownership_unproven" => ("ownership_unproven", "Ownership does not authorize cleanup of this resource."),
+        "creation_identity_unavailable" => ("creation_identity_unavailable", "The exact resource creation identity is unavailable."),
+        "creation_provenance_conflict" => ("creation_provenance_conflict", "The resource creation provenance conflicts with its receipt."),
+        "terminal_identity_changed" => ("terminal_identity_changed", "The terminal identity no longer matches its original retirement receipt."),
+        "superseded_work_preserved" => ("superseded_work_preserved", "The superseded attempt's work and claims remain independently protected."),
+        "superseded_space_preserved" => ("superseded_space_preserved", "The superseded attempt's Space is retained without explicit teardown authority."),
+        _ => return cleanup_inspection_explanation(code),
+    })
+}
+
+fn cleanup_inspection_explanation(code: &str) -> Option<(&'static str, &'static str)> {
+    Some(match code {
+        "consumer_inventory_bounded" => ("consumer_inventory_bounded", "Consumer inventory exceeded its inspection bound; complete absence has not been proved."),
+        "terminal_peer_unproven" => ("terminal_peer_unproven", "The runtime peer identity needed for terminal inspection is unproven."),
+        "endpoint_changed" => ("endpoint_changed", "The observed runtime endpoint or session did not match the requested inventory."),
+        "fixture_adapter_unavailable" => ("fixture_adapter_unavailable", "The fixture cleanup adapter is unavailable."),
+        "inspection_unavailable" => ("inspection_unavailable", "Actual resource outcome could not be inspected."),
+        _ => return None,
+    })
+}
+
+fn cleanup_inspection_error(kind: OwnedResourceKind, why: InspectionError) -> CleanupEvaluation {
+    if kind == OwnedResourceKind::AttemptDirectory {
+        // Private attempt storage retains the original authority diagnostic.
+        return CleanupEvaluation::Unknown(reason(CleanupReasonClass::Authority, &why.code, why.message));
+    }
+    let (code, message) = cleanup_inspection_explanation(&why.code)
+        .unwrap_or(("inspection_unavailable", "Actual resource outcome could not be inspected."));
+    CleanupEvaluation::Unknown(reason(CleanupReasonClass::Transient, code, message))
+}
+
 fn cleanup_hold_action(code: &str) -> &'static str {
     match code {
         "integration_pending" => "Record exact target checks through IntegrationRecord, or merge the accepted head into the root's checked-out target; cleanup reevaluates on the resulting event.",
-        "terminal_observation_unavailable" => "Restore the exact runtime observation connection; the next connection/pane event reevaluates automatically without resubmitting an uncertain effect.",
+        "terminal_observation_unavailable" | "consumer_inventory_bounded" => "Restore the exact runtime observation connection and complete fresh consumer inventory; the next connection/pane event reevaluates automatically without resubmitting an uncertain effect.",
         "terminal_primary_checkout_space" => "Leave this explicitly borrowed primary checkout Space and foreign Spaces untouched; normal Git workers should use an isolated worktree. Do not retry this close or delete state to bypass the guard.",
+        "terminal_retained_HerdrRefused" => "Inspect the runtime adapter's refusal for this exact terminal and preserve its identity; do not retry closure or substitute another pane to bypass the guard.",
+        "inspection_unavailable" | "fixture_adapter_unavailable" => "Restore the exact resource inspection adapter and obtain a fresh observation before cleanup; do not repeat an uncertain effect.",
+        "terminal_peer_unproven" | "endpoint_changed" => "Reestablish the exact creation endpoint and runtime peer identity before inspection; preserve the resource and do not adopt a replacement.",
         "containment_unproven" => "Preserve this exact claim until its owned scope and fresh pane inventory prove drain; old uncontained launches are not retrofitted. Do not substitute PID absence or another scope.",
         "scope_dirty_checkout" | "scope_unaccepted_commits" => "Review and integrate the remaining output separately or retain it; neither the process scope nor checkout is stopped/discarded while this work is protected.",
         "scope_resource_admission" => "Finish and release the exact holder's build/resource request with actual build-process exit proof; never remove its queue entry or steal the grant.",
