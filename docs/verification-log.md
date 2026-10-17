@@ -2,6 +2,28 @@
 
 These are historical observations, not proof of the current checkout. Each named original source occurrence is reproduced verbatim, including mixed current-rule/result paragraphs, obsolete wording, dates and limitations. Current architecture, rules and source owners live in the root documents. Undated cohorts retain source context rather than an invented run date.
 
+## Accepted supervisor improvements — isolated combined candidate (2026-10-17)
+
+Candidate `0d33c58b7843b3dd02bd7b9968688253c9b3d77a` contains all four accepted heads by ancestry: replacement `deb5bdf3`, guidance `d1d1e421`, safe diagnostics `80aa83ef`, and placement/branch repair `27bcba48`, all from `d956e730`. Only the two independent verification-log insertions conflicted; both were retained without deleting source observations. Every other changed source/document blob matches its accepted head. Protocol, frontend and lockfile inputs are unchanged, so no generated TypeScript was hand-merged or regenerated.
+
+Final combined checks used `CARGO_TARGET_DIR=/home/nnex/dev/prj/cockpit/target`, unique `RUSTC_WORKSPACE_WRAPPER=/home/nnex/.cache/ci30163/rustc-wrapper`, and `CARGO_BUILD_JOBS=4`, under one continuous `flock target/.wave-cargo.lock` through the build and binary freeze. A final child-environment-isolated pass removed inherited `COCKPIT_*`, `HERDR_*` and `PI_*` overrides without changing the credentialed parent; all counts below remained green and the frozen binary hash was identical:
+
+| Command | Result |
+| --- | --- |
+| `cargo test -p cockpit-host --bin cockpit cli_orchestration:: -- --nocapture` | 49 passed; 6 private child entries ignored in standalone discovery and exercised through parents |
+| `cargo test -p cockpit-core task_ownership:: -- --nocapture` | 45 passed |
+| `cargo test -p cockpit-core cleanup -- --nocapture` | 56 passed |
+| `cargo test -p cockpit-core orchestration::mutate::integration::tests:: -- --nocapture` | 6 passed |
+| `cargo test -p cockpit-core projects::prepare::tests:: -- --nocapture` | 27 passed |
+| `cargo test -p cockpit-core orchestration::dispatch::tests:: -- --nocapture` | 51 passed |
+| `cargo build -p cockpit-host --bin cockpit` | Passed; frozen host SHA-256 `8b0aa6cd8f67aeb3683093082424c8ee7c283bf198828879c45aa5ed9ace8d28` |
+
+`python3 /home/nnex/.cache/ci30163/smoke.py` passed against that frozen combined host: both actual replacement CLI commands with pending and active ownership, successor generations 3/5, stale-run refusal without state writes, preserved attachment fields and source drafts; real saved `run list` projection of primary-checkout retention, bounded inventory and adapter refusal with raw diagnostics/effect evidence redacted and store bytes unchanged; 15 help entry points and exact embedded-skill equality; both illustrative JSON examples parsed to expected semantic refusal in a private store, while unknown/missing fields and 16-KiB overflow were rejected. The probe used synthetic saved launch/resource evidence, never launched Herdr/agents or dispatched cleanup, and scrubbed inherited Cockpit identity/root overrides only in its children. Initial throwaway-probe assumptions about nullable attachment defaults, root summary rows, help phrasing and the integration `--record-file` flag were corrected; these were probe failures, not product changes. The unfiltered core suite was not run; the placement source's historical environment-sensitive configuration failure is not relabelled.
+
+Placement's prior real Herdr/browser evidence remains at `/tmp/cpol-5kg2e_vo/evidence/`; its seven non-log files are byte-identical to the accepted head. No new combined-binary live Git-placement, browser/native, install or shared-service restart is claimed. Existing ts-rs/Review visibility warnings remain. Durable combined command/output evidence is under `/home/nnex/.cache/ci30163/`, including `final-checks-isolated.log` and `smoke-evidence.json`; the published report and copied logs are `/home/nnex/.local/state/cockpit/reports/supervisor-integration-30163c09.{json,checks.log,smoke.json}`.
+
+This is candidate verification, **not main integration proof**. Main publication was withheld: protected main-checkout claim `c668847b-ffcf-4fcf-aaed-67bb8474dfc0` remains quiescing, and root observations retain other primary-checkout consumers. No claim, pane, process, accepted source checkout or persistent service was changed for publication. The liaison root is bound to Directory `/home/nnex/tmp`, not the main Git checkout; no target IntegrationRecord or invented project identity was submitted.
+
 ## CLI pending-attempt replacement selector (2026-10-17)
 
 On base `d956e730ce34970aa125e62361b596d0d855f376`, a private saved-state regression reproduced `task restart` refusing a started-but-unactivated `launch_unknown` attempt with `assignment_conflict`. The corrected shared CLI selector accepts the exact current owner or one vacant next-generation pending attempt, forwards that run's generation, and rejects ambiguity before narrowing by a named run. An owner plus a pending sibling is also rejected, because core supersession would otherwise revoke both.
