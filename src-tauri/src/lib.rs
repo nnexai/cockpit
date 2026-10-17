@@ -35,6 +35,11 @@ pub fn run() {
         Some(browser_runtime.clone()),
     );
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         .manage(service)
         .manage(browser_runtime)
         .manage(orchestration_runtime)

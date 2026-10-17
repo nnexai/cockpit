@@ -98,6 +98,13 @@
     "allow-cockpit-browser-view-command",
     "allow-cockpit-browser-view-subscribe",
     "allow-cockpit-browser-view-release",
-    "allow-cockpit-browser-draft-recovery"
+    "allow-cockpit-browser-draft-recovery",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        { "url": "http://*" },
+        { "url": "https://*" }
+      ]
+    }
   ]
 }

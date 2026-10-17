@@ -1,9 +1,28 @@
 import { Terminal } from "@xterm/xterm";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { WebLinksAddon } from "@xterm/addon-web-links";
+import { isTauri } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { snapTerminalFontSize, TERMINAL_THEME, TERMINAL_FONT_FAMILY } from "./terminalTheme";
 
+function openTerminalLink(event: MouseEvent, uri: string): void {
+  if (event.button !== 0 || (!event.ctrlKey && !event.metaKey)) return;
+  let url: URL;
+  try {
+    url = new URL(uri);
+  } catch {
+    return;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return;
+  if (isTauri()) {
+    void openUrl(url.href).catch(error => console.error("Could not open terminal URL", error));
+  } else {
+    window.open(url.href, "_blank", "noopener,noreferrer");
+  }
+}
+
 export function createCockpitTerminal(fontSize = snapTerminalFontSize()): Terminal {
-  return new Terminal({
+  const terminal = new Terminal({
     convertEol: false,
     cursorBlink: false,
     fontFamily: TERMINAL_FONT_FAMILY,
@@ -14,8 +33,11 @@ export function createCockpitTerminal(fontSize = snapTerminalFontSize()): Termin
     scrollbar: { showScrollbar: false, width: 8 },
     theme: TERMINAL_THEME,
     scrollback: 5000,
+    linkHandler: { activate: openTerminalLink },
     vtExtensions: { kittyKeyboard: true },
   });
+  terminal.loadAddon(new WebLinksAddon(openTerminalLink));
+  return terminal;
 }
 
 // The DOM renderer draws box/block glyphs from the font, so their edges land on

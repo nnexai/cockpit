@@ -110,6 +110,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("@xterm/xterm", () => ({ Terminal: mocks.MockTerminal }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: mocks.MockFitAddon }));
+vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => mocks.native.enabled, invoke: mocks.native.invoke }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 

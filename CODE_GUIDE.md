@@ -309,6 +309,8 @@ Herdr snapshot/stream → session ordering → authoritative membership/focus re
 
 Herdr client-shell projection → runtime shortcut aliases → confirmed-focus command invocation → singleton popup metadata → `src/app/ServerPopup.tsx` reusing terminal attachment. Decoder provenance, input gating, disconnected retention, focus return and the active 120×40 shell-subscription resize caveat are specified in [DECISIONS](DECISIONS.md), not inferred from local layout geometry.
 
+Shared terminal creation in `src/app/terminal/cockpitTerminal.ts` installs xterm's WebLinks addon and uses the same handler for OSC 8 hyperlinks. Ctrl+click (Cmd+click on macOS) opens only HTTP(S) links; plain click and drag selection do not open links. Native uses the official Tauri opener plugin with HTTP(S)-only capability scope and automatic page-link interception disabled; the web client opens an isolated new browser tab.
+
 ### Browser and trusted widgets
 
 Tab Browser action → core tab association/service → private owner runtime → supervised Node/CDP helper attached to the CLI-managed Chromium session → bounded relay → transport-local stream → shared decoder → Browser hooks/frame presenter. `browser-runtime/browser-user-agent.cjs` owns the narrow running-version HeadlessChrome substitution policy; it is not general anti-bot/media parity. Fresh-open/default URL and prerequisites are in [configuration](docs/configuration.md); lifetime/reset/cleanup/delivery guards are in [DECISIONS](DECISIONS.md).
