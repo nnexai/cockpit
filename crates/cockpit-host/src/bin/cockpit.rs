@@ -43,17 +43,21 @@ use cockpit_host::{
 mod cli_orchestration;
 
 const ROOT_HELP: &str = "Agent workflows:
-  cockpit-cli run context        Register current session and read scoped authority
+  cockpit-cli run context        Claim authorized attempt and read scoped authority
   cockpit-cli notes --help       Durable Notes, todos, Kanban and decisions
   cockpit-cli task --help        Canonical supervisor tasks and revision fences
-  cockpit-cli run --help         Worker lifecycle, plans, reports and questions
-  cockpit-cli inbox --help       Read messages, then acknowledge processed mail
+  cockpit-cli run --help         Results, review, integration and retained adapters
+  cockpit-cli inbox --help       next captures/ACKs internally; no model ACK ceremony
   cockpit-cli route --help       Read configured project-routing evidence
   cockpit-cli skills --help      Read or explicitly install portable CLI skills
   cockpit-cli library --help     Save to the Library and select in the current Space
 
 Use <command> <subcommand> --help for payloads, selectors and examples.
 Prefer COCKPIT_CLI_PATH when supplied by a Cockpit-launched agent.
+Normal delegation: task create, then task schedule (isolated Git by default).
+worker-start is adapter-only. Saved run status is not fresh Herdr liveness;
+empty attention does not prove runtime health. run context is authority, not
+project discovery; context --current is only the originating pane's context.
 Help and skills commands do not connect to Herdr or modify Notes.
 Notes UUID-pinned content and routine credential-scoped orchestration work
 without Herdr. Agent calls use actual --harness/--session-id or generic
@@ -102,7 +106,14 @@ Cockpit-rendered declarative choices. No selection is pasted into the terminal.
 Without a target, HERDR_ENV=1 resolves the caller's current pane. Outside Herdr,
 pass --pane, --tab or --space with --herdr-session and --herdr-socket.")]
     Widget(WidgetArgs),
-    /// Print the live Library context selected by a Herdr Space.
+    /// Print the live Library context selected by an explicit or originating Herdr Space.
+    #[command(after_long_help = "Select the actual source Space for the task, independently of liaison cwd:
+  cockpit-cli context --space SOURCE_SPACE --herdr-session SESSION --herdr-socket SOCKET
+  cockpit-cli context --current
+--current resolves only the originating pane; it does not select an unrelated
+project or grant task authority. run context reads authority, not source context.
+Use explicit task/setup or routing evidence; if absent, ask for the actual target.
+Output is JSON automatically; no --json flag.")]
     Context(ContextArgs),
     /// Save provider/folder input to the Library and select it in the current Space.
     #[command(after_long_help = library_cli::LIBRARY_HELP)]

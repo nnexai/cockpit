@@ -186,6 +186,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Agent CLI activation/replacement/internal inbox capture | `crates/cockpit-host/src/cli_orchestration/context.rs` (`replacement_action`); `wait.rs` (`inbox_next`); `output.rs` (`capture`) |
 | CLI binary/Notes/skills | `crates/cockpit-host/src/bin/cockpit.rs`; `crates/cockpit-host/src/bin/cockpit/notes.rs`; `crates/cockpit-host/src/bin/cockpit/skills.rs` |
 | CLI endpoint resolution/portable guides | `crates/cockpit-host/src/bin/cockpit/endpoint.rs`; `integrations/agent-skills/` |
+| Bounded cleanup/integration payload guidance | `run cleanup-finish --help`, `run integration-record --help` expose complete field shapes/examples from CLI `mod.rs`; authoritative `CleanupFinish`/`IntegrationRecord` and nested types in `crates/cockpit-protocol/src/orchestration.rs`. Samples are parser illustrations, never production evidence. |
 | Receipt-owned native installer | `scripts/install-native.py` |
 
 ### Protocol, clients and host adapters

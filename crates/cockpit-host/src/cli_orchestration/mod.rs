@@ -25,6 +25,8 @@ pub(crate) const TASK_HELP: &str = r#"Canonical tasks live in the root's Markdow
 3. create does not start a worker. Choose a stable --task-id UUID; the CLI
    prints the ID to stderr before submitting (and generates one if omitted).
    After an unknown outcome, task show that ID; never create with a new ID.
+   Normal delegation is create, then task schedule TASK_ID. Schedule defaults
+   to an owned isolated Git worktree, including for read-only research.
 4. Choose stable UUIDs for new steps; use task show --self for existing steps.
    Checklist edits capture the current task revision internally; --revision
    preserves an explicit fence. Dependencies replace the full prerequisite
@@ -41,6 +43,7 @@ Examples:
   cockpit-cli task show TASK_ID --json
   cockpit-cli task inputs --self --json
   cockpit-cli task create --task-id UUID --title "Fix flaky test" --description-file brief.md
+  cockpit-cli task schedule TASK_ID --space-worktree SOURCE_SPACE_ID
   cockpit-cli task update TASK_ID --revision TASK_REVISION --description-file description.md
   cockpit-cli task scope-update TASK_ID --operation-id UUID --run RUN_ID --revision TASK_REVISION --doc-revision DOC_REVISION --description-file description.md
   cockpit-cli task step-add TASK_ID --revision TASK_REVISION --step-id UUID --title "Write regression test"
@@ -81,8 +84,9 @@ pub(crate) const RUN_HELP: &str = r#"Credential-first, harness-neutral coordinat
   capability. Session/socket use the existing flags/environment resolution.
   Task writes/start/schedule/replace need --root; run management needs RUN_ID.
   Self/report/registration/inbox commands are not applicable to operator mode.
-  cleanup-finish --request-file JSON requires --operator --root ROOT_ID;
-  the request's root_id must match and optional run_id names its exact subtree.
+  cleanup-finish --request-file JSON: explicit --operator requires --root equal
+  to payload root_id. A credentialed root may manage its subtree; an accepted
+  worker may only reevaluate its own run's existing owned records.
   Ordinary calls implicitly register/claim an authorized pending attempt.
   run context returns compact role/run/root/assignment/inbox metadata.
   run brief returns canonical task scope and the short launch instructions.
@@ -97,8 +101,15 @@ pub(crate) const RUN_HELP: &str = r#"Credential-first, harness-neutral coordinat
   done is worker-only: it derives actual commits/task revision and never runs
   or fabricates checks. The root finishes batches conversationally and remains
   available for new tasks. --check records supplied evidence; not_run stays so.
-  Result is not acceptance or integration. Root acceptance needs the fresh task
-  revision; safe cleanup additionally requires actual passed target checks.
+  Result, canonical acceptance, target integration, process retirement and
+  checkout-claim release are separate facts. Acceptance needs the current task
+  revision; verified integration needs actual passed target checks. Cleanup may
+  also remove clean owned accepted Git output whose exact head is freshly proven
+  contained in the root's actual checkout, without an IntegrationRecord. That
+  exception records neither integration nor passed checks. Borrowed resources,
+  unmerged output, active consumers and uncertain effects remain protected.
+  run list/show read a saved durable snapshot, not fresh Herdr liveness.
+  Empty attention is not proof of runtime health or process exit.
 
   Generated operation/message IDs are printed before submission; explicit IDs
   support exact replay. Inspect unknown outcomes and reuse the exact payload/ID,
@@ -107,7 +118,8 @@ pub(crate) const RUN_HELP: &str = r#"Credential-first, harness-neutral coordinat
 Examples:
   cockpit-cli run context --json
   cockpit-cli run brief --json
-  cockpit-cli run worker-start --task TASK_ID --space-worktree SPACE_ID --brief-file brief.txt
+  cockpit-cli task create --task-id UUID --title "Bounded outcome" --description-file brief.md
+  cockpit-cli task schedule TASK_ID --space-worktree SOURCE_SPACE_ID
   cockpit-cli run worker-replace RUN_ID --reason "Attempt stalled"
   cockpit-cli run done --summary "Completed" --check "contract::focused command::passed"
   cockpit-cli run report --kind needs-input --summary "Which outcome?"
@@ -148,8 +160,12 @@ pub(crate) const ROUTE_HELP: &str = r#"Read-only artifact-to-project routing.
    focus to guess the project.
 2. Configured mappings win, including ambiguous configured matches.
    Otherwise routing uses actual forge-origin matches.
-3. Inspect the resolution before using the explicit project in worker-start;
-   resolving a route does not launch a worker.
+3. Inspect the resolution before using its explicit project in task schedule;
+   normal delegation is task create, then task schedule. worker-start is an
+   adapter-only immediate start. Resolving a route never launches a worker.
+   run context gives authority; context --current gives the originating pane's
+   context, not an unrelated task target. A general-directory liaison can manage
+   multiple projects; ask for the actual target only if project evidence is absent.
 
 Example:
   cockpit-cli route resolve --artifact https://gitlab.example/group/repo/-/issues/12
@@ -163,12 +179,16 @@ Caller and authority:
 Output: JSON on stdout; --json selects compact JSON.
 Errors: {"code","message"} JSON on stderr, exit 1."#;
 
-const WORKER_START_HELP: &str = r#"Read the canonical task and inspect the real project before starting.
-Choose exactly one explicit target: --space for a safe shared checkout;
---space-worktree for isolation from conflicting/uncertain work; --repository
-for catalog setup; --path for a borrowed checkout. --space-worktree inherits
-the source checkout's HEAD when --base is omitted. Do not substitute cwd or
-the supervisor's Space for the task's project.
+const WORKER_START_HELP: &str = r#"Adapter-only immediate start; normal delegation is task create, then task schedule.
+Read the canonical task and inspect the explicit source project before starting.
+Choose exactly one target: --space-worktree for owned isolated Git placement,
+including read-only research; --repository for catalog setup; --path for borrowed
+Open placement; --space for deliberate borrowed reuse, not a shared-reader claim.
+Read-only instructions create neither a sandbox nor concurrent-reader capability;
+borrowed inspection must not change HEAD, index or build outputs. A borrowed worker
+in a primary Git Space is intentionally retained, not automatically closed.
+--space-worktree inherits the source checkout's committed HEAD without --base.
+Never substitute cwd, current pane or the supervisor's Space for the task project.
 
 The CLI reads exact task/document revisions internally before one core CAS
 submission. Optional --task-revision/--doc-revision preserve caller fences.
@@ -182,6 +202,109 @@ Example:
 The result is worker_started.start {operation_id,run_id,attempt,duplicate}.
 After uncertainty inspect run list/show and task show, then reuse the printed
 operation ID and exact payload. Do not blindly start another writer."#;
+
+const CLEANUP_FINISH_HELP: &str = r#"Bounded UTF-8 JSON, at most 16 KiB; unknown fields are rejected.
+Authoritative type: crates/cockpit-protocol/src/orchestration.rs::CleanupFinish.
+Required string fields: operation_id (stable operation UUID), root_id.
+Optional run_id (string, omitted/null for the root; otherwise exact run subtree).
+
+Illustrative shape only; do not submit these placeholders to production:
+{"operation_id":"OPERATION_UUID","root_id":"ROOT_UUID","run_id":"WORKER_RUN_UUID"}
+
+Explicit local management:
+  cockpit-cli run --operator --root ROOT_UUID cleanup-finish --request-file FILE
+The flag and payload roots must match. Credentialed roots manage their subtree;
+an accepted worker may only reevaluate its own existing owned records. This
+requests convergence, not force deletion, process stop or checkout-claim release.
+Current acceptance, ownership and fresh physical safety checks remain required.
+Only owned owned_when_safe records not yet removed are re-queued; borrowed
+records and intent/unknown effects stay protected. Result: cleanup_finished.cleanup
+{operation_id,items,removed_count,waiting_count,kept_count,unknown_count,duplicate}.
+Changing payload under the same operation UUID fails operation_conflict.
+Retain exact operation ID/payload after uncertainty; inspect before replay."#;
+
+const INTEGRATION_RECORD_HELP: &str = r#"Bounded UTF-8 JSON, at most 16 KiB; unknown fields are rejected.
+Authoritative types: crates/cockpit-protocol/src/orchestration.rs::{
+  IntegrationRecord, Integration, SourceOutput, IntegrationMapping, CheckOutcome,
+  IntegrationMethod, CheckStatus}.
+Read run show RUN --json and task show TASK --json first. The named run must be
+the current accepted successful attempt, with the canonical task still checked
+at the exact source revision. expected_result_message_id and
+expected_task_revision fence that exact Result/current task, not launch scope.
+Only the current active root job over that worker, or explicit --operator,
+may record integration. operation_id must be a stable UUID.
+
+Required IntegrationRecord fields:
+  operation_id, run_id, expected_result_message_id, expected_task_revision,
+  integration (one of the tagged objects below). IDs/revisions are strings.
+Integration variants:
+  {"state":"pending"}
+  {"state":"not_applicable","reason":"ACTUAL_REASON","result_message_id":"RESULT_ID"}
+  integrated: all fields shown in the example below are required.
+not_applicable is NonCode-only, with a nonblank reason (at most 4096 bytes)
+and the exact fenced Result ID; it never publishes/discards artifacts.
+
+Illustrative Integrated shape only, NOT evidence or a production request.
+Placeholders are strings; the not_run check deliberately attests no success.
+Replace source with the EXACT accepted SourceOutput, not a reconstructed copy:
+{
+  "operation_id":"OPERATION_UUID",
+  "run_id":"ACCEPTED_WORKER_RUN_UUID",
+  "expected_result_message_id":"RESULT_ID",
+  "expected_task_revision":"CURRENT_TASK_REVISION",
+  "integration":{
+    "state":"integrated",
+    "operation_id":"OPERATION_UUID",
+    "accepted_result_message_id":"RESULT_ID",
+    "accepted_task_revision":"CURRENT_TASK_REVISION",
+    "source":{
+      "kind":"code","repository_key":"SOURCE_REPOSITORY_KEY",
+      "checkout_key":"SOURCE_CHECKOUT_KEY","base_commit":"BASE_COMMIT",
+      "head_commit":"SOURCE_HEAD","commits":["SOURCE_COMMIT"],
+      "task_revision":"CURRENT_TASK_REVISION","result_message_id":"RESULT_ID",
+      "focused_checks":[]
+    },
+    "target_repository_key":"TARGET_REPOSITORY_KEY",
+    "target_ref":"refs/heads/TARGET_BRANCH","target_commit":"TARGET_COMMIT",
+    "method":"ancestor","mappings":[],
+    "checks":[{"contract":"CONTRACT","command_or_scenario":"ACTUAL_TARGET_CHECK",
+      "outcome":"not_run","limitation":"Illustration only; not executed"}],
+    "integrator_run_id":"INTEGRATOR_RUN_UUID","verified_at":"RFC3339_TIMESTAMP"
+  }
+}
+
+Other nested shapes:
+  SourceOutput non_code: {kind:"non_code",result_message_id,task_revision,
+    artifacts:[string],focused_checks:[CheckOutcome]} (not for Integrated).
+  CheckOutcome: required contract, command_or_scenario, outcome; optional
+    evidence, limitation strings/null. outcome: passed | failed | not_run.
+  IntegrationMapping: required source_commits, target_commits, source_paths,
+    target_paths (string arrays); optional explanation string/null.
+  method: ancestor | patch_equivalent | recorded_adaptation.
+ancestor requires empty mappings and actual source-head containment.
+Other methods require full commit/path mappings (1..256); patch_equivalent
+requires full-range byte equivalence; recorded_adaptation requires nonblank
+explanations (at most 16 KiB each) and source check contracts.
+Mappings cover every source commit once in order, with no reused target commit.
+Ranges must be contiguous with a single-parent base; path arrays must name all
+actual changed paths, unique and repository-relative.
+Commit IDs must be full lowercase 40/64-hex. At most 128 checks with unique,
+nonblank contracts; byte bounds: contract 1024, command_or_scenario 4096
+(nonblank), evidence 16384, limitation 4096. The whole file still must fit 16 KiB.
+
+Integrated repeats the outer operation/Result/task fences exactly and retains
+the exact accepted source. Use source.repository_key as target_repository_key:
+cleanup/dependency use honors only matching keys. integrator_run_id must name
+the authenticated root run for agent calls; the target Git checkout must be
+known in its root. target_ref must pass git check-ref-format, start refs/heads/
+and currently point at target_commit. Core re-verifies Git facts and sets
+verified_at itself; that required input string is not trusted proof.
+Only actual nonempty passed target checks covering every source check contract,
+without nonblank limitations, establish Integrated; failed/not_run retain
+Pending. The core never executes check strings. Do not fabricate evidence to
+make this illustrative shape pass. Even pending cannot overwrite a different
+verified fact. Retain exact operation UUID/payload for an inspected replay;
+changed payload under that UUID fails operation_conflict."#;
 
 const REPORT_HELP: &str = r#"Report the credential's own run with optional actual conversation metadata.
   Private active credential/epoch/task generation grants authority, not

@@ -34,8 +34,8 @@ invalid supplied files. Later metadata enriches registration; it cannot rebind a
 credential already associated with a different conversation.
 
 ```sh
-"${COCKPIT_CLI_PATH:-cockpit-cli}" inbox next --wait 0 --deliverable --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run context --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" inbox next --wait 0 --deliverable --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run brief --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task show --self --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task inputs --self --json
@@ -63,22 +63,28 @@ TASK_ID="$(uuidgen)"
 
 Schedule uses the current canonical revisions unless exact `--task-revision` /
 `--doc-revision` fences are supplied. Placement defaults to an owned isolated
-worktree from the task's source Space. Discover the actual project from
-Library/Space context (`context --current`) or configured routing; never infer
-it from arbitrary cwd or the root's folder. `run context` identifies authority,
-not necessarily a project checkout. Prefer `--space-worktree` for Git workers,
-even read-only research, so owned worker terminals can be cleaned up after
-acceptance. `--path` to an already-open Git Space creates an isolated worktree
-from that Space; otherwise it borrows/opens the checkout. `--space` is deliberate
-advanced borrowed reuse, only for safe shared/read-only inspection that changes
-no HEAD, index or build outputs. A primary Git Space's borrowed worker terminal
-cannot be auto-closed and remains until the user closes it. Review/testing an MR
-is writer work: use `--space-worktree`, optionally with `--base REF`.
+worktree from the task's source Space, including read-only Git research.
+Discover the actual target from explicit task/setup project evidence, the
+source Space's Library/context or configured routing; never infer it from cwd
+or the liaison's folder. `run context` identifies authority, not a project.
+`context --current` resolves only the originating pane, not an unrelated task.
+A general-directory liaison can manage multiple projects. If no project evidence
+is supplied, ask for that actual target rather than guessing current focus.
+Prefer `--space-worktree` for Git workers so owned terminals can retire after
+acceptance. Scheduled `--path` matching exactly one fresh verified Git Space
+isolates from it; otherwise Open placement borrows the directory. `--space` is
+deliberate advanced borrowed reuse, not concurrent shared-reader capability.
+Read-only instructions are not a sandbox and do not bypass exclusive checkout
+claims; borrowed inspection must change no HEAD, index or build outputs. A primary
+Git Space's borrowed worker terminal is intentionally retained until the user
+closes it. Review/testing an MR is writer work: use `--space-worktree`, optionally
+with `--base REF` (otherwise the source checkout's committed HEAD).
 Optional `--brief` / `--brief-file` add instructions, not another task store.
 Dependencies and the parallel slot gate launch; authorization survives waiting.
 If source placement cannot be resolved, inspect the returned blocker.
 
 ```sh
+"${COCKPIT_CLI_PATH:-cockpit-cli}" context --space "$SOURCE_SPACE" --herdr-session "$SESSION" --herdr-socket "$SOCKET"
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task list --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task show "$TASK_ID" --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task schedule "$TASK_ID" --space-worktree "$SOURCE_SPACE" --json
@@ -135,6 +141,9 @@ Review is a source Result awaiting review; Accepted requires root acceptance.
 Check off only actually completed canonical steps. Checklist completion, idle,
 process exit, registration and message capture never substitute for acceptance.
 Accepted history remains read-only.
+`run list` / `run show` are saved durable snapshots, not fresh Herdr/process
+liveness. Empty `attention` does not prove runtime health. Use separate fresh,
+identity-bound physical evidence before lifecycle actions.
 
 ### Actual prerequisite inputs
 
@@ -231,8 +240,14 @@ Acceptance is not integration or cleanup evidence. Integrate accepted output int
 the requested target and let automatic cleanup converge. A clean owned accepted
 head already contained in the root's actual checkout can retire without a prior
 IntegrationRecord; this never invents passed target checks or changes integration
-status. Preserve unmerged output and uncertain effects. Explicit local cleanup
-management supports `run --operator --root ROOT cleanup-finish --request-file FILE`.
+status. Preserve unmerged output and uncertain effects. A credentialed root may
+request `run cleanup-finish --request-file FILE`; an accepted worker may request
+only its own run's existing records. Explicit local management uses
+`run --operator --root ROOT cleanup-finish --request-file FILE`, with matching
+payload `root_id`. This is reevaluation, never forced cleanup.
+Source outcome, canonical acceptance, target integration, process retirement
+and checkout-claim release are independent; acceptance or pane absence alone
+does not prove background writers stopped or release their claims.
 For manual Space/worktree removal, use **Remove worktree…**; remaining files
 require a reviewed discard confirmation, not historical setup ownership.
 Low-level commands remain for adapters and inspected recovery, not normal
@@ -252,8 +267,35 @@ preserve those exact fences for an inspected replay after changes:
   `inbox ack --through READ_THROUGH_SEQ` are retained integration/capture tools,
   not the ordinary model workflow; a wait cursor is never an ACK cursor.
 
-Structured files are bounded JSON (16 KiB). Read actual schema/help before use;
-never fabricate receipts, source identity or process ownership. `route resolve
---artifact URL --json` selects configured project routing; top-level
-`context --current` reads Library/Space context (automatic JSON, no `--json`),
-not capability registration. `library add --current INPUT` (add `--follow` for a Jira query or Confluence space) saves to the Library and selects it in this Space; use it instead of copying files. Report typed failures and unknown outcomes honestly.
+Structured files are bounded UTF-8 JSON (16 KiB), with unknown fields rejected.
+Discover complete CleanupFinish and IntegrationRecord fields, nested shapes,
+enum/method values and illustrative JSON through the existing verb help:
+
+```sh
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run cleanup-finish --help
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run integration-record --help
+```
+
+Authoritative types are `CleanupFinish`, `IntegrationRecord`, `Integration`,
+`SourceOutput`, `IntegrationMapping` and `CheckOutcome` in
+`crates/cockpit-protocol/src/orchestration.rs`. CleanupFinish requires
+`operation_id`, `root_id`; optional `run_id` narrows the subtree. IntegrationRecord
+requires `operation_id`, `run_id`, `expected_result_message_id`,
+`expected_task_revision`, `integration`. Its states are `pending`,
+`not_applicable` (NonCode only, exact Result and reason), `integrated` (Code with
+exact accepted source and actual target evidence); methods are `ancestor`,
+`patch_equivalent`, `recorded_adaptation`. The detailed help enumerates every
+nested field. Current accepted Result/task fences are not launch revisions.
+Examples are illustrative, not evidence; never submit placeholders to production
+or invent passed checks, mappings, receipts, source identity or process ownership.
+Core verifies Git facts, never executes supplied check strings; failed/not_run
+target checks retain Pending. No schema command or lifecycle probe is needed
+to learn the payload.
+
+`route resolve --artifact URL --json` reads project-routing evidence; top-level
+`context --space SOURCE --herdr-session SESSION --herdr-socket SOCKET` reads
+explicit source Library/Space context (automatic JSON, no `--json`).
+`context --current` reads only the originating pane's context, not capability
+registration. `library add --current INPUT` (add `--follow` for a Jira query or
+Confluence space) saves to the Library and selects it in this Space; use it
+instead of copying files. Report typed failures and unknown outcomes honestly.

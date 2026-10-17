@@ -10,7 +10,7 @@ use cockpit_protocol::{
 };
 
 use super::context::{read_input, read_json_file};
-use super::{CliError, MESSAGE_HELP, WORKER_START_HELP, REPORT_HELP, ROUTE_HELP};
+use super::{CliError, MESSAGE_HELP, WORKER_START_HELP, REPORT_HELP, ROUTE_HELP, INTEGRATION_RECORD_HELP, CLEANUP_FINISH_HELP};
 
 pub(super) const MAX_TEXT_BYTES: usize = 16 * 1024;
 
@@ -589,8 +589,10 @@ pub(super) struct LaunchArgs {
     #[arg(long)]
     pub(super) repository: Option<String>,
     #[arg(long)]
+    /// Open placement; schedule isolates a uniquely matched Git Space, otherwise borrows.
     pub(super) path: Option<String>,
     #[arg(long)]
+    /// Deliberate borrowed reuse; no shared-reader capability or teardown ownership.
     pub(super) space: Option<String>,
     /// Create an isolated owned worktree from the source Space.
     #[arg(long)]
@@ -782,7 +784,7 @@ pub(super) enum RunCommand {
         #[arg(long, conflicts_with_all = ["checks", "artifacts"], requires = "message_id")]
         source_output_file: Option<PathBuf>,
     },
-    /// List durable runs joined to fresh Herdr observations.
+    /// Read a saved durable snapshot; not fresh Herdr liveness or runtime-health proof.
     List {
         /// Indent runs by their parent hierarchy.
         #[arg(long)]
@@ -798,7 +800,7 @@ pub(super) enum RunCommand {
         #[arg(long = "self")]
         self_run: bool,
     },
-    /// Start one canonical-task worker with exact CAS fences and a stable operation UUID.
+    /// Adapter-only immediate canonical-task start; normally use task create then schedule.
     #[command(after_long_help = WORKER_START_HELP)]
     WorkerStart(WorkerStartArgs),
     /// Accept an explicit successful result against the canonical task revision.
@@ -875,6 +877,7 @@ operation's outcome is uncertain; never repeat it blindly."
         original_claim_id: Option<String>,
     },
     /// Record reviewed integration evidence for an accepted Result.
+    #[command(after_long_help = INTEGRATION_RECORD_HELP)]
     IntegrationRecord {
         /// IntegrationRecord JSON (at most 16 KiB).
         #[arg(long)]
@@ -905,6 +908,7 @@ operation's outcome is uncertain; never repeat it blindly."
         request_file: PathBuf,
     },
     /// Request cleanup convergence; an accepted worker can only reevaluate its own existing owned records.
+    #[command(after_long_help = CLEANUP_FINISH_HELP)]
     CleanupFinish {
         /// CleanupFinish JSON (at most 16 KiB).
         #[arg(long)]
@@ -980,16 +984,16 @@ Native delivery receipts do not grant work authority or prove resumed work."
     },
     /// Capture an already Read recipient prefix; does not answer or accept work.
     Ack {
-        /// Highest recipient sequence already Read and processed.
+        /// Highest recipient sequence already Read and durably captured; ordinary next ACKs internally.
         #[arg(long)]
         through: u64,
     },
     /// Wait read-only for pending mail; returns counts/kinds/sequence, never bodies.
     #[command(
         after_long_help = "Read-only counts/kinds/through_seq, never message bodies or a Read receipt.
-After pending mail, use inbox list and process messages within your authority.
+Ordinary consumers use inbox next, which captures and ACKs internally.
 An empty startup inbox does not mean the worker brief arrived.
-Use inbox list, then inbox ack --through READ_THROUGH_SEQ after capturing the bodies."
+list/ack are low-level recovery; a wait cursor is never an ACK cursor."
     )]
     Wait {
         /// Wait for pending recipient sequences strictly greater than this cursor.
