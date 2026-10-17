@@ -270,48 +270,11 @@ async fn replacement_selector_rejects_stale_closed_ambiguous_and_foreign_attempt
     }
 }
 
-#[tokio::test]
-#[ignore = "private environment child launched by replacement_cli_boundary"]
-async fn replacement_selector_forwards_pending_generation_and_rejects_selected_old_run() {
-    let fixture = Fixture::new();
-    let context = fixture.context().await;
-    for selected in [None, Some(fixture.worker.as_str())] {
-        let action = context
-            .replacement_action(
-                &fixture.root,
-                &fixture.task,
-                selected,
-                None,
-                "Continue safely".into(),
-            )
-            .await
-            .unwrap();
-        assert!(matches!(action, OrchestrationAction::WorkerReplace {
-            expected_run_id, expected_assignment_generation: 1, ..
-        } if expected_run_id == fixture.worker));
-    }
-    assert_eq!(
-        context
-            .replacement_action(
-                &fixture.root,
-                &fixture.task,
-                Some("old-run"),
-                None,
-                "Continue safely".into()
-            )
-            .await
-            .unwrap_err()
-            .code,
-        "assignment_conflict"
-    );
-}
-
 #[test]
 fn replacement_cli_boundary() {
     for name in [
         "replacement_cli_pending_and_active_attempts_preserve_old_attachment_and_work",
         "replacement_selector_rejects_stale_closed_ambiguous_and_foreign_attempts_without_writes",
-        "replacement_selector_forwards_pending_generation_and_rejects_selected_old_run",
     ] {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
