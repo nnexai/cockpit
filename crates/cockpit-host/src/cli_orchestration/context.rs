@@ -366,20 +366,30 @@ impl Context {
         let snapshot = self.snapshot(Some(root.into())).await?;
         let ownership = snapshot.task_ownership.iter().find(|ownership| ownership.root_id == root && ownership.task_id == task)
             .ok_or_else(|| CliError::new("task_unassigned", "Task has no current or pending assignment"))?;
-        let run = snapshot.runs.iter().find(|run| {
+        let pending_generation = ownership.generation.checked_add(1);
+        let mut attempts = snapshot.runs.iter().filter(|run| {
             run.root_id == root && run.task_id.as_deref() == Some(task)
-                && run.assignment_generation == Some(ownership.generation)
                 && run.stage != RunStage::Closed
+                && run.assignment_generation.is_some_and(|generation| {
+                    Some(generation) == pending_generation
+                        || (ownership.owner.is_some() && generation == ownership.generation)
+                })
+        });
+        // Check uniqueness before a named run narrows the selection: replacement
+        // also revokes pending authorizations, so never hide a second attempt.
+        let run = attempts.next().filter(|run| {
+            attempts.next().is_none()
+                && ownership.owner.as_ref().is_none_or(|owner| owner.run_id == run.run_id
+                    && run.assignment_generation == Some(ownership.generation))
                 && selected_run.is_none_or(|selected| run.run_id == selected)
-                && ownership.owner.as_ref().is_none_or(|owner| owner.run_id == run.run_id)
-        }).ok_or_else(|| CliError::new("assignment_conflict", "Selected task attempt is no longer current; inspect the task before retrying"))?;
+        }).ok_or_else(|| CliError::new("assignment_conflict", "Selected task attempt is no longer current or is ambiguous; inspect the task before retrying"))?;
         if reason.trim().is_empty() || reason.len() > 4096 {
             return Err(CliError::usage("Replacement --reason must be nonempty and at most 4 KiB"));
         }
         Ok(OrchestrationAction::WorkerReplace {
             operation_id: super::args::submission_id(operation_id, "Operation")?,
             root_id: root.into(), task_id: task.into(), expected_run_id: run.run_id.clone(),
-            expected_assignment_generation: ownership.generation, reason,
+            expected_assignment_generation: run.assignment_generation.expect("selected assignment generation"), reason,
         })
     }
 
@@ -419,4 +429,8 @@ impl Context {
     }
 
 }
+
+#[cfg(test)]
+#[path = "tests/replacement.rs"]
+mod replacement_tests;
 
