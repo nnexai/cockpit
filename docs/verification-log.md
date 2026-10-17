@@ -2,6 +2,31 @@
 
 These are historical observations, not proof of the current checkout. Each named original source occurrence is reproduced verbatim, including mixed current-rule/result paragraphs, obsolete wording, dates and limitations. Current architecture, rules and source owners live in the root documents. Undated cohorts retain source context rather than an invented run date.
 
+## Orchestration terminal-title wake amplification (2026-10-17)
+
+On base `250a1232a076e16413382d3f2ac11deb08b40f44`, a fresh 181-second, build-free installed-runtime baseline and a 5,382-sample profile identified repeated orchestration JSON decoding. A separate unchanged-state sample read about 223.8 MB/s through `rchar` (cached reads/socket traffic, not physical disk throughput). The live Herdr stream delivered 758 `pane_updated` events in 30 seconds; successive payloads predominantly changed only OSC terminal titles, revision and scroll state. The historical unchanged-revision watch feedback bug was already corrected and was not reapplied.
+
+The adapter now filters those output-only updates only for orchestration subscriptions. UI subscriptions retain live titles. The per-connection cache moves parsed metadata rather than cloning it, retains unknown/relevant fields, admits only snapshot-known pane IDs, and resets across other events and reconnects. `CONTEXT.md` records that current contract.
+
+`cargo test --release -p cockpit-herdr --lib -- --nocapture` passed **114 tests**, including title-only suppression, unchanged UI title delivery, meaningful/unknown metadata, unknown pane IDs and reconnect boundaries. Release host and packaged native builds passed separately (`cargo build --release -p cockpit-host --bin cockpit`; `cargo build --release -p cockpit-tauri --bin cockpit-tauri --features tauri/custom-protocol`). A stable private workspace compiler wrapper and separate baseline/candidate output roots prevented foreign-worktree artifact reuse; actual build processes were registered, frozen pairs were hashed before releasing their resources, and one focused independent review found no high-severity issue.
+
+The controlled native ABBA run lasted 05:34:04–05:49:45 UTC. Each of four cohorts had 181.02 admissible seconds after a matched 40-second warm-up, with no suspend, compiler or process-churn exclusions. Fresh disposable fixtures used one genuinely credential-claimed custom Root, 30 acknowledged startup Progress records and 20-Hz OSC titles—no model, fabricated context or worker. Actual packaged `tauri://localhost`, loaded asset hashes, default WebKit rendering, 1384×1749 viewport/DPR 1 and 122×80 PTY geometry matched throughout. Both candidate cohorts were below both baselines:
+
+| Mean measured metric | Baseline | Candidate |
+| --- | ---: | ---: |
+| Orchestration-owner CPU (% of one logical core) | 11.8328 | 0.2044 |
+| Entire fixture CPU, including native/WebKit/Herdr and sampler (% of one logical core) | 32.7750 | 18.1387 |
+| Owner `rchar` (decimal MB/s) | 135.45755 | 0.00001147 |
+
+Owner CPU fell 98.27%; the complete measured fixture fell 44.66%. Native DOM observation retained distinct visible title updates in every cohort; a real OSC7 cwd change propagated through Herdr and native IPC without changing pane/terminal identity or the tab launch tag. These are matched-fixture results, not an installed-session or universal workload speedup.
+
+Evidence is under `/home/nnex/.local/state/cockpit/diagnostics/perf-ca854fb0/`: build manifests, raw baseline/profile/event data, `native-title-20261017-073404-84ccb6/` and `validation.json`. Candidate host SHA-256 is `73997e4c464c7bfa2931744e263832bbbf45ddbd4362cc4c2260d1194c37288b`; candidate native is `9ac5e4d0101c226c0cee4d2936c7bd3f4075443a95a2c9215ceee6263149e312`. The exact comparison command was `python3 …/title_cpu_native.py --source "$PWD" --order ABBA --duration 181 --warmup 40 --parent-wayland /run/user/1000/wayland-1 --screenshot --execute`, under the common performance lock and an explicit sibling build-free acknowledgement.
+
+Earlier fixture attempts remain recorded as unsuccessful: a launch-label/title-discovery assumption, an unjustified UI cadence threshold, and a 20-second warm-up that caught zero-CPU glycin icon-loader shutdown. The latter window was rejected, not relabelled; the final run kept the strict rejection guards and used the longer matched warm-up.
+
+All recorded process effects were Absent, all exact owned shutdown checks passed, and final read-only inspection found all 41 measured process incarnations exited. The exhaustive fixture census still returned **Unknown** for protected `/proc` visibility, so global cleanup was not asserted and fixture data was retained; the driver truthfully exited 2 while its native/measurement checks passed. All build resources and the performance lock were released. No persistent session was restarted, no installation or global power/security setting was changed, and post-install CPU, cooling defects and hardware throttling remain unverified.
+
+
 ## Accepted supervisor improvements — isolated combined candidate (2026-10-17)
 
 Candidate `0d33c58b7843b3dd02bd7b9968688253c9b3d77a` contains all four accepted heads by ancestry: replacement `deb5bdf3`, guidance `d1d1e421`, safe diagnostics `80aa83ef`, and placement/branch repair `27bcba48`, all from `d956e730`. Only the two independent verification-log insertions conflicted; both were retained without deleting source observations. Every other changed source/document blob matches its accepted head. Protocol, frontend and lockfile inputs are unchanged, so no generated TypeScript was hand-merged or regenerated.

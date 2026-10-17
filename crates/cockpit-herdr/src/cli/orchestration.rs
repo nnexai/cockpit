@@ -15,7 +15,7 @@ use cockpit_core::orchestration::session_identity::read_omp_session_file;
 use cockpit_protocol::orchestration::RunLocation;
 use serde_json::{Value, json};
 
-use super::{HerdrCliAdapter, object, parse_snapshot, required_string};
+use super::{EventRelevance, HerdrCliAdapter, object, parse_snapshot, required_string};
 
 fn unknown(error: InspectionError) -> InspectionError {
     if matches!(
@@ -390,7 +390,7 @@ fn validate_prompt_receipt(result: &Value, request: &AgentPromptRequest) -> Resu
 impl OrchestrationHerdr for HerdrCliAdapter {
     async fn session_changes(&self, session_id: &str) -> Result<cockpit_core::SessionSubscription, InspectionError> {
         let snapshot = self.read_snapshot(session_id).await?;
-        self.subscribe_socket(session_id.to_owned(), snapshot).await
+        self.subscribe_socket(session_id.to_owned(), snapshot, EventRelevance::Orchestration).await
     }
     async fn move_pane_to_new_space(
         &self, session_id: &str, source: &RunLocation, label: &str, tab_label: &str,
@@ -681,6 +681,174 @@ impl OrchestrationHerdr for HerdrCliAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    async fn reply_to_event_test_request(
+        listener: &tokio::net::UnixListener,
+        method: &str,
+        result: &Value,
+    ) -> tokio::net::UnixStream {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let request: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(request["method"], method);
+        let mut stream = reader.into_inner();
+        stream.write_all(
+            format!("{}\n", json!({"id": request["id"], "result": result})).as_bytes(),
+        ).await.unwrap();
+        stream
+    }
+
+    #[cfg(unix)]
+    async fn pane_update_subscription_changes(
+        orchestration: bool,
+        connections: usize,
+    ) -> Vec<usize> {
+        use std::{sync::atomic::Ordering, time::Duration};
+        use cockpit_core::{HerdrAdapter, SessionChange};
+        use tokio::io::AsyncWriteExt;
+        use super::super::{HerdrCliConfig, NEXT_REQUEST_ID};
+
+        let socket = std::env::temp_dir().join(format!(
+            "cockpit-pane-events-{}-{}.sock",
+            std::process::id(), NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+        ));
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/session-snapshot.json"
+        )).unwrap();
+        let snapshot = parse_snapshot(fixture.clone(), "default", "fixture-endpoint").unwrap();
+        let result = fixture["result"].clone();
+        let mut pane = result["snapshot"]["panes"][0].clone();
+        pane["revision"] = json!(8);
+        pane["terminal_title"] = json!("t0");
+        pane["terminal_title_stripped"] = json!("t0");
+        pane["scroll"] = json!({"offset": 0});
+        let mut events = vec![json!({
+            "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
+        })];
+        for revision in 9..=12 {
+            pane["revision"] = json!(revision);
+            pane["terminal_title"] = json!(format!("t{revision}"));
+            pane["terminal_title_stripped"] = json!(format!("t{revision}"));
+            if revision == 10 {
+                pane["scroll"] = json!({"offset": 10});
+            }
+            let event = if revision == 12 { "pane.updated" } else { "pane_updated" };
+            events.push(json!({"event": event, "data": {"type": event, "pane": pane}}));
+        }
+        for (field, value) in [
+            ("tokens", json!({"input": 10, "output": 20})),
+            ("cwd", json!("/tmp")),
+            ("future_field", json!({"status": "new"})),
+        ] {
+            pane[field] = value;
+            events.push(json!({
+                "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
+            }));
+        }
+        pane["terminal_title"] = json!("after-metadata");
+        events.push(json!({
+            "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
+        }));
+        events.push(json!({
+            "event": "pane.agent_status_changed",
+            "data": {"pane_id": "pane-a", "agent_status": "idle"}
+        }));
+        pane["terminal_title"] = json!("after-agent-status");
+        events.push(json!({
+            "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
+        }));
+        let reconnect_pane = pane.clone();
+        // Unknown pane IDs must be delivered, but never admitted to the bounded cache.
+        pane["pane_id"] = json!("unknown-pane");
+        for _ in 0..2 {
+            events.push(json!({
+                "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
+            }));
+        }
+        let server = tokio::spawn(async move {
+            for connection in 0..connections {
+                if orchestration || connection > 0 {
+                    reply_to_event_test_request(&listener, "session.snapshot", &result).await;
+                }
+                reply_to_event_test_request(
+                    &listener, "ping", &json!({"type": "pong", "version": "0.9.0", "protocol": 22}),
+                ).await;
+                let mut stream = reply_to_event_test_request(
+                    &listener, "events.subscribe", &json!({"type": "subscription_started"}),
+                ).await;
+                reply_to_event_test_request(&listener, "session.snapshot", &result).await;
+                if connection == 0 {
+                    for event in &events {
+                        stream.write_all(format!("{event}\n").as_bytes()).await.unwrap();
+                    }
+                } else {
+                    // Same relevant state as before disconnect: first must still invalidate.
+                    for title in ["reconnected", "reconnected-again"] {
+                        let mut pane = reconnect_pane.clone();
+                        pane["terminal_title"] = json!(title);
+                        let event = json!({
+                            "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
+                        });
+                        stream.write_all(format!("{event}\n").as_bytes()).await.unwrap();
+                    }
+                }
+                stream.shutdown().await.unwrap();
+            }
+        });
+        let adapter = HerdrCliAdapter::new(
+            HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap(),
+        );
+        let mut subscription = if orchestration {
+            OrchestrationHerdr::session_changes(&adapter, "default").await.unwrap()
+        } else {
+            adapter.subscribe_session("default", &snapshot).await.unwrap()
+        };
+        let mut counts = Vec::new();
+        let mut changed = 0;
+        while counts.len() < connections {
+            match tokio::time::timeout(Duration::from_secs(3), subscription.messages.recv())
+                .await.unwrap().expect("subscription remains open")
+            {
+                SessionChange::Changed => changed += 1,
+                SessionChange::Disconnected { code, .. } => {
+                    assert_eq!(code, "disconnected");
+                    counts.push(changed);
+                    changed = 0;
+                }
+                other => panic!("unexpected subscription change: {other:?}"),
+            }
+        }
+        drop(subscription);
+        server.await.unwrap();
+        std::fs::remove_file(socket).unwrap();
+        counts
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn orchestration_session_changes_ignore_title_only_pane_updates() {
+        assert_eq!(pane_update_subscription_changes(true, 1).await, vec![8]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ui_session_subscription_keeps_title_only_pane_updates() {
+        assert_eq!(pane_update_subscription_changes(false, 1).await, vec![13]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn orchestration_pane_update_filter_resets_on_reconnect() {
+        // Reconnect publishes two snapshot invalidations, plus its first live pane update.
+        assert_eq!(pane_update_subscription_changes(true, 2).await, vec![8, 3]);
+    }
+
     #[cfg(unix)]
     struct OmpJournal {
         root: std::path::PathBuf,

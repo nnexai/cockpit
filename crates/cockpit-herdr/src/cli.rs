@@ -1374,6 +1374,7 @@ impl HerdrCliAdapter {
         &self,
         session_id: String,
         snapshot: SessionSnapshotResponse,
+        relevance: EventRelevance,
     ) -> Result<SessionSubscription, InspectionError> {
         self.selected_session(&session_id)?;
         if snapshot.session_id != session_id {
@@ -1407,6 +1408,7 @@ impl HerdrCliAdapter {
                         &current_snapshot,
                         &expected_identity,
                         identity_checked_for_connection,
+                        relevance,
                         &sender,
                         initial_ready.clone(),
                     )
@@ -1572,6 +1574,7 @@ impl HerdrCliAdapter {
         snapshot: &SessionSnapshotResponse,
         expected: &EventIdentity,
         identity_checked: bool,
+        relevance: EventRelevance,
         sender: &mpsc::Sender<SessionChange>,
         readiness: Option<mpsc::Sender<Result<(), InspectionError>>>,
     ) -> Result<EventConnectionEnd, InspectionError> {
@@ -1581,6 +1584,7 @@ impl HerdrCliAdapter {
                 snapshot,
                 expected,
                 identity_checked,
+                relevance,
                 sender,
                 readiness.clone(),
             )
@@ -1605,6 +1609,7 @@ impl HerdrCliAdapter {
         snapshot: &SessionSnapshotResponse,
         expected: &EventIdentity,
         identity_checked: bool,
+        relevance: EventRelevance,
         sender: &mpsc::Sender<SessionChange>,
         readiness: Option<mpsc::Sender<Result<(), InspectionError>>>,
     ) -> Result<EventConnectionEnd, InspectionError> {
@@ -1754,6 +1759,8 @@ impl HerdrCliAdapter {
         if let Some(readiness) = readiness.as_ref() {
             let _ = readiness.send(Ok(())).await;
         }
+        let mut pane_filter =
+            (relevance == EventRelevance::Orchestration).then(PaneUpdateFilter::default);
         loop {
             let n = tokio::select! {
                 result = read_bounded_line(&mut reader, &mut line, MAX_TERMINAL_LINE) => {
@@ -1773,7 +1780,7 @@ impl HerdrCliAdapter {
             if n == 0 {
                 return Ok(EventConnectionEnd::StreamEnded);
             }
-            let value: Value = serde_json::from_str(line.trim_end()).map_err(|error| {
+            let mut value: Value = serde_json::from_str(line.trim_end()).map_err(|error| {
                 InspectionError::new("malformed_event", format!("invalid event JSON: {error}"))
             })?;
             let Some(event) = value.get("event").and_then(Value::as_str) else {
@@ -1797,7 +1804,22 @@ impl HerdrCliAdapter {
                     ),
                 ));
             }
-            if pane_topology_event(event) {
+            let pane_update = pane_update_event(event);
+            let topology = pane_topology_event(event);
+            if let Some(filter) = pane_filter.as_mut() {
+                if !pane_update {
+                    filter.reset();
+                } else if let Some(data) = value.get_mut("data")
+                    && data.get("pane")
+                        .and_then(|pane| pane.get("pane_id"))
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| snapshot.panes.iter().any(|pane| pane.id == id))
+                    && filter.redundant(data)
+                {
+                    continue;
+                }
+            }
+            if topology {
                 let latest = self.read_snapshot(session_id).await?;
                 validate_event_snapshot_identity(&latest, expected)?;
                 if pane_set_changed(snapshot, &latest) {
@@ -1926,6 +1948,68 @@ fn pane_set_changed(previous: &SessionSnapshotResponse, latest: &SessionSnapshot
     let previous: BTreeSet<_> = previous.panes.iter().map(|pane| &pane.id).collect();
     let latest: BTreeSet<_> = latest.panes.iter().map(|pane| &pane.id).collect();
     previous != latest
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EventRelevance {
+    Session,
+    Orchestration,
+}
+
+const ORCHESTRATION_IGNORED_PANE_FIELDS: [&str; 4] = [
+    "revision",
+    "scroll",
+    "terminal_title",
+    "terminal_title_stripped",
+];
+
+fn pane_update_event(event: &str) -> bool {
+    matches!(event, "pane.updated" | "pane_updated")
+}
+
+#[derive(Default)]
+struct PaneUpdateFilter {
+    panes: BTreeMap<String, serde_json::Map<String, Value>>,
+}
+
+impl PaneUpdateFilter {
+    /// Repeats the last relevant pane state on this connection, with no other event between.
+    fn redundant(&mut self, data: &mut Value) -> bool {
+        let Some(data) = data.as_object_mut() else {
+            return false;
+        };
+        if data.keys().any(|key| key != "type" && key != "pane")
+            || data.get("type").is_some_and(|kind| {
+                !kind.as_str().is_some_and(pane_update_event)
+            })
+        {
+            return false;
+        }
+        let Some(pane) = data.get_mut("pane").and_then(Value::as_object_mut) else {
+            return false;
+        };
+        if !pane.get("pane_id").is_some_and(Value::is_string) {
+            return false;
+        }
+        let mut pane = std::mem::take(pane);
+        for field in ORCHESTRATION_IGNORED_PANE_FIELDS {
+            pane.remove(field);
+        }
+        let pane_id = pane["pane_id"].as_str().expect("pane_id was validated");
+        if let Some(previous) = self.panes.get_mut(pane_id) {
+            if previous == &pane {
+                return true;
+            }
+            *previous = pane;
+        } else {
+            self.panes.insert(pane_id.to_owned(), pane);
+        }
+        false
+    }
+
+    fn reset(&mut self) {
+        self.panes.clear();
+    }
 }
 
 fn pane_topology_event(event: &str) -> bool {
@@ -2206,7 +2290,7 @@ impl HerdrAdapter for HerdrCliAdapter {
         session_id: &str,
         snapshot: &SessionSnapshotResponse,
     ) -> Result<SessionSubscription, InspectionError> {
-        self.subscribe_socket(session_id.to_owned(), snapshot.clone())
+        self.subscribe_socket(session_id.to_owned(), snapshot.clone(), EventRelevance::Session)
             .await
     }
 
@@ -2306,6 +2390,94 @@ mod tests {
         let first = HerdrCliAdapter::process_start_identity(Some(pid));
         assert!(first.is_some());
         assert_eq!(first, HerdrCliAdapter::process_start_identity(Some(pid)));
+    }
+
+    #[test]
+    fn orchestration_pane_update_filter_ignores_only_title_revision_scroll() {
+        let base = json!({
+            "type": "pane_updated",
+            "pane": {
+                "pane_id": "pane-a",
+                "terminal_id": "term-a",
+                "workspace_id": "space-a",
+                "tab_id": "tab-a",
+                "title": "worker",
+                "label": "label",
+                "cwd": "/work",
+                "foreground_cwd": "/work",
+                "agent": "omp",
+                "agent_status": "working",
+                "agent_session": {"kind": "id", "value": "session-a"},
+                "display_agent": "worker",
+                "focused": true,
+                "tokens": 1,
+                "state_labels": ["busy"],
+                "revision": 1,
+                "scroll": {"offset": 0},
+                "terminal_title": "first",
+                "terminal_title_stripped": "first"
+            }
+        });
+        let mut filter = PaneUpdateFilter::default();
+        assert!(!filter.redundant(&mut base.clone()));
+        let mut output_only = base.clone();
+        output_only["type"] = json!("pane.updated");
+        output_only["pane"]["revision"] = json!(2);
+        output_only["pane"]["scroll"] = json!({"offset": 10});
+        output_only["pane"]["terminal_title"] = json!("next");
+        output_only["pane"]["terminal_title_stripped"] = json!("next");
+        assert!(filter.redundant(&mut output_only));
+
+        for (field, changed) in [
+            ("label", json!("renamed")),
+            ("cwd", json!("/tmp")),
+            ("foreground_cwd", json!("/tmp")),
+            ("agent", json!("another-agent")),
+            ("agent_status", json!("idle")),
+            ("agent_session", json!({"kind": "id", "value": "session-b"})),
+            ("display_agent", json!("renamed worker")),
+            ("focused", json!(false)),
+            ("tokens", json!(2)),
+            ("state_labels", json!(["waiting"])),
+            ("title", json!("a relevant title")),
+            ("terminal_id", json!("term-b")),
+            ("workspace_id", json!("space-b")),
+            ("tab_id", json!("tab-b")),
+            ("future_field", json!({"status": "new"})),
+        ] {
+            let mut filter = PaneUpdateFilter::default();
+            assert!(!filter.redundant(&mut base.clone()));
+            let mut update = base.clone();
+            update["pane"][field] = changed;
+            assert!(!filter.redundant(&mut update.clone()), "{field}");
+            assert!(filter.redundant(&mut update), "{field}");
+        }
+
+        let mut second_pane = base.clone();
+        second_pane["pane"]["pane_id"] = json!("pane-b");
+        assert!(!filter.redundant(&mut second_pane.clone()));
+        assert!(filter.redundant(&mut base.clone()));
+        assert!(filter.redundant(&mut second_pane));
+        filter.reset();
+        assert!(!filter.redundant(&mut base.clone()));
+
+        for invalid in [
+            Value::Null,
+            json!({}),
+            json!({"pane": null}),
+            json!({"pane": []}),
+            json!({"pane": {}}),
+            json!({"pane": {"pane_id": 7}}),
+            json!({"pane": base["pane"], "future_data": true}),
+            json!({"pane": base["pane"], "type": "pane_closed"}),
+            json!({"pane": base["pane"], "type": 7}),
+        ] {
+            for _ in 0..2 {
+                assert!(!filter.redundant(&mut invalid.clone()), "{invalid}");
+            }
+        }
+        // Older payloads omit the redundant data.type discriminator.
+        assert!(filter.redundant(&mut json!({"pane": base["pane"]})));
     }
 
     fn subscription_snapshot(panes: &[&str]) -> SessionSnapshotResponse {
@@ -2612,7 +2784,9 @@ mod tests {
         let (ready, initial_caller) = mpsc::channel(1);
         drop(initial_caller);
         adapter
-            .event_connection("default", &snapshot, &expected, true, &sender, Some(ready))
+            .event_connection(
+                "default", &snapshot, &expected, true, EventRelevance::Session, &sender, Some(ready),
+            )
             .await
             .unwrap();
         drop(sender);
