@@ -3,8 +3,8 @@ use cockpit_core::{
     InspectionError,
     library::LibraryService,
     orchestration::{
-        Actor, OrchestrationService, ResolvedMutationInput, is_project_root_candidate,
-        preferred_project_root,
+        Actor, OrchestrationService, ResolvedMutationInput, effect_free_reserved_resume_launch,
+        is_project_root_candidate, preferred_project_root, root_checkout_reselection_pending,
         dispatch::{Dispatcher, DispatcherSettings, resume_supported},
         herdr::{OrchestrationHerdr, RuntimeView, RuntimeWorkspace},
         project_identity::{replacement_consumers_preflight, resolve_directory},
@@ -277,9 +277,20 @@ async fn resolve_physical_mutation_input(
                     resolved.root_main_recovery = observed.root_main_recovery;
                     resolved.root_attachment_expected = observed.root_attachment_expected;
                     resolved.observation_cause = observed.observation_cause;
-                    // Reuse/resume retains the root's original checkout, not the
-                    // checkout of a different Space for the same project.
-                    resolved.checkout = observed.checkout;
+                    if root_checkout_reselection_pending(&runs[index]) {
+                        // Only an explicit existing-Space Start can re-select a
+                        // refused root checkout; ordinary resume retains it.
+                        resolved.reselected_checkout = if matches!(target, DispatchTarget::ExistingSpace { .. }) {
+                            resolved.checkout.take()
+                        } else {
+                            None
+                        };
+                        resolved.checkout = None;
+                    } else {
+                        // Reuse/resume retains the root's original checkout,
+                        // not another Space's checkout for the same project.
+                        resolved.checkout = observed.checkout;
+                    }
                 }
             }
             Ok(resolved)
@@ -613,14 +624,26 @@ fn root_candidate(run: &Run, modern_binding: bool) -> ProjectRootCandidate {
         record.phase == ResumePhase::Blocked
             && record.cause.as_ref().is_some_and(|cause| cause.code == "harness_resume_unsupported"))
         && resume_supported(&run.launch_config);
-    let resume = if incompatible_live { RootResumeAvailability::Blocked } else { match run.resume.as_ref().map(|r| r.phase) {
+    let refused_launch = run.resume.as_ref()
+        .filter(|resume| resume.phase == ResumePhase::Launching)
+        .filter(|_| effect_free_reserved_resume_launch(run))
+        .and_then(|_| run.dispatch.as_ref()?.error.as_ref());
+    let retryable_refusal = refused_launch.is_some_and(|error|
+        error.code == "harness_resume_unsupported" && resume_supported(&run.launch_config));
+    let resume = if incompatible_live { RootResumeAvailability::Blocked }
+    else if refused_launch.is_some() {
+        if retryable_refusal { RootResumeAvailability::Available }
+        else { RootResumeAvailability::Blocked }
+    } else { match run.resume.as_ref().map(|r| r.phase) {
         Some(ResumePhase::Reconciling | ResumePhase::Launching) =>
             RootResumeAvailability::InProgress,
         Some(ResumePhase::Blocked) if stale_unsupported => RootResumeAvailability::Available,
         Some(ResumePhase::Blocked) => RootResumeAvailability::Blocked,
         _ => RootResumeAvailability::Available,
     }};
-    let connection = if resume == RootResumeAvailability::InProgress {
+    let connection = if refused_launch.is_some() && !incompatible_live {
+        RootConnection::Disconnected
+    } else if resume == RootResumeAvailability::InProgress {
         RootConnection::Reconnecting
     } else {
         match live {
@@ -636,7 +659,17 @@ fn root_candidate(run: &Run, modern_binding: bool) -> ProjectRootCandidate {
             code: "conversation_unregistered".into(),
             message: "The living writer has not registered its conversation with this run's capability. Its process and checkout claim are preserved.".into(),
             class: ResumeCauseClass::Recover,
-        }) } else if stale_unsupported { None } else { run.resume.as_ref().and_then(|r| r.cause.clone()) },
+        }) } else if let Some(error) = refused_launch {
+            if retryable_refusal { None } else { Some(ResumeCause {
+                code: error.code.clone(),
+                message: error.message.clone(),
+                class: if error.code == "checkout_identity_changed" {
+                    ResumeCauseClass::Decision
+                } else {
+                    ResumeCauseClass::Recover
+                },
+            }) }
+        } else if stale_unsupported { None } else { run.resume.as_ref().and_then(|r| r.cause.clone()) },
         updated_at: run.updated_at.clone(),
     }
 }

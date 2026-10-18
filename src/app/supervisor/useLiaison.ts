@@ -3,7 +3,7 @@ import type { OrchestrationSnapshot, ProjectRootLookupResponse, Run, TaskView } 
 import type { WorkbenchProps } from "../shell/Workbench";
 import { useSupervisor, type LiaisonAction, type MutationRequestScope } from "./useSupervisor";
 
-type RetainedOperation = { action: LiaisonAction; scope: MutationRequestScope; spaceId: string };
+type RetainedOperation = { action: LiaisonAction; scope: MutationRequestScope; spaceId: string; confirmedBlocked: boolean };
 export interface LiaisonController {
   snapshot: OrchestrationSnapshot | null; root: Run | null; tasks: TaskView[];
   waiting: boolean; fresh: boolean; status: string | null; actionLabel: string | null; startAvailable: boolean; error: string | null;
@@ -47,28 +47,35 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
   const waiting = !!root && root.stage !== "closed" && !!snapshot?.questions.some(question => question.run_id === root.run_id && question.receipt.status === "unresolved");
   const retainedScopeMatches = !retained.current || retained.current.spaceId === selection.spaceId && retained.current.scope.sessionId === state.sessionId && retained.current.scope.stateStoreId === snapshot?.state_store_id;
   const actionable = fresh && !observer.busy && !state.focusPending && !state.focusError && lookup?.status === "resolved" && !!selection.spaceId && selection.spaceId === state.snapshot?.focused_space_id && retainedScopeMatches;
-  const actionLabel = actionable && !rootId ? "Start supervisor" : actionable && root && candidate?.resume === "available" && candidate.connection === "disconnected" && root.stage !== "closed" && root.stage !== "reported" ? "Resume supervisor" : null;
+  const reselect = actionable && !!root && candidate?.resume === "blocked" && candidate.cause?.code === "checkout_identity_changed" && root.stage !== "closed" && root.stage !== "reported";
+  const actionLabel = actionable && !rootId ? "Start supervisor" : reselect ? "Resume in this folder" : actionable && root && candidate?.resume === "available" && candidate.connection === "disconnected" && root.stage !== "closed" && root.stage !== "reported" ? "Resume supervisor" : null;
   const startAvailable = actionable && (!!actionLabel || observation?.presence === "present" && !!observation.pane_id);
   const tasks = root && snapshot?.board?.root_id === root.run_id ? snapshot.board.tasks : [];
-  const status = !fresh ? "Offline" : observer.busy ? root ? "Resuming…" : "Starting…" : root?.resume && ["reconciling", "launching"].includes(root.resume.phase) ? "Resuming…" : root?.stage === "starting" || root?.stage === "queued" ? "Starting…" : null;
+  const status = !fresh ? "Offline" : observer.busy ? root ? "Resuming…" : "Starting…" : candidate?.resume === "blocked" && candidate.cause ? candidate.cause.message : root?.resume && ["reconciling", "launching"].includes(root.resume.phase) ? "Resuming…" : root?.stage === "starting" || root?.stage === "queued" ? "Starting…" : null;
   const start = async () => {
     if (!startAvailable || !state.sessionId || !selection.spaceId || !snapshot || lookup?.status !== "resolved") return;
     openConversation();
     setNavigationError(null);
-    if (root && actionLabel !== "Resume supervisor" && observation?.presence === "present" && observation.pane_id) {
+    const acting = actionLabel === "Resume supervisor" || actionLabel === "Resume in this folder";
+    if (root && !acting && observation?.presence === "present" && observation.pane_id) {
       try { await navigate(observation.pane_id, root, snapshot); }
       catch (failure) { setNavigationError(failure instanceof Error ? failure.message : "The conversation could not be opened."); }
       return;
     }
-    if (root && actionLabel !== "Resume supervisor") return;
+    if (root && !acting) return;
     let operation = retained.current;
     if (operation && (operation.spaceId !== selection.spaceId || operation.scope.sessionId !== state.sessionId || operation.scope.stateStoreId !== snapshot.state_store_id)) return;
+    // Re-selection needs a new Start, not a confirmed blocked plain Resume.
+    // Unknown outcomes must replay the original operation before changing kinds.
+    if (reselect && operation?.action.action === "run_resume" && operation.confirmedBlocked) {
+      retained.current = null; operation = null;
+    }
     if (!operation) {
-      const action: LiaisonAction = root ? { action: "run_resume", run_id: root.run_id, operation_id: crypto.randomUUID(), expected_attachment_epoch: root.attachment?.epoch ?? null }
+      const action: LiaisonAction = root && !reselect ? { action: "run_resume", run_id: root.run_id, operation_id: crypto.randomUUID(), expected_attachment_epoch: root.attachment?.epoch ?? null }
         : { action: "supervisor_start", operation_id: crypto.randomUUID(), mode: "reuse_or_resume", target: { target: "existing_space", workspace_id: selection.spaceId }, label: null, selected_root_id: rootId, expected_project_key: lookup.project.key };
       const scope = observer.captureMutationScope(action);
       if (!scope) return;
-      operation = { action, scope, spaceId: selection.spaceId }; retained.current = operation;
+      operation = { action, scope, spaceId: selection.spaceId, confirmedBlocked: false }; retained.current = operation;
     }
     const result = await observer.mutateResult(operation.action, operation.scope);
     if (result?.result === "supervisor_started" && result.start.operation_id === operation.action.operation_id) {
@@ -76,6 +83,7 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
       setRootSelection({ sessionId: operation.scope.sessionId, spaceId: operation.spaceId, rootId: result.start.root_id });
       setLookupToken(value => value + 1); onReconnect();
     } else if (result?.result === "run_resumed" && result.resume.resume.operation_id === operation.action.operation_id) {
+      operation.confirmedBlocked = result.resume.resume.phase === "blocked";
       if (result.resume.resume.phase !== "blocked") { retained.current = null; focusRoot.current = { sessionId: operation.scope.sessionId, rootId: result.resume.run_id, sourcePaneId: selection.paneId }; onReconnect(); }
       setLookupToken(value => value + 1);
     }
@@ -89,5 +97,5 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
     }).finally(() => { navigating.current = false; });
   }, [root, snapshot, observation, state.sessionId, state.snapshot, selection.paneId, conversationVisible, navigate]);
   const savedLocation = root?.session_id === state.sessionId ? root.attachment?.location : null;
-  return { snapshot, root, tasks, waiting, fresh, status, actionLabel, startAvailable, start, error: observer.error ?? navigationError, paneId: observation?.presence === "present" ? observation.pane_id : savedLocation?.pane_id ?? null, tabId: observation?.presence === "present" ? observation.tab_id : savedLocation?.tab_id ?? null };
+  return { snapshot, root, tasks, waiting, fresh, status, actionLabel, startAvailable, start, error: observer.error ?? navigationError ?? (fresh && candidate?.resume === "blocked" ? candidate.cause?.message ?? null : null), paneId: observation?.presence === "present" ? observation.pane_id : savedLocation?.pane_id ?? null, tabId: observation?.presence === "present" ? observation.tab_id : savedLocation?.tab_id ?? null };
 }

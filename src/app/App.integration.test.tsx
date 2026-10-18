@@ -14,6 +14,7 @@ import type {
   CommentBatch,
   OrchestrationSnapshot,
   OrchestrationWaitResponse,
+  ProjectRootCandidate,
   ResourceMutationRequest,
   ResourceMutationResponse,
   ViewerContext,
@@ -1231,13 +1232,13 @@ describe("Library view presentation lifecycle", () => {
 });
 
 describe("liaison conversation and compact task rail", () => {
-  function bindLiaison(fixture: AppFixture, current: () => OrchestrationSnapshot) {
+  function bindLiaison(fixture: AppFixture, current: () => OrchestrationSnapshot, candidate: () => Partial<ProjectRootCandidate> = () => ({})) {
     vi.mocked(fixture.client.orchestrationSnapshot).mockImplementation(async () => current());
     vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
     vi.mocked(fixture.client.orchestrationProjectRootLookup).mockImplementation(async () => ({
       status: "resolved", project: { key: "project", source: { kind: "directory", root: "/project" }, repository_id: null, source_workspace_id: "space-1" },
       lookup_revision: current().revision, preferred_root_id: current().runs.length ? "root" : null,
-      roots: current().runs.length ? [{ root_id: "root", connection: "connected", resume: "available", cause: null, updated_at: "2026-10-07T12:00:00Z" }] : [],
+      roots: current().runs.length ? [{ root_id: "root", connection: "connected", resume: "available", cause: null, updated_at: "2026-10-07T12:00:00Z", ...candidate() }] : [],
     }));
   }
   it("starts a real liaison from Commands and opens its actual terminal tab", async () => {
@@ -1356,6 +1357,104 @@ describe("liaison conversation and compact task rail", () => {
     await mount(fixture);
     click(button("Resume supervisor")); await settle();
     expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toEqual({ action: "run_resume", run_id: "root", operation_id: expect.any(String), expected_attachment_epoch: 1 });
+  });
+  it("shows the checkout blocker and explicitly reselects the existing root from this folder", async () => {
+    const fixture = new AppFixture(), current = orchestrationFixture([taskFixture("Work")]);
+    current.runs[0].resume = { operation_id: "reserved-resume", run_id: "root", previous_attachment_epoch: 1, phase: "launching", cause: null, decision_id: null, replacement_attachment_epoch: 2, updated_at: "2026-10-07T12:00:00Z" };
+    current.runs[0].attachment = { ...current.runs[0].attachment!, epoch: 2, state: "reserved", location: null };
+    if (current.runtime.status === "fresh") current.runtime.runs = current.runtime.runs.map(run => ({ ...run, presence: "missing", actual_agent: false, workspace_id: null, tab_id: null, pane_id: null }));
+    bindLiaison(fixture, () => current, () => ({
+      connection: "disconnected", resume: "blocked",
+      cause: { code: "checkout_identity_changed", message: "Saved physical checkout no longer matches", class: "decision" },
+    }));
+    vi.mocked(fixture.client.orchestrationMutate).mockRejectedValue(new Error("checkout_reselection_space_mismatch: Select the retained Space"));
+    await mount(fixture);
+    expect(container.querySelector('[aria-label="Tasks"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Task overview"]')).toBeNull();
+    expect(container.querySelector(".workarea-statusbar")?.textContent).toContain("Saved physical checkout no longer matches");
+    await openCommand("Show overview");
+    expect(container.textContent).toContain("Saved physical checkout no longer matches");
+    expect(container.textContent).not.toContain("Resuming…");
+    click(button("Resume in this folder")); await settle();
+    expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toEqual({
+      action: "supervisor_start", operation_id: expect.any(String), mode: "reuse_or_resume",
+      target: { target: "existing_space", workspace_id: "space-1" }, label: null,
+      selected_root_id: "root", expected_project_key: "project",
+    });
+    expect(container.textContent).toContain("checkout_reselection_space_mismatch: Select the retained Space");
+    expect(container.querySelector(".workarea-statusbar")?.textContent).toContain("checkout_reselection_space_mismatch: Select the retained Space");
+    expect(container.querySelector(".workarea-statusbar")?.textContent).not.toContain("Saved physical checkout no longer matches");
+    click(button("Resume in this folder")); await settle();
+    const actions = vi.mocked(fixture.client.orchestrationMutate).mock.calls.map(([request]) => request.action);
+    expect(actions).toHaveLength(2);
+    expect(actions[1]).toEqual(actions[0]);
+  });
+  it("does not offer checkout re-selection for other blockers or completed roots", async () => {
+    const fixture = new AppFixture();
+    let current = orchestrationFixture([taskFixture("Work")]);
+    let candidate: Partial<ProjectRootCandidate> = {
+      connection: "disconnected", resume: "blocked",
+      cause: { code: "root_unproven", message: "The root attachment cannot be proven", class: "recover" },
+    };
+    const waits: Deferred<OrchestrationWaitResponse>[] = [];
+    bindLiaison(fixture, () => current, () => candidate);
+    vi.mocked(fixture.client.orchestrationWait).mockImplementation(() => { const wait = deferred<OrchestrationWaitResponse>(); waits.push(wait); return wait.promise; });
+    await mount(fixture);
+    await openCommand("Show overview");
+    expect(container.textContent).toContain("The root attachment cannot be proven");
+    expect(container.textContent).not.toContain("Resume in this folder");
+    expect(container.textContent).not.toContain("Resume supervisor");
+    candidate = { ...candidate, cause: { code: "checkout_identity_changed", message: "Saved physical checkout no longer matches", class: "decision" } };
+    for (const stage of ["closed", "reported"] as const) {
+      current = { ...current, revision: current.revision + 1, runs: [{ ...current.runs[0], stage }] };
+      await act(async () => waits.at(-1)!.resolve({ revision: current.revision, tasks_token: current.tasks_token, changed: true }));
+      await settle();
+      expect(container.textContent).not.toContain("Resume in this folder");
+    }
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+  it.each(["confirmed", "unknown"] as const)("replaces a retained Resume only after its blocked outcome is confirmed (%s response)", async outcome => {
+    const fixture = new AppFixture();
+    let current = orchestrationFixture(), blocked = false, resumeCalls = 0;
+    bindLiaison(fixture, () => current, () => ({
+      connection: "disconnected", resume: blocked ? "blocked" : "available",
+      cause: blocked ? { code: "checkout_identity_changed", message: "Saved physical checkout no longer matches", class: "decision" } : null,
+    }));
+    vi.mocked(fixture.client.orchestrationMutate).mockImplementation(async request => {
+      current = { ...current, revision: current.revision + 1 };
+      if (request.action.action === "run_resume") {
+        blocked = true; resumeCalls += 1;
+        if (outcome === "unknown" && resumeCalls === 1) throw new Error("Resume response lost");
+        return { revision: current.revision, result: { result: "run_resumed", resume: {
+          run_id: "root", duplicate: resumeCalls > 1,
+          resume: { operation_id: request.action.operation_id, run_id: "root", previous_attachment_epoch: 1, phase: "blocked", cause: { code: "checkout_identity_changed", message: "Saved physical checkout no longer matches", class: "decision" }, decision_id: null, replacement_attachment_epoch: 2, updated_at: "2026-10-07T12:00:00Z" },
+        } } };
+      }
+      if (request.action.action !== "supervisor_start") throw new Error("Expected supervisor start");
+      return { revision: current.revision, result: { result: "supervisor_started", start: { root_id: "root", outcome: "resuming", operation_id: request.action.operation_id, resume_operation_id: "reserved-resume", duplicate: false } } };
+    });
+    await mount(fixture);
+    click(button("Resume supervisor")); await settle();
+    const original = vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action;
+    expect(original.action).toBe("run_resume");
+    if (original.action !== "run_resume") throw new Error("Expected retained root resume");
+    if (outcome === "unknown") {
+      click(button("Resume in this folder")); await settle();
+      expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls).toHaveLength(2);
+      expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[1][0].action).toEqual(original);
+      expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls.every(([request]) => request.action.action === "run_resume")).toBe(true);
+    }
+    click(button("Resume in this folder")); await settle();
+    const actions = vi.mocked(fixture.client.orchestrationMutate).mock.calls.map(([request]) => request.action);
+    expect(actions).toHaveLength(outcome === "unknown" ? 3 : 2);
+    expect(actions.at(-1)).toEqual({
+      action: "supervisor_start", operation_id: expect.any(String), mode: "reuse_or_resume",
+      target: { target: "existing_space", workspace_id: "space-1" }, label: null,
+      selected_root_id: "root", expected_project_key: "project",
+    });
+    const reselectAction = actions.at(-1)!;
+    if (reselectAction.action !== "supervisor_start") throw new Error("Expected folder re-selection");
+    expect(reselectAction.operation_id).not.toBe(original.operation_id);
   });
   it("retries an unconfirmed Start with the same operation identity rather than launching another liaison", async () => {
     const fixture = new AppFixture(), current = orchestrationFixture([], []);

@@ -163,25 +163,22 @@ fn startup_registration_pending(state: &OrchestrationState, run: &Run) -> bool {
                 && holder.attachment_id == attachment.attachment_id && holder.attachment_epoch == attachment.epoch)))
 }
 
-fn retryable_unsupported_resume_launch(state: &OrchestrationState, run: &Run) -> bool {
+/// A reserved replacement refused before any physical launch effect.
+pub fn effect_free_reserved_resume_launch(run: &Run) -> bool {
     let (Some(resume), Some(attachment), Some(dispatch)) = (&run.resume, &run.attachment, &run.dispatch) else { return false };
-    // An older dispatcher can refuse the newly supported adapter before writing
-    // launch intent. Retry only that effect-free, already-authorized reservation.
     run.stage == RunStage::Starting
-        && dispatch::resume_supported(&run.launch_config)
         && resume.phase == ResumePhase::Launching
         && resume.run_id == run.run_id
         && resume.replacement_attachment_epoch == Some(attachment.epoch)
         && resume.previous_attachment_epoch.is_some_and(|previous|
             previous > 0 && previous.checked_add(1) == Some(attachment.epoch))
         && attachment.state == AttachmentState::Reserved
-        && attachment.conversation.is_some()
+        && dispatch.error.is_some()
         && attachment.location.is_none()
         && attachment.process.is_none()
         && attachment.shell.is_none()
         && attachment.process_scope.is_none()
         && dispatch.step == DispatchStep::NeedsReview
-        && dispatch.error.as_ref().is_some_and(|error| error.code == "harness_resume_unsupported")
         && dispatch.launch_attempt > 0
         && dispatch.launch_attempt == attachment.launch_attempt
         && !dispatch.agent_started
@@ -195,15 +192,84 @@ fn retryable_unsupported_resume_launch(state: &OrchestrationState, run: &Run) ->
         && dispatch.move_operation_id.is_none()
         && dispatch.staging_workspace_id.is_none()
         && dispatch.recovery.is_none()
-        && state.operations.iter().any(|operation| operation.operation_id == resume.operation_id
-            && operation.kind == DurableOperationKind::RunResume
-            && operation.run_id.as_ref() == Some(&run.run_id) && operation.result.is_none())
+}
+
+/// Only explicit Start from the retained Space may re-select this root checkout.
+pub fn root_checkout_reselection_pending(run: &Run) -> bool {
+    matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)
+        && run.run_id == run.root_id
+        && run.parent_run_id.is_none()
+        && run.checkout_claim_id.is_none()
+        && run.checkout.is_some()
+        && run.setup.is_some()
+        && effect_free_reserved_resume_launch(run)
+        && run.dispatch.as_ref().and_then(|dispatch| dispatch.error.as_ref())
+            .is_some_and(|error| error.code == "checkout_identity_changed")
+}
+
+fn resume_operation_open(state: &OrchestrationState, run: &Run) -> bool {
+    let (Some(resume), Some(attachment)) = (&run.resume, &run.attachment) else { return false };
+    state.operations.iter().any(|operation| operation.operation_id == resume.operation_id
+        && operation.kind == DurableOperationKind::RunResume
+        && operation.run_id.as_ref() == Some(&run.run_id) && operation.result.is_none())
         && !state.credentials.iter().any(|credential| credential.run_id == run.run_id
             && credential.state == credentials::CredentialState::Active
             && (credential.attachment_id != attachment.attachment_id || credential.attachment_epoch != attachment.epoch))
 }
 
+fn retryable_unsupported_resume_launch(state: &OrchestrationState, run: &Run) -> bool {
+    effect_free_reserved_resume_launch(run)
+        && dispatch::resume_supported(&run.launch_config)
+        && run.attachment.as_ref().is_some_and(|attachment| attachment.conversation.is_some())
+        && run.dispatch.as_ref().and_then(|dispatch| dispatch.error.as_ref())
+            .is_some_and(|error| error.code == "harness_resume_unsupported")
+        && resume_operation_open(state, run)
+}
+
+fn requeue_effect_free_launch(run: &mut Run) {
+    let dispatch = run.dispatch.as_mut().expect("effect-free dispatch checked");
+    dispatch.step = DispatchStep::SetupPending;
+    dispatch.error = None;
+    dispatch.updated_at = now();
+    run.updated_at = dispatch.updated_at.clone();
+}
+
+fn reselect_root_checkout(ctx: &mut MutationCtx<'_>, index: usize, fresh: &CheckoutIdentity) -> Result<(), InspectionError> {
+    operator(ctx.actor)?;
+    let run = &ctx.state.runs[index];
+    if !root_checkout_reselection_pending(run) || !resume_operation_open(ctx.state, run)
+        || ctx.state.checkout_claims.iter().any(|claim| claim.state != claims::ClaimState::Released
+            && claim.holder.as_ref().is_some_and(|holder| holder.run_id == run.run_id)) {
+        return Err(error("checkout_reselection_unavailable", "Only a claim-free root waiting on a changed checkout can be re-selected"));
+    }
+    let saved = run.checkout.as_ref().expect("pending checkout checked");
+    if fresh.path != saved.path || fresh.key != saved.key || fresh.git != saved.git {
+        return Err(error("checkout_reselection_identity_mismatch", "Re-selection must retain the same canonical checkout path, key and Git directories"));
+    }
+    let project = ctx.resolved.and_then(|resolved| resolved.project.as_ref());
+    if project.is_none() || project.map(|project| &project.key) != run.project.as_ref().map(|project| &project.key) {
+        return Err(error("project_identity_conflict", "Re-selection must retain the root project"));
+    }
+    let workspace_id = run.setup.as_ref().and_then(|setup| setup.workspace_id.as_ref());
+    if workspace_id.is_none() || project.and_then(|project| project.source_workspace_id.as_ref()) != workspace_id {
+        return Err(error("checkout_reselection_space_mismatch", "Re-selection must originate in the root's retained Space"));
+    }
+    project_identity::revalidate_checkout(fresh)?;
+    let run = &mut ctx.state.runs[index];
+    run.checkout = Some(fresh.clone());
+    requeue_effect_free_launch(run);
+    Ok(())
+}
+
 pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
+    resume_inner(ctx, action, false)
+}
+
+pub(super) fn resume_from_start(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
+    resume_inner(ctx, action, true)
+}
+
+fn resume_inner(ctx: &mut MutationCtx<'_>, action: OrchestrationAction, from_start: bool) -> Result<Applied, InspectionError> {
     let OrchestrationAction::RunResume { run_id, operation_id, expected_attachment_epoch } = &action else { unreachable!() };
     let index = resume_target(ctx, run_id)?;
     if let Some(result) = replay(ctx, operation_id, DurableOperationKind::RunResume, &action)? {
@@ -230,13 +296,10 @@ pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> 
     if let Some(current) = ctx.state.runs[index].resume.as_ref().filter(|r|
         matches!(r.phase, ResumePhase::Reconciling | ResumePhase::Launching)) {
         let result = OrchestrationActionResult::RunResumed { resume: RunResumeResult { run_id: run_id.clone(), resume: current.clone(), duplicate: false } };
-        if retryable_unsupported_resume_launch(ctx.state, &ctx.state.runs[index]) {
-            let run = &mut ctx.state.runs[index];
-            let dispatch = run.dispatch.as_mut().expect("effect-free dispatch checked");
-            dispatch.step = DispatchStep::SetupPending;
-            dispatch.error = None;
-            dispatch.updated_at = now();
-            run.updated_at = dispatch.updated_at.clone();
+        if let Some(fresh) = ctx.resolved.and_then(|resolved| resolved.reselected_checkout.as_ref()).filter(|_| from_start) {
+            reselect_root_checkout(ctx, index, fresh)?;
+        } else if retryable_unsupported_resume_launch(ctx.state, &ctx.state.runs[index]) {
+            requeue_effect_free_launch(&mut ctx.state.runs[index]);
         }
         record(ctx, operation_id.clone(), DurableOperationKind::RunResume, &action, root_id, result.clone(), Vec::new())?;
         return Ok(Applied::Machine(result));

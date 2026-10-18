@@ -30,6 +30,7 @@ pub(crate) mod fixture_resources;
 
 pub use agent::NativeAgentKind;
 pub use mutate::integration::OutputFacts;
+pub use mutate::resume::{effect_free_reserved_resume_launch, root_checkout_reselection_pending};
 pub use resource_queue::ResourceSourceFacts;
 pub use cleanup::ResourceRegistrationFacts;
 pub use messages::{latest_progress_sequences, inbox_counts, InboxCounts, InboxKindCount};
@@ -90,6 +91,8 @@ pub(crate) struct AuthorizedJob {
 pub struct ResolvedMutationInput {
     pub project: Option<ProjectIdentity>,
     pub checkout: Option<CheckoutIdentity>,
+    /// Owner-resolved current Space checkout for an explicit claim-free root re-selection; never set by RunResume.
+    pub reselected_checkout: Option<CheckoutIdentity>,
     /// Placement resolved from fresh project/Space evidence before scheduled start.
     pub normalized_target: Option<DispatchTarget>,
     pub writer_exit_proof: Option<WriterExitProof>,

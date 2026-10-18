@@ -25,6 +25,23 @@ pub(in crate::orchestration) fn supervisor_start(
     if let Some(checkout) = ctx.resolved.and_then(|r| r.checkout.as_ref()) {
         project_identity::revalidate_checkout(checkout)?;
     }
+    if let Some(checkout) = ctx.resolved.and_then(|r| r.reselected_checkout.as_ref()) {
+        project_identity::revalidate_checkout(checkout)?;
+        let index = selected_root_id.as_deref().map(|run_id| scoped_index(ctx.state, ctx.session_id, run_id)).transpose()?
+            .ok_or_else(|| error("checkout_reselection_unavailable", "Re-selection requires an explicitly selected root"))?;
+        let run = &ctx.state.runs[index];
+        if *mode != SupervisorStartMode::ReuseOrResume || !root_checkout_reselection_pending(run)
+            || !matches!(target, Some(DispatchTarget::ExistingSpace { .. })) {
+            return Err(error("checkout_reselection_unavailable", "Only a claim-free root waiting on a changed checkout can be re-selected"));
+        }
+        if resolved_project.as_ref().map(|project| &project.key) != run.project.as_ref().map(|project| &project.key) {
+            return Err(error("project_identity_conflict", "Re-selection must retain the root project"));
+        }
+        if let Some(DispatchTarget::ExistingSpace { workspace_id }) = target
+            && resolved_project.as_ref().and_then(|project| project.source_workspace_id.as_ref()) != Some(workspace_id) {
+            return Err(error("checkout_reselection_space_mismatch", "Re-selection must originate in the root's retained Space"));
+        }
+    }
     if *mode == SupervisorStartMode::ReuseOrResume {
         if let Some(workspace_id) = resolved_project.as_ref().and_then(|p| p.source_workspace_id.as_deref()) {
             let unresolved = ctx.state.runs.iter().any(|run| run.session_id == ctx.session_id
@@ -71,7 +88,7 @@ pub(in crate::orchestration) fn supervisor_start(
                 } else {
                     let resume_id = id();
                     let epoch = ctx.state.runs[index].attachment.as_ref().map(|a| a.epoch);
-                    super::resume::resume(ctx, OrchestrationAction::RunResume {
+                    super::resume::resume_from_start(ctx, OrchestrationAction::RunResume {
                         run_id: root_id.clone(), operation_id: resume_id.clone(),
                         expected_attachment_epoch: epoch,
                     })?;

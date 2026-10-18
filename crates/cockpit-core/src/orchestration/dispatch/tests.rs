@@ -690,6 +690,97 @@ async fn dispatch_reservation_refuses_changed_inode_without_rotating_epoch_or_cl
         assert_eq!(std::fs::read(&credential_path).unwrap(), credential_bytes);
     }
 }
+
+#[tokio::test]
+async fn explicitly_reselected_root_dispatch_reuses_reserved_credential_and_exact_checkout_fence() {
+    use super::super::{Actor, ResolvedMutationInput, credentials, project_identity};
+    use cockpit_protocol::orchestration::{AttachmentState, OperatorOrigin, OrchestrationAction,
+        OrchestrationMutationRequest, ResumePhase, SupervisorStartMode};
+    let fixture = ReviewFixture::new(RunStage::Starting);
+    let path = fixture.root.join("checkout");
+    std::fs::create_dir_all(&path).unwrap();
+    let (project, fresh) = project_identity::resolve_directory(&path, None, Some("space".into())).await.unwrap();
+    let operator = Actor::Operator(OperatorOrigin::Browser);
+    fixture.service.mutate_resolved(&operator, OrchestrationMutationRequest {
+        session_id: "test-session".into(), expected_revision: None,
+        action: OrchestrationAction::RunResume {
+            run_id: fixture.run.run_id.clone(), operation_id: uuid::Uuid::new_v4().to_string(),
+            expected_attachment_epoch: Some(1),
+        },
+    }, &ResolvedMutationInput::default()).unwrap();
+    fixture.change(|run| {
+        run.project = Some(project.clone());
+        let mut saved = fresh.clone();
+        saved.directory_identity.device = "previous-boot-device".into();
+        run.checkout = Some(saved);
+        run.target = Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() });
+        run.setup = Some(SetupSummary {
+            operation_id: None, generation: None, workspace_id: Some("space".into()),
+            checkout_path: fresh.path.clone(), repository_id: None, branch: None, base: None,
+            base_commit: None, ownership: None, effects: vec![], warnings: vec![], project_workspace_id: None,
+        });
+        let attachment = test_attachment(run);
+        attachment.epoch = 2;
+        attachment.launch_attempt = 2;
+        attachment.state = AttachmentState::Reserved;
+        attachment.location = None;
+        attachment.process = None;
+        attachment.shell = None;
+        attachment.process_scope = None;
+        let resume = run.resume.as_mut().unwrap();
+        resume.phase = ResumePhase::Launching;
+        resume.previous_attachment_epoch = Some(1);
+        resume.replacement_attachment_epoch = Some(2);
+        resume.cause = None;
+        let mut dispatch = crate::orchestration::dispatch(DispatchStep::NeedsReview);
+        dispatch.launch_attempt = 2;
+        dispatch.error = Some(cockpit_protocol::ErrorResponse {
+            code: "checkout_identity_changed".into(), message: "Saved physical checkout no longer matches".into(),
+        });
+        run.dispatch = Some(dispatch);
+    });
+    let stalled = fixture.current().1;
+    let (credential, credential_path) = credentials::stage_credential(fixture.service.base(), &stalled, super::super::JobRole::Root).unwrap();
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.credentials.push(credential);
+        locked.save(&mut state).unwrap();
+    }
+    let credential_bytes = std::fs::read(&credential_path).unwrap();
+    let before = fixture.service.store.lock().unwrap().read().unwrap();
+    let refused = fixture.service.reserve_dispatch_launch(&stalled, project.clone(), fresh.clone(), None, None).unwrap_err();
+    assert_eq!(refused.code, "checkout_identity_changed");
+    assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(), serde_json::to_value(&before).unwrap());
+    fixture.service.mutate_resolved(&operator, OrchestrationMutationRequest {
+        session_id: "test-session".into(), expected_revision: None,
+        action: OrchestrationAction::SupervisorStart {
+            operation_id: uuid::Uuid::new_v4().to_string(), mode: SupervisorStartMode::ReuseOrResume,
+            target: Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() }), label: None,
+            selected_root_id: Some(stalled.run_id.clone()), expected_project_key: Some(project.key.clone()),
+        },
+    }, &ResolvedMutationInput {
+        project: Some(project.clone()), reselected_checkout: Some(fresh.clone()), ..Default::default()
+    }).unwrap();
+    let reselected = fixture.current().1;
+    let (reserved, path) = fixture.service.reserve_dispatch_launch(&reselected, project.clone(), fresh.clone(), None, None).unwrap();
+    assert_eq!(path, credential_path);
+    assert_eq!(std::fs::read(&path).unwrap(), credential_bytes);
+    assert_eq!(reserved.checkout.as_ref(), Some(&fresh));
+    assert_eq!(serde_json::to_value(&reserved.attachment).unwrap(), serde_json::to_value(&stalled.attachment).unwrap());
+    assert_eq!(reserved.resume.as_ref().unwrap().operation_id, stalled.resume.as_ref().unwrap().operation_id);
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert_eq!(serde_json::to_value(&state.credentials).unwrap(), serde_json::to_value(&before.credentials).unwrap());
+    assert!(state.checkout_claims.is_empty());
+    // Re-selection is not a standing identity exemption: later physical drift still refuses.
+    std::fs::rename(&fresh.path, fixture.root.join("previous-checkout")).unwrap();
+    std::fs::create_dir(&fresh.path).unwrap();
+    let (project, changed) = project_identity::resolve_directory(std::path::Path::new(&fresh.path), None, project.source_workspace_id).await.unwrap();
+    let error = fixture.service.reserve_dispatch_launch(&reserved, project, changed, None, None).unwrap_err();
+    assert_eq!(error.code, "checkout_identity_changed");
+    assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(), serde_json::to_value(state).unwrap());
+    assert_eq!(std::fs::read(&path).unwrap(), credential_bytes);
+}
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn root_main_exit_proof_is_same_boot_and_independent_of_worker_consumers() {

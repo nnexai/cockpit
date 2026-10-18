@@ -881,6 +881,73 @@ async fn resume_does_not_reconnect_quiescing_live_attachment() {
     assert!(resolved.observation_cause.is_some());
 }
 
+fn reserved_resume_refusal(code: &str) -> Run {
+    let mut run = reviewed();
+    run.stage = RunStage::Starting;
+    let dispatch = run.dispatch.as_mut().unwrap();
+    dispatch.step = DispatchStep::NeedsReview;
+    dispatch.launch_attempt = 1;
+    dispatch.launch_tag = None;
+    dispatch.endpoint_identity = None;
+    dispatch.error = Some(cockpit_protocol::ErrorResponse {
+        code: code.into(), message: format!("Reserved launch refused: {code}"),
+    });
+    let attachment = run.attachment.as_mut().unwrap();
+    attachment.epoch = 2;
+    attachment.launch_attempt = 1;
+    attachment.state = AttachmentState::Reserved;
+    attachment.location = None;
+    attachment.conversation = Some(ConversationIdentity {
+        harness: run.launch_config.harness_kind.clone(), session_id: "conversation".into(),
+    });
+    run.resume = Some(ResumeRecord {
+        operation_id: "resume".into(), run_id: run.run_id.clone(),
+        previous_attachment_epoch: Some(1), phase: ResumePhase::Launching,
+        cause: None, decision_id: None, replacement_attachment_epoch: Some(2),
+        updated_at: run.updated_at.clone(),
+    });
+    run
+}
+
+#[test]
+fn root_lookup_projects_effect_free_refusal_but_preserves_inflight_launch() {
+    for (harness, code, launch_tag, step, availability, connection, cause_class) in [
+        ("omp", "checkout_identity_changed", None, DispatchStep::NeedsReview,
+            RootResumeAvailability::Blocked, RootConnection::Disconnected, Some(ResumeCauseClass::Decision)),
+        ("omp", "harness_resume_unsupported", None, DispatchStep::NeedsReview,
+            RootResumeAvailability::Available, RootConnection::Disconnected, None),
+        ("unknown-custom", "harness_resume_unsupported", None, DispatchStep::NeedsReview,
+            RootResumeAvailability::Blocked, RootConnection::Disconnected, Some(ResumeCauseClass::Recover)),
+        ("omp", "launch_configuration_invalid", None, DispatchStep::NeedsReview,
+            RootResumeAvailability::Blocked, RootConnection::Disconnected, Some(ResumeCauseClass::Recover)),
+        ("omp", "checkout_identity_changed", Some("launch-in-flight"), DispatchStep::NeedsReview,
+            RootResumeAvailability::InProgress, RootConnection::Reconnecting, None),
+        ("omp", "checkout_identity_changed", None, DispatchStep::SetupPending,
+            RootResumeAvailability::InProgress, RootConnection::Reconnecting, None),
+    ] {
+        let mut run = reserved_resume_refusal(code);
+        run.launch_config.harness_kind = harness.into();
+        run.launch_config.resume_args = None;
+        let dispatch = run.dispatch.as_mut().unwrap();
+        dispatch.launch_tag = launch_tag.map(str::to_owned);
+        dispatch.step = step;
+        let before = serde_json::to_value(&run).unwrap();
+        let candidate = root_candidate(&run, false);
+        assert_eq!(candidate.resume, availability, "{harness}, {code}, {launch_tag:?}, {step:?}");
+        assert_eq!(candidate.connection, connection);
+        match cause_class {
+            Some(class) => {
+                let cause = candidate.cause.unwrap();
+                assert_eq!(cause.code, code);
+                assert_eq!(cause.message, run.dispatch.as_ref().unwrap().error.as_ref().unwrap().message);
+                assert_eq!(cause.class, class);
+            }
+            None => assert!(candidate.cause.is_none()),
+        }
+        assert_eq!(serde_json::to_value(&run).unwrap(), before);
+    }
+}
+
 #[test]
 fn root_lookup_offers_retry_only_for_stale_unsupported_omp_resume() {
     for (harness, configured_resume, code, expected) in [
@@ -1033,6 +1100,60 @@ async fn setup_open_and_existing_space_resolve_same_exact_plain_directory() {
         worker_start_request(invalid_target),
     ] {
         assert!(resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &invalid).await.is_err());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn start_reselects_only_pending_root_from_existing_space() {
+    let fixture = Fixture::new();
+    let projects = fixture.projects(None);
+    let actor = Actor::Operator(OperatorOrigin::Browser);
+    let (project, fresh) = resolve_directory(&fixture.root, None, Some("space".into())).await.unwrap();
+    let mut pending = reserved_resume_refusal("checkout_identity_changed");
+    pending.project = Some(project);
+    let mut saved = fresh.clone();
+    saved.directory_identity.device = "previous-device".into();
+    pending.checkout = Some(saved.clone());
+    pending.target = Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() });
+    pending.setup = Some(SetupSummary {
+        operation_id: None, generation: None, workspace_id: Some("space".into()),
+        checkout_path: saved.path.clone(), repository_id: None, branch: None, base: None,
+        base_commit: None, ownership: Some(cockpit_protocol::projects::WorkspaceCheckoutOwnership::BorrowedDirectory),
+        effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
+    });
+    for (refused, existing_space, mode, reselected, expected_checkout) in [
+        (true, true, SupervisorStartMode::ReuseOrResume, true, None),
+        (true, false, SupervisorStartMode::ReuseOrResume, false, None),
+        (false, true, SupervisorStartMode::ReuseOrResume, false, Some(&saved)),
+        (true, true, SupervisorStartMode::Another, false, Some(&fresh)),
+    ] {
+        let mut run = pending.clone();
+        if !refused {
+            run.dispatch.as_mut().unwrap().error.as_mut().unwrap().code = "another_refusal".into();
+        }
+        fixture.publish(&[run.clone()]);
+        let before = fs::read(fixture.service.base().join("state.json")).unwrap();
+        let target = if existing_space {
+            DispatchTarget::ExistingSpace { workspace_id: "space".into() }
+        } else {
+            DispatchTarget::Setup { request: WorkspaceSetupRequest::Open {
+                path: fresh.path.clone(), label: None, task_name: None, focus: false,
+            }}
+        };
+        let mut request = start_request(Some(target), mode);
+        let OrchestrationAction::SupervisorStart { selected_root_id, .. } = &mut request.action
+            else { unreachable!() };
+        *selected_root_id = Some(run.run_id.clone());
+        let resolved = resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &request)
+            .await.unwrap();
+        assert_eq!(resolved.reselected_checkout.as_ref(), reselected.then_some(&fresh));
+        assert_eq!(resolved.checkout.as_ref(), expected_checkout);
+        let resume = resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &resume_request(&run))
+            .await.unwrap();
+        assert!(resume.reselected_checkout.is_none(), "RunResume never re-selects a checkout");
+        assert_eq!(resume.checkout.as_ref(), Some(&saved));
+        assert_eq!(before, fs::read(fixture.service.base().join("state.json")).unwrap());
     }
 }
 
