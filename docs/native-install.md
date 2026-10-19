@@ -8,9 +8,9 @@ Run this from the repository root:
 python3 scripts/install-native.py
 ```
 
-On Linux, the default build invokes `bunx tauri build --no-bundle`, then builds the CLI with Cargo. It installs `target/release/cockpit-tauri` as `$XDG_DATA_HOME/cockpit/bin/cockpit` (default `~/.local/share/cockpit/bin/cockpit`) and `target/release/cockpit` beside it as `cockpit-cli`.
+On Linux, the default build builds the CLI with Cargo, then invokes `bunx tauri build --no-bundle`. It installs `target/release/cockpit-tauri` as `$XDG_DATA_HOME/cockpit/bin/cockpit` (default `~/.local/share/cockpit/bin/cockpit`) and `target/release/cockpit` beside it as `cockpit-cli`.
 
-On macOS, the build uses `bunx tauri build --bundles app` and installs the complete `target/release/bundle/macos/Cockpit.app` bundle at `~/Applications/Cockpit.app`. The CLI is installed under `$XDG_DATA_HOME/cockpit/bin`, defaulting to `~/Library/Application Support/cockpit/bin`. The graphical launcher points into the installed bundle; no second raw graphical binary is installed.
+On macOS, the installer builds the CLI first, then uses `bunx tauri build --bundles app` with a bundle file mapping to include that CLI as `Cockpit.app/Contents/MacOS/cockpit-cli`, beside `cockpit-tauri`. It installs the complete bundle at `~/Applications/Cockpit.app` and the same CLI under `$XDG_DATA_HOME/cockpit/bin`, defaulting to `~/Library/Application Support/cockpit/bin`. Finder and Spotlight launches use the bundled CLI without a shell PATH or CLI override. The graphical launcher points into the installed bundle; no second raw graphical binary is installed.
 
 Both platforms install `cockpit` and `cockpit-cli` launchers under `$XDG_BIN_HOME`, or `~/.local/bin` by default. Updates stage artifacts on their destination filesystems and journal publication and rollback. Individual replacements are atomic; a multi-artifact update is not one atomic filesystem operation. Existing processes are not stopped or restarted.
 
@@ -49,7 +49,7 @@ python3 scripts/install-native.py --reuse
 python3 scripts/install-native.py --reuse --debug
 ```
 
-On Linux, `--reuse` expects `target/release/cockpit-tauri` and `target/release/cockpit`. On macOS it requires the complete `target/release/bundle/macos/Cockpit.app` and the CLI binary. `--debug` selects the corresponding `target/debug` paths.
+On Linux, `--reuse` expects `target/release/cockpit-tauri` and `target/release/cockpit`. On macOS it requires the complete `target/release/bundle/macos/Cockpit.app`, including an executable `Contents/MacOS/cockpit-cli` matching `target/release/cockpit`, as well as the matching native binary. Bundles built without the paired CLI are refused; rebuild with this installer rather than adding files to a signed bundle. `--debug` selects the corresponding `target/debug` paths.
 
 A disposable prefix contains both launchers in `PREFIX/bin` and installer data under `PREFIX/share`. On macOS its bundle is installed at `PREFIX/Applications/Cockpit.app`:
 

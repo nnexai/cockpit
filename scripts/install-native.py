@@ -150,20 +150,26 @@ def source_icon(project_root: Path) -> Path:
     return project_root / "src-tauri" / "icons" / "icon.png"
 
 
+def macos_bundle_config(project_root: Path, debug: bool) -> str:
+    return json.dumps(
+        {"bundle": {"macOS": {"files": {f"MacOS/{CLI_LAUNCHER_NAME}": str(source_cli_binary(project_root, debug).resolve())}}}}
+    )
+
+
 def run_build(project_root: Path, debug: bool) -> None:
     tauri_command = ["bunx", "tauri", "build"]
     if sys.platform != "darwin":
         tauri_command.append("--no-bundle")
     else:
-        tauri_command.extend(["--bundles", "app"])
+        tauri_command.extend(["--bundles", "app", "--config", macos_bundle_config(project_root, debug)])
     if debug:
         tauri_command.append("--debug")
     cli_command = ["cargo", "build", "-p", "cockpit-host", "--bin", CLI_BINARY_NAME]
     if not debug:
         cli_command.append("--release")
     try:
-        subprocess.run(tauri_command, cwd=project_root, check=True)
         subprocess.run(cli_command, cwd=project_root, check=True)
+        subprocess.run(tauri_command, cwd=project_root, check=True)
     except FileNotFoundError as error:
         raise InstallError(f"{error.filename} was not found; install the repository's toolchain first") from error
     except subprocess.CalledProcessError as error:
@@ -329,6 +335,9 @@ def validate_bundle(path: Path, label: str = "macOS application bundle") -> list
         _safe_bundle_target(path, executable, os.readlink(executable))
     if not executable.is_file() or not (os.stat(executable).st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)):
         raise InstallError(f"{label} executable is missing or not executable: {executable}")
+    cli = path / "Contents" / "MacOS" / CLI_LAUNCHER_NAME
+    if cli.is_symlink() or not cli.is_file() or not (os.stat(cli).st_mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)):
+        raise InstallError(f"{label} is missing its bundled Cockpit CLI: {cli}")
     return _bundle_entries(path)
 def receipt_paths(paths: InstallPaths, include_application: bool = True, include_binary: bool | None = None) -> dict[str, str]:
     if include_binary is None:
@@ -746,6 +755,9 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
         executable = bundle / "Contents" / "MacOS" / BINARY_NAME
         if sha256(executable) != sha256(binary):
             raise InstallError("macOS application executable does not match the native binary")
+        bundled_cli = bundle / "Contents" / "MacOS" / CLI_LAUNCHER_NAME
+        if sha256(bundled_cli) != sha256(cli_binary):
+            raise InstallError("macOS application bundled CLI does not match the Cockpit CLI binary")
     ensure_installable(paths)
     existing_receipt = load_receipt(paths)
     raw_gui_migration = bool(
@@ -803,6 +815,9 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
             staged_executable = stages["application"] / "Contents" / "MacOS" / BINARY_NAME
             if sha256(staged_executable) != sha256(binary):
                 raise InstallError("staged macOS application executable does not match staged native binary")
+            staged_cli = stages["application"] / "Contents" / "MacOS" / CLI_LAUNCHER_NAME
+            if sha256(staged_cli) != sha256(stages["cli_binary"]):
+                raise InstallError("staged macOS application bundled CLI does not match the staged Cockpit CLI binary")
             application_manifest = staged_manifest
         artifact_hashes = {
             "cli_binary": sha256(stages["cli_binary"]),

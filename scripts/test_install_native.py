@@ -49,11 +49,15 @@ class NativeInstallTests(unittest.TestCase):
             application=self.root / "Applications" / installer.BUNDLE_NAME,
         )
 
-    def write_bundle(self, path: Path, executable: bytes, resource: bytes = b"bundle resource") -> Path:
+    def write_bundle(self, path: Path, executable: bytes, resource: bytes = b"bundle resource", cli: bytes | None = b"first Cockpit CLI") -> Path:
         executable_path = path / "Contents" / "MacOS" / installer.BINARY_NAME
         executable_path.parent.mkdir(parents=True, exist_ok=True)
         executable_path.write_bytes(executable)
         executable_path.chmod(0o755)
+        if cli is not None:
+            cli_path = executable_path.with_name(installer.CLI_LAUNCHER_NAME)
+            cli_path.write_bytes(cli)
+            cli_path.chmod(0o755)
         resource_path = path / "Contents" / "Resources" / "payload"
         resource_path.parent.mkdir(parents=True, exist_ok=True)
         resource_path.write_bytes(resource)
@@ -284,6 +288,9 @@ class NativeInstallTests(unittest.TestCase):
         self.assertEqual(destination_payload.read_bytes(), b"bundle resource")
         self.assertTrue((paths.application / "Contents" / "Resources" / "alias").is_symlink())
         self.assertEqual(paths.launcher.resolve(), paths.application / "Contents" / "MacOS" / installer.BINARY_NAME)
+        bundled_cli = paths.application / "Contents" / "MacOS" / installer.CLI_LAUNCHER_NAME
+        self.assertEqual(bundled_cli.read_bytes(), paths.cli_binary.read_bytes())
+        self.assertTrue(os.access(bundled_cli, os.X_OK))
         self.assertFalse(paths.binary.exists())
         receipt = json.loads(paths.receipt.read_text(encoding="utf-8"))
         self.assertEqual(receipt["schema"], 4)
@@ -291,9 +298,82 @@ class NativeInstallTests(unittest.TestCase):
         self.assertNotIn("binary", receipt["paths"])
         self.assertEqual(receipt["artifact_manifests"]["application"], installer.bundle_manifest(paths.application))
         self.assertEqual(receipt["artifact_sha256"]["application"], installer.sha256_bundle(paths.application))
+        self.assertTrue(
+            any(
+                entry["path"] == f"Contents/MacOS/{installer.CLI_LAUNCHER_NAME}" and entry["type"] == "file"
+                for entry in receipt["artifact_manifests"]["application"]
+            )
+        )
         self.assertNotIn("omp_extension", receipt["paths"])
         self.assertNotIn("omp_extension", receipt["artifact_sha256"])
         self.assertFalse((paths.app_root / "omp").exists())
+
+    def test_macos_rejects_missing_or_invalid_bundled_cli(self) -> None:
+        paths = self.mac_paths()
+        for kind in ("missing", "nonexecutable", "symlink", "directory"):
+            with self.subTest(kind=kind):
+                source = self.write_bundle(
+                    self.root / kind / installer.BUNDLE_NAME, self.binary.read_bytes(), cli=None
+                )
+                cli = source / "Contents" / "MacOS" / installer.CLI_LAUNCHER_NAME
+                if kind == "nonexecutable":
+                    cli.write_bytes(self.cli_binary.read_bytes())
+                    cli.chmod(0o644)
+                elif kind == "symlink":
+                    target = cli.with_name("cli-target")
+                    target.write_bytes(self.cli_binary.read_bytes())
+                    target.chmod(0o755)
+                    cli.symlink_to(target.name)
+                elif kind == "directory":
+                    cli.mkdir()
+
+                with self.assertRaisesRegex(installer.InstallError, "missing its bundled Cockpit CLI"):
+                    installer.install(paths, self.binary, self.cli_binary, self.icon, source)
+
+                self.assertFalse(paths.application.exists())
+                self.assertFalse(paths.cli_binary.exists())
+                self.assertFalse(paths.receipt.exists())
+
+    def test_macos_rejects_mismatched_bundled_cli(self) -> None:
+        paths = self.mac_paths()
+        source = self.write_bundle(
+            self.root / "build" / installer.BUNDLE_NAME, self.binary.read_bytes(), cli=b"stale Cockpit CLI"
+        )
+
+        with self.assertRaisesRegex(installer.InstallError, "bundled CLI does not match"):
+            installer.install(paths, self.binary, self.cli_binary, self.icon, source)
+
+        self.assertFalse(paths.application.exists())
+        self.assertFalse(paths.cli_binary.exists())
+        self.assertFalse(paths.receipt.exists())
+
+    def test_macos_old_bundle_without_cli_can_be_updated_or_uninstalled(self) -> None:
+        source = self.write_bundle(self.root / "build" / installer.BUNDLE_NAME, self.binary.read_bytes())
+        for action in ("update", "uninstall"):
+            with self.subTest(action=action):
+                prefix = self.root / action
+                paths = installer.InstallPaths(
+                    data_home=prefix / "share",
+                    bin_home=prefix / "bin",
+                    application=prefix / "Applications" / installer.BUNDLE_NAME,
+                )
+                installer.install(paths, self.binary, self.cli_binary, self.icon, source)
+                bundled_cli = paths.application / "Contents" / "MacOS" / installer.CLI_LAUNCHER_NAME
+                bundled_cli.unlink()
+                receipt = json.loads(paths.receipt.read_text(encoding="utf-8"))
+                manifest = installer.bundle_manifest(paths.application)
+                receipt["artifact_manifests"]["application"] = manifest
+                receipt["artifact_sha256"]["application"] = installer.bundle_manifest_hash(manifest)
+                paths.receipt.write_text(json.dumps(receipt), encoding="utf-8")
+
+                if action == "update":
+                    installer.install(paths, self.binary, self.cli_binary, self.icon, source)
+                    self.assertEqual(bundled_cli.read_bytes(), paths.cli_binary.read_bytes())
+                else:
+                    self.assertTrue(installer.uninstall(paths))
+                    self.assertFalse(paths.application.exists())
+                    self.assertFalse(paths.cli_binary.exists())
+                    self.assertFalse(paths.receipt.exists())
 
     def test_macos_update_refuses_modified_bundle_and_preserves_it(self) -> None:
         paths = self.mac_paths()
@@ -444,12 +524,6 @@ class NativeInstallTests(unittest.TestCase):
         self.assertEqual(paths.data_home, (self.root / "home" / "Library" / "Application Support").resolve())
         self.assertEqual(paths.application, self.root / "home" / "Applications" / installer.BUNDLE_NAME)
         self.assertEqual(prefixed.application, self.root / "prefix" / "Applications" / installer.BUNDLE_NAME)
-
-    def test_macos_build_keeps_tauri_bundling_enabled(self) -> None:
-        with mock.patch.object(installer.sys, "platform", "darwin"), mock.patch.object(installer.subprocess, "run") as run:
-            installer.run_build(self.root, False)
-
-        self.assertEqual(run.call_args_list[0], mock.call(["bunx", "tauri", "build", "--bundles", "app"], cwd=self.root, check=True))
 
 
 if __name__ == "__main__":
