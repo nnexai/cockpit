@@ -91,7 +91,7 @@ export function buildCommands(input: CommandInput): CommandAction[] {
     ...SHORTCUTS.filter(entry => entry.palette === undefined).flatMap((entry): CommandAction[] => {
       if (!entry.prefix) {
         const handler = local[entry.id as LocalShortcutId];
-        return handler ? [{ id: entry.id, label: entry.label, primary: entry.primary, group: entry.group, run: handler }] : [];
+        return handler ? [{ id: entry.id, label: entry.label, primary: entry.primary, shortcut: formatShortcut(entry.id), group: entry.group, run: handler }] : [];
       }
       const command = entry.id as PrefixCommand;
       const reason = entry.needs === "space" && !selectedSpace ? "Select a Space first"

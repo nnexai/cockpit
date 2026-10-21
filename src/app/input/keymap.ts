@@ -1,4 +1,4 @@
-import { type PrefixCommand, prefixCommandForKey, unboundPrefixMessage } from "./shortcuts";
+import { type PrefixCommand, prefixCommandForKey, unboundPrefixMessage, chordMatches, detectPlatform, shortcutEntry } from "./shortcuts";
 import { matchingHerdrCommand, herdrBindingMatches, type HerdrBindingEvent, type HerdrBinding, type HerdrChord } from "./herdrBindings";
 import type { HerdrCommand } from "../../protocol/generated/v1";
 
@@ -13,6 +13,7 @@ export type WorkbenchKeyRouting = {
   runCommand: (command: PrefixCommand) => void;
   setPrefixActive: (active: boolean) => void;
   setCommandsOpen: (open: boolean) => void;
+  onQuickSwitch?: () => void;
   /** A key that follows the prefix but has no binding. The key is swallowed; say so. */
   onUnboundPrefixKey?: (message: string) => void;
   herdrBindings?: readonly HerdrBinding[];
@@ -36,11 +37,9 @@ function modifierOnlyKey(key: string): boolean {
 const MODAL_DIALOG = 'dialog[open], [role="dialog"][aria-modal="true"]:not(#cockpit-sidebar)';
 
 /**
- * The window-level (capture) router for the `Ctrl+B` prefix. Order, per the
- * keyboard design: composing → (reserved: Herdr magic escape) → armed `Esc` →
- * modal → arm / bare `?` → armed key lookup. With a terminal or the inline
- * browser surface focused it consumes `Ctrl+B` and the one key after it, nothing
- * else; plain `Tab` and `Shift+Tab` only mean anything as that next key.
+ * The window-level (capture) router for Cockpit navigation and the Ctrl+B prefix.
+ * Mod+K opens the quick switcher even from editors; other non-prefix input still
+ * belongs to terminals and the inline browser. Modal input always stays local.
  */
 export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: WorkbenchKeyRouting): void {
   if (event.isComposing) return;
@@ -69,8 +68,19 @@ export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: Workben
       return;
     }
   }
-  const plainCtrlB = event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "b";
   const serverPrefix = routing.herdrPrefixes?.find(prefix => herdrBindingMatches(prefix, event));
+  const platform = detectPlatform();
+  const quickSwitchChord = shortcutEntry("quick-switch").chords?.[0];
+  if (routing.onQuickSwitch && quickSwitchChord && event.ctrlKey === (platform !== "mac") && event.metaKey === (platform === "mac")
+    && !serverPrefix && !matchingHerdrCommand(routing.herdrBindings ?? [], event as HerdrBindingEvent, false)
+    && chordMatches(quickSwitchChord, { key: event.key, code: event.code ?? "", ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey, altKey: event.altKey })) {
+    event.preventDefault();
+    event.stopPropagation();
+    routing.setPrefixActive(false);
+    if (!event.repeat) routing.onQuickSwitch();
+    return;
+  }
+  const plainCtrlB = event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "b";
   const sharedPrefix = routing.herdrPrefixes?.some(prefix => herdrBindingMatches(prefix, { key: "b", ctrlKey: true, shiftKey: false, altKey: false, metaKey: false })) ?? false;
   if (!routing.prefixActive) {
     if ((plainCtrlB || serverPrefix) && prefixSafe) {

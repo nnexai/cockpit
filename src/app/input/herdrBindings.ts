@@ -55,4 +55,6 @@ export function setEffectiveHerdrBindings(bindings: readonly HerdrBinding[], pre
 export function herdrShadowsPrefix(key: string, shift: boolean | "any"): boolean {
   return effectivePrefixes.some(prefix => prefix.ctrl && !prefix.alt && !prefix.shift && !prefix.meta && prefix.key.toLowerCase() === "b") && effectiveBindings.some(binding => binding.prefix && !binding.ctrl && !binding.alt && !binding.meta && binding.key.toLowerCase() === key.toLowerCase() && (shift === "any" || binding.shift === shift));
 }
-export function herdrShadowsChord(event: HerdrBindingEvent): boolean { return matchingHerdrCommand(effectiveBindings, event, false) !== null; }
+export function herdrShadowsChord(event: HerdrBindingEvent): boolean {
+  return effectivePrefixes.some(prefix => herdrBindingMatches(prefix, event)) || matchingHerdrCommand(effectiveBindings, event, false) !== null;
+}

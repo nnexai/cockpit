@@ -117,6 +117,93 @@ describe("prefix routing", () => {
   });
 });
 
+describe("quick switcher chord", () => {
+  it.each([
+    ['<div class="terminal-host"><textarea></textarea></div>', "textarea"],
+    ['<div class="browser-surface" tabindex="0"></div>', ".browser-surface"],
+    ['<input aria-label="Search" />', "input"],
+  ])("claims Ctrl+K before content input in %s", (html, selector) => {
+    const target = mount(html, selector);
+    const onQuickSwitch = vi.fn();
+    const { route, armed } = harness(false, { onQuickSwitch });
+    route(ctrlB());
+    const event = keyEvent({ key: "k", ctrlKey: true, target });
+    route(event);
+    expect(onQuickSwitch).toHaveBeenCalledOnce();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(event.stopPropagation).toHaveBeenCalledOnce();
+    expect(armed()).toBe(false);
+  });
+
+  it("leaves modal and composing input alone, including DOM-only dialogs", () => {
+    const onQuickSwitch = vi.fn();
+    const target = mount('<section role="dialog" aria-modal="true"><input /></section>', "input");
+    for (const [routing, overrides] of [
+      [harness(false, { onQuickSwitch }), { target }],
+      [harness(true, { onQuickSwitch }), {}],
+      [harness(false, { onQuickSwitch }), { isComposing: true }],
+      [harness(false, { onQuickSwitch, serverModalOpen: true }), {}],
+    ] as const) {
+      const event = keyEvent({ key: "k", ctrlKey: true, ...overrides });
+      routing.route(event);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(onQuickSwitch).not.toHaveBeenCalled();
+  });
+
+  it("claims only the exact platform chord, not other modifier variants", () => {
+    const onQuickSwitch = vi.fn();
+    const { route } = harness(false, { onQuickSwitch });
+    for (const overrides of [{ shiftKey: true }, { altKey: true }, { metaKey: true }, { ctrlKey: false, metaKey: true }]) {
+      const event = keyEvent({ key: "k", ctrlKey: true, ...overrides });
+      route(event);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(onQuickSwitch).not.toHaveBeenCalled();
+    const platform = vi.spyOn(window.navigator, "platform", "get").mockReturnValue("MacIntel");
+    try {
+      const control = keyEvent({ key: "k", ctrlKey: true });
+      route(control);
+      expect(control.preventDefault).not.toHaveBeenCalled();
+      const command = keyEvent({ key: "k", metaKey: true });
+      route(command);
+      expect(command.preventDefault).toHaveBeenCalledOnce();
+      expect(onQuickSwitch).toHaveBeenCalledOnce();
+    } finally { platform.mockRestore(); }
+  });
+
+  it("preserves an advertised direct Herdr binding over the local chord", () => {
+    const command = { command_id: "custom:k", binding_labels: ["ctrl+k"], action: "shell" as const, description: "Custom K" };
+    const onQuickSwitch = vi.fn();
+    const runHerdrCommand = vi.fn();
+    const { route } = harness(false, { onQuickSwitch, runHerdrCommand, herdrBindings: herdrBindings([command]) });
+    const event = keyEvent({ key: "k", ctrlKey: true });
+    route(event);
+    expect(runHerdrCommand).toHaveBeenCalledExactlyOnceWith(command);
+    expect(onQuickSwitch).not.toHaveBeenCalled();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a configured Herdr prefix and its double-prefix passthrough", () => {
+    const onQuickSwitch = vi.fn();
+    const command = { command_id: "prefix:k", binding_labels: ["prefix+a"], action: "plugin_action" as const, description: "Prefix action" };
+    const runHerdrCommand = vi.fn();
+    const { route, armed } = harness(false, { onQuickSwitch, runHerdrCommand, herdrBindings: herdrBindings([command]), herdrPrefixes: herdrPrefixes(["ctrl+k"]) });
+    const prefix = keyEvent({ key: "k", ctrlKey: true });
+    route(prefix);
+    expect(armed()).toBe(true);
+    expect(prefix.preventDefault).toHaveBeenCalledOnce();
+    const literal = keyEvent({ key: "k", ctrlKey: true });
+    route(literal);
+    expect(armed()).toBe(false);
+    expect(literal.preventDefault).not.toHaveBeenCalled();
+    route(keyEvent({ key: "k", ctrlKey: true }));
+    route(keyEvent({ key: "a" }));
+    expect(runHerdrCommand).toHaveBeenCalledExactlyOnceWith(command);
+    expect(onQuickSwitch).not.toHaveBeenCalled();
+  });
+});
+
 describe("terminal and browser focus", () => {
   it("never consumes a plain Tab or Shift+Tab in a terminal, armed or not", () => {
     const { route, runCommand, setPrefixActive } = harness();

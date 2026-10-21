@@ -473,3 +473,19 @@ kbd {
   white-space: nowrap;
   font-size: var(--font-size-2xs);
 }
+
+.switcher-status { padding: 0 14px 6px; color: var(--text-secondary); font-size: var(--font-size-2xs); }
+.switcher-status.is-warning { color: var(--warning); }
+.switcher-row { display: flex; width: 100%; min-height: 40px; align-items: center; gap: 10px; padding: 5px 14px; border: 0; border-radius: 0; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
+.switcher-row:hover { background: var(--surface-hover); }
+.switcher-row.is-active, .switcher-row:focus-visible { background: var(--surface-selected); }
+.switcher-row:disabled { color: var(--text-muted); cursor: default; }
+.switcher-row:disabled .switcher-primary { color: var(--text-muted); }
+.switcher-row > .sb-glyph { flex: 0 0 auto; }
+.switcher-text { display: grid; flex: 1; min-width: 0; gap: 1px; }
+.switcher-primary, .switcher-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switcher-primary { color: var(--text-primary); font-size: var(--font-size-xs); }
+.switcher-meta { color: var(--text-muted); font-size: var(--font-size-2xs); }
+.switcher-kind, .switcher-current { flex: 0 0 auto; border: 1px solid var(--border); border-radius: var(--radius-small); padding: 0 5px; background: var(--surface); color: var(--text-muted); font-size: var(--font-size-2xs); }
+.switcher-current { border-color: var(--accent); color: var(--text-primary); }
+.switcher-row mark { background: transparent; color: var(--focus-strong); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }

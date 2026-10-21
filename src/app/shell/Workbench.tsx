@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { FocusRequest, SessionSummary, WidgetSummary } from "../../protocol/generated/v1";
 import type { SessionState } from "../session/sessionStore";
@@ -24,8 +25,24 @@ export function Workbench(props: WorkbenchProps) {
   const runtime = useWorkbenchState(props);
   const actions = useWorkbenchActions(props, runtime);
   const input = useWorkbenchInput(props, runtime, actions);
+  useEffect(() => {
+    const target = runtime.switchTarget;
+    if (!target || runtime.switcherOpen) return;
+    runtime.setSwitchTarget(null);
+    // Re-resolve after the modal has unmounted; never focus from a stale row or while another modal owns input.
+    if (runtime.modalOpen || props.state.sync !== "live" || (target.kind === "space" && runtime.mutationBusy)) return;
+    if (target.kind === "space") {
+      const space = byId(runtime.spaces, target.id);
+      if (space) actions.focusSpace(space);
+      else runtime.setPrefixHint("That Space no longer exists");
+    } else {
+      const agent = runtime.snapshot?.agents.find(candidate => candidate.pane_id === target.id);
+      if (agent) actions.focusAgent(agent);
+      else runtime.setPrefixHint("That agent no longer exists");
+    }
+  }, [runtime.switchTarget, runtime.switcherOpen, runtime.modalOpen, runtime.spaces, runtime.snapshot, runtime.mutationBusy, props.state.sync, actions.focusSpace, actions.focusAgent, runtime.setSwitchTarget, runtime.setPrefixHint]);
   const { ctx, tabLayout, mutations, onFocus } = props;
-  const { shell, popup, spaces, allTabs, selectedTab, confirmedSpaceId, customPrefixes, libraryOpen, notesOpen, overviewOpen, openOverview, closeOverview, liaison, browserOpen, browserReason, spaceGit, gitActions, gitBlocked, widgets, widgetsPending, viewerSources, limits, runGitAction, setRecoveryOpen, closeNotes, openNotes, showWidgets, setLibraryAddOpen, openLibrary, setLimitsOpen, commandNotice, lifecycleError, leave } = runtime;
+  const { shell, popup, spaces, allTabs, selectedTab, confirmedSpaceId, customPrefixes, libraryOpen, notesOpen, overviewOpen, openOverview, closeOverview, liaison, browserOpen, browserReason, spaceGit, gitActions, gitBlocked, widgets, widgetsPending, viewerSources, limits, runGitAction, setRecoveryOpen, closeNotes, openNotes, showWidgets, setLibraryAddOpen, openLibrary, setLimitsOpen, setSwitcherOpen, commandNotice, lifecycleError, leave } = runtime;
   const target = byId(spaces, confirmedSpaceId);
   const status = target ? spaceGit.get(target.id) : undefined;
   const goToWidget = (widget: WidgetSummary) => {
@@ -44,7 +61,7 @@ export function Workbench(props: WorkbenchProps) {
     liaison: { actionLabel: liaison.actionLabel, startAvailable: liaison.startAvailable, overviewAvailable: liaison.tasks.some(task => !task.task.checked), overviewOpen },
     git: { target, status, pending: gitActions.forStatus(status), blocked: gitBlocked },
     widgets: { pending: widgetsPending, dockTabId: tabLayout?.viewers.widget ? tabLayout.tabId : null, list: widgets.widgets(ctx.sessionId) },
-    viewerSources, local: limits.absent ? {} : { "subscription-limits": () => setLimitsOpen(true) },
+    viewerSources, local: { "quick-switch": () => setSwitcherOpen(true), ...(!limits.absent ? { "subscription-limits": () => setLimitsOpen(true) } : {}) },
     run: {
       herdr: input.runHerdrCommand, prefix: input.runCommand, supervisor: () => { void liaison.start(); }, overview: () => { if (!overviewOpen) openOverview(); else { closeOverview(); if (props.selection.paneId !== liaison.paneId && liaison.startAvailable) void liaison.start(); } }, git: runGitAction,
       recovery: () => setRecoveryOpen(true), toggleNotes: notesOpen ? closeNotes : openNotes, openBrowser: actions.openBrowser,

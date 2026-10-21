@@ -50,13 +50,13 @@ Current rules are grouped by behavioral contract: conditions, limits and caveats
 
 ## Keyboard
 
-- Keep platform-independent Ctrl+B prefixes and Herdr-default action meanings or leave them unbound; Cockpit-only actions use free keys. Omit Herdr-only s/q/e/[/o/Shift+G/Shift+R; cycle Ctrl+B Tab/Shift+Tab in local visual order. Static registry drives Commands/tooltips/generated docs, not runtime plugin entries. [Owner](src/app/input/shortcuts.ts). Rationale: One registry keeps local discoverability accurate.
+- Keep platform-independent Ctrl+B prefixes and Herdr-default action meanings or leave them unbound; Cockpit-only actions use free keys. The quick switcher is the explicit direct-chord exception: Ctrl+K on Linux/Windows, Cmd+K on macOS, available from terminals and editors outside modals. Omit Herdr-only s/q/e/[/o/Shift+G/Shift+R; cycle Ctrl+B Tab/Shift+Tab in local visual order. Static registry drives Commands/tooltips/generated docs, not runtime plugin entries. [Owner](src/app/input/shortcuts.ts). Rationale: One registry keeps local discoverability accurate.
 
 - Discover generic shell/pane/popup/plugin commands, opaque IDs, aliases and configured prefixes from identity-checked live projection; reload replaces retired bindings. Invoke only currently advertised actions against confirmed Herdr focus and revalidated membership, never uncertain-result replay. [Owner](src/app/input/herdrBindings.ts). Rationale: Advertisements are revocable dispatch authority.
 
 - Outside editors/dialogs, direct custom bindings precede viewer keys; configured Herdr prefixes coexist with Ctrl+B, and shared Ctrl+B custom aliases win collisions. Hide shadowed local hints; reserve literal Ctrl+B Ctrl+B and Herdr-prefix double-prefix passthrough before custom lookup. [Owner](src/app/input/keymap.ts). Rationale: Collision policy must preserve literal program input.
 
-- Terminal/inline Browser claims stay narrow: prefixes/custom bindings, clipboard Ctrl+Shift+C/V (Cmd+C/V on macOS) and Shift+Enter; unbound Tab/Shift+Tab/Alt/function/Ctrl keys reach content. Recognize Browser prefixes on its surface, not URL/note editors; popup routing yields entirely. [Owner](src/app/input/keymap.ts). Rationale: Workbench shortcuts must not trap content keys.
+- Terminal/inline Browser claims stay narrow: direct quick-switch Ctrl+K (Cmd+K on macOS), prefixes/custom bindings, clipboard Ctrl+Shift+C/V (Cmd+C/V on macOS) and Shift+Enter; other unbound Tab/Shift+Tab/Alt/function/Ctrl keys reach content. Recognize Browser prefixes on its surface, not URL/note editors; popup routing yields entirely. [Owner](src/app/input/keymap.ts). Rationale: Workbench shortcuts must not trap content keys.
 
 - Local modals own focus; delayed pane autofocus yields, and portalled inputs cannot select their Files pane through bubbling. Viewer handlers require DOM containment and yield to editable/modal focus. [Owner](src/app/input/modal.ts). Rationale: React ancestry is not keyboard ownership.
 

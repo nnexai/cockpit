@@ -4,6 +4,7 @@ import type { WorkbenchProps } from "./Workbench";
 import type { TabLayoutState } from "../layout/tabLayoutStore";
 import type { ContextMenuState, ContextTarget } from "./ContextMenu";
 import type { PaneDialog } from "./PaneDialogOverlay";
+import type { SwitchTarget } from "./quickSwitch";
 import { useSubscriptionLimits, type SubscriptionLimitsState } from "../limits/useSubscriptionLimits";
 import { stateClass } from "../sidebar/spaceTree";
 import { subscribeBrowserLifecycle } from "../layout/browserLifecycle";
@@ -27,6 +28,8 @@ export interface WorkbenchUI {
   editing: ContextTarget | null; setEditing: Dispatch<SetStateAction<ContextTarget | null>>;
   dialog: PaneDialog | null; setDialog: Dispatch<SetStateAction<PaneDialog | null>>;
   commandsOpen: boolean; setCommandsOpen: Dispatch<SetStateAction<boolean>>;
+  switcherOpen: boolean; setSwitcherOpen: Dispatch<SetStateAction<boolean>>;
+  switchTarget: SwitchTarget | null; setSwitchTarget: Dispatch<SetStateAction<SwitchTarget | null>>;
   limitsOpen: boolean; setLimitsOpen: Dispatch<SetStateAction<boolean>>; limits: SubscriptionLimitsState;
   commandsOpener: MutableRefObject<HTMLElement | null>;
   sessionChooserOpen: boolean; setSessionChooserOpen: Dispatch<SetStateAction<boolean>>;
@@ -70,6 +73,8 @@ export function useWorkbenchUI({ state, client, tabLayout, onOpenSession, mutati
   const [editing, setEditing] = useState<ContextTarget | null>(null);
   const [dialog, setDialog] = useState<PaneDialog | null>(null);
   const [commandsOpen, setCommandsOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [switchTarget, setSwitchTarget] = useState<SwitchTarget | null>(null);
   const [limitsOpen, setLimitsOpen] = useState(false);
   const agentsWorking = state.sync === "live" && (snapshot?.agents ?? []).some(agent => stateClass(agent.status) === "working");
   const limits = useSubscriptionLimits(client, agentsWorking);
@@ -106,5 +111,5 @@ export function useWorkbenchUI({ state, client, tabLayout, onOpenSession, mutati
     setSessionChooserOpen(true);
     onOpenSession();
   }, [onOpenSession]);
-  return { customBindings, customPrefixes, popupPending, setPopupPending, commandNotice, setCommandNotice, lifecycleError, setLifecycleError, paintedTab, setPaintedTab, switching, canvasTabs, attachedPaneIds, registerStream, menu, setMenu, editing, setEditing, dialog, setDialog, commandsOpen, setCommandsOpen, limitsOpen, setLimitsOpen, limits, commandsOpener, sessionChooserOpen, setSessionChooserOpen, setupOpen, setSetupOpen, recoveryOpen, setRecoveryOpen, teardownSpaceId, setTeardownSpaceId, libraryAddOpen, setLibraryAddOpen, prefixActive, setPrefixActive, armedPrefix, setArmedPrefix, prefixHint, setPrefixHint, openSessionChooser };
+  return { customBindings, customPrefixes, popupPending, setPopupPending, commandNotice, setCommandNotice, lifecycleError, setLifecycleError, paintedTab, setPaintedTab, switching, canvasTabs, attachedPaneIds, registerStream, menu, setMenu, editing, setEditing, dialog, setDialog, commandsOpen, setCommandsOpen, switcherOpen, setSwitcherOpen, switchTarget, setSwitchTarget, limitsOpen, setLimitsOpen, limits, commandsOpener, sessionChooserOpen, setSessionChooserOpen, setupOpen, setSetupOpen, recoveryOpen, setRecoveryOpen, teardownSpaceId, setTeardownSpaceId, libraryAddOpen, setLibraryAddOpen, prefixActive, setPrefixActive, armedPrefix, setArmedPrefix, prefixHint, setPrefixHint, openSessionChooser };
 }

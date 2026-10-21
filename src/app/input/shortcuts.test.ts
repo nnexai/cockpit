@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { SHORTCUTS, formatShortcut, prefixCommandForKey, returnFocusFromSidebar, focusSidebarList, registerSidebarFocus, viewerShortcutAction, type PrefixCommand } from "./shortcuts";
+import { herdrPrefixes, setEffectiveHerdrBindings } from "./herdrBindings";
 
 function chord(overrides: Partial<{ key: string; code: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; target: EventTarget | null }>) {
   return { key: "", code: "", shiftKey: false, ctrlKey: false, altKey: false, metaKey: false, target: null, ...overrides };
@@ -43,6 +44,20 @@ describe("shortcut registry", () => {
     expect(formatShortcut("toggle-preview", "mac")).toBe("Option+M");
     expect(formatShortcut("terminal-copy", "mac")).toBe("Cmd+Shift+C or Cmd+C");
     expect(formatShortcut("terminal-copy", "other")).toBe("Ctrl+Shift+C");
+  });
+
+  it("hides a quick-switch chord claimed by a configured Herdr prefix and restores it on reload", () => {
+    try {
+      setEffectiveHerdrBindings([], herdrPrefixes(["ctrl+k"]));
+      expect(formatShortcut("quick-switch", "other")).toBe("");
+      expect(formatShortcut("quick-switch", "mac")).toBe("Cmd+K");
+      setEffectiveHerdrBindings([], herdrPrefixes(["cmd+k"]));
+      expect(formatShortcut("quick-switch", "other")).toBe("Ctrl+K");
+      expect(formatShortcut("quick-switch", "mac")).toBe("");
+      setEffectiveHerdrBindings([]);
+      expect(formatShortcut("quick-switch", "other")).toBe("Ctrl+K");
+      expect(formatShortcut("quick-switch", "mac")).toBe("Cmd+K");
+    } finally { setEffectiveHerdrBindings([]); }
   });
 
 });

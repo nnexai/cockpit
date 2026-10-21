@@ -44,7 +44,7 @@ export type LocalShortcutId =
   | "comment-lines" | "comment-file"
   | "terminal-copy" | "terminal-paste" | "terminal-newline"
   | "browser-delete-annotation"
-  | "literal-prefix" | "cancel-prefix" | "commands-bare" | "subscription-limits" | "start-supervisor" | "show-overview"
+  | "literal-prefix" | "cancel-prefix" | "commands-bare" | "quick-switch" | "subscription-limits" | "start-supervisor" | "show-overview"
   | "show-widgets" | "next-widget" | "previous-widget" | "remove-widget";
 
 export type ShortcutId = PrefixCommand | LocalShortcutId;
@@ -128,6 +128,7 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
   { id: "focus-spaces", label: "Focus Spaces list", group: "Navigate", scope: "global", prefix: k("w"), allowWhileBusy: true, note: "Then ↑ ↓ move, Enter selects through Herdr, Esc returns." },
   { id: "focus-agents", label: "Focus Agents list", group: "Navigate", scope: "global", prefix: k("a"), allowWhileBusy: true },
   { id: "switch-session", label: "Switch session…", group: "Navigate", scope: "global", prefix: k("g"), primary: true, allowWhileBusy: true },
+  { id: "quick-switch", label: "Go to Space or agent…", group: "Navigate", scope: "global", chords: [{ mod: true, key: "k", shift: false, display: "K" }], primary: true, allowWhileBusy: true, note: "Fuzzy search over this session's Spaces and agents. Cmd+K on macOS; available in terminals and editors outside dialogs." },
   { id: "subscription-limits", label: "Subscription limits", group: "Navigate", scope: "global", note: "Commands-only; opens read-only subscription limits in the lower workarea strip." },
   { id: "start-supervisor", label: "Start supervisor", group: "Navigate", scope: "global", palette: "custom", primary: true, note: "Starts or resumes the liaison in the current Space and opens its conversation. No assigned shortcut." },
   { id: "show-overview", label: "Show overview", group: "Navigate", scope: "global", palette: "custom", note: "Read-only task board and prerequisite graph, available while work is open. No assigned shortcut." },
@@ -355,10 +356,11 @@ export function renderShortcutDocs(): string {
     .map((entry) => row(entry, entry.chords!.filter((chord) => !chord.platform || chord.platform === platform).map((chord) => formatChord(chord, platform)).join(SHORTCUT_SEPARATOR)));
   const meta = (["literal-prefix", "cancel-prefix", "commands-bare"] as const).map((id) => row(shortcutEntry(id), shortcutForms(id, platform).join(SHORTCUT_SEPARATOR)));
   return [
+    "### Anywhere outside dialogs", "", docsTable(SHORTCUTS.filter(entry => entry.scope === "global" && entry.chords?.some(chord => chord.key || chord.code)).map(entry => row(entry, shortcutForms(entry.id, platform).join(SHORTCUT_SEPARATOR))), ["Keys", "Action"]), "",
     "### Prefix commands", "", "Press Ctrl+B, release it, then press the key. Shift and other modifier keys keep the prefix armed; Escape cancels it; there is no timeout.", "",
     docsTable(prefix, ["Keys", "Action"]), "",
     "### Prefix control keys", "", docsTable(meta, ["Keys", "Action"]), "",
-    "### Terminal panes", "", "With a terminal or the browser surface focused, Cockpit takes only Ctrl+B and the key after it, these clipboard chords and Shift+Enter. Every other key reaches the program, including Tab, Shift+Tab, Esc, function keys, Alt chords and Ctrl+letter chords.", "",
+    "### Terminal panes", "", "With a terminal or the browser surface focused, Cockpit takes Ctrl+K (Cmd+K on macOS), Ctrl+B and the key after it, these clipboard chords and Shift+Enter. Every other unbound key reaches the program, including Tab, Shift+Tab, Esc, function keys, Alt chords and other Ctrl+letter chords.", "",
     docsTable(local("terminal"), ["Keys", "Action"]), "",
     "### Files, Review, Context and Library viewers", "", "Local chords act when focus is inside the viewer and not in a text field or dialog. Alt chords match the physical key, so Option works on macOS.", "",
     docsTable(local("viewer"), ["Keys", "Action"]), "",

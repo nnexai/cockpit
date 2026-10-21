@@ -15,6 +15,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Workarea and canvas | `src/app/shell/useWorkarea.ts`; `src/app/shell/WorkbenchCanvas.tsx`; `src/app/shell/model.ts` |
 | Viewer/widget/liaison shell coordination | `src/app/shell/useViewerSources.ts`; `src/app/shell/useWidgetWindowState.ts`; `src/app/shell/useLiaisonNavigation.ts` |
 | Commands and tab strip | `src/app/shell/commands.ts`; `src/app/shell/CommandOverlay.tsx`; `src/app/shell/TabStrip.tsx` |
+| Space/agent quick switcher | `src/app/shell/quickSwitch.ts`; `src/app/shell/QuickSwitcher.tsx`; shared `rankFuzzyMatches` in `src/app/input/fileNavigation.ts`; `Workbench.tsx` re-resolves current-session IDs and dispatches sidebar focus callbacks after modal close |
 | Shell menus | `src/app/shell/ContextMenu.tsx`; `src/app/shell/ResourceContextMenu.tsx` |
 | Shell dialogs/recovery | `src/app/shell/PaneDialogOverlay.tsx`; `src/app/shell/SessionDialogOverlay.tsx`; `src/app/shell/RecoveryPanel.tsx` |
 | Compatibility notice | `src/app/shell/CompatibilityNotice.tsx` |
