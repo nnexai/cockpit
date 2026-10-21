@@ -15,7 +15,7 @@ export function tabLabelIsRedundant(label: string, displayedNumber: number): boo
   return trimmed === String(displayedNumber) || /^\d+$/.test(trimmed);
 }
 
-export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDisabledReason, libraryOpen, supervisorAction, liaisonTab, waitingTabId, onSupervisor, notesOpen, onNotesToggle, widgetDots, widgetsPending, onWidgets, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
+export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDisabledReason, libraryOpen, supervisorAction, supervisorActionDisabled, supervisorActionReason, liaisonTab, waitingTabId, onSupervisor, notesOpen, onNotesToggle, widgetDots, widgetsPending, onWidgets, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
@@ -24,6 +24,8 @@ export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, br
   browserDisabledReason: string | null;
   libraryOpen: boolean;
   supervisorAction: string | null;
+  supervisorActionDisabled: boolean;
+  supervisorActionReason: string | null;
   liaisonTab: { id: string; launchTag: string } | null;
   waitingTabId: string | null;
   onSupervisor(): void;
@@ -79,6 +81,6 @@ export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, br
     </div>;
   })}
     <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" />{widgetsPending ? <button type="button" className="tab-strip-action" aria-label="Show widgets" disabled={busy} onClick={onWidgets}>Widgets <span className="widget-dot" aria-hidden="true" /></button> : null}<button type="button" className="tab-icon-button" disabled={busy || Boolean(browserDisabledReason)} aria-label="Browser" aria-pressed={browserOpen} title={browserDisabledReason ?? withShortcut(browserOpen ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : "Open browser for tab", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><LibraryProblems /><button type="button" className="tab-strip-action" aria-label={notesOpen ? "Notes (open)" : "Open Notes"} aria-controls="cockpit-notes" aria-pressed={notesOpen} title={notesOpen ? "Close Notes" : "Open Notes"} onClick={onNotesToggle}>Notes</button><button type="button" className="tab-strip-action" title={withShortcut("Commands", "help")} onClick={onCommands}>Commands</button></div>
-    {supervisorAction ? <div className="tab-strip-actions"><button type="button" className="tab-strip-action" onClick={onSupervisor}>{supervisorAction}</button></div> : null}
+    {supervisorAction ? <div className="tab-strip-actions"><button type="button" className="tab-strip-action" disabled={supervisorActionDisabled} title={supervisorActionReason ?? undefined} onClick={onSupervisor}>{supervisorAction}</button></div> : null}
   </nav>;
 }

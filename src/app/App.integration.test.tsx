@@ -1342,12 +1342,12 @@ describe("liaison conversation and compact task rail", () => {
     expect(document.activeElement).toBe(input);
     expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
   });
-  it("resumes only a disconnected root with an available recovery, even when its old terminal still exists", async () => {
+  it.each(["disconnected", "unknown"] as const)("resumes an available %s root even when its old terminal still exists", async connection => {
     const fixture = new AppFixture(), current = orchestrationFixture();
     bindLiaison(fixture, () => current);
     vi.mocked(fixture.client.orchestrationProjectRootLookup).mockResolvedValue({
       status: "resolved", project: { key: "project", source: { kind: "directory", root: "/project" }, repository_id: null, source_workspace_id: "space-1" }, lookup_revision: 1, preferred_root_id: "root",
-      roots: [{ root_id: "root", connection: "disconnected", resume: "available", cause: null, updated_at: "2026-10-07T12:00:00Z" }],
+      roots: [{ root_id: "root", connection, resume: "available", cause: null, updated_at: "2026-10-07T12:00:00Z" }],
     });
     vi.mocked(fixture.client.orchestrationMutate).mockImplementation(async request => {
       if (request.action.action !== "run_resume") throw new Error("Expected root resume");
@@ -1355,6 +1355,7 @@ describe("liaison conversation and compact task rail", () => {
       return { revision: 2, result: { result: "run_resumed", resume: { run_id: "root", duplicate: false, resume: { operation_id: request.action.operation_id, run_id: "root", previous_attachment_epoch: 1, phase: "connected", cause: null, decision_id: null, replacement_attachment_epoch: 1, updated_at: "2026-10-07T12:00:00Z" } } } };
     });
     await mount(fixture);
+    expect(button("Resume supervisor").disabled).toBe(false);
     click(button("Resume supervisor")); await settle();
     expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toEqual({ action: "run_resume", run_id: "root", operation_id: expect.any(String), expected_attachment_epoch: 1 });
   });
@@ -1389,13 +1390,14 @@ describe("liaison conversation and compact task rail", () => {
     expect(actions).toHaveLength(2);
     expect(actions[1]).toEqual(actions[0]);
   });
-  it("does not offer checkout re-selection for other blockers or completed roots", async () => {
+  it("keeps re-selection special and offers guarded Resume for other blockers", async () => {
     const fixture = new AppFixture();
     let current = orchestrationFixture([taskFixture("Work")]);
     let candidate: Partial<ProjectRootCandidate> = {
       connection: "disconnected", resume: "blocked",
       cause: { code: "root_unproven", message: "The root attachment cannot be proven", class: "recover" },
     };
+    current.runs[0].resume = { operation_id: "blocked-resume", run_id: "root", previous_attachment_epoch: 1, phase: "blocked", cause: candidate.cause!, decision_id: null, replacement_attachment_epoch: null, updated_at: "2026-10-07T12:00:00Z" };
     const waits: Deferred<OrchestrationWaitResponse>[] = [];
     bindLiaison(fixture, () => current, () => candidate);
     vi.mocked(fixture.client.orchestrationWait).mockImplementation(() => { const wait = deferred<OrchestrationWaitResponse>(); waits.push(wait); return wait.promise; });
@@ -1403,13 +1405,14 @@ describe("liaison conversation and compact task rail", () => {
     await openCommand("Show overview");
     expect(container.textContent).toContain("The root attachment cannot be proven");
     expect(container.textContent).not.toContain("Resume in this folder");
-    expect(container.textContent).not.toContain("Resume supervisor");
+    expect(button("Resume supervisor").disabled).toBe(false);
     candidate = { ...candidate, cause: { code: "checkout_identity_changed", message: "Saved physical checkout no longer matches", class: "decision" } };
     for (const stage of ["closed", "reported"] as const) {
       current = { ...current, revision: current.revision + 1, runs: [{ ...current.runs[0], stage }] };
       await act(async () => waits.at(-1)!.resolve({ revision: current.revision, tasks_token: current.tasks_token, changed: true }));
       await settle();
       expect(container.textContent).not.toContain("Resume in this folder");
+      expect(container.textContent).not.toContain("Resume supervisor");
     }
     expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
   });
@@ -1466,6 +1469,158 @@ describe("liaison conversation and compact task rail", () => {
     const actions = vi.mocked(fixture.client.orchestrationMutate).mock.calls.map(([request]) => request.action);
     expect(actions).toHaveLength(2);
     expect(actions[1]).toEqual(actions[0]);
+  });
+  it.each(["confirmed", "unknown"] as const)("re-observes a settled blocker with a fresh operation only after a %s response", async outcome => {
+    const fixture = new AppFixture();
+    const cause = { code: "root_unproven", message: "The root attachment cannot be proven", class: "recover" as const };
+    let current = orchestrationFixture(), calls = 0;
+    current.runs[0].resume = { operation_id: "previous", run_id: "root", previous_attachment_epoch: 1, phase: "blocked", cause, decision_id: null, replacement_attachment_epoch: null, updated_at: "2026-10-07T12:00:00Z" };
+    bindLiaison(fixture, () => current, () => ({ connection: "unknown", resume: "blocked", cause }));
+    vi.mocked(fixture.client.orchestrationMutate).mockImplementation(async request => {
+      if (request.action.action !== "run_resume") throw new Error("Expected root resume");
+      calls++;
+      current = { ...current, revision: current.revision + 1 };
+      current.runs[0].resume = { ...current.runs[0].resume!, operation_id: request.action.operation_id };
+      if (outcome === "unknown" && calls === 1) throw new Error("Response lost");
+      return { revision: current.revision, result: { result: "run_resumed", resume: { run_id: "root", duplicate: outcome === "unknown" && calls === 2, resume: current.runs[0].resume! } } };
+    });
+    await mount(fixture);
+    click(button("Resume supervisor")); await settle();
+    click(button("Resume supervisor")); await settle();
+    if (outcome === "unknown") {
+      const actions = vi.mocked(fixture.client.orchestrationMutate).mock.calls.map(([request]) => request.action);
+      expect(actions[1]).toEqual(actions[0]);
+      click(button("Resume supervisor")); await settle();
+    }
+    const actions = vi.mocked(fixture.client.orchestrationMutate).mock.calls.map(([request]) => request.action);
+    expect(actions).toHaveLength(outcome === "unknown" ? 3 : 2);
+    expect(actions.every(action => action.action === "run_resume")).toBe(true);
+    const first = actions[0], last = actions.at(-1)!;
+    if (first.action !== "run_resume" || last.action !== "run_resume") throw new Error("Expected root resume");
+    expect(last.operation_id).not.toBe(first.operation_id);
+  });
+  it("keeps Resume visible and disabled while the request and restart are in progress", async () => {
+    const fixture = new AppFixture();
+    let current = orchestrationFixture(), inProgress = false;
+    const response = deferred<Awaited<ReturnType<CockpitClient["orchestrationMutate"]>>>();
+    bindLiaison(fixture, () => current, () => ({ connection: inProgress ? "reconnecting" : "unknown", resume: inProgress ? "in_progress" : "available" }));
+    vi.mocked(fixture.client.orchestrationMutate).mockReturnValue(response.promise);
+    await mount(fixture);
+    const action = button("Resume supervisor");
+    click(action); await settle();
+    expect(button("Resume supervisor")).toBe(action);
+    expect(action.disabled).toBe(true);
+    click(action); await settle();
+    expect(fixture.client.orchestrationMutate).toHaveBeenCalledOnce();
+    const request = vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action;
+    if (request.action !== "run_resume") throw new Error("Expected root resume");
+    inProgress = true;
+    current = { ...current, revision: 2 };
+    current.runs[0].resume = { operation_id: request.operation_id, run_id: "root", previous_attachment_epoch: 1, phase: "launching", cause: null, decision_id: null, replacement_attachment_epoch: 2, updated_at: "2026-10-07T12:00:00Z" };
+    await act(async () => response.resolve({ revision: 2, result: { result: "run_resumed", resume: { run_id: "root", duplicate: false, resume: current.runs[0].resume! } } }));
+    await settle();
+    fixture.emitSnapshot("session-1", 1, 1, snapshot("session-1"));
+    await settle();
+    expect(button("Resume supervisor").disabled).toBe(true);
+    click(button("Resume supervisor")); await settle();
+    expect(fixture.client.orchestrationMutate).toHaveBeenCalledOnce();
+  });
+  it.each(["queued", "starting"] as const)("keeps the initial %s launch visible without offering Resume", async stage => {
+    const fixture = new AppFixture(), current = orchestrationFixture([], [runFixture({ stage, resume: null })]);
+    bindLiaison(fixture, () => current, () => ({ connection: "unknown", resume: "available" }));
+    await mount(fixture);
+    expect(button("Start supervisor").disabled).toBe(true);
+    click(button("Start supervisor")); await settle();
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+  it("does not dispatch a Resume that only joins an effect-free refused launch", async () => {
+    const fixture = new AppFixture(), waits: Deferred<OrchestrationWaitResponse>[] = [];
+    const cause = { code: "launch_configuration_invalid", message: "Supervisor command is invalid", class: "recover" as const };
+    let current = orchestrationFixture();
+    current.runs[0].resume = { operation_id: "reserved", run_id: "root", previous_attachment_epoch: 1, phase: "launching", cause: null, decision_id: null, replacement_attachment_epoch: 2, updated_at: "2026-10-07T12:00:00Z" };
+    bindLiaison(fixture, () => current, () => ({ connection: "disconnected", resume: "blocked", cause }));
+    vi.mocked(fixture.client.orchestrationWait).mockImplementation(() => { const wait = deferred<OrchestrationWaitResponse>(); waits.push(wait); return wait.promise; });
+    vi.mocked(fixture.client.orchestrationMutate).mockRejectedValue(new Error("Inspection not confirmed"));
+    await mount(fixture);
+    expect(button("Resume supervisor").disabled).toBe(true);
+    expect(button("Resume supervisor").title).toBe(cause.message);
+    click(button("Resume supervisor")); await settle();
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+    current = { ...current, revision: 2, runs: [{ ...current.runs[0], resume: { ...current.runs[0].resume!, phase: "blocked", cause } }] };
+    await act(async () => waits.at(-1)!.resolve({ revision: 2, tasks_token: current.tasks_token, changed: true }));
+    await settle();
+    expect(button("Resume supervisor").disabled).toBe(false);
+    click(button("Resume supervisor")); await settle();
+    expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toMatchObject({ action: "run_resume", run_id: "root", expected_attachment_epoch: 1 });
+  });
+  it.each(["offline", "focus pending"] as const)("keeps the known action disabled while %s", async gate => {
+    const fixture = new AppFixture(), current = orchestrationFixture();
+    bindLiaison(fixture, () => current, () => ({ connection: "unknown", resume: "available" }));
+    await mount(fixture);
+    const action = button("Resume supervisor");
+    if (gate === "offline") act(() => fixture.emitError("session-1"));
+    else {
+      fixture.focusCalls.mockReturnValue(deferred<Awaited<ReturnType<CockpitClient["focus"]>>>().promise);
+      click(button("Tab 2: Second tab"));
+    }
+    await settle();
+    expect(button("Resume supervisor")).toBe(action);
+    expect(action.disabled).toBe(true);
+    click(action); await settle();
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+  it("falls back to Start when a selected root disappears from a newer lookup", async () => {
+    const fixture = new AppFixture(), waits: Deferred<OrchestrationWaitResponse>[] = [];
+    let current = orchestrationFixture([], []);
+    bindLiaison(fixture, () => current, () => ({ connection: "unknown", resume: "available" }));
+    vi.mocked(fixture.client.orchestrationWait).mockImplementation(() => { const wait = deferred<OrchestrationWaitResponse>(); waits.push(wait); return wait.promise; });
+    vi.mocked(fixture.client.orchestrationMutate).mockImplementation(async request => {
+      if (request.action.action !== "supervisor_start") throw new Error("Expected supervisor start");
+      current = { ...orchestrationFixture(), revision: 2 };
+      if (current.runtime.status === "fresh") current.runtime.runs = current.runtime.runs.map(run => ({ ...run, presence: "missing", actual_agent: false, pane_id: null }));
+      return { revision: 2, result: { result: "supervisor_started", start: { root_id: "root", outcome: "created", operation_id: request.action.operation_id, resume_operation_id: null, duplicate: false } } };
+    });
+    await mount(fixture);
+    click(button("Start supervisor")); await settle();
+    fixture.emitSnapshot("session-1", 1, 1, snapshot("session-1"));
+    await settle();
+    expect(button("Resume supervisor").disabled).toBe(false);
+    current = { ...orchestrationFixture([], []), revision: 3 };
+    await act(async () => waits.at(-1)!.resolve({ revision: 3, tasks_token: current.tasks_token, changed: true }));
+    await settle();
+    expect(button("Start supervisor").disabled).toBe(false);
+    click(button("Start supervisor")); await settle();
+    expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[1][0].action).toMatchObject({ action: "supervisor_start", selected_root_id: null });
+  });
+  it.each(["pending", "unavailable"] as const)("keeps Start visible and non-actionable while the root lookup is %s", async lookupState => {
+    const fixture = new AppFixture(), current = orchestrationFixture([], []);
+    bindLiaison(fixture, () => current);
+    const lookup = vi.mocked(fixture.client.orchestrationProjectRootLookup);
+    if (lookupState === "pending") lookup.mockReturnValue(deferred<Awaited<ReturnType<CockpitClient["orchestrationProjectRootLookup"]>>>().promise);
+    else lookup.mockResolvedValue({ status: "unavailable", code: "project_unavailable", message: "Project state cannot be resolved" });
+    await mount(fixture);
+    const action = button("Start supervisor");
+    expect(action.disabled).toBe(true);
+    expect(action.title).toBe(lookupState === "pending" ? "Checking supervisor…" : "Project state cannot be resolved");
+    click(action); await settle();
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+  it("preserves the known Resume action when a later root lookup becomes unavailable", async () => {
+    const fixture = new AppFixture(), waits: Deferred<OrchestrationWaitResponse>[] = [];
+    let current = orchestrationFixture();
+    bindLiaison(fixture, () => current, () => ({ connection: "unknown", resume: "available" }));
+    vi.mocked(fixture.client.orchestrationWait).mockImplementation(() => { const wait = deferred<OrchestrationWaitResponse>(); waits.push(wait); return wait.promise; });
+    await mount(fixture);
+    const action = button("Resume supervisor");
+    vi.mocked(fixture.client.orchestrationProjectRootLookup).mockResolvedValue({ status: "unavailable", code: "project_unavailable", message: "Project state cannot be resolved" });
+    current = { ...current, revision: 2 };
+    await act(async () => waits.at(-1)!.resolve({ revision: 2, tasks_token: current.tasks_token, changed: true }));
+    await settle();
+    expect(button("Resume supervisor")).toBe(action);
+    expect(action.disabled).toBe(true);
+    expect(action.title).toBe("Project state cannot be resolved");
+    click(action); await settle();
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
   });
 });
 
