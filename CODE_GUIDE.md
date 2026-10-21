@@ -275,6 +275,13 @@ Four stream methods remain transport-local: `subscribeSession`, `openTerminal`, 
 
 Agent CLI → private attempt credential plus run/root/attachment epoch and pinned task generation → `Actor::Agent`; explicit local `--operator` CLI → `Actor::Operator` with named root/task/run targets, ignoring stale ambient job metadata. Both paths use canonical Markdown/store mutations → notifications/snapshot/inbox → shared host operation → frontend decoder. Supplied actual agent conversation metadata is recorded/revalidated; ordinary coordination needs no identity-hunt turn. Process labels, pane presence and focus grant no semantic authority; physical effects retain their separate fresh target proofs.
 
+OMP 18.12.4 and later supplies native conversation metadata to agent Bash calls,
+so learning that identity no longer requires hook injection or journal discovery.
+Cockpit already reads `PI_SESSION_FILE` through its bounded header reader when
+the harness is OMP; it does not yet consume `PI_SESSION_ID` directly. See the
+[agent guidance](integrations/agent-skills/cockpit-cli-orchestration/SKILL.md#authority-and-startup)
+for per-call lifetime, unpersisted-session and credential/routing distinctions.
+
 Credentialed saved reads authenticate under the store lock and project only the caller's root; workers receive their own inbox bodies, with same-root task/run records for collaboration. Launch capability bytes are redacted from agent projections without changing durable launch state or generic operator/UI snapshots. Working task content writes by the root use the existing scope journal/instruction path; checklist writes retain ordinary canonical CAS. Neither grants sibling worker writes nor changes accepted-task immutability.
 
 `run context` claims pending generations. Schedules survive root credential/attachment rotation via immutable receipt/exact root/current binding checks. Atomic replacement preserves old work/claims and uses typed GitHead isolated worktree or Directory private no-copy attempt with original project/context. Same-checkout reuse requires precise reboot or exact drained scope plus registered consumer proof/fresh Herdr inventory. Directory outputs remain retained: acceptance/NotApplicable never permits recursive deletion, and only an accepted retired drained EMPTY private attempt directory can be removed after durable output publication/move.

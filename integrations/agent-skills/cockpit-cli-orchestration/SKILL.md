@@ -33,6 +33,21 @@ Do not invent IDs, search unrelated journals, clear conflicting sources or hide
 invalid supplied files. Later metadata enriches registration; it cannot rebind a
 credential already associated with a different conversation.
 
+OMP 18.12.4 and later [supply native session metadata to every agent Bash
+call](https://github.com/can1357/oh-my-pi/blob/v18.12.4/docs/environment-variables.md#set-by-the-bash-tool):
+`PI_SESSION_ID` and an absolute `PI_SESSION_FILE` (empty when unpersisted).
+Values are captured at call start: the next call follows `/fork`, `/new` or
+`/resume`, while an in-flight command keeps its starting conversation. User `!`
+commands do not receive this injection. Bash scripts therefore no longer need
+hook-injected identity or journal discovery just to learn their OMP conversation.
+Cockpit currently consumes only `PI_SESSION_FILE`, with the OMP harness selected;
+it does not consume `PI_SESSION_ID` directly. An empty supplied file is not a
+usable header source. Native metadata does not replace launch credentials,
+configuration or Herdr routing, and does not rebind an existing credential after
+a conversation switch. Hooks remain optional adapters for inbox delivery, not
+a prerequisite for Bash identity discovery. Older OMP versions lack this native
+Bash injection; conversation metadata remains optional for credentialed calls.
+
 ```sh
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run context --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" inbox next --wait 0 --deliverable --json
