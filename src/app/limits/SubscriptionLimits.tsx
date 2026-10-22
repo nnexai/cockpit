@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type CSSProperties, type RefObject 
 import type { QuotaLimit, QuotaStatusResponse } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
 import { formatAgo } from "../library/libraryState";
-import { accessibleLabel, compareWindows, errorText, formatLimitValue, formatReset, formatSpan, limitIsStale, limitPace, providerViews, usedFraction, usageTone, summaryView, windowLabel, type ProviderView } from "./limitsModel";
+import { accessibleLabel, compareWindows, errorText, formatCredits, formatLimitValue, formatReset, formatSpan, limitIsStale, limitPace, providerViews, usedFraction, usageTone, summaryView, windowLabel, type ProviderView } from "./limitsModel";
 import "./limits.css";
 
 export interface SubscriptionLimitsProps {
@@ -28,12 +28,16 @@ function Meter({ limit, stale, expected }: { limit: QuotaLimit; stale: boolean; 
 function Chip({ view, now }: { view: ProviderView; now: number }) {
   return <span className={`limits-chip${view.stale ? " is-stale" : ""}`}>
     <span className="limits-name">{view.name}</span>
-    {view.segments.length ? view.segments.map(segment => <span key={segment.key} className={`limits-segment${view.segments.length > 1 ? " has-window-label" : ""}${segment.tone ? ` limits-tone-${segment.tone}` : ""}${segment.stale ? " is-stale" : ""}${segment.pace?.runsOutMs != null ? " is-risk" : ""}`}>
-      <span className="limits-window">{segment.label}</span>
-      <span className="limits-chip-meter"><Meter limit={segment.limit} stale={segment.stale} /></span>
-      <span className="limits-value">{segment.text}</span>
-      {segment.pace?.runsOutMs != null ? <span className="limits-runout">{formatSpan(segment.pace.runsOutMs)}</span> : null}
-    </span>) : <span className="limits-value">{view.provider.state === "pending" ? "…" : view.provider.state === "unsupported" ? "n/a" : "—"}</span>}
+    {view.segments.length ? view.segments.map(segment => {
+      const credits = formatCredits(segment.limit);
+      return <span key={segment.key} className={`limits-segment${view.segments.length > 1 ? " has-window-label" : ""}${segment.tone ? ` limits-tone-${segment.tone}` : ""}${segment.stale ? " is-stale" : ""}${segment.pace?.runsOutMs != null ? " is-risk" : ""}`}>
+        <span className="limits-window">{segment.label}</span>
+        <span className="limits-chip-meter"><Meter limit={segment.limit} stale={segment.stale} /></span>
+        <span className="limits-value">{credits !== null && segment.used === null ? "—" : segment.text}</span>
+        {credits !== null ? <span className="limits-credits" title={formatLimitValue(segment.limit, true)}>{credits}</span> : null}
+        {segment.pace?.runsOutMs != null ? <span className="limits-runout">{formatSpan(segment.pace.runsOutMs)}</span> : null}
+      </span>;
+    }) : <span className="limits-value">{view.provider.state === "pending" ? "…" : view.provider.state === "unsupported" ? "n/a" : "—"}</span>}
     {view.stale && view.provider.fetched_at_ms !== null ? <span className="limits-age">{formatAgo(view.provider.fetched_at_ms, now)}</span> : null}
     {view.provider.error ? <UiIcon name="info" /> : null}
   </span>;
@@ -120,12 +124,14 @@ export function SubscriptionLimits({ snapshot, link, now, open, onOpenChange, su
             const stale = view.stale || limitIsStale(limit, account.fetched_at_ms, now);
             const pace = stale ? null : limitPace(limit, used, now);
             const reset = formatReset(limit.resets_at_ms, now);
+            const credits = formatCredits(limit, true);
             return <li key={`${limit.id}:${limitIndex}`} className="limits-row">
               <span className="limits-row-label">{windowLabel(limit.window, limit.tier)}</span>
               <span className="limits-row-meter"><Meter limit={limit} stale={stale} expected={pace?.expected} /></span>
-              <span className="limits-row-value" title={formatLimitValue(limit, true)}>{formatLimitValue(limit)}</span>
+              <span className="limits-row-value" title={formatLimitValue(limit, true)}>{credits !== null && used === null ? "—" : formatLimitValue(limit)}</span>
               <span className="limits-runout">{pace?.runsOutMs != null ? `out ${formatSpan(pace.runsOutMs)}` : null}</span>
               <span className="limits-reset" title={reset ?? undefined}>{limit.resets_at_ms === null ? null : limit.resets_at_ms > now ? `in ${formatSpan(limit.resets_at_ms - now)}` : "reset"}</span>
+              {credits !== null ? <span className="limits-row-credits">{credits}</span> : null}
             </li>;
           })}</ul>
         </div>)}

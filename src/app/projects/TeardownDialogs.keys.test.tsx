@@ -26,14 +26,6 @@ function mount(node: React.ReactNode): HTMLElement {
 
 const escape = () => act(() => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); });
 
-function setConfirmation(view: HTMLElement, value: string): void {
-  const input = view.querySelector<HTMLInputElement>("#teardown-confirmation")!;
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-}
-
 function removalButton(view: HTMLElement, label: string): HTMLButtonElement {
   return [...view.querySelectorAll<HTMLButtonElement>(".setup-actions button")].find((button) => button.textContent === label)!;
 }
@@ -72,7 +64,7 @@ it("closes Pending cleanup with Escape", () => {
   expect(onClose).toHaveBeenCalledOnce();
 });
 
-it("requires the exact server confirmation and omits a fingerprint for clean removal", async () => {
+it("requires selecting and then confirming clean removal and omits the discard fingerprint", async () => {
   const preview: WorkspaceTeardownPreview = {
     operation_id: "operation", workspace_id: "space", endpoint_identity: "endpoint",
     repository_key: "repo", repository_root: "/repo", checkout_path: "/worktrees/task",
@@ -91,21 +83,13 @@ it("requires the exact server confirmation and omits a fingerprint for clean rem
   };
   const view = mount(<TeardownDialog client={client} sessionId="session" workspaceId="space" open onClose={vi.fn()} onCompleted={vi.fn()} />);
   await act(async () => { await Promise.resolve(); });
-  expect(view.textContent).toContain("the selected Space's linked worktree");
-  expect(view.textContent).not.toContain("Cockpit-owned");
-  expect(view.textContent).not.toContain("Recovery notes");
-  expect(view.textContent).not.toContain("obsolete recovery advice");
   expect(view.querySelector(".setup-discard-list")).toBeNull();
-  const action = [...view.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Remove worktree")!;
+  expect(removalButton(view, "Choose an action").disabled).toBe(true);
+  const action = view.querySelector<HTMLButtonElement>(".setup-progress-actions button:last-child")!;
   act(() => action.click());
-  const confirm = removalButton(view, "Remove worktree");
-  expect(confirm.disabled).toBe(true);
-  for (const wrong of ["REMOVE", "REMOVE /worktrees/task", "REMOVE WORKTREE ", "remove worktree"]) {
-    setConfirmation(view, wrong);
-    expect(confirm.disabled).toBe(true);
-    expect(client.workspaceTeardownExecute).not.toHaveBeenCalled();
-  }
-  setConfirmation(view, preview.required_confirmation!);
+  expect(action.getAttribute("aria-pressed")).toBe("true");
+  expect(client.workspaceTeardownExecute).not.toHaveBeenCalled();
+  const confirm = removalButton(view, "Confirm remove worktree");
   expect(confirm.disabled).toBe(false);
   await act(async () => confirm.click());
   expect(client.workspaceTeardownExecute).toHaveBeenCalledWith("session", {
@@ -115,7 +99,7 @@ it("requires the exact server confirmation and omits a fingerprint for clean rem
   expect(client.workspaceTeardownExecute.mock.calls[0]![1]).not.toHaveProperty("discard_fingerprint");
 });
 
-it("reviews dirty paths and sends the fingerprint only after the server's discard confirmation", async () => {
+it("reviews dirty paths and sends the server token and fingerprint only after the second button press", async () => {
   const preview = dirtyPreview();
   const result: WorkspaceTeardownResult = {
     operation_id: "operation", workspace_id: "space", action: "remove_owned_worktree",
@@ -134,18 +118,15 @@ it("reviews dirty paths and sends the fingerprint only after the server's discar
   expect([...list.querySelectorAll("code")].map((path) => path.textContent)).toEqual(preview.discard_paths);
   act(() => { list.focus(); });
   expect(document.activeElement).toBe(list);
-  const action = [...view.querySelectorAll<HTMLButtonElement>(".setup-progress-actions button")].find((button) => button.textContent === "Discard and remove worktree")!;
+  expect(removalButton(view, "Choose an action").disabled).toBe(true);
+  const action = view.querySelector<HTMLButtonElement>(".setup-progress-actions button:last-child")!;
   act(() => action.click());
-  const confirm = removalButton(view, "Discard and remove worktree");
-  expect(confirm.disabled).toBe(true);
-  expect(view.querySelector(".setup-label")!.textContent).toContain("discard 3 uncommitted paths and remove this exact reviewed worktree");
-  for (const wrong of ["REMOVE WORKTREE", "DISCARD AND REMOVE ", "discard and remove"]) {
-    setConfirmation(view, wrong);
-    expect(confirm.disabled).toBe(true);
-    expect(client.workspaceTeardownExecute).not.toHaveBeenCalled();
-  }
-  setConfirmation(view, preview.required_confirmation!);
+  expect(action.getAttribute("aria-pressed")).toBe("true");
+  expect(client.workspaceTeardownExecute).not.toHaveBeenCalled();
+  const confirm = removalButton(view, "Confirm discard 3 paths and remove");
   expect(confirm.disabled).toBe(false);
+  expect(confirm.getAttribute("aria-describedby")).toBe("teardown-confirm-hint");
+  expect(view.querySelector("#teardown-confirm-hint")!.textContent).toContain(preview.checkout_path);
   await act(async () => confirm.click());
   expect(client.workspaceTeardownExecute).toHaveBeenCalledWith("session", {
     operation_id: "operation", workspace_id: "space", expected_endpoint_identity: "endpoint",
@@ -184,7 +165,7 @@ it("omits the dirty fingerprint when closing the Space instead of removing its w
   const view = mount(<TeardownDialog client={client} sessionId="session" workspaceId="space" open onClose={vi.fn()} onCompleted={vi.fn()} />);
   await act(async () => { await Promise.resolve(); });
   act(() => { view.querySelector<HTMLButtonElement>(".setup-progress-actions button")!.click(); });
-  expect(view.querySelector("#teardown-confirmation")).toBeNull();
+  expect(client.workspaceTeardownExecute).not.toHaveBeenCalled();
   await act(async () => removalButton(view, "Close Space").click());
   expect(client.workspaceTeardownExecute).toHaveBeenCalledWith("session", {
     operation_id: "operation", workspace_id: "space", expected_endpoint_identity: "endpoint",
@@ -196,6 +177,8 @@ it("omits the dirty fingerprint when closing the Space instead of removing its w
 it.each(["stale_identity", "git_failure"])("refreshes a %s removal failure while preserving its error and requiring a fresh selection and confirmation", async (operationCode) => {
   const initial = dirtyPreview();
   const fresh = dirtyPreview({
+    operation_id: "fresh-operation", endpoint_identity: "fresh-endpoint", checkout_path: "/worktrees/fresh-task",
+    required_confirmation: "FRESH DISCARD CONFIRMATION",
     discard_count: 1, discard_paths: ["new-change.txt"], discard_fingerprint: "b".repeat(64),
   });
   const failure = Object.assign(new Error("The reviewed worktree changed. Review it again."), { operationCode });
@@ -211,8 +194,8 @@ it.each(["stale_identity", "git_failure"])("refreshes a %s removal failure while
   const view = mount(<TeardownDialog client={client} sessionId="session" workspaceId="space" open onClose={vi.fn()} onCompleted={onCompleted} />);
   await act(async () => { await Promise.resolve(); });
   act(() => { view.querySelector<HTMLButtonElement>('.setup-progress-actions button:last-child')!.click(); });
-  setConfirmation(view, initial.required_confirmation!);
-  await act(async () => removalButton(view, "Discard and remove worktree").click());
+  expect(client.workspaceTeardownExecute).not.toHaveBeenCalled();
+  await act(async () => removalButton(view, "Confirm discard 3 paths and remove").click());
   await act(async () => { await Promise.resolve(); });
   expect(client.workspaceTeardownPreview).toHaveBeenCalledTimes(2);
   expect(client.workspaceTeardownPreview).toHaveBeenLastCalledWith("session", { workspace_id: "space" });
@@ -223,15 +206,59 @@ it.each(["stale_identity", "git_failure"])("refreshes a %s removal failure while
   expect(view.textContent).toContain("new-change.txt");
   expect(view.textContent).not.toContain("changed.txt");
   expect(view.querySelector('.setup-progress-actions [aria-pressed="true"]')).toBeNull();
-  expect(view.querySelector("#teardown-confirmation")).toBeNull();
   expect(removalButton(view, "Choose an action").disabled).toBe(true);
   act(() => { view.querySelector<HTMLButtonElement>('.setup-progress-actions button:last-child')!.click(); });
-  expect(view.querySelector<HTMLInputElement>("#teardown-confirmation")!.value).toBe("");
-  expect(removalButton(view, "Discard and remove worktree").disabled).toBe(true);
-  setConfirmation(view, fresh.required_confirmation!);
-  await act(async () => removalButton(view, "Discard and remove worktree").click());
+  expect(client.workspaceTeardownExecute).toHaveBeenCalledTimes(1);
+  const confirm = removalButton(view, "Confirm discard 1 path and remove");
+  expect(confirm.disabled).toBe(false);
+  await act(async () => confirm.click());
   expect(client.workspaceTeardownExecute).toHaveBeenCalledTimes(2);
-  expect(client.workspaceTeardownExecute).toHaveBeenLastCalledWith("session", expect.objectContaining({
-    confirmation: fresh.required_confirmation, discard_fingerprint: fresh.discard_fingerprint,
-  }));
+  expect(client.workspaceTeardownExecute).toHaveBeenLastCalledWith("session", {
+    operation_id: fresh.operation_id, workspace_id: fresh.workspace_id,
+    expected_endpoint_identity: fresh.endpoint_identity, expected_checkout_path: fresh.checkout_path,
+    action: "remove_owned_worktree", confirmation: fresh.required_confirmation,
+    discard_fingerprint: fresh.discard_fingerprint,
+  });
+});
+
+it("does not enable removal without a server-issued confirmation token", async () => {
+  const client = {
+    workspaceTeardownPreview: vi.fn(async () => dirtyPreview({ required_confirmation: null })),
+    workspaceTeardownExecute: vi.fn(),
+  };
+  const view = mount(<TeardownDialog client={client} sessionId="session" workspaceId="space" open onClose={vi.fn()} onCompleted={vi.fn()} />);
+  await act(async () => { await Promise.resolve(); });
+  act(() => { view.querySelector<HTMLButtonElement>(".setup-progress-actions button:last-child")!.click(); });
+  const confirm = removalButton(view, "Confirm discard 3 paths and remove");
+  expect(confirm.disabled).toBe(true);
+  act(() => confirm.click());
+  expect(client.workspaceTeardownExecute).not.toHaveBeenCalled();
+});
+
+it("reconciles removal without sending the removal token or discard fingerprint", async () => {
+  const preview = dirtyPreview({ allowed_actions: ["reconcile_remove_outcome"] });
+  const result: WorkspaceTeardownResult = {
+    operation_id: preview.operation_id, workspace_id: preview.workspace_id,
+    action: "reconcile_remove_outcome", outcome: "completed", message: "Removal reconciled",
+  };
+  const client = {
+    workspaceTeardownPreview: vi.fn(async () => preview),
+    workspaceTeardownExecute: vi.fn<TeardownClient["workspaceTeardownExecute"]>(async () => result),
+  };
+  const onClose = vi.fn();
+  const onCompleted = vi.fn();
+  const view = mount(<TeardownDialog client={client} sessionId="session" workspaceId="space" open onClose={onClose} onCompleted={onCompleted} />);
+  await act(async () => { await Promise.resolve(); });
+  act(() => { view.querySelector<HTMLButtonElement>(".setup-progress-actions button")!.click(); });
+  expect(client.workspaceTeardownExecute).not.toHaveBeenCalled();
+  await act(async () => removalButton(view, "Reconcile removal").click());
+  expect(client.workspaceTeardownExecute).toHaveBeenCalledWith("session", {
+    operation_id: preview.operation_id, workspace_id: preview.workspace_id,
+    expected_endpoint_identity: preview.endpoint_identity, expected_checkout_path: preview.checkout_path,
+    action: "reconcile_remove_outcome", confirmation: "",
+  });
+  expect(client.workspaceTeardownExecute.mock.calls[0]![1]).not.toHaveProperty("discard_fingerprint");
+  expect(onCompleted).toHaveBeenCalledWith(result);
+  act(() => removalButton(view, "Done").click());
+  expect(onClose).toHaveBeenCalledOnce();
 });

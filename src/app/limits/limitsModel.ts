@@ -40,7 +40,17 @@ export function formatLimitValue(limit: QuotaLimit | null, detail = false): stri
   const used = limit.used ?? (limit.limit !== null && limit.remaining !== null ? Math.max(0, limit.limit - limit.remaining) : null);
   if (used === null) return percent === null ? "—" : `${percent} used`;
   if (detail) return `${number.format(used)}${limit.limit === null ? "" : ` of ${number.format(limit.limit)}`} AI credits used${percent === null ? "" : ` · ${percent}`}`;
-  return `${used >= 10_000 ? `${number.format(used / 1000)}k` : number.format(used)} cr used`;
+  return `${used >= 10_000 ? `${number.format(used / 1000)}k` : number.format(used)} AIC used`;
+}
+
+export function formatCredits(limit: QuotaLimit, detail = false): string | null {
+  if (limit.unit !== "credits" || limit.unlimited) return null;
+  const used = limit.used ?? (limit.limit !== null && limit.remaining !== null ? Math.max(0, limit.limit - limit.remaining) : null);
+  if (used === null) return null;
+  if (detail) return `${number.format(used)}${limit.limit === null ? "" : ` of ${number.format(limit.limit)}`} AI credits used`;
+  const compactUsed = used >= 10_000 ? `${number.format(used / 1000)}k` : number.format(used);
+  const compactTotal = limit.limit === null ? null : limit.limit >= 10_000 ? `${number.format(limit.limit / 1000)}k` : number.format(limit.limit);
+  return `${compactUsed}${compactTotal === null ? "" : ` / ${compactTotal}`} AIC`;
 }
 
 export function errorText(error: QuotaErrorCode | null): string {

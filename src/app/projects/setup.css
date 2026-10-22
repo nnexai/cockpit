@@ -68,6 +68,8 @@
 .setup-actions button:disabled,
 .setup-progress-actions button:disabled { cursor: not-allowed; opacity: .55; }
 .setup-primary.setup-primary.setup-primary.setup-primary { border-color: var(--accent); background: var(--surface-selected); }
+.setup-actions button.setup-destructive { color: var(--blocked); border-color: color-mix(in srgb, var(--blocked) 60%, var(--border)); }
+.setup-actions button.setup-destructive:hover:not(:disabled) { background: color-mix(in srgb, var(--blocked) 12%, var(--surface)); }
 
 .setup-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .setup-step-content { padding: 20px 24px 24px; }

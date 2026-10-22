@@ -2,7 +2,7 @@
 import { act, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it } from "vitest";
-import type { QuotaStatusResponse } from "../../protocol/generated/v1";
+import type { QuotaLimit, QuotaStatusResponse } from "../../protocol/generated/v1";
 import { SubscriptionLimits } from "./SubscriptionLimits";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -44,6 +44,8 @@ it("opens a readable credit popup, restores the pointer trigger on Escape, and l
     const trigger = host.querySelector<HTMLButtonElement>(".limits-trigger")!;
     expect(trigger.getAttribute("aria-label")).toContain("4 of 8,000 AI credits used · 0.05%");
     expect(trigger.getAttribute("aria-label")).not.toContain("Codex");
+    expect(host.querySelector(".limits-chips .limits-credits")?.textContent).toBe("4 / 8,000 AIC");
+    expect(host.querySelector(".limits-summary .limits-credits")?.textContent).toBe("4 / 8,000 AIC");
     const outside = host.querySelector<HTMLButtonElement>("[data-outside]")!;
     outside.focus();
     await act(async () => movePointer(outside, trigger));
@@ -53,6 +55,8 @@ it("opens a readable credit popup, restores the pointer trigger on Escape, and l
     const popup = host.querySelector<HTMLElement>(".limits-popup")!;
     expect(document.activeElement).toBe(popup);
     expect(popup.querySelector(".limits-row-value")!.getAttribute("title")).toBe("4 of 8,000 AI credits used · 0.05%");
+    expect(popup.querySelector(".limits-row-value")?.textContent).toBe("0.05%");
+    expect(popup.querySelector(".limits-row-credits")?.textContent).toBe("4 of 8,000 AI credits used");
     expect(popup.textContent).toContain("Monthly");
     expect(popup.textContent).toContain("Not signed in to OMP");
     await act(async () => movePointer(trigger, outside));
@@ -257,6 +261,64 @@ it("shows all grouped provider windows in the strip and narrow summary while ret
     )).toEqual([["20%", "58%"], ["39%"]]);
     const trigger = host.querySelector(".limits-trigger")!;
     expect(trigger.getAttribute("aria-label")).toContain("Claude: 5h 39% used, 7d 58% used");
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it.each<{
+  changes: Partial<QuotaLimit>;
+  percent: string;
+  credits: string | null;
+  detail: string | null;
+}>([
+  { changes: { used: 0, remaining: 8000, used_fraction: 0 }, percent: "0%", credits: "0 / 8,000 AIC", detail: "0 of 8,000 AI credits used" },
+  { changes: { used: 4, limit: null, remaining: null, used_fraction: null }, percent: "—", credits: "4 AIC", detail: "4 AI credits used" },
+  { changes: { used: 0, limit: 0, remaining: 0, used_fraction: null }, percent: "—", credits: "0 / 0 AIC", detail: "0 of 0 AI credits used" },
+  { changes: { used: null, remaining: null, used_fraction: 0.5 }, percent: "50%", credits: null, detail: null },
+  { changes: { unlimited: true }, percent: "unlimited", credits: null, detail: null },
+])("shows known credit counts without inventing percentages or amounts: $credits", async ({ changes, percent, credits, detail }) => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const base = snapshot.providers[2];
+  const value: QuotaStatusResponse = { ...snapshot, providers: snapshot.providers.map(provider => provider.provider === "copilot" ? {
+    ...base, accounts: [{ ...base.accounts[0], limits: [{ ...base.accounts[0].limits[0], ...changes }] }],
+  } : { ...provider, state: "not_signed_in" as const, error: null, accounts: [] }) };
+  try {
+    await act(async () => root.render(<SubscriptionLimits snapshot={value} link="live" now={1000} open={true} onOpenChange={() => {}} suspended={false} />));
+    expect(host.querySelector(".limits-chips .limits-value")?.textContent).toBe(percent);
+    expect(host.querySelector(".limits-summary .limits-value")?.textContent).toBe(percent);
+    expect(host.querySelector(".limits-row-value")?.textContent).toBe(percent);
+    expect(host.querySelector(".limits-chips .limits-credits")?.textContent ?? null).toBe(credits);
+    expect(host.querySelector(".limits-summary .limits-credits")?.textContent ?? null).toBe(credits);
+    expect(host.querySelector(".limits-row-credits")?.textContent ?? null).toBe(detail);
+    if (percent === "—" || percent === "unlimited") expect(host.querySelector(".limits-row-meter .limits-meter")).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
+it("retains each Copilot account's reported credits while summarizing the highest used fraction", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const base = snapshot.providers[2];
+  const value: QuotaStatusResponse = { ...snapshot, providers: snapshot.providers.map(provider => provider.provider === "copilot" ? {
+    ...base, accounts: [
+      base.accounts[0],
+      { fetched_at_ms: 1000, limits: [{ ...base.accounts[0].limits[0], used: 800, remaining: 200, limit: 1000, used_fraction: 0.8 }] },
+    ],
+  } : { ...provider, state: "not_signed_in" as const, error: null, accounts: [] }) };
+  try {
+    await act(async () => root.render(<SubscriptionLimits snapshot={value} link="live" now={1000} open={true} onOpenChange={() => {}} suspended={false} />));
+    expect(host.querySelector(".limits-chips .limits-value")?.textContent).toBe("80%");
+    expect(host.querySelector(".limits-chips .limits-credits")?.textContent).toBe("800 / 1,000 AIC");
+    expect([...host.querySelectorAll(".limits-row-credits")].map(row => row.textContent)).toEqual([
+      "4 of 8,000 AI credits used", "800 of 1,000 AI credits used",
+    ]);
   } finally {
     await act(async () => root.unmount());
     host.remove();

@@ -42,10 +42,18 @@ function actionLabel(action: WorkspaceTeardownAction, discardCount: number): str
   }
 }
 
+function confirmLabel(action: WorkspaceTeardownAction, discardCount: number): string {
+  if (action === "remove_owned_worktree") {
+    return discardCount > 0
+      ? `Confirm discard ${discardCount} ${discardCount === 1 ? "path" : "paths"} and remove`
+      : "Confirm remove worktree";
+  }
+  return actionLabel(action, discardCount);
+}
+
 export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, onCompleted }: TeardownDialogProps) {
   const titleId = useId();
   const [preview, setPreview] = useState<WorkspaceTeardownPreview | null>(null);
-  const [confirmation, setConfirmation] = useState("");
   const [selectedAction, setSelectedAction] = useState<WorkspaceTeardownAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -58,7 +66,6 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
     if (!open) return;
     let active = true;
     setPreview(null);
-    setConfirmation("");
     setSelectedAction(null);
     void client.workspaceTeardownPreview(sessionId, { workspace_id: workspaceId })
       .then((next) => { if (active) setPreview(next); })
@@ -70,7 +77,7 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
   const removeSelected = selectedAction === "remove_owned_worktree";
   const discardPaths = preview?.discard_paths.slice(0, 50) ?? [];
   const canConfirm = Boolean(preview && selectedAction)
-    && (!removeSelected || Boolean(preview?.required_confirmation && confirmation === preview.required_confirmation))
+    && (!removeSelected || Boolean(preview?.required_confirmation))
     && !busy;
   const execute = async () => {
     if (!preview || !selectedAction || !canConfirm) return;
@@ -83,14 +90,13 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
         expected_endpoint_identity: preview.endpoint_identity,
         expected_checkout_path: preview.checkout_path,
         action: selectedAction,
-        confirmation,
+        confirmation: removeSelected ? preview.required_confirmation! : "",
         ...(removeSelected && preview.discard_count > 0 && preview.discard_fingerprint !== null
           ? { discard_fingerprint: preview.discard_fingerprint }
           : {}),
       });
       onCompleted(result);
       setReceipt(result);
-      setConfirmation("");
       setSelectedAction(null);
       if (result.outcome === "completed") setPreview(null);
       else setRefresh((current) => current + 1);
@@ -98,7 +104,6 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
       setError(errorMessage(reason, "Could not complete the reviewed teardown."));
       if (removeSelected || errorCode(reason) === "stale_identity") {
         setPreview(null);
-        setConfirmation("");
         setSelectedAction(null);
         setRefresh((current) => current + 1);
       }
@@ -109,7 +114,7 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
 
   return <div className="setup-overlay" role="presentation">
     <ModalSection className="setup-dialog setup-dialog-compact" labelledBy={titleId} onDismiss={() => { if (!busy) onClose(); }}>
-      <header className="setup-header"><div><span className="setup-eyebrow">Task cleanup</span><h2 id={titleId}>Review teardown</h2><p>Close keeps local files. Removal deletes the selected Space's linked worktree; uncommitted changes are discarded only after you type the confirmation shown.</p></div><button type="button" className="setup-close" onClick={onClose} disabled={busy}>Close</button></header>
+      <header className="setup-header"><div><span className="setup-eyebrow">Task cleanup</span><h2 id={titleId}>Review teardown</h2><p>Close keeps local files. Removal deletes the selected Space's linked worktree; uncommitted changes are discarded only after you confirm with the final button.</p></div><button type="button" className="setup-close" onClick={onClose} disabled={busy}>Close</button></header>
       <main className="setup-body"><section className="setup-step-content">
         {receipt ? <p className="setup-inline-status" role="status">{receipt.message}</p> : null}
         {receipt?.outcome === "completed" ? <div className="setup-actions"><button type="button" onClick={onClose}>Done</button></div> : !preview && !error ? <p className="setup-empty">Preparing fresh provenance and Git status…</p> : null}
@@ -127,9 +132,9 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
             <ul className="setup-discard-list" tabIndex={0} aria-label="Paths to be discarded">{discardPaths.map((path) => <li key={path}><code>{path}</code></li>)}</ul>
             {preview.discard_count > discardPaths.length ? <p className="setup-inline-status">…and {preview.discard_count - discardPaths.length} more not shown.</p> : null}
           </div> : null}
-          <div className="setup-progress-actions">{preview.allowed_actions.map((action) => <button key={action} type="button" className={selectedAction === action ? "setup-primary" : ""} aria-pressed={selectedAction === action} onClick={() => { setSelectedAction(action); setConfirmation(""); }} disabled={busy}>{actionLabel(action, preview.discard_count)}</button>)}</div>
-          {removeSelected && preview.required_confirmation ? <label className="setup-field" htmlFor="teardown-confirmation"><span className="setup-label">Type <code>{preview.required_confirmation}</code> to {preview.discard_count > 0 ? `discard ${preview.discard_count} uncommitted ${preview.discard_count === 1 ? "path" : "paths"} and remove` : "remove"} this exact reviewed worktree</span><input id="teardown-confirmation" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} autoComplete="off" disabled={busy} /></label> : null}
-          <div className="setup-actions"><button type="button" onClick={onClose} disabled={busy}>Cancel</button><button type="button" className={removeSelected ? "setup-primary" : ""} onClick={() => void execute()} disabled={!canConfirm}>{selectedAction ? actionLabel(selectedAction, preview.discard_count) : "Choose an action"}</button></div>
+          <div className="setup-progress-actions">{preview.allowed_actions.map((action) => <button key={action} type="button" className={selectedAction === action ? "setup-primary" : ""} aria-pressed={selectedAction === action} onClick={() => setSelectedAction(action)} disabled={busy}>{actionLabel(action, preview.discard_count)}</button>)}</div>
+          {removeSelected && preview.required_confirmation ? <p className="setup-inline-status" id="teardown-confirm-hint">{preview.discard_count > 0 ? `This discards ${preview.discard_count} uncommitted ${preview.discard_count === 1 ? "path" : "paths"} and removes ${preview.checkout_path}.` : `This removes ${preview.checkout_path}.`}</p> : null}
+          <div className="setup-actions"><button type="button" onClick={onClose} disabled={busy}>Cancel</button><button type="button" className={removeSelected ? "setup-destructive" : ""} aria-describedby={removeSelected && preview.required_confirmation ? "teardown-confirm-hint" : undefined} onClick={() => void execute()} disabled={!canConfirm}>{selectedAction ? confirmLabel(selectedAction, preview.discard_count) : "Choose an action"}</button></div>
         </> : null}
       </section></main>
     </ModalSection>

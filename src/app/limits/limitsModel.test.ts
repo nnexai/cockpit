@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { QuotaLimit, QuotaProviderStatus } from "../../protocol/generated/v1";
-import { formatLimitValue, limitPace, providerView, usedFraction, summaryView } from "./limitsModel";
+import { formatCredits, formatLimitValue, limitPace, providerView, usedFraction, summaryView } from "./limitsModel";
 
 const limit = (changes: Partial<QuotaLimit> = {}): QuotaLimit => ({
   id: "test", window: "7d", tier: null, unit: "percent", used_fraction: null,
@@ -41,7 +41,7 @@ describe("subscription usage windows", () => {
       limit({ window: "monthly", unit: "credits", used: 4 }),
     ] }] }), 2000, false);
     expect(view.segments.map(segment => [segment.label, segment.text, segment.used])).toEqual([
-      ["5h", "—", null], ["7d", "unlimited", null], ["Monthly", "4 cr used", null],
+      ["5h", "—", null], ["7d", "unlimited", null], ["Monthly", "4 AIC used", null],
     ]);
   });
 
@@ -63,10 +63,31 @@ describe("subscription usage windows", () => {
 
   it("preserves zero used credits and does not mistake a remaining-only balance for usage", () => {
     expect(formatLimitValue(limit({ unit: "credits", used: 0 }), true)).toBe("0 AI credits used");
-    expect(formatLimitValue(limit({ unit: "credits", used: 4 }))).toBe("4 cr used");
+    expect(formatLimitValue(limit({ unit: "credits", used: 4 }))).toBe("4 AIC used");
     expect(formatLimitValue(limit({ unit: "credits", remaining: 0 }))).toBe("—");
     expect(usedFraction(limit({ unit: "credits", remaining: 5, limit: 0 }))).toBeNull();
     expect(usedFraction(limit({ unit: "credits", limit: 100 }))).toBeNull();
+  });
+
+  it.each<{
+    changes: Partial<QuotaLimit>;
+    compact: string | null;
+    detail: string | null;
+  }>([
+    { changes: { used: 0, limit: 1500 }, compact: "0 / 1,500 AIC", detail: "0 of 1,500 AI credits used" },
+    { changes: { used: 4, limit: 8000, used_fraction: 0.0005 }, compact: "4 / 8,000 AIC", detail: "4 of 8,000 AI credits used" },
+    { changes: { remaining: 7996, limit: 8000 }, compact: "4 / 8,000 AIC", detail: "4 of 8,000 AI credits used" },
+    { changes: { used: 12500, limit: 100000 }, compact: "12.5k / 100k AIC", detail: "12,500 of 100,000 AI credits used" },
+    { changes: { used: 4 }, compact: "4 AIC", detail: "4 AI credits used" },
+    { changes: { used: 0, limit: 0 }, compact: "0 / 0 AIC", detail: "0 of 0 AI credits used" },
+    { changes: { remaining: 0 }, compact: null, detail: null },
+    { changes: { used_fraction: 0.5, limit: 100 }, compact: null, detail: null },
+    { changes: { used: 4, limit: 8000, unlimited: true }, compact: null, detail: null },
+    { changes: { unit: "percent", used: 4, limit: 8000 }, compact: null, detail: null },
+  ])("formats reported AI credits independently of percentage availability: $compact", ({ changes, compact, detail }) => {
+    const value = limit({ unit: "credits", ...changes });
+    expect(formatCredits(value)).toBe(compact);
+    expect(formatCredits(value, true)).toBe(detail);
   });
 
   it("derives bounded used credit fractions without changing source precedence", () => {
