@@ -28,6 +28,8 @@ configuration is loaded at startup; if another process already owns the
 browser state root, the new process observes it and forwards browser
 operations to that owner.
 
+On Linux, `python3 scripts/restart-native.py` restarts the installed GUI. It matches only argument-free processes running the installed binary (including the renamed image left after an update), closes their windows through niri so Cockpit runs its graceful shutdown (SIGTERM without niri), waits for exit, then starts one replacement in a transient systemd user unit. Herdr and its agents are not touched. The repository's `.herdr/actions.json` exposes **Install and restart Cockpit**, which runs the installer and then this script in a tab.
+
 Linux desktop entries and icons are installed under the selected data directory at `applications/dev.cockpit.app.desktop` and `icons/hicolor/256x256/apps/dev.cockpit.app.png`. On macOS, launch the installed app bundle or use the `cockpit` shell launcher. Add the selected `bin` directory to `PATH` if needed.
 
 For subscription-limit OMP discovery and executable overrides, see [configuration](configuration.md). “OMP usage source not found” means the CLI could not be launched, not that its Copilot usage JSON failed to parse. Restart Cockpit after changing configuration.
