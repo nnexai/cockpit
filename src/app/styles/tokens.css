@@ -31,6 +31,13 @@
   --pane-kind-review: var(--warning);
   --pane-kind-browser: var(--done);
   --pane-kind-widget: var(--color-hex-cba6f7);
+  /* User tag colours: hues apart from the agent-state colours, so a tag never reads as a state. */
+  --tag-1: #cba6f7;
+  --tag-2: #89dceb;
+  --tag-3: #fab387;
+  --tag-4: #89b4fa;
+  --tag-5: #f5c2e7;
+  --tag-6: #f5e0dc;
   --terminal-bg: #0c1016;
   --terminal-fg: #d8dee8;
   --scrim: rgb(7 9 13 / 72%);

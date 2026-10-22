@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Space } from "./spaceTree";
-import { chipFor, findTag, normalizeTag, projectTagGroups, readSpacesView, SPACES_VIEW_KEY, tagKey, TAG_MAX_CHARS, UNTAGGED_KEY, writeSpacesView } from "./spaceTagView";
+import { findTag, normalizeTag, projectTagGroups, readSpacesView, rowTags, SPACES_VIEW_KEY, tagHue, tagKey, TAG_MAX_CHARS, UNTAGGED_KEY, writeSpacesView } from "./spaceTagView";
 
 const space = (id: string): Space => ({ id, label: id, number: 1, tab_count: 0, pane_count: 0, focused: false, agent_status: "idle", git: null });
 beforeEach(() => {
@@ -57,13 +57,15 @@ describe("tag chips and groups", () => {
   const catalog = Object.freeze(["My check", "Needs testing", "Demo Friday", "Unused"]);
   const tags = Object.freeze(["My check", "Needs testing", "Demo Friday"]);
 
-  it("uses the first remaining catalog-ordered tag without evicting or reordering tags", () => {
-    expect(chipFor(tags)).toEqual({ primary: "My check", more: 2 });
-    expect(chipFor(tags, "Needs testing")).toEqual({ primary: "My check", more: 1 });
-    expect(chipFor(tags, "My check")).toEqual({ primary: "Needs testing", more: 1 });
-    expect(chipFor(["My check"], "My check")).toBeNull();
-    expect(chipFor([])).toBeNull();
+  it("shows every catalog-ordered tag except the group tag, without evicting or reordering tags", () => {
+    expect(rowTags(tags)).toEqual(["My check", "Needs testing", "Demo Friday"]);
+    expect(rowTags(tags, "Needs testing")).toEqual(["My check", "Demo Friday"]);
+    expect(rowTags(["My check"], "My check")).toEqual([]);
     expect(tags).toEqual(["My check", "Needs testing", "Demo Friday"]);
+  });
+
+  it("keeps one colour per tag regardless of case or spacing", () => {
+    expect(tagHue("Needs  Review")).toBe(tagHue("needs review"));
   });
 
   it("keeps catalog group order, Space order and Untagged last, omitting empty groups", () => {

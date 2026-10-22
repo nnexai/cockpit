@@ -12,7 +12,7 @@ import { useRovingList } from "./useRovingList";
 import { GitProblemNotice, SpaceGitAction as InlineGitAction } from "./SpaceGitAction";
 import { gitReadProblem, type GitActionState } from "../session/spaceGitActions";
 import type { SpaceTagsState } from "../session/spaceTags";
-import { projectTagGroups, readSpacesView, writeSpacesView, type TagListRow, type SpacesView } from "./spaceTagView";
+import { projectTagGroups, readSpacesView, rowTags, writeSpacesView, type TagListRow, type SpacesView } from "./spaceTagView";
 import { SpaceTagChip } from "./SpaceTagChip";
 import { SpaceTagPopover } from "./SpaceTagPopover";
 
@@ -354,8 +354,10 @@ export function Spaces({ spaces, tags, tagEditorRequest, editorSuspended = false
           const hiddenGitProblem = row.kind === "parent" && !row.expanded && spaces.some(candidate => candidate.id !== space.id
             && candidate.git?.repository_key === row.repositoryKey && !spaceRows.some(visible => visible.space.id === candidate.id)
             && gitEntry(gitStatus.get(candidate.id))?.result?.kind === "problem");
+          const tagDots = tags.ready && rowTags(spaceTags, row.exclude).length > 0;
+          const tagTrigger = tags.ready ? <SpaceTagChip spaceLabel={space.label} tags={spaceTags} exclude={row.exclude} showAdd={!row.exclude} expanded={editor?.rowId === row.rowId} disabled={tags.editBlocked} busy={tags.pending.has(space.id)} onToggle={trigger => openEditor(space.id, row.rowId, trigger)} /> : null;
           return <div key={row.rowId} className="space-row-group" data-space-id={space.id}>
-            <div className={`space-tree-row space-tree-${row.kind}${row.grouped ? " space-tagged-row" : ""}${showBranch || secondary ? " has-branch" : ""} state-${status.className}${selected ? " is-selected" : ""}${pending ? " is-pending" : ""}${side ? ` drop-${side}` : ""}`} draggable={!row.grouped && !busy && editingId !== space.id}
+            <div className={`space-tree-row space-tree-${row.kind}${row.grouped ? " space-tagged-row" : ""}${showBranch || secondary || tagDots ? " has-branch" : ""} state-${status.className}${selected ? " is-selected" : ""}${pending ? " is-pending" : ""}${side ? ` drop-${side}` : ""}`} draggable={!row.grouped && !busy && editingId !== space.id}
               onDragStart={row.grouped ? undefined : (event) => startDrag(event, space)}
               onDragEnd={row.grouped ? undefined : () => { setDragIntent(null); setDropMark(null); }}
               onDragEnter={row.grouped ? undefined : (event) => { if (!busy) event.preventDefault(); }}
@@ -385,10 +387,11 @@ export function Spaces({ spaces, tags, tagEditorRequest, editorSuspended = false
                     <StateGlyph shape={spaceGlyphShape(status)} />
                     <span className="space-details">
                       <span className="space-name-line"><span className="space-label">{row.label}</span>{!row.grouped && child ? gitAction : null}</span>
-                      {showBranch ? <span className="space-branch">{branch ? <span className="space-branch-name">{branch}</span> : null}{gitAction}</span> : null}
-                      {secondary ? <span className="space-tag-secondary">{secondary}</span> : null}
+                      {showBranch ? <span className="space-branch">{branch ? <span className="space-branch-name">{branch}</span> : null}{gitAction}{tagDots ? tagTrigger : null}</span> : null}
+                      {secondary ? <span className="space-branch"><span className="space-tag-secondary">{secondary}</span>{tagDots ? tagTrigger : null}</span> : null}
+                      {tagDots && !showBranch && !secondary ? <span className="space-branch">{tagTrigger}</span> : null}
                     </span>
-                    {tags.ready ? <SpaceTagChip spaceLabel={space.label} tags={spaceTags} exclude={row.exclude} showAdd={!row.exclude} expanded={editor?.rowId === row.rowId} disabled={tags.editBlocked} busy={tags.pending.has(space.id)} onToggle={trigger => openEditor(space.id, row.rowId, trigger)} /> : null}
+                    {tagDots ? null : tagTrigger}
                   </div>
                 </>}
               {row.kind === "parent" && row.repositoryKey

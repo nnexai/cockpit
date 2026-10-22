@@ -4,7 +4,7 @@ import { ErrorSlot } from "../ErrorSlot";
 import { ServerPopup } from "../ServerPopup";
 import { BrowserCleanupNotices } from "../layout/BrowserCleanupNotices";
 import { SubscriptionLimits } from "../limits/SubscriptionLimits";
-import { armedPrefixHint } from "../input/shortcuts";
+import { armedPrefixHint, withShortcut } from "../input/shortcuts";
 import { SetupDialog } from "../projects/SetupDialog";
 import { TeardownDialog } from "../projects/TeardownDialog";
 import { TeardownRecoveryPanel } from "../projects/TeardownRecoveryPanel";
@@ -14,8 +14,9 @@ import { SupervisorView } from "../supervisor/SupervisorView";
 import { NotesView } from "../notes/NotesView";
 import { Sidebar } from "../sidebar/Sidebar";
 import { spaceNotesFromFailures } from "../sidebar/Spaces";
+import { spaceStatus } from "../sidebar/spaceTree";
 import { byId } from "./model";
-import { TabStrip } from "./TabStrip";
+import { TabStrip, type TabStripSpaceContext } from "./TabStrip";
 import { CommandOverlay } from "./CommandOverlay";
 import { QuickSwitcher } from "./QuickSwitcher";
 import { switchRows } from "./quickSwitch";
@@ -57,6 +58,14 @@ export function WorkbenchContent(props: WorkbenchContentProps) {
   const pendingServiceKey = [...spaceServices.values()].flat().find(service =>
     (service.tab_id !== null && state.focusPending?.kind === "tab" && state.focusPending.target_id === service.tab_id)
     || (state.focusPending?.kind === "pane" && state.focusPending.target_id === service.pane_id))?.key ?? null;
+  const activeSpace = byId(spaces, selection.spaceId);
+  const activeCheckout = activeSpace ? spaceGit.get(activeSpace.id)?.checkout : undefined;
+  const activeSpaceContext: TabStripSpaceContext | null = activeSpace ? {
+    label: activeSpace.label,
+    branch: activeCheckout ? (activeCheckout.state === "branch" ? activeCheckout.branch : null) : activeSpace.git?.branch ?? null,
+    status: spaceStatus(activeSpace.agent_status),
+  } : null;
+  const agentBlocked = (snapshot?.agents ?? []).some(agent => spaceStatus(agent.status || "unknown").className === "blocked");
   return <div className={`workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${narrowViewport && drawerOpen ? " drawer-open" : ""}`} style={workbenchStyle}>
     <div className="workbench-underlay" inert={Boolean(popup)}>
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
@@ -70,7 +79,7 @@ export function WorkbenchContent(props: WorkbenchContentProps) {
       onPointerDown={(event) => { if (sidebarCollapsed || event.button !== 0) return; event.preventDefault(); const start = event.clientX; const width = sidebarWidth; const move = (next: PointerEvent) => updateSidebarWidth(width + next.clientX - start); const stop = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", stop); }; window.addEventListener("pointermove", move); window.addEventListener("pointerup", stop); }} /> : null}
     <main className="main-workarea">
       {!selection.spaceId ? <button type="button" className="drawer-toggle" aria-expanded={drawerOpen} aria-controls="cockpit-sidebar" aria-label="Open sidebar" onClick={narrowViewport ? openDrawer : toggleSidebarCollapsed}><UiIcon name="sidebar" /> <span>Sidebar</span></button> : null}
-      {selection.spaceId ? <TabStrip supervisorAction={liaison.actionLabel} supervisorActionDisabled={!liaison.actionEnabled} supervisorActionReason={liaison.actionReason} liaisonTab={liaison.tabId && liaison.root?.attachment?.location?.tab_id === liaison.tabId ? { id: liaison.tabId, launchTag: liaison.root.attachment.location.launch_tag } : null} waitingTabId={liaison.waiting ? liaison.tabId : null} onSupervisor={() => { void liaison.start(); }} widgetDots={widgetDots} widgetsPending={widgetsPending} onWidgets={showWidgets} sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={browserOpen} browserDisabledReason={browserOpen ? null : browserReason} libraryOpen={libraryOpen} notesOpen={notesOpen} onNotesToggle={notesOpen ? closeNotes : openNotes} onEdit={id => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={toggleBrowser} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} mutate={onMutate} /> : <div className="tab-toolbar"><button type="button" className="tab-strip-action" onClick={() => setCommandsOpen(true)}>Commands</button></div>}
+      {selection.spaceId ? <TabStrip supervisorAction={liaison.actionLabel} supervisorActionDisabled={!liaison.actionEnabled} supervisorActionReason={liaison.actionReason} liaisonTab={liaison.tabId && liaison.root?.attachment?.location?.tab_id === liaison.tabId ? { id: liaison.tabId, launchTag: liaison.root.attachment.location.launch_tag } : null} waitingTabId={liaison.waiting ? liaison.tabId : null} onSupervisor={() => { void liaison.start(); }} widgetDots={widgetDots} widgetsPending={widgetsPending} onWidgets={showWidgets} sidebarOpen={narrowViewport ? drawerOpen : !sidebarCollapsed} spaceContext={activeSpaceContext} agentBlocked={agentBlocked} onToggleSidebar={narrowViewport ? (drawerOpen ? () => closeDrawer() : openDrawer) : toggleSidebarCollapsed} tabs={tabs} selectedTabId={selection.tabId} editingId={editing?.kind === "tab" ? editing.id : null} busy={mutationBusy} browserOpen={browserOpen} browserDisabledReason={browserOpen ? null : browserReason} libraryOpen={libraryOpen} notesOpen={notesOpen} onNotesToggle={notesOpen ? closeNotes : openNotes} onEdit={id => { if (!mutationBusy && !modalOpen) setEditing(id ? { kind: "tab", id } : null); }} onSelect={focusTab} onContext={openContext} onCreate={() => { if (selection.spaceId) onMutate("tab:new", { type: "tab_create", space_id: selection.spaceId, label: null }, true); }} onBrowserToggle={toggleBrowser} onLibraryToggle={() => { if (libraryOpen) closeLibrary(); else openLibrary(); }} onCommands={() => setCommandsOpen(true)} onQuickSwitch={() => setSwitcherOpen(true)} mutate={onMutate} /> : <div className="tab-toolbar"><div className="tab-strip-actions"><button type="button" className="tab-icon-button" aria-label="Commands" title={withShortcut("Commands", "help")} onClick={() => setCommandsOpen(true)}><UiIcon name="command" /></button></div></div>}
       <div className="workarea-content">
         {overviewOpen ? <SupervisorView key={`${liaison.snapshot?.state_store_id}:${liaison.root?.run_id}`} tasks={liaison.tasks} runs={liaison.snapshot?.runs.filter(run => run.root_id === liaison.root?.run_id) ?? []} snapshot={liaison.snapshot} rootId={liaison.root?.run_id ?? null} fresh={liaison.fresh} waiting={liaison.waiting} status={liaison.status} onClose={() => { closeOverview(); if (selection.paneId !== liaison.paneId && liaison.startAvailable) void liaison.start(); }} /> : null}
         {notesOpen ? <NotesView key={`${state.sessionId}:${selection.spaceId}`} client={client} space={librarySpace} onClose={closeNotes} /> : libraryOpen ? <LibraryView client={client} onClose={closeLibrary} onCaptureInvoker={captureLibraryInvoker} command={libraryCommand} space={librarySpace} /> : <WorkbenchCanvas {...props} />}

@@ -26,9 +26,18 @@ export function findTag(catalog: readonly string[], input: string): string | und
   return key ? catalog.find(tag => tagKey(tag) === key) : undefined;
 }
 
-export function chipFor(tags: readonly string[], exclude?: string): { primary: string; more: number } | null {
-  const remaining = exclude === undefined ? tags : tags.filter(tag => tag !== exclude);
-  return remaining.length ? { primary: remaining[0], more: remaining.length - 1 } : null;
+/** The tags a row shows: all of them, minus the group tag the row already sits under. */
+export function rowTags(tags: readonly string[], exclude?: string): readonly string[] {
+  return exclude === undefined ? tags : tags.filter(tag => tag !== exclude);
+}
+
+export const TAG_HUES = 6;
+
+/** A stable palette slot per tag, case-insensitive, so a tag keeps its colour on every row and across reloads. */
+export function tagHue(tag: string): number {
+  let hash = 0;
+  for (const char of tagKey(tag)) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+  return hash % TAG_HUES;
 }
 
 export const UNTAGGED_KEY = "\u0000untagged";

@@ -175,8 +175,17 @@
   margin: 2px 4px;
 }
 
-/* The shared top-bar icon button: sidebar toggle, browser, Library. 28x28 with 6px margins fills the 41px bar. */
-.tab-icon-button { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; margin: 6px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); cursor: pointer; }
+/* The shared top-bar icon button: sidebar toggle, go to, browser, Library, Notes, Commands, supervisor. 28x28 with 6px margins fills the 41px bar. */
+.tab-icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 28px; width: 28px; height: 28px; margin: 6px; padding: 0; border: 0; border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); cursor: pointer; }
+
+/* A blocked agent while the sidebar is hidden: a dot on the sidebar toggle; the toggle's name says why. */
+.tab-attention-dot { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--blocked); box-shadow: 0 0 0 2px var(--chrome-bg); pointer-events: none; }
+
+/* The active Space while the sidebar is hidden, ruled off from the tabs. */
+.tab-space-context { display: flex; min-width: 0; max-width: 240px; flex: 0 1 auto; align-items: center; gap: 6px; align-self: center; height: 24px; margin-right: 4px; padding: 0 10px 0 2px; border-right: 1px solid var(--border); color: var(--text-primary); font-size: var(--font-size-xs); font-weight: 600; white-space: nowrap; }
+.tab-space-context .sb-glyph { flex: 0 0 16px; width: 16px; height: 16px; }
+.tab-space-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.tab-space-branch { flex: none; color: var(--text-muted); font-family: var(--font-mono); font-size: var(--font-size-2xs); font-weight: 400; }
 
 .tab-icon-button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
 
@@ -213,6 +222,8 @@
   gap: 2px;
   padding: 0 8px 0 6px;
 }
+
+.tab-strip-actions + .tab-strip-actions { padding-left: 0; }
 
 .tab-strip-actions .tab-icon-button { align-self: stretch; height: auto; margin: 0; border-radius: 0; }
 

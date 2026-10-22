@@ -35,12 +35,15 @@ const paths = {
   "half-ring": "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
   "dot-ring": "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
   "slash-ring": "M5.6 5.6l12.8 12.8M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
+  command: "M9 9V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V9h6v6H9",
+  supervisor: "M11 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM3 21a8 8 0 0 1 11-7.4",
 } satisfies Record<string, string>;
 
 /** Solid parts of a mark, drawn over its outline (the half of `half-ring`, the dot of `dot-ring`). */
 const fills: Partial<Record<keyof typeof paths, string>> = {
   "half-ring": "M12 3a9 9 0 0 0 0 18Z",
   "dot-ring": "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z",
+  supervisor: "M16 15v6l5-3Z",
 };
 
 export type UiIconName = keyof typeof paths;

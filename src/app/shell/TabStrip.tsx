@@ -1,5 +1,7 @@
 import { useState, type MouseEvent } from "react";
 import { UiIcon } from "../UiIcon";
+import { StateGlyph, spaceGlyphShape } from "../sidebar/StateGlyph";
+import type { SpaceStatus } from "../sidebar/spaceTree";
 import { InlineRename } from "../InlineRename";
 import { LibraryProblems } from "../library/LibraryProblems";
 import { tabDropInsertionIndex } from "../layout/layoutProjection";
@@ -15,7 +17,10 @@ export function tabLabelIsRedundant(label: string, displayedNumber: number): boo
   return trimmed === String(displayedNumber) || /^\d+$/.test(trimmed);
 }
 
-export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDisabledReason, libraryOpen, supervisorAction, supervisorActionDisabled, supervisorActionReason, liaisonTab, waitingTabId, onSupervisor, notesOpen, onNotesToggle, widgetDots, widgetsPending, onWidgets, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, sidebarOpen, onToggleSidebar, mutate }: {
+/** The active Space, shown before the tabs while the sidebar is hidden. */
+export type TabStripSpaceContext = { label: string; branch: string | null; status: SpaceStatus };
+
+export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDisabledReason, libraryOpen, supervisorAction, supervisorActionDisabled, supervisorActionReason, liaisonTab, waitingTabId, onSupervisor, notesOpen, onNotesToggle, widgetDots, widgetsPending, onWidgets, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, onQuickSwitch, sidebarOpen, spaceContext, agentBlocked, onToggleSidebar, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
@@ -41,14 +46,22 @@ export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, br
   onBrowserToggle: () => void;
   onLibraryToggle: () => void;
   onCommands: () => void;
+  onQuickSwitch: () => void;
   sidebarOpen: boolean;
+  spaceContext: TabStripSpaceContext | null;
+  /** Some agent in the session is blocked; flagged on the sidebar toggle while the sidebar is hidden. */
+  agentBlocked: boolean;
   onToggleSidebar: () => void;
   mutate: Mutate;
 }) {
   const [dragIntent, setDragIntent] = useState<DragIntent | null>(null);
   const [dropMark, setDropMark] = useState<DropMark>(null);
   const [dragMessage, setDragMessage] = useState<string | null>(null);
-  return <nav className="tab-toolbar" aria-label="Tabs"><button type="button" className="tab-icon-button" aria-label={sidebarOpen ? "Hide sidebar" : "Show sidebar"} title={withShortcut(sidebarOpen ? "Hide sidebar" : "Show sidebar", "toggle-sidebar")} aria-expanded={sidebarOpen} aria-controls="cockpit-sidebar" onClick={onToggleSidebar}><UiIcon name={sidebarOpen ? "sidebar-open" : "sidebar"} /></button><div className="tab-strip" role="tablist">{tabs.map((tab, index) => {
+  const flagBlocked = !sidebarOpen && agentBlocked;
+  const sidebarLabel = `${sidebarOpen ? "Hide sidebar" : "Show sidebar"}${flagBlocked ? " (an agent is blocked)" : ""}`;
+  return <nav className="tab-toolbar" aria-label="Tabs"><button type="button" className="tab-icon-button" aria-label={sidebarLabel} title={withShortcut(sidebarLabel, "toggle-sidebar")} aria-expanded={sidebarOpen} aria-controls="cockpit-sidebar" onClick={onToggleSidebar}><UiIcon name={sidebarOpen ? "sidebar-open" : "sidebar"} />{flagBlocked ? <span className="tab-attention-dot" aria-hidden="true" /> : null}</button>
+    {!sidebarOpen && spaceContext ? <span className="tab-space-context" title={`${spaceContext.label} · ${spaceContext.status.className === "unknown" ? "No agent" : spaceContext.status.word}${spaceContext.branch ? ` · ${spaceContext.branch}` : ""}`}><StateGlyph shape={spaceGlyphShape(spaceContext.status)} /><span className="tab-space-name">{spaceContext.label}</span>{spaceContext.branch ? <span className="tab-space-branch">{spaceContext.branch}</span> : null}</span> : null}
+    <div className="tab-strip" role="tablist">{tabs.map((tab, index) => {
     const displayedNumber = index + 1;
     const label = liaisonTab && tab.id === liaisonTab.id && tab.label === liaisonTab.launchTag ? "Supervisor" : tab.label;
     const redundantLabel = tabLabelIsRedundant(label, displayedNumber);
@@ -80,7 +93,7 @@ export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, br
       {waitingTabId === tab.id ? <span className="liaison-tab-dot" title="Waiting for you"><span className="sr-only">waiting for you</span></span> : null}
     </div>;
   })}
-    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" />{widgetsPending ? <button type="button" className="tab-strip-action" aria-label="Show widgets" disabled={busy} onClick={onWidgets}>Widgets <span className="widget-dot" aria-hidden="true" /></button> : null}<button type="button" className="tab-icon-button" disabled={busy || Boolean(browserDisabledReason)} aria-label="Browser" aria-pressed={browserOpen} title={browserDisabledReason ?? withShortcut(browserOpen ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : "Open browser for tab", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><LibraryProblems /><button type="button" className="tab-icon-button" aria-label="Notes" aria-controls="cockpit-notes" aria-pressed={notesOpen} title={notesOpen ? "Close Notes" : "Open Notes"} onClick={onNotesToggle}><UiIcon name="file" /></button><button type="button" className="tab-strip-action" title={withShortcut("Commands", "help")} onClick={onCommands}>Commands</button></div>
-    {supervisorAction ? <div className="tab-strip-actions"><button type="button" className="tab-strip-action" disabled={supervisorActionDisabled} title={supervisorActionReason ?? undefined} onClick={onSupervisor}>{supervisorAction}</button></div> : null}
+    <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" />{widgetsPending ? <button type="button" className="tab-strip-action" aria-label="Show widgets" disabled={busy} onClick={onWidgets}>Widgets <span className="widget-dot" aria-hidden="true" /></button> : null}<button type="button" className="tab-icon-button" aria-label="Go to Space or agent" title={withShortcut("Go to Space or agent", "quick-switch")} onClick={onQuickSwitch}><UiIcon name="search" /></button><button type="button" className="tab-icon-button" disabled={busy || Boolean(browserDisabledReason)} aria-label="Browser" aria-pressed={browserOpen} title={browserDisabledReason ?? withShortcut(browserOpen ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : "Open browser for tab", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><LibraryProblems /><button type="button" className="tab-icon-button" aria-label="Notes" aria-controls="cockpit-notes" aria-pressed={notesOpen} title={notesOpen ? "Close Notes" : "Open Notes"} onClick={onNotesToggle}><UiIcon name="file" /></button><button type="button" className="tab-icon-button" aria-label="Commands" title={withShortcut("Commands", "help")} onClick={onCommands}><UiIcon name="command" /></button></div>
+    {supervisorAction ? <div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" /><button type="button" className="tab-icon-button" aria-label={supervisorAction} disabled={supervisorActionDisabled} title={supervisorActionReason ?? supervisorAction} onClick={onSupervisor}><UiIcon name="supervisor" /></button></div> : null}
   </nav>;
 }

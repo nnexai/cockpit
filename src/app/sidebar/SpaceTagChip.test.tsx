@@ -17,11 +17,10 @@ async function mount(overrides: Partial<ComponentProps<typeof SpaceTagChip>> = {
   return { host, props, button: host.querySelector<HTMLButtonElement>("button") };
 }
 
-it("shows catalog-first tag and +N, with all tag names available and no row selection", async () => {
+it("shows every tag with its colour, with all tag names available and no row selection", async () => {
   const { host, button, props } = await mount();
-  expect(button!.className).toBe("space-tag-chip");
-  expect(button!.querySelector(".space-tag-name")?.textContent).toBe("My check");
-  expect(button!.querySelector(".space-tag-more")?.textContent).toBe("+2");
+  expect(button!.className).toBe("space-tag-dots");
+  expect([...button!.querySelectorAll(".space-tag")].map(tag => tag.textContent)).toEqual(["My check", "Needs testing", "Demo Friday"]);
   expect(button!.title).toBe("My check, Needs testing, Demo Friday");
   expect(button!.getAttribute("aria-label")).toBe("Edit tags for login-flow: My check, Needs testing, Demo Friday");
   expect(button!.getAttribute("aria-haspopup")).toBe("dialog");
@@ -35,10 +34,9 @@ it("shows catalog-first tag and +N, with all tag names available and no row sele
   expect(rowClick).not.toHaveBeenCalled();
 });
 
-it("excludes the group tag, and omits a chip for a Space with only that tag", async () => {
+it("excludes the group tag, and omits the trigger for a Space with only that tag", async () => {
   const other = await mount({ exclude: "My check" });
-  expect(other.button!.querySelector(".space-tag-name")?.textContent).toBe("Needs testing");
-  expect(other.button!.querySelector(".space-tag-more")?.textContent).toBe("+1");
+  expect([...other.button!.querySelectorAll(".space-tag")].map(tag => tag.textContent)).toEqual(["Needs testing", "Demo Friday"]);
   const only = await mount({ tags: ["My check"], exclude: "My check" });
   expect(only.button).toBeNull();
   const empty = await mount({ tags: [] });

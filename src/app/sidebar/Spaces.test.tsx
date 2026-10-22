@@ -124,7 +124,7 @@ it("groups duplicate Space references with unique roving identities and services
   const key = async (element: HTMLElement, value: string) => { await act(async () => { element.dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true })); }); };
   try {
     await act(async () => root.render(createElement(Spaces, current)));
-    expect(host.querySelector(".space-tag-chip")?.textContent).toBe("My check+1");
+    expect([...host.querySelectorAll(".space-tag-dots .space-tag")].map(tag => tag.textContent)).toEqual(["My check", "Needs testing"]);
     const switchButton = [...host.querySelectorAll<HTMLButtonElement>(".spaces-view-switch button")].find(button => button.textContent === "Tags")!;
     await act(async () => switchButton.click());
     expect(document.activeElement).toBe(switchButton);
@@ -163,7 +163,7 @@ it("never projects unknown tag data as Untagged and keeps cached offline chips n
     await act(async () => root.render(createElement(Spaces, { ...current, tags: { ...current.tags, editBlocked: "Herdr is not live", catalog: ["My check"], bySpace: new Map([["app", ["My check"]]]) } })));
     expect(host.textContent).toContain("My check");
     await act(async () => host.querySelectorAll<HTMLButtonElement>(".spaces-view-switch button")[0].click());
-    const chip = host.querySelector<HTMLButtonElement>(".space-tag-chip")!;
+    const chip = host.querySelector<HTMLButtonElement>(".space-tag-dots")!;
     expect(chip.getAttribute("aria-disabled")).toBe("true");
     await act(async () => chip.click());
     expect(document.querySelector(".space-tag-popover")).toBeNull();
