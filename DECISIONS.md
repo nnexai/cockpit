@@ -52,6 +52,8 @@ Current rules are grouped by behavioral contract: conditions, limits and caveats
 
 - Keep platform-independent Ctrl+B prefixes and Herdr-default action meanings or leave them unbound; Cockpit-only actions use free keys. The quick switcher is the explicit direct-chord exception: Ctrl+K on Linux/Windows, Cmd+K on macOS, available from terminals and editors outside modals. Omit Herdr-only s/q/e/[/o/Shift+G/Shift+R; cycle Ctrl+B Tab/Shift+Tab in local visual order. Static registry drives Commands/tooltips/generated docs, not runtime plugin entries. [Owner](src/app/input/shortcuts.ts). Rationale: One registry keeps local discoverability accurate.
 
+- Keep the Space/agent quick switcher compact with a 348px maximum results viewport; short windows may shrink it further. All matches remain searchable and reachable by scrolling or keyboard navigation. [Owner](src/app/styles/overlays.css). Rationale: Navigation should not fill the window with results.
+
 - Discover generic shell/pane/popup/plugin commands, opaque IDs, aliases and configured prefixes from identity-checked live projection; reload replaces retired bindings. Invoke only currently advertised actions against confirmed Herdr focus and revalidated membership, never uncertain-result replay. [Owner](src/app/input/herdrBindings.ts). Rationale: Advertisements are revocable dispatch authority.
 
 - Outside editors/dialogs, direct custom bindings precede viewer keys; configured Herdr prefixes coexist with Ctrl+B, and shared Ctrl+B custom aliases win collisions. Hide shadowed local hints; reserve literal Ctrl+B Ctrl+B and Herdr-prefix double-prefix passthrough before custom lookup. [Owner](src/app/input/keymap.ts). Rationale: Collision policy must preserve literal program input.
@@ -444,7 +446,7 @@ Canonical tasks retain durable stages and dependencies while schedules drive bou
 
 - Sidebar arrows/Home-End/left-right/Menu move DOM focus only; Enter/Space/click requests Herdr focus and selection follows ACK. Pending target uses neutral marker, and aria-disabled during mutation preserves keyboard focus. [Owner](src/app/sidebar/useRovingList.ts). Rationale: Navigation intent is not acknowledged selection.
 
-- Below header, Spaces/Agents each reserve one-third of area and share remaining third by entry counts, scrolling independently; no entries splits equally. [Owner](src/app/sidebar/Sidebar.tsx). Rationale: Both lists need usable space under varying counts.
+- Below header, fit Spaces/Agents to their content while either fits within one-third of the area, keeping Agents directly below Spaces when both lists fit. Contain Space row margins in the measured group boxes so fitting content does not acquire a tiny scroll range. When both overflow, each reserves one-third and shares the remainder by entry count, scrolling independently. [Owner](src/app/sidebar/Sidebar.tsx). Rationale: Use available room without unnecessary scrolling while keeping both long lists usable.
 
 ## Engineering and delivery boundaries
 

@@ -474,6 +474,9 @@ kbd {
   font-size: var(--font-size-2xs);
 }
 
+/* Show a partial next row to hint that more switcher results are available below. */
+.quick-switcher .command-list { max-height: calc(8.5 * 40px + 8px); }
+
 .switcher-status { padding: 0 14px 6px; color: var(--text-secondary); font-size: var(--font-size-2xs); }
 .switcher-status.is-warning { color: var(--warning); }
 .switcher-row { display: flex; width: 100%; min-height: 40px; align-items: center; gap: 10px; padding: 5px 14px; border: 0; border-radius: 0; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }

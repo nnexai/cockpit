@@ -268,6 +268,9 @@
 }
 
 /* ---- rows: full bleed, square, 2px apart; a 3px pill marks selection ---- */
+/* Keep row margins inside the group box measured when fitting sidebar sections. */
+.space-row-group { display: flow-root; }
+
 .space-tree-row {
   position: relative;
   display: flex;
