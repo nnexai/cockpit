@@ -10,7 +10,7 @@ use cockpit_herdr::HerdrCliAdapter;
 use cockpit_protocol::{notes::*, v1::ErrorResponse};
 
 use super::{
-    HerdrArgs, current_pane_id,
+    HerdrArgs, current_pane_id, current_pane_space,
     endpoint::{AmbientEndpoint, resolve_endpoint},
 };
 
@@ -906,21 +906,7 @@ async fn execute(args: NotesArgs) -> Result<NotesResponse, InspectionError> {
         };
         let adapter = Arc::new(HerdrCliAdapter::new(endpoint.config));
         let space_id = if let Some(pane) = pane {
-            let source = adapter.source_adapter();
-            let before = source.source_pane_evidence(&endpoint.session, &pane).await?;
-            let after = source.source_pane_evidence(&endpoint.session, &pane).await?;
-            if before.pane_id != pane
-                || after.pane_id != pane
-                || before.workspace_id != after.workspace_id
-                || before.tab_id != after.tab_id
-                || before.endpoint_identity != after.endpoint_identity
-            {
-                return Err(InspectionError::new(
-                    "stale_identity",
-                    "The originating pane identity changed during lookup",
-                ));
-            }
-            before.workspace_id
+            current_pane_space(&adapter, &endpoint.session, &pane).await?
         } else {
             args.space
                 .ok_or_else(|| usage("No Space target supplied"))?

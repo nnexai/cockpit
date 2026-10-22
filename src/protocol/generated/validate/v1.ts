@@ -152,6 +152,25 @@ export const wireSpaceServiceStatusResponse: WireDescriptor<V1.SpaceServiceStatu
   "services": req(list(named(() => wireSpaceServiceStatus))),
 });
 
+export const wireSpaceTags: WireDescriptor<V1.SpaceTags> = struct<V1.SpaceTags>("SpaceTags", {
+  "space_id": req(str),
+  "tags": req(list(str)),
+});
+
+export const wireSpaceTagsResponse: WireDescriptor<V1.SpaceTagsResponse> = struct<V1.SpaceTagsResponse>("SpaceTagsResponse", {
+  "session_id": req(str),
+  "server_instance": req(str),
+  "catalog": req(list(str)),
+  "spaces": req(list(named(() => wireSpaceTags))),
+});
+
+export const wireSpaceTagChangeRequest: WireDescriptor<V1.SpaceTagChangeRequest> = struct<V1.SpaceTagChangeRequest>("SpaceTagChangeRequest", {
+  "space_id": req(str),
+  "server_instance": req(str),
+  "tag": req(str),
+  "assigned": req(bool),
+});
+
 export const wireSpaceSummary: WireDescriptor<V1.SpaceSummary> = struct<V1.SpaceSummary>("SpaceSummary", {
   "id": req(str),
   "label": req(str),

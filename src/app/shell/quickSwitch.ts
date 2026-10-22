@@ -25,6 +25,7 @@ export function switchRows({ spaces, agents, tabs, currentSpaceId, currentPaneId
   const tabLabels = new Map(tabs.map(tab => [tab.id, tab.label]));
   const rows: (SwitchRow & { discriminator: string })[] = spaces.map(space => {
     const status = spaceStatus(space.agent_status);
+    if (status.className === "unknown") status.word = "No agent";
     return {
       kind: "space", id: space.id, key: `space:${space.id}`, primary: space.label,
       meta: [space.git?.branch, space.git?.repository !== space.label ? space.git?.repository : null, space.git?.is_linked_worktree ? "worktree" : null, status.word].filter(Boolean).join(" · "),

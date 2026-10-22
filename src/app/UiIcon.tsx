@@ -3,6 +3,7 @@ const paths = {
   plus: "M12 5v14M5 12h14",
   expand: "M9 3H3v6m12-6h6v6M3 15v6h6m12-6v6h-6",
   edit: "m16 3 5 5L8 21H3v-5ZM14 5l5 5",
+  tag: "M3 3h8l10 10-8 8L3 11ZM7 7h.01",
   trash: "M4 6h16M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7",
   file: "M14 3H5v18h14V8Zm0 0v5h5M8 12h8m-8 4h6",
   search: "M15 15l6 6M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0",

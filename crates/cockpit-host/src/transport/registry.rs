@@ -69,6 +69,26 @@ macro_rules! cockpit_operations {
                   limit = none; origin = none;
                   guard = none; status = service
             }
+            { id: space_tags, ctx: service, out: ::cockpit_protocol::v1::SpaceTagsResponse,
+              call: $crate::transport::operations::session::space_tags,
+              native: cockpit_space_tags(session_id: ::std::string::String)
+                  => $crate::transport::native_input::typed(),
+              http: get "/api/v1/sessions/{session_id}/space-tags"
+                  (path: ::axum::extract::Path<::std::string::String>)
+                  => $crate::transport::http_input::session($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"));
+                  limit = none; origin = none;
+                  guard = none; status = service
+            }
+            { id: space_tag_change, ctx: service, out: ::cockpit_protocol::v1::SpaceTagsResponse,
+              call: $crate::transport::operations::session::space_tag_change,
+              native: cockpit_space_tag_change(session_id: ::std::string::String, request: ::cockpit_protocol::v1::SpaceTagChangeRequest)
+                  => $crate::transport::native_input::typed2(),
+              http: post "/api/v1/sessions/{session_id}/space-tags"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::v1::SpaceTagChangeRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::session_sized_body($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"), $crate::transport::http_input::Reject("invalid_space_tag_change", "Expected a bounded JSON Space tag change with valid fields"));
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = method;
+                  guard = none; status = service
+            }
             { id: space_git_action, ctx: service, out: ::cockpit_protocol::v1::SpaceGitActionResponse,
               call: $crate::transport::operations::session::space_git_action,
               native: cockpit_space_git_action(session_id: ::std::string::String, request: ::cockpit_protocol::v1::SpaceGitActionRequest)

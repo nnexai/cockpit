@@ -243,6 +243,20 @@ export type SpaceServiceStatus = { key: string, space_id: string, pane_id: strin
 
 export type SpaceServiceStatusResponse = { session_id: string, services: Array<SpaceServiceStatus>, };
 
+export type SpaceTags = { space_id: string,
+/**
+ * Canonical catalog spellings, in catalog order.
+ */
+tags: Array<string>, };
+
+export type SpaceTagsResponse = { session_id: string, server_instance: string,
+/**
+ * Every tag ever created, in creation order and case-insensitively unique.
+ */
+catalog: Array<string>, spaces: Array<SpaceTags>, };
+
+export type SpaceTagChangeRequest = { space_id: string, server_instance: string, tag: string, assigned: boolean, };
+
 export type SpaceSummary = { id: string, label: string, number: number, tab_count: number, pane_count: number, focused: boolean, agent_status: string, git: SpaceGitSummary | null, };
 
 export type TabSummary = { id: string, space_id: string, label: string, number: number, pane_count: number, focused: boolean, focused_pane_id: string | null, };

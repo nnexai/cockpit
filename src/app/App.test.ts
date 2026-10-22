@@ -290,11 +290,12 @@ function commandInput(): CommandInput {
     libraryOpen: false, notesOpen: false, browser: { open: false, reason: null },
     liaison: { actionLabel: "Start supervisor", startAvailable: true, overviewAvailable: false, overviewOpen: false },
     git: { target: undefined, status: undefined, pending: undefined, blocked: undefined },
+    tags: { blocked: null },
     widgets: { pending: false, dockTabId: null, list: [] },
     viewerSources: { status: "ready", options: viewerOptions() },
     local: {},
     run: {
-      herdr: vi.fn(), prefix: vi.fn(), supervisor: vi.fn(), overview: vi.fn(), git: vi.fn(), recovery: vi.fn(), toggleNotes: vi.fn(),
+      herdr: vi.fn(), prefix: vi.fn(), supervisor: vi.fn(), overview: vi.fn(), git: vi.fn(), editSpaceTags: vi.fn(), recovery: vi.fn(), toggleNotes: vi.fn(),
       openBrowser: vi.fn(), closeBrowser: vi.fn(), retryBrowserCleanup: vi.fn(), showWidgets: vi.fn(),
       cycleWidget: vi.fn(), removeWidget: vi.fn(), goToWidget: vi.fn(), libraryAdd: vi.fn(), library: vi.fn(), openViewer: vi.fn(),
     },
@@ -302,6 +303,19 @@ function commandInput(): CommandInput {
 }
 
 describe("command consumers", () => {
+  it("offers keyless Space tag editing for the exact selected Space and reports unavailable reads", () => {
+    const input = commandInput();
+    const row = buildCommands(input).find(candidate => candidate.id === "space-tags:edit")!;
+    expect(row.shortcut).toBeUndefined();
+    expect(row.disabled).toBe(false);
+    row.run();
+    expect(input.run.editSpaceTags).toHaveBeenCalledOnce();
+    input.tags.blocked = "Tags unavailable";
+    expect(buildCommands(input).find(candidate => candidate.id === "space-tags:edit")).toMatchObject({ disabled: true, reason: "Tags unavailable" });
+    input.view.selectedSpace = undefined;
+    expect(buildCommands(input).find(candidate => candidate.id === "space-tags:edit")).toMatchObject({ disabled: true, reason: "Select a Space first" });
+  });
+
   it("offers local subscription limits only with a bound handler", () => {
     const input = commandInput();
     expect(buildCommands(input).find(row => row.id === "subscription-limits")).toBeUndefined();

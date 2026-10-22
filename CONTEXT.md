@@ -53,6 +53,7 @@ Project setup is plan-driven: repository discovery, artifact validation, Herdr c
 | Project operation records | Setup/teardown intent, exact resource receipts and ownership proof. |
 | Global Context Library | Durable provider snapshots and explicit folder captures, independent of workspace lifetime. |
 | Space context selections | Relevant Library IDs and configured existing repository paths, not copied or pinned files. |
+| Space tags | Cockpit-owned arbitrary organization labels; durable across Herdr restart, removed from a Space after confirmed closure, with a reusable catalog. |
 | Space Notes | Durable UUID-scoped Markdown, separate from Library and checkouts. |
 | Supervisor task Markdown | Canonical task title, description, relationships, checklist and checked state, outside checkouts; current task/document revisions fence scope changes. |
 | Orchestration machine document | Jobs, attachments, operation/effect journals, messages, source outcomes, integration and cleanup receipts, not live Herdr status or another task store. |
@@ -65,7 +66,7 @@ Notes presents Scratchpad, Todos, Kanban, Decisions and board-item comment threa
 
 ## Local surfaces
 
-The sidebar follows Herdr's Space hierarchy and agent attention ordering, with Space-scoped Git status/actions. Local status counters describe last-fetch knowledge rather than remote freshness. The workarea contains the selected Space's tab strip, selected tab canvas, and Cockpit-owned Library, Notes or Supervisor views; these views are not synthetic Herdr panes.
+The sidebar defaults to Repository hierarchy and can switch to flat Tags groups; the choice is remembered locally. Tags group references to the same live Spaces, not copies or new Herdr resources. Rows show one tag and an additional-tag count; the small picker, Space menu and Commands edit assignments. Tags are distinct from Herdr display labels and agent state; Spaces without agents use a small gray dot, while agent indicators remain unchanged. Space-scoped Git status/actions and counters describe last-fetch knowledge rather than remote freshness. The workarea contains the selected Space's tab strip, selected tab canvas, and Cockpit-owned Library, Notes or Supervisor views; these views are not synthetic Herdr panes.
 
 Every painted active-tab terminal is a direct control attachment rendered by xterm.js. Rendering and input permission remain separate. Herdr owns screen state, scrollback and PTY lifetime; resynchronization supplies a fresh baseline. Keyboard routing combines Cockpit's static prefix registry with identity-checked server-advertised commands. The singleton server popup floats above, rather than reshaping, the split tree.
 

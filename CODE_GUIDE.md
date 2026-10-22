@@ -26,6 +26,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Virtual leaves | `src/app/layout/FilesLeaf.tsx`; `src/app/layout/ReviewLeaf.tsx`; `src/app/layout/BrowserLeaf.tsx` |
 | Terminal leaf and cleanup notices | `src/app/layout/TerminalLeaf.tsx`; `src/app/layout/BrowserCleanupNotices.tsx` |
 | Sidebar presentation | `src/app/sidebar/`; `src/app/sidebar.css` |
+| Space tags/picker/grouping | `src/app/session/spaceTags.ts`; `src/app/sidebar/SpaceTagChip.tsx`; `src/app/sidebar/SpaceTagPopover.tsx`; `src/app/sidebar/spaceTagView.ts`; menu/Commands in `ResourceContextMenu.tsx`/`commands.ts` |
 | Git status/actions | `src/app/session/spaceGitStatus.ts`; `src/app/session/spaceGitActions.ts`; `src/app/sidebar/SpaceGitAction.tsx` |
 | Running services (read-only) | `src/app/session/spaceServiceStatus.ts`; `src/app/sidebar/Spaces.tsx`; plugin-owned rows focus their live Herdr pane/tab, with no lifecycle controls |
 | Keyboard registry and runtime aliases | `src/app/input/shortcuts.ts`; `src/app/input/herdrBindings.ts`; `src/app/input/keymap.ts` |
@@ -185,7 +186,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Orchestration contract tests | `crates/cockpit-core/src/orchestration/service_tests.rs` (shared fixture); `crates/cockpit-core/src/orchestration/service_tests/` (domain suites); core `orchestration/{dispatch,messages,credentials,cleanup}/tests.rs`; `crates/cockpit-host/src/orchestration_runtime/tests.rs` |
 | Agent CLI facade/args/caller | `crates/cockpit-host/src/cli_orchestration/mod.rs`; `crates/cockpit-host/src/cli_orchestration/args.rs`; `crates/cockpit-host/src/cli_orchestration/caller.rs` |
 | Agent CLI activation/replacement/internal inbox capture | `crates/cockpit-host/src/cli_orchestration/context.rs` (`replacement_action`); `wait.rs` (`inbox_next`); `output.rs` (`capture`) |
-| CLI binary/Notes/skills | `crates/cockpit-host/src/bin/cockpit.rs`; `crates/cockpit-host/src/bin/cockpit/notes.rs`; `crates/cockpit-host/src/bin/cockpit/skills.rs` |
+| CLI binary/Notes/skills/tags | `crates/cockpit-host/src/bin/cockpit.rs`; `crates/cockpit-host/src/bin/cockpit/notes.rs`; `crates/cockpit-host/src/bin/cockpit/skills.rs`; `crates/cockpit-host/src/bin/cockpit/tags.rs` |
 | CLI endpoint resolution/portable guides | `crates/cockpit-host/src/bin/cockpit/endpoint.rs`; `integrations/agent-skills/` |
 | Bounded cleanup/integration payload guidance | `run cleanup-finish --help`, `run integration-record --help` expose complete field shapes/examples from CLI `mod.rs`; authoritative `CleanupFinish`/`IntegrationRecord` and nested types in `crates/cockpit-protocol/src/orchestration.rs`. Samples are parser illustrations, never production evidence. |
 | Receipt-owned native installer | `scripts/install-native.py` |
@@ -208,6 +209,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Client project/teardown decoders | `src/client/projectProtocol.ts`; `src/client/projectTeardownProtocol.ts` |
 | Shared operation declaration/registry | `crates/cockpit-host/src/transport/operations.rs`; `crates/cockpit-host/src/transport/registry.rs` |
 | Shared typed session/project/viewer handlers | `crates/cockpit-host/src/transport/operations/session.rs`; `crates/cockpit-host/src/transport/operations/projects.rs`; `crates/cockpit-host/src/transport/operations/viewer.rs` |
+| Space tags storage/contract/transport | `crates/cockpit-core/src/space_tags.rs`; `crates/cockpit-protocol/src/v1.rs`; session operations/registry above; `src/client/CockpitClient.ts` and `src/client/operations.ts` decode and fence responses |
 | Shared typed library/credentials/Notes handlers | `crates/cockpit-host/src/transport/operations/library.rs`; `crates/cockpit-host/src/transport/operations/credentials.rs`; `crates/cockpit-host/src/transport/operations/notes.rs` |
 | Shared typed orchestration/review/Context handlers | `crates/cockpit-host/src/transport/operations/orchestration.rs`; `crates/cockpit-host/src/transport/operations/review.rs`; `crates/cockpit-host/src/transport/operations/context.rs` |
 | Shared typed Browser/comment/widget handlers | `crates/cockpit-host/src/transport/operations/browser.rs`; `crates/cockpit-host/src/transport/operations/comments.rs`; `crates/cockpit-host/src/transport/operations/widgets.rs` |
@@ -330,6 +332,8 @@ Widget CLI show → bounded file/stdin/choices preflight → fresh source/target
 Notes request → Origin-checked HTTP or native shared operation (standalone CLI calls core directly) → target authorization/registry → bounded durable Markdown/CAS publication → Notes response decoder → UUID-pinned hooks/drafts → editor or task detail. Opaque change tokens are not CAS revisions. [configuration](docs/configuration.md#durable-space-notes) owns root/UUID recipes; [DECISIONS](DECISIONS.md) owns external-editor limits, read-before-retry, CodeMirror caret/focus and real dnd-kit listener/drop semantics.
 
 Use `cockpit-cli notes <area> --help` for payload/revision sources and `cockpit-cli task|run|inbox|route --help` for caller/lifecycle contracts. `run context` is the orchestration entry; the separate `cockpit-cli context --current` command reads Space/Library context. `cockpit-cli library add` saves and selects for the current Space through the existing Library add-with-target operation; see `cockpit-cli library add --help` for current/explicit targeting and input options. `cockpit-cli skills list` discovers portable guides; `cockpit-cli skills show NAME` reads without installation. Installation targeting, collision/refusal, serialized writes and same-UID race limits remain in [DECISIONS](DECISIONS.md).
+
+`cockpit-cli tags list|add TAG|remove TAG` reads or edits the calling Space by default; `list --all` lists tagged live Spaces in the session. The standalone CLI calls the same `SpaceTagService` as HTTP/native without initializing Library/providers; `cockpit-cli tags --help` and [configuration](docs/configuration.md#space-tags) cover explicit targeting, JSON and exit statuses.
 
 ## Development and verification recipes
 

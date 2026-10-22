@@ -31,6 +31,7 @@ pub mod sources;
 pub mod space_git;
 pub mod space_git_action;
 pub mod space_services;
+pub mod space_tags;
 pub mod viewer;
 pub mod widget;
 
@@ -156,6 +157,7 @@ pub struct CockpitService {
     reviews: Option<Arc<review::ReviewService>>,
     library: Option<Arc<library::LibraryService>>,
     notes: Option<Arc<notes::NotesService>>,
+    space_tags: Option<Arc<space_tags::SpaceTagService>>,
     credentials: Option<Arc<credentials::ProviderCredentials>>,
     quota: Option<Arc<quota::QuotaService>>,
     git_actions: Arc<space_git_action::SpaceGitActions>,
@@ -226,6 +228,7 @@ impl CockpitService {
             reviews: None,
             library: None,
             notes: None,
+            space_tags: None,
             credentials: None,
             quota: None,
             git_actions: Arc::new(space_git_action::SpaceGitActions::default()),
@@ -305,6 +308,17 @@ impl CockpitService {
     pub fn notes(&self) -> Result<&Arc<notes::NotesService>, InspectionError> {
         self.notes.as_ref().ok_or_else(|| InspectionError::new(
             "notes_unavailable", "Notes operations are not configured in this host",
+        ))
+    }
+
+    pub fn with_space_tags(mut self, tags: space_tags::SpaceTagService) -> Self {
+        self.space_tags = Some(Arc::new(tags));
+        self
+    }
+
+    pub fn space_tags(&self) -> Result<&Arc<space_tags::SpaceTagService>, InspectionError> {
+        self.space_tags.as_ref().ok_or_else(|| InspectionError::new(
+            "space_tags_unavailable", "Space tags are not configured in this host",
         ))
     }
 

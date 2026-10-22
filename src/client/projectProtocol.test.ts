@@ -7,7 +7,7 @@ function configuration(providers: unknown[]) {
   return {
     version: 1, repository_roots: [], worktree_root: "/worktrees", state_root: "/state", cache_root: "/cache",
     library_root: "/library", notes_root: "/notes", branch_template: "{task}", checkout_template: "{task}", providers,
-    orchestration: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, inbox_prompt_hints: false, routes: [] },
+    orchestration: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, initial_prompt_args: null, hook_args: null, max_parallel: 4, process_scope: "auto", inbox_prompt_hints: false, routes: [] },
     limits: {
       catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
       context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,

@@ -59,3 +59,13 @@ describe("quick switcher live identity and input", () => {
     } finally { probe.unmount(); }
   });
 });
+
+it("draws a gray dot for a no-agent Space while preserving the unknown-agent ring", () => {
+  const unknown = { shape: "unknown", className: "unknown", word: "Unknown" } as const;
+  const probe = mount([{ ...row("Empty Space"), status: unknown }, { ...row("Unknown agent"), kind: "agent", status: unknown }]);
+  try {
+    const rows = probe.host.querySelectorAll(".switcher-row");
+    expect(rows[0].querySelector(".sb-glyph.is-none circle")?.getAttribute("r")).toBe("2.75");
+    expect(rows[1].querySelector(".sb-glyph.is-unknown circle")?.getAttribute("r")).toBe("8.25");
+  } finally { probe.unmount(); }
+});

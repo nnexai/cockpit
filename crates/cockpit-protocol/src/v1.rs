@@ -157,6 +157,32 @@ pub struct SpaceServiceStatusResponse {
     pub services: Vec<SpaceServiceStatus>,
 }
 
+/// Cockpit-owned tags of current Spaces, bound to a proven Herdr server incarnation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct SpaceTagsResponse {
+    pub session_id: String,
+    pub server_instance: String,
+    /// Every tag ever created, in creation order and case-insensitively unique.
+    pub catalog: Vec<String>,
+    pub spaces: Vec<SpaceTags>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct SpaceTags {
+    pub space_id: String,
+    /// Canonical catalog spellings, in catalog order.
+    pub tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceTagChangeRequest {
+    pub space_id: String,
+    pub server_instance: String,
+    pub tag: String,
+    pub assigned: bool,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SpaceGitAction {

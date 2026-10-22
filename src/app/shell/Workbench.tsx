@@ -60,11 +60,13 @@ export function Workbench(props: WorkbenchProps) {
     view: runtime, libraryOpen, notesOpen, browser: { open: browserOpen, reason: browserReason },
     liaison: { actionLabel: liaison.actionLabel, startAvailable: liaison.startAvailable, overviewAvailable: liaison.tasks.some(task => !task.task.checked), overviewOpen },
     git: { target, status, pending: gitActions.forStatus(status), blocked: gitBlocked },
+    tags: { blocked: runtime.spaceTags.editBlocked },
     widgets: { pending: widgetsPending, dockTabId: tabLayout?.viewers.widget ? tabLayout.tabId : null, list: widgets.widgets(ctx.sessionId) },
     viewerSources, local: { "quick-switch": () => setSwitcherOpen(true), ...(!limits.absent ? { "subscription-limits": () => setLimitsOpen(true) } : {}) },
     run: {
       herdr: input.runHerdrCommand, prefix: input.runCommand, supervisor: () => { void liaison.start(); }, overview: () => { if (!overviewOpen) openOverview(); else { closeOverview(); if (props.selection.paneId !== liaison.paneId && liaison.startAvailable) void liaison.start(); } }, git: runGitAction,
       recovery: () => setRecoveryOpen(true), toggleNotes: notesOpen ? closeNotes : openNotes, openBrowser: actions.openBrowser,
+      editSpaceTags: () => { if (runtime.selectedSpace) runtime.requestTagEditor(runtime.selectedSpace.id); },
       closeBrowser: () => { if (selectedTab) actions.perform(closeBrowserLeaf(ctx, selectedTab.id)); },
       retryBrowserCleanup: () => actions.perform(retryBrowserCleanup(ctx)), showWidgets,
       cycleWidget: (tabId, step) => widgets.cycle(tabId, step), removeWidget: tabId => { actions.closeLeaf(`${tabId}:widget`); }, goToWidget,

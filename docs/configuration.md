@@ -52,7 +52,7 @@ catalog_depth = 3
 
 ## Endpoint and CLI selection
 
-Herdr-addressed `widget`, `context`, `library add`, `browser`, `notes` and orchestration commands share [endpoint.rs](../crates/cockpit-host/src/bin/cockpit/endpoint.rs). Explicit `--herdr-session`/`--herdr-socket` selectors take precedence; otherwise launch `COCKPIT_HERDR_SESSION` pairs with the pane's `HERDR_SOCKET_PATH`, then native Herdr inheritance. Socket layout identifies `herdr.sock` as `default` and `sessions/<name>/herdr.sock` as a named session. An explicit Herdr session never borrows another session's inherited socket; a stale selected socket fails rather than falling back. This physical session is separate from the agent conversation's `COCKPIT_SESSION_ID`.
+Herdr-addressed `widget`, `context`, `library add`, `tags`, `browser`, `notes` and orchestration commands share [endpoint.rs](../crates/cockpit-host/src/bin/cockpit/endpoint.rs). Explicit `--herdr-session`/`--herdr-socket` selectors take precedence; otherwise launch `COCKPIT_HERDR_SESSION` pairs with the pane's `HERDR_SOCKET_PATH`, then native Herdr inheritance. Socket layout identifies `herdr.sock` as `default` and `sessions/<name>/herdr.sock` as a named session. An explicit Herdr session never borrows another session's inherited socket; a stale selected socket fails rather than falling back. This physical session is separate from the agent conversation's `COCKPIT_SESSION_ID`.
 
 Agent launches receive an absolute selected `COCKPIT_CLI_PATH` and configuration, not a guessed worker-PATH replacement. Host role uses its actual executable; Native prefers sibling `cockpit-cli` rather than the installed GUI, with the distinct development `cockpit` host fallback retained. Bare `COCKPIT_CLI_EXECUTABLE` overrides and native PATH fallback resolve in the owner's environment before worker cwd/environment changes and must identify an executable regular file; otherwise `cockpit_cli_unavailable` is explicit. The installed pair needs no override. Agent coordination uses issued private credentials with optional actual conversation metadata; physical commands separately require fresh evidence.
 
@@ -63,6 +63,28 @@ Open/Create leaves Herdr's default root terminal only, without a companion folde
 `cockpit-cli library add --current [--provider ID] [--follow] INPUT` saves to the global Library and selects what that add saved in the originating Space through the app's existing add operation. `--current` requires a Herdr pane (`HERDR_ENV=1`); alternatively use `--space ID --herdr-session ID --herdr-socket PATH`, without `--current`. `--config PATH` selects configuration (otherwise `COCKPIT_CONFIG_PATH` applies). Inputs are provider URLs, Jira JQL or Confluence spaces with `--follow`, and absolute or `~/` folder paths; relative folder paths are not resolved against the working directory. Already-saved items are selected without being overwritten. The command uses tokens already stored through Cockpit, reads providers but never writes to them, and offers no credential entry, select-only, remove or refresh command. Pacing is per process: the short-lived CLI does not share the running host's in-memory pacer or start background sync.
 
 The command waits for completion and prints JSON containing `target`, `space_label`, `pane_id`, `library_root`, `operation` and selected `items[].path`. Exit 0 means every operation phase is Done; Partial, Failed or Cancelled phases exit 1 with the report still on stdout. Preflight/start errors exit 1; usage errors exit 2. Interrupting does not roll back saved items; the abandoned operation is marked interrupted on its next read. `cockpit-cli library add --help` describes the bounded input and targeting options; `context` remains read-only.
+
+## Space tags
+
+Use the Spaces header's **Repository / Tags** switch (Repository initially; remembered in local storage) to group by repository or tag. Tags view puts a Space under each assigned tag and untagged Spaces under **Untagged** last; collapsing a group does not change membership. A row shows one tag plus `+N` for the rest; click it or **+ tag**, choose **Edit tags…** in the Space menu, or run **Edit Space tags…** from Commands. Type to filter/create and check or uncheck assignments; Enter adds the exact existing match or creates the entered tag, and Escape closes the picker. Tags are arbitrary organization, separate from the Herdr display label and agent state.
+
+Tags contain 1–32 Unicode characters after whitespace normalization and match case-insensitively, preserving catalog spelling/order. Removing the last assignment keeps the tag available in the catalog. HTTP, native and CLI use the same `state_root/space-tags/space-tags.json`; no separate tag configuration, running HTTP owner, Library or credentials are required. Tags survive ordinary Herdr restart, but confirmed Space closure prunes assignments; reopening the same name/path is not restoration. Disconnection alone never prunes. The exact unavoidable offline Space-ID-reuse limitation and storage identity are documented in [DECISIONS](../DECISIONS.md#supervisor-and-sidebar-presentation).
+
+```sh
+# Inside a Herdr pane: the calling Space is the default (--current is optional).
+cockpit-cli tags list
+cockpit-cli tags --current add "needs review"
+cockpit-cli tags remove "needs review"
+cockpit-cli tags list --all
+# Outside a pane: explicitly select both the session/socket and Space.
+cockpit-cli tags --space "$SPACE" --herdr-session "$SESSION" --herdr-socket "$SOCKET" add testing
+```
+
+`--current` requires `HERDR_ENV=1`; `--space` requires both explicit endpoint selectors (`COCKPIT_HERDR_SESSION` and `COCKPIT_HERDR_SOCKET` also supply them). `list --all` refuses `--current`/`--space`, uses the ambient endpoint inside Herdr, and requires both selectors outside it. There is no ambient default-session fallback outside a calling pane. `--config PATH` or `COCKPIT_CONFIG_PATH` selects the shared store configuration. Pass `--` before a tag beginning with `-`.
+
+Output is always JSON; no `--json` flag. A Space result contains `{session_id, server_instance, space_id, changed, tags, catalog}`; `list --all` returns `{session_id, server_instance, catalog, spaces}` with tagged live Spaces only. `list` reports `changed:false`; mutations compare their before/after reads, not exclusive ownership of a concurrent edit. An unknown explicit Space lists empty tags, while add/remove reject unavailable Spaces. Even `list` may persist confirmed-absence pruning.
+
+Add/remove are idempotent and never automatically retry. Exit statuses are 0 success, 2 usage/target required, 4 unavailable target, 9 changed identity (nothing written), 11 invalid tag/limit, 12 store busy, and 20 other failure (outcome may be unknown). On 9, re-run; on 20, list before re-running a mutation. Errors are JSON on stdout and text on stderr; `cockpit-cli tags --help` is the command reference.
 
 ## Supervisor launch and attempt authority
 

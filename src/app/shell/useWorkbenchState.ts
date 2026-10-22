@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { SpaceGitAction, SpaceGitStatus, SpaceServiceStatus } from "../../protocol/generated/v1";
 import { spaceCheckoutKey, useSpaceGitStatus } from "../session/spaceGitStatus";
 import { useSpaceServiceStatus } from "../session/spaceServiceStatus";
+import { useSpaceTags, type SpaceTagsState } from "../session/spaceTags";
 import { gitActionReason, gitActionRequest, useSpaceGitActions, type SpaceGitActions } from "../session/spaceGitActions";
 import type { SessionSummary } from "../../protocol/generated/v1";
 import type { LibraryCommand } from "../context/ContextViewer";
@@ -24,6 +25,9 @@ export interface WorkbenchState extends WorkbenchView, WorkareaController, Sideb
   gitPoll: { spaces: ReadonlyMap<string, SpaceGitStatus>; error: string | undefined; refresh(): void };
   spaceGit: ReadonlyMap<string, SpaceGitStatus>; gitBlocked: string | undefined; gitActions: SpaceGitActions;
   spaceServices: ReadonlyMap<string, readonly SpaceServiceStatus[]>;
+  spaceTags: SpaceTagsState;
+  tagEditorRequest: { spaceId: string; token: number } | null;
+  requestTagEditor(spaceId: string): void;
   gitNotice: { sessionId: string | null; text: string } | null;
   runGitAction(spaceId: string, action: SpaceGitAction): void;
 }
@@ -47,6 +51,15 @@ export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
   const gitPoll = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
   const spaceGit = gitPoll.spaces;
   const spaceServices = useSpaceServiceStatus(client, state.sync === "live" ? state.sessionId : null, snapshot, narrowViewport ? drawerOpen : !sidebarCollapsed);
+  const spaceTags = useSpaceTags(client, state.sessionId, snapshot, state.sync === "live");
+  const [tagEditor, setTagEditor] = useState<{ spaceId: string; token: number; sessionId: string | null; serverInstance: string | undefined } | null>(null);
+  const tagEditorRequest = tagEditor?.sessionId === state.sessionId && tagEditor?.serverInstance === snapshot?.server_instance ? tagEditor : null;
+  const requestTagEditor = (spaceId: string) => {
+    if (spaceTags.editBlocked) return;
+    if (narrowViewport) sidebar.openDrawer();
+    else if (sidebarCollapsed) sidebar.toggleSidebarCollapsed();
+    setTagEditor(previous => ({ spaceId, token: (previous?.token ?? 0) + 1, sessionId: state.sessionId, serverInstance: snapshot?.server_instance }));
+  };
   const gitBlocked = state.sync !== "live" ? "Herdr is not live" : mutationBusy ? "Herdr is applying a change" : popup || popupPending ? "The popup owns keyboard input" : gitPoll.error ? `Git status unavailable: ${gitPoll.error}` : undefined;
   const [gitNotice, setGitNotice] = useState<{ sessionId: string | null; text: string } | null>(null);
   const gitActions = useSpaceGitActions(client, state.sessionId, spaceGit, gitPoll.refresh, (spaceId, problem) => {
@@ -77,5 +90,5 @@ export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
   return { ...view, ...workarea, ...ui, ...widget, ...navigation, ...sidebar, libraryOpen, notesOpen, overviewOpen, liaison,
     libraryCommand: workarea.view.kind === "library" ? workarea.view.command : null,
     mutationBusy, modalOpen, viewerSources, browserOpen, browserInputActive, browserReason,
-    sidebarSession: props.sessions.find(session => session.id === state.sessionId), gitPoll, spaceGit, spaceServices, gitBlocked, gitActions, gitNotice, runGitAction };
+    sidebarSession: props.sessions.find(session => session.id === state.sessionId), gitPoll, spaceGit, spaceServices, spaceTags, tagEditorRequest, requestTagEditor, gitBlocked, gitActions, gitNotice, runGitAction };
 }

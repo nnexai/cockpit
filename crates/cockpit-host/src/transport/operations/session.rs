@@ -6,6 +6,7 @@ use cockpit_protocol::{
         SessionListResponse, SessionSnapshotResponse, SpaceGitActionRequest,
         SpaceGitActionResponse, SpaceGitStatusResponse, StatusResponse,
         SpaceServiceStatusResponse,
+        SpaceTagChangeRequest, SpaceTagsResponse,
     },
 };
 
@@ -71,6 +72,22 @@ pub async fn space_service_status(
         .space_service_status(&session_id)
         .await
         .map_err(Into::into)
+}
+
+pub async fn space_tags(
+    service: &CockpitService,
+    _transport: Transport,
+    session_id: String,
+) -> Result<SpaceTagsResponse, OperationError> {
+    service.space_tags()?.list(&session_id).await.map_err(Into::into)
+}
+
+pub async fn space_tag_change(
+    service: &CockpitService,
+    _transport: Transport,
+    (session_id, request): (String, SpaceTagChangeRequest),
+) -> Result<SpaceTagsResponse, OperationError> {
+    service.space_tags()?.change(&session_id, &request).await.map_err(Into::into)
 }
 
 pub async fn space_git_action(

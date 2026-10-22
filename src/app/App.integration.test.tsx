@@ -290,6 +290,8 @@ class AppFixture {
     sessionSnapshot: this.snapshotCalls,
     spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
     spaceServiceStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, services: [] })),
+    spaceTags: vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: snapshot(sessionId).server_instance, catalog: [], spaces: [] })),
+    changeSpaceTag: vi.fn(async () => { throw new Error("Unexpected Space tag change in terminal fixture"); }),
     spaceGitAction: vi.fn(async () => { throw new Error("Unexpected Git action in terminal fixture"); }),
     focus: this.focusCalls,
     mutate: this.mutateCalls,

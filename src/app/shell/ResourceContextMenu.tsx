@@ -17,6 +17,7 @@ export function ResourceContextMenu(props: WorkbenchContentProps) {
     const gitPending = gitActions.forStatus(git);
     return <ContextMenu menu={menu} onDismiss={dismissMenu}>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => beginRename(menu.target))}><UiIcon name="edit" />Rename</button>
+      <button role="menuitem" type="button" aria-haspopup="dialog" disabled={Boolean(props.spaceTags.editBlocked)} title={props.spaceTags.editBlocked ?? undefined} onClick={() => menuAction(() => props.requestTagEditor(space.id))}><UiIcon name="tag" />Edit tags…</button>
       <button role="menuitem" type="button" disabled={disabled} className="destructive" onClick={() => menuAction(() => closeSpace(space))}><UiIcon name="close" />Close</button>
       <button role="menuitem" type="button" disabled={disabled} onClick={() => menuAction(() => setTeardownSpaceId(space.id))}><UiIcon name="trash" />Remove worktree…</button>
       {git ? <>

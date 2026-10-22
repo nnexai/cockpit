@@ -53,6 +53,7 @@ export interface CommandInput {
   liaison: { actionLabel: string | null; startAvailable: boolean; overviewAvailable: boolean; overviewOpen: boolean };
   browser: { open: boolean; reason: string | null };
   git: { target: Space | undefined; status: SpaceGitStatus | undefined; pending: GitActionState | undefined; blocked: string | undefined };
+  tags: { blocked: string | null };
   widgets: { pending: boolean; dockTabId: string | null; list: readonly WidgetSummary[] };
   viewerSources: ViewerSourcesState;
   local: Partial<Record<LocalShortcutId, () => void>>;
@@ -62,6 +63,7 @@ export interface CommandInput {
     supervisor(): void;
     overview(): void;
     git(spaceId: string, action: SpaceGitAction): void;
+    editSpaceTags(): void;
     recovery(): void;
     toggleNotes(): void;
     openBrowser(): void;
@@ -113,6 +115,7 @@ export function buildCommands(input: CommandInput): CommandAction[] {
       const detail = target ? gitTargetDetail(target.label, status, action) : undefined;
       return { id: entry.id, label: entry.label, primary: entry.primary, group: entry.group, icon: action === "pull" ? "down" : "up", shortcut: formatShortcut(id), disabled: Boolean(reason), reason: reason ?? detail, reasonDetail: detail ? `${detail}${reason ? ` · ${reason}` : ""}` : reason, run: () => { if (target) run.git(target.id, action); } };
     }),
+    { id: "space-tags:edit", label: "Edit Space tags…", group: "Space", icon: "tag", disabled: !selectedSpace || Boolean(input.tags.blocked), reason: !selectedSpace ? "Select a Space first" : input.tags.blocked ?? undefined, run: run.editSpaceTags },
     { id: "recovery:cleanup", label: "Recover task cleanup…", group: "Navigate", run: run.recovery },
     { id: "notes:toggle", label: notesOpen ? "Close Notes" : "Open Notes", icon: "file", primary: true, group: "Navigate", disabled: !selectedSpace, reason: !selectedSpace ? "Select a Space first" : undefined, run: run.toggleNotes },
     { id: "browser:open", label: "Open Browser", primary: true, shortcut: formatShortcut("toggle-browser"), group: "Browser", disabled: Boolean(browser.reason), reason: browser.reason ?? undefined, run: run.openBrowser },

@@ -10,6 +10,7 @@ import {
   parseSpaceGitStatusResponse,
   parseSpaceGitActionResponse,
   parseSpaceServiceStatusResponse,
+  parseSpaceTagsResponse,
   parseStatusResponse,
   parseTerminalCommand,
   parseTerminalOpenRequest,
@@ -158,6 +159,8 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     sessionSnapshot: vi.fn(async () => snapshot),
     spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
     spaceServiceStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, services: [] })),
+    spaceTags: vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: snapshot.server_instance, catalog: [], spaces: [] })),
+    changeSpaceTag: vi.fn(async () => { throw new Error("Unexpected Space tag change in terminal fixture"); }),
     spaceGitAction: vi.fn(async () => { throw new Error("Unexpected Git action in terminal fixture"); }),
     focus: vi.fn(async () => ({ session_id: snapshot.session_id, kind: "pane" as const, target_id: "pane-1", accepted: true })),
     mutate: vi.fn(async () => ({ session_id: snapshot.session_id, snapshot, created: null })),
@@ -358,6 +361,81 @@ describe("Space service status contracts", () => {
         ? createBrowserClient(vi.fn(async () => jsonResponse(response)))
         : createNativeClient(vi.fn(async () => response));
       await expect(client.spaceServiceStatus("session-1")).resolves.toEqual(response);
+    });
+  }
+});
+
+describe("Space tags contracts", () => {
+  const response = { session_id: "session-1", server_instance: "server-1", catalog: ["My check", "Needs testing"], spaces: [{ space_id: "space-1", tags: ["My check"] }] };
+  const request = { space_id: "space-1", server_instance: "server-1", tag: "Needs testing", assigned: true };
+
+  it("decodes catalogs and assignments while rejecting malformed tag payloads", () => {
+    expect(parseSpaceTagsResponse({ ...response, extra: true, spaces: [{ ...response.spaces[0], extra: true }] })).toEqual(response);
+    for (const invalid of [
+      { ...response, server_instance: undefined },
+      { ...response, catalog: ["My check", 2] },
+      { ...response, catalog: null },
+      { ...response, spaces: [{ space_id: "space-1", tags: [false] }] },
+      { ...response, spaces: [{ space_id: null, tags: [] }] },
+      { ...response, spaces: [{ space_id: "space-1" }] },
+    ]) expect(() => parseSpaceTagsResponse(invalid)).toThrow(CockpitClientError);
+  });
+
+  for (const transport of ["browser", "native"] as const) {
+    const clientFor = (value: unknown) => transport === "browser"
+      ? createBrowserClient(vi.fn(async () => jsonResponse(value)))
+      : createNativeClient(vi.fn(async () => value));
+
+    it(`${transport} decodes tags and rejects responses for another session or write instance`, async () => {
+      await expect(clientFor(response).spaceTags("session-1")).resolves.toEqual(response);
+      await expect(clientFor(response).changeSpaceTag("session-1", request)).resolves.toEqual(response);
+      await expect(clientFor({ ...response, session_id: "other" }).spaceTags("session-1")).rejects.toMatchObject({ code: "malformed_response" });
+      for (const field of ["session_id", "server_instance"]) {
+        await expect(clientFor({ ...response, [field]: "other" }).changeSpaceTag("session-1", request)).rejects.toMatchObject({ code: "malformed_response" });
+      }
+      await expect(clientFor({ ...response, spaces: [{ space_id: "space-1", tags: [1] }] }).spaceTags("session-1")).rejects.toMatchObject({ code: "malformed_response" });
+    });
+
+    it(`${transport} preserves target-change, validation and unknown-outcome operation codes`, async () => {
+      for (const code of ["space_tags_target_changed", "invalid_space_tag", "space_tags_outcome_unknown"]) {
+        const error = { code, message: "Tag change failed" };
+        const client = transport === "browser"
+          ? createBrowserClient(vi.fn(async () => jsonResponse(error, code === "invalid_space_tag" ? 400 : code === "space_tags_target_changed" ? 409 : 503)))
+          : createNativeClient(vi.fn(async () => { throw error; }));
+        await expect(client.changeSpaceTag("session-1", request)).rejects.toMatchObject({ operationCode: code, message: error.message });
+      }
+    });
+
+    it(`${transport} snapshots the submitted tag request before caller mutation`, async () => {
+      let resolve!: (value: unknown) => void;
+      const pending = new Promise<unknown>(next => { resolve = next; });
+      const submitted = { ...request };
+      const fetch = vi.fn(async (_url: string, _init?: RequestInit) => jsonResponse(await pending));
+      const invoke = vi.fn(async (_command: string, _args?: Record<string, unknown>) => pending);
+      const client = transport === "browser" ? createBrowserClient(fetch) : createNativeClient(invoke);
+      const result = client.changeSpaceTag("session-1", submitted);
+      submitted.server_instance = "changed-by-caller";
+      submitted.tag = "Different";
+      resolve(response);
+      await expect(result).resolves.toEqual(response);
+      if (transport === "browser") {
+        expect(fetch).toHaveBeenCalledExactlyOnceWith("/api/v1/sessions/session-1/space-tags", expect.objectContaining({ method: "POST", body: JSON.stringify(request) }));
+      } else {
+        expect(invoke).toHaveBeenCalledExactlyOnceWith("cockpit_space_tag_change", { sessionId: "session-1", request });
+      }
+    });
+
+    it(`${transport} rejects a late aborted tag read`, async () => {
+      let resolve!: (value: unknown) => void;
+      const pending = new Promise<unknown>(next => { resolve = next; });
+      const client = transport === "browser"
+        ? createBrowserClient(vi.fn(async () => jsonResponse(await pending)))
+        : createNativeClient(vi.fn(async () => pending));
+      const controller = new AbortController();
+      const result = client.spaceTags("session-1", controller.signal);
+      controller.abort();
+      resolve(response);
+      await expect(result).rejects.toBeDefined();
     });
   }
 });

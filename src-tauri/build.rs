@@ -83,6 +83,8 @@ fn main() {
             "cockpit_session_snapshot",
             "cockpit_space_git_status",
             "cockpit_space_service_status",
+            "cockpit_space_tags",
+            "cockpit_space_tag_change",
             "cockpit_space_git_action",
             "cockpit_focus",
             "cockpit_mutate",

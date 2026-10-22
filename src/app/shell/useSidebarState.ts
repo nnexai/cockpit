@@ -85,6 +85,8 @@ export function useSidebarState({ selection, state }: Pick<WorkbenchProps, "sele
     if (!narrowViewport || !drawerOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (document.querySelector("[data-server-modal]")) return;
+      // The tag picker owns its Escape and Tab keys, including in the narrow drawer.
+      if (event.target instanceof Element && event.target.closest(".space-tag-popover")) return;
       if (event.key === "Escape") {
         event.preventDefault();
         closeDrawer();
@@ -98,7 +100,9 @@ export function useSidebarState({ selection, state }: Pick<WorkbenchProps, "sele
       controls[(current + (event.shiftKey ? controls.length - 1 : 1)) % controls.length]?.focus();
     };
     window.addEventListener("keydown", handleKeyDown, true);
-    window.setTimeout(() => sidebarCloseRef.current?.focus({ preventScroll: true }), 0);
+    window.setTimeout(() => {
+      if (!document.querySelector(".space-tag-popover")) sidebarCloseRef.current?.focus({ preventScroll: true });
+    }, 0);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [closeDrawer, drawerOpen, narrowViewport]);
   useEffect(() => {

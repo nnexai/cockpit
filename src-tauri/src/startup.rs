@@ -217,6 +217,11 @@ fn compose_views(runtimes: RuntimeServices) -> NativeServices {
         ))
         .with_herdr(inspector.clone()),
     );
+    let service = service.with_space_tags(
+        cockpit_core::space_tags::SpaceTagService::new(
+            std::path::Path::new(&project_config.state_root), inspector.clone(),
+        ).expect("failed to initialize Space tags"),
+    );
     let reviews = cockpit_core::review::ReviewService::new(
         project_config.clone(),
         service

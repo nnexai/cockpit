@@ -86,6 +86,8 @@
     "allow-cockpit-library-media",
     "allow-cockpit-space-git-status",
     "allow-cockpit-space-service-status",
+    "allow-cockpit-space-tags",
+    "allow-cockpit-space-tag-change",
     "allow-cockpit-space-git-action",
     "allow-cockpit-browser-action",
     "allow-cockpit-browser-feedback",

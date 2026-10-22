@@ -66,10 +66,10 @@ import {
   parseBrowserFeedbackSendRequest, parseBrowserFeedbackSendResponse, parseBrowserRequest, parseBrowserResponse, 
   parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest, parseFocusRequest, parseFocusResponse, 
   parseResourceMutationRequest, parseResourceMutationResponse, parseSessionListResponse, 
-  parseSessionSnapshotResponse, parseSpaceGitStatusResponse, parseSpaceServiceStatusResponse, matchSpaceGitActionResponse, parseStatusResponse,
+  parseSessionSnapshotResponse, parseSpaceGitStatusResponse, parseSpaceServiceStatusResponse, parseSpaceTagsResponse, matchSpaceGitActionResponse, parseStatusResponse,
   validateSessionId, validateResourceId, type CockpitClient,
 } from "./CockpitClient";
-import type { FocusRequest, ResourceMutationRequest, SpaceGitActionRequest } from "../protocol/generated/v1";
+import type { FocusRequest, ResourceMutationRequest, SpaceGitActionRequest, SpaceTagChangeRequest } from "../protocol/generated/v1";
 import { widgetAbortable } from "./widgetTransport";
 
 type Backend = "browser" | "native";
@@ -942,6 +942,39 @@ const operations: OperationTable = {
         tauri: { command: "cockpit_space_service_status", args: () => ({ sessionId }) },
         parse: parseSpaceServiceStatusResponse,
         matchIdentity: (response) => { if (backend === "native") signal?.throwIfAborted(); if (response.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Space service status belongs to another session"); return response; },
+      };
+    },
+  },
+  spaceTags: { direct: "both",
+    encode(_backend, sessionId, signal) {
+      validateSessionId(sessionId); signal?.throwIfAborted();
+      return {
+        operation: "Space tags",
+        http: { method: "GET", route: () => `/api/v1/sessions/${encodeURIComponent(sessionId)}/space-tags`, signal: () => signal },
+        tauri: { command: "cockpit_space_tags", args: () => ({ sessionId }) },
+        parse: parseSpaceTagsResponse,
+        matchIdentity: (response) => { signal?.throwIfAborted(); if (response.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Space tags belong to another session"); return response; },
+      };
+    },
+  },
+  changeSpaceTag: { direct: "both",
+    encode(_backend, sessionId, request) {
+      validateSessionId(sessionId);
+      let submitted: SpaceTagChangeRequest;
+      const submit = () => { submitted = { ...request }; return submitted; };
+      return {
+        operation: "Space tag change",
+        http: {
+          method: "POST",
+          route: () => { submit(); return `/api/v1/sessions/${encodeURIComponent(sessionId)}/space-tags`; },
+          json: () => submitted,
+        },
+        tauri: { command: "cockpit_space_tag_change", args: () => ({ sessionId, request: submit() }) },
+        parse: parseSpaceTagsResponse,
+        matchIdentity: (response) => {
+          if (response.session_id !== sessionId || response.server_instance !== submitted.server_instance) throw new CockpitClientError("malformed_response", "Space tag change belongs to another target");
+          return response;
+        },
       };
     },
   },

@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { UiIcon } from "../UiIcon";
 import { rankFuzzyMatches } from "../input/fileNavigation";
 import { trapModalTab, useModalFocus } from "../input/modal";
-import { StateGlyph } from "../sidebar/StateGlyph";
+import { StateGlyph, spaceGlyphShape } from "../sidebar/StateGlyph";
 import { switchSearchText, type SwitchRow, type SwitchTarget } from "./quickSwitch";
 
 export function QuickSwitcher({ rows, hasSession, loading, live, onChoose, onDismiss }: {
@@ -56,7 +56,7 @@ export function QuickSwitcher({ rows, hasSession, loading, live, onChoose, onDis
           const matched = new Set(row.matchedIndices);
           const metaStart = Array.from(row.primary).length + 1;
           return <button ref={index === active ? activeRowRef : null} id={`${listId}-${row.key}`} key={row.key} type="button" role="option" aria-selected={index === active} aria-disabled={Boolean(row.disabledReason)} aria-label={`${row.primary}, ${kind}, ${row.meta}${row.current ? ", current" : ""}${row.disabledReason ? `, unavailable: ${row.disabledReason}` : ""}`} className={`switcher-row${index === active ? " is-active" : ""}`} title={row.title} disabled={Boolean(row.disabledReason)} onFocus={() => selectIndex(index)} onMouseMove={() => { if (index !== active) selectIndex(index); }} onClick={() => { if (!row.disabledReason) onChoose({ kind: row.kind, id: row.id }); }}>
-            <StateGlyph shape={row.status.shape} />
+            <StateGlyph shape={row.kind === "space" ? spaceGlyphShape(row.status) : row.status.shape} />
             <span className="switcher-text"><span className="switcher-primary">{Array.from(row.primary, (character, offset) => matched.has(offset) ? <mark key={offset}>{character}</mark> : character)}</span><span className="switcher-meta">{Array.from(row.meta, (character, offset) => matched.has(metaStart + offset) ? <mark key={offset}>{character}</mark> : character)}</span>{row.disabledReason ? <span className="switcher-meta">{row.disabledReason}</span> : null}</span>
             {row.current ? <span className="switcher-current">Current</span> : null}<span className="switcher-kind">{kind}</span>
           </button>;

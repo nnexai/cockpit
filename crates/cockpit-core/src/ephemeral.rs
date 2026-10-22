@@ -119,14 +119,14 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, b"old work").unwrap();
         }
-        for name in ["project.json", "Library/page.md", "vault/token", "config/settings.json", "outside/sentinel", "browser/owner.lock", "browser/owner.sock"] {
+        for name in ["project.json", "Library/page.md", "vault/token", "config/settings.json", "outside/sentinel", "browser/owner.lock", "browser/owner.sock", "space-tags/space-tags.json"] {
             let path = fixture.0.join(name);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, name).unwrap();
         }
         symlink(fixture.0.join("outside"), fixture.0.join("browser/profiles/link")).unwrap();
         reset_owner_state(&fixture.0, &service).await.unwrap();
-        for name in ["project.json", "Library/page.md", "vault/token", "config/settings.json", "outside/sentinel", "browser/owner.lock", "browser/owner.sock"] {
+        for name in ["project.json", "Library/page.md", "vault/token", "config/settings.json", "outside/sentinel", "browser/owner.lock", "browser/owner.sock", "space-tags/space-tags.json"] {
             assert_eq!(fs::read(fixture.0.join(name)).unwrap(), name.as_bytes());
         }
         for name in STATE_DIRS {

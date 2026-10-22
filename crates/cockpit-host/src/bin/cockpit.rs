@@ -6,6 +6,8 @@ mod library_cli;
 mod notes_cli;
 #[path = "cockpit/skills.rs"]
 mod skills_cli;
+#[path = "cockpit/tags.rs"]
+mod tags_cli;
 #[path = "cockpit/contain.rs"]
 mod contain;
 #[path = "cockpit/agent_exec.rs"]
@@ -51,6 +53,7 @@ const ROOT_HELP: &str = "Agent workflows:
   cockpit-cli route --help       Read configured project-routing evidence
   cockpit-cli skills --help      Read or explicitly install portable CLI skills
   cockpit-cli library --help     Save to the Library and select in the current Space
+  cockpit-cli tags --help        List, add or remove tags of the current Space
 
 Use <command> <subcommand> --help for payloads, selectors and examples.
 Prefer COCKPIT_CLI_PATH when supplied by a Cockpit-launched agent.
@@ -135,6 +138,9 @@ Output is JSON automatically; no --json flag.")]
     /// Read and edit durable Space Notes outside repositories and the Library.
     #[command(after_long_help = notes_cli::NOTES_HELP)]
     Notes(notes_cli::NotesArgs),
+    /// List, add and remove organisation tags of the current or an explicit Space.
+    #[command(after_long_help = tags_cli::TAGS_HELP)]
+    Tags(tags_cli::TagsArgs),
     /// Read or explicitly install bundled portable skills for this CLI.
     #[command(after_long_help = skills_cli::SKILLS_HELP)]
     Skills(skills_cli::SkillsArgs),
@@ -359,6 +365,11 @@ fn make_service(
             let notes = cockpit_core::notes::NotesService::new(PathBuf::from(&config.notes_root))
                 .with_herdr(adapter.clone());
             let service = service.with_notes(notes);
+            let service = service.with_space_tags(
+                cockpit_core::space_tags::SpaceTagService::new(
+                    std::path::Path::new(&config.state_root), adapter.clone(),
+                ).map_err(|error| error.to_string())?,
+            );
             let credentials = Arc::new(cockpit_core::credentials::ProviderCredentials::new(
                 &config,
                 cockpit_secrets::os_vault(),
@@ -551,6 +562,7 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
         Command::Browser(args) => run_browser(args).await,
         Command::Widget(_) => unreachable!("widget commands use their own exit-status contract"),
         Command::Notes(_) => unreachable!("Notes commands use their own exit-status contract"),
+        Command::Tags(_) => unreachable!("tags commands use their own exit-status contract"),
         Command::Skills(_) => unreachable!("skills commands use their own exit-status contract"),
         Command::Library(_) => unreachable!("Library commands use their own exit-status contract"),
         Command::Contain(_) => unreachable!("contain is a launch-only exec helper"),
@@ -589,6 +601,29 @@ async fn current_pane_id(
         .filter(|id| !id.is_empty())
         .map(str::to_owned)
         .ok_or_else(|| "Herdr current-pane response has no pane_id".to_owned())
+}
+
+/// Double-read the calling pane's evidence on one session; returns its Space id.
+async fn current_pane_space(
+    adapter: &HerdrCliAdapter,
+    session: &str,
+    pane: &str,
+) -> Result<String, cockpit_core::InspectionError> {
+    let source = adapter.source_adapter();
+    let before = source.source_pane_evidence(session, pane).await?;
+    let after = source.source_pane_evidence(session, pane).await?;
+    if before.pane_id != pane
+        || after.pane_id != pane
+        || before.workspace_id != after.workspace_id
+        || before.tab_id != after.tab_id
+        || before.endpoint_identity != after.endpoint_identity
+    {
+        return Err(cockpit_core::InspectionError::new(
+            "stale_identity",
+            "The originating pane identity changed during lookup",
+        ));
+    }
+    Ok(before.workspace_id)
 }
 
 struct SpaceContext {
@@ -1105,6 +1140,7 @@ async fn main() -> ExitCode {
     let widget = std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("widget"));
     let notes = std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("notes"));
     let skills = std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("skills"));
+    let tags = std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("tags"));
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
@@ -1113,6 +1149,9 @@ async fn main() -> ExitCode {
             }
             if skills && !matches!(error.kind(), clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion) {
                 return ExitCode::from(skills_cli::print_error(cockpit_core::InspectionError::new("skills_usage", error.to_string())));
+            }
+            if tags && !matches!(error.kind(), clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion) {
+                return ExitCode::from(tags_cli::print_error(cockpit_core::InspectionError::new("tags_usage", error.to_string())));
             }
             if widget && !matches!(error.kind(), clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion) {
                 eprintln!("{}", CliError::widget("widget_usage", error).text);
@@ -1131,6 +1170,7 @@ async fn main() -> ExitCode {
         Command::Inbox(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Route(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Notes(args) => return ExitCode::from(notes_cli::run(args).await),
+        Command::Tags(args) => return ExitCode::from(tags_cli::run(args).await),
         Command::Skills(args) => return ExitCode::from(skills_cli::run(args).await),
         Command::Library(args) => library_cli::run(args).await.map_err(CliError::from),
         Command::Contain(args) => return ExitCode::from(contain::run(args).await),
@@ -1203,6 +1243,27 @@ mod tests {
         assert!(Cli::try_parse_from([
             "cockpit", "context", "--herdr-session", "fixture", "--herdr-socket", "/fixture/herdr.sock", "--space", "w1",
         ]).is_ok());
+    }
+
+    #[test]
+    fn tags_parser_accepts_targets_and_verbs() {
+        for arguments in [
+            vec!["list"],
+            vec!["--current", "add", "needs review"],
+            vec!["add", "x", "--current"],
+            vec!["--space", "w1", "--herdr-session", "s", "--herdr-socket", "/x", "remove", "x"],
+            vec!["list", "--all"],
+            vec!["add", "--", "-needs-review"],
+        ] {
+            assert!(Cli::try_parse_from(["cockpit", "tags"].into_iter().chain(arguments)).is_ok());
+        }
+        assert_eq!(
+            Cli::try_parse_from(["cockpit", "tags", "--current", "--space", "w1", "list"])
+                .unwrap_err().kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+        );
+        assert!(Cli::try_parse_from(["cockpit", "tags", "add"]).is_err());
+        assert!(Cli::try_parse_from(["cockpit", "tags"]).is_err());
     }
 
     #[test]
