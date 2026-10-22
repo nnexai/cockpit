@@ -29,7 +29,8 @@ export function SpaceGitAction({ status, child, entry, blocked, statusError, onA
   const unknown = result?.kind === "problem" && result.unknown;
   const readProblem = Boolean(onReadProblem && gitReadProblem(status));
   const reason = gitActionReason(status, action, entry, blocked ?? (statusError ? `Git status unavailable: ${statusError}` : undefined));
-  const quiet = !statusError && tracked?.ahead === 0 && tracked.behind === 0;
+  // Level and no-upstream branches carry no news; their mark appears only on hover, focus or selection.
+  const quiet = !statusError && (upstream?.state === "none" || (tracked?.ahead === 0 && tracked.behind === 0));
   const diverged = Boolean(tracked && tracked.ahead > 0 && tracked.behind > 0);
   const position = aheadBehindLabel(status);
   const target = checkout.state === "branch" && tracked ? `${checkout.branch} ${action === "push" ? "→" : "←"} ${tracked.name}` : "";

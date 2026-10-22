@@ -157,8 +157,8 @@
   flex-direction: column;
 }
 
-/* Each section reserves one third; entry counts share the remaining third.
- * Zero-minimum grid tracks let both lists scroll even in a short sidebar. */
+/* Agents sit directly under the Spaces content while the lists fit (Sidebar.tsx measures them); once both overflow,
+ * each section reserves one third and entry counts share the rest. Zero-minimum tracks let both lists scroll. */
 .agents-section {
   padding-top: 8px;
   border-top: 1px solid var(--border);
@@ -760,7 +760,9 @@
 }
 .space-tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .space-tag-more { flex: none; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.space-tag-add { visibility: hidden; border-style: dashed; color: var(--text-muted); }
+/* The add trigger overlays the row end, so an untagged row's name keeps the full width. */
+.space-tag-add { position: absolute; top: 7px; right: 8px; z-index: 3; visibility: hidden; border-style: dashed; background: var(--surface-hover); color: var(--text-muted); }
+.space-tree-row.is-selected .space-tag-add { background: var(--select-fill); }
 .space-tree-row:is(:hover, :focus-within, .is-selected) .space-tag-add,
 .space-tag-add[aria-expanded="true"] { visibility: visible; }
 .space-tag-chip:hover, .space-tag-chip[aria-expanded="true"], .space-tag-add:hover { border-color: var(--accent); color: var(--text-primary); }
@@ -807,4 +809,4 @@
   .spaces-view-switch button { padding-inline: 4px; }
   .space-tag-chip { max-width: 84px; }
 }
-@media (pointer: coarse) { .space-tag-add { visibility: visible; } }
+@media (pointer: coarse) { .space-tag-add { position: relative; top: auto; right: auto; visibility: visible; background: transparent; } }
