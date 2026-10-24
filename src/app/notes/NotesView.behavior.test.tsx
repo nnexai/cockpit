@@ -46,6 +46,7 @@ interface Fixture {
   readComments: Mock<(todoId: string) => Promise<NotesResponse>>;
   addComment: Mock<(operation: Extract<NotesRequest["operation"], { op: "comment_add" }>) => Promise<NotesResponse>>;
   addTodo: Mock<(operation: Extract<NotesRequest["operation"], { op: "todo_add" }>) => Promise<NotesResponse>>;
+  removeTodo: Mock<(operation: Extract<NotesRequest["operation"], { op: "todo_remove" }>) => Promise<NotesResponse>>;
   response(result: NotesResponse["result"], changed?: boolean): NotesResponse;
   replaceTodos(todos: NotesTodo[]): void;
 }
@@ -63,7 +64,7 @@ function fixture(): Fixture {
   const response = (result: NotesResponse["result"], changed = false): NotesResponse => ({ notes_id: notesId, changed, result });
   const resolveTarget = vi.fn(async (): Promise<NotesResponse> => response({ kind: "target", info }));
   const readCatalog = vi.fn(async (): Promise<NotesResponse> => response({ kind: "catalog", entries: [] }));
-  const readComments = vi.fn(async (todoId: string): Promise<NotesResponse> => response({ kind: "comments", todo_id: todoId, comments }));
+  const readComments = vi.fn(async (todoId: string): Promise<NotesResponse> => response({ kind: "comments", todo_id: todoId, comments: comments.filter(comment => comment.todo_id === todoId) }));
   const addComment = vi.fn(async (operation: Extract<NotesRequest["operation"], { op: "comment_add" }>): Promise<NotesResponse> => {
     const comment: NotesComment = { todo_id: operation.todo_id, comment_id: `20000000-0000-4000-8000-${(comments.length + 1).toString(16).padStart(12, "0")}`, created: null, author: operation.author, body: operation.body, revision: "comment-1" };
     comments = [...comments, comment];
@@ -73,6 +74,16 @@ function fixture(): Fixture {
     const added: NotesTodo = { ...task, id: "task2", ref: "L2@file2", line: 2, text: operation.text, lane: operation.lane };
     todos = [...todos, added];
     return response({ kind: "todo", revision: "todos-2", todo: added }, true);
+  });
+  const removeTodo = vi.fn(async (operation: Extract<NotesRequest["operation"], { op: "todo_remove" }>): Promise<NotesResponse> => {
+    const selector = operation.todo;
+    const matches = todos.filter(todo => selector.by === "id" ? todo.id === selector.id : todo.ref === selector.ref);
+    const selected = matches[0];
+    if (matches.length !== 1 || !selected || (selector.by === "id" && selected.revision !== selector.expected_revision)) {
+      throw problem("notes_conflict", "The selected todo changed before deletion");
+    }
+    todos = todos.filter(todo => todo !== selected);
+    return response({ kind: "todo_removed", revision: "todos-after-remove" }, true);
   });
   const notes = vi.fn(async ({ operation }: NotesRequest): Promise<NotesResponse> => {
     switch (operation.op) {
@@ -84,10 +95,11 @@ function fixture(): Fixture {
       case "comment_list": return readComments(operation.todo_id);
       case "comment_add": return addComment(operation);
       case "todo_add": return addTodo(operation);
+      case "todo_remove": return removeTodo(operation);
       default: throw new Error(`Unexpected Notes operation: ${operation.op}`);
     }
   });
-  return { client: { notes } as unknown as CockpitClient, space, info, task, notes, resolveTarget, readCatalog, readComments, addComment, addTodo, response, replaceTodos: (next: NotesTodo[]) => { todos = next; } };
+  return { client: { notes } as unknown as CockpitClient, space, info, task, notes, resolveTarget, readCatalog, readComments, addComment, addTodo, removeTodo, response, replaceTodos: (next: NotesTodo[]) => { todos = next; } };
 }
 
 async function settle(): Promise<void> {
@@ -117,13 +129,16 @@ function query<T extends Element>(selector: string): T {
   if (!element) throw new Error(`Missing element: ${selector}`);
   return element;
 }
-function findButton(label: string): HTMLButtonElement | undefined {
-  return [...host!.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === label || button.getAttribute("aria-label") === label);
+function findButton(label: string, scope: ParentNode = host!): HTMLButtonElement | undefined {
+  return [...scope.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === label || button.getAttribute("aria-label") === label);
 }
-function button(label: string): HTMLButtonElement {
-  const element = findButton(label);
+function button(label: string, scope: ParentNode = host!): HTMLButtonElement {
+  const element = findButton(label, scope);
   if (!element) throw new Error(`Missing button: ${label}`);
   return element;
+}
+function todoConfirmationButton(label: "Keep" | "Delete todo"): HTMLButtonElement {
+  return button(label, query<HTMLElement>('.notes-task-detail .notes-delete-confirm[role="group"]'));
 }
 async function click(element: HTMLElement): Promise<void> {
   await act(async () => { element.focus(); element.click(); });
@@ -288,6 +303,111 @@ describe("NotesView consumer safety", () => {
     flushFrames();
     expect(document.activeElement).toBe(button("Attach existing notes…"));
     expect(current.notes.mock.calls.some(([request]) => request.operation.op === "target_attach")).toBe(false);
+  });
+
+  it.each(["Keep", "Escape"] as const)("cancels todo deletion with %s without a write and returns focus to Delete todo", async cancel => {
+    const current = fixture();
+    await mount(current);
+    await openTask(current);
+    flushFrames();
+    await click(button("Delete todo"));
+    flushFrames();
+    expect(document.activeElement).toBe(todoConfirmationButton("Keep"));
+    expect(current.removeTodo).not.toHaveBeenCalled();
+
+    if (cancel === "Keep") await click(todoConfirmationButton("Keep"));
+    else {
+      await act(async () => todoConfirmationButton("Keep").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+      await settle();
+    }
+    flushFrames();
+    expect(findButton("Keep")).toBeUndefined();
+    expect(document.activeElement).toBe(button("Delete todo"));
+    expect(current.removeTodo).not.toHaveBeenCalled();
+    expect(query<HTMLElement>('#todoList [data-todo-id="task1"]')).toBeTruthy();
+    expect(query<HTMLInputElement>("#todoAddInput").value).toBe("Next task draft");
+    expect(query<HTMLTextAreaElement>('[aria-label="New comment Markdown"]').value).toBe("Comment draft to preserve");
+  });
+
+  it("deletes only the confirmed todo while retaining its saved thread and comment and add-todo drafts across remount", async () => {
+    const current = fixture();
+    const sibling: NotesTodo = { ...current.task, id: "task2", ref: "L2@file1", line: 2, text: "Unrelated task", revision: "sibling-1" };
+    current.replaceTodos([current.task, sibling]);
+    const saved = await current.addComment({ op: "comment_add", todo_id: "task1", body: "Saved discussion", author: "Reviewer" });
+    if (saved.result.kind !== "comment") throw new Error("Expected saved comment");
+    const comment = saved.result.comment;
+    await mount(current);
+    await openTask(current);
+    await click(button("Edit"));
+    const editSelector = `[aria-label="Edit comment ${comment.comment_id}"]`;
+    await type(editSelector, "Unfinished comment edit");
+    await click(button("Delete todo"));
+    expect(current.removeTodo).not.toHaveBeenCalled();
+    await click(todoConfirmationButton("Delete todo"));
+
+    expect(current.removeTodo).toHaveBeenCalledTimes(1);
+    expect(current.removeTodo).toHaveBeenCalledWith({ op: "todo_remove", todo: { by: "id", id: "task1", expected_revision: "item1" } });
+    expect(host!.querySelector('#todoList [data-todo-id="task1"]')).toBeNull();
+    expect(query<HTMLElement>('#todoList [data-todo-id="task2"]').textContent).toContain("Unrelated task");
+    expect(query<HTMLElement>(".notes-task-removed").textContent).toContain("comments and your drafts are kept");
+    expect(query<HTMLTextAreaElement>(editSelector).value).toBe("Unfinished comment edit");
+    expect(query<HTMLTextAreaElement>('[aria-label="New comment Markdown"]').value).toBe("Comment draft to preserve");
+    expect(query<HTMLInputElement>("#todoAddInput").value).toBe("Next task draft");
+    expect(query<HTMLButtonElement>("#postCommentBtn").disabled).toBe(true);
+    expect(host!.querySelectorAll(".notes-comment")).toHaveLength(1);
+    const remaining = await current.notes({ target: { kind: "notes", notes_id: current.info.notes_id }, operation: { op: "todo_list", filter: "all" } });
+    expect(remaining.result).toMatchObject({ kind: "todos", todos: [sibling] });
+    const thread = await current.readComments("task1");
+    expect(thread.result).toEqual({ kind: "comments", todo_id: "task1", comments: [comment] });
+    expect(current.notes.mock.calls.some(([request]) => request.operation.op === "comment_remove")).toBe(false);
+
+    await act(async () => root!.render(null));
+    await render(current);
+    expect(query<HTMLElement>(".notes-task-removed")).toBeTruthy();
+    expect(query<HTMLTextAreaElement>('[aria-label="New comment Markdown"]').value).toBe("Comment draft to preserve");
+    expect(query<HTMLInputElement>("#todoAddInput").value).toBe("Next task draft");
+    await click(button("Resume edit · draft kept"));
+    expect(query<HTMLTextAreaElement>(editSelector).value).toBe("Unfinished comment edit");
+    expect(current.removeTodo).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses deletion when the saved todo changes after confirmation opens without deleting its new revision", async () => {
+    const current = fixture();
+    await mount(current);
+    await openTask(current);
+    await click(button("Delete todo"));
+    const changed: NotesTodo = { ...current.task, text: "Updated by another writer", revision: "item2", ref: "L1@file2" };
+    current.replaceTodos([changed]);
+    await click(todoConfirmationButton("Delete todo"));
+
+    expect(current.removeTodo).toHaveBeenCalledTimes(1);
+    expect(current.removeTodo).toHaveBeenCalledWith({ op: "todo_remove", todo: { by: "id", id: "task1", expected_revision: "item1" } });
+    expect(query<HTMLTextAreaElement>('#todoList [aria-label="Task title: Updated by another writer"]').value).toBe(changed.text);
+    expect(host!.textContent).toContain("notes_conflict");
+    expect(host!.querySelector(".notes-task-removed")).toBeNull();
+    expect(query<HTMLTextAreaElement>('[aria-label="New comment Markdown"]').value).toBe("Comment draft to preserve");
+    const remaining = await current.notes({ target: { kind: "notes", notes_id: current.info.notes_id }, operation: { op: "todo_list", filter: "all" } });
+    expect(remaining.result).toMatchObject({ kind: "todos", todos: [changed] });
+  });
+
+  it("does not retarget an open deletion confirmation when refreshed todo state has a newer revision", async () => {
+    const current = fixture();
+    await mount(current);
+    await openTask(current);
+    await click(button("Delete todo"));
+    const changed: NotesTodo = { ...current.task, text: "Refreshed task revision", revision: "item2", ref: "L1@file2" };
+    current.replaceTodos([changed]);
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    await settle();
+    expect(query<HTMLTextAreaElement>('#todoList [aria-label="Task title: Refreshed task revision"]').value).toBe(changed.text);
+    expect(current.removeTodo).not.toHaveBeenCalled();
+    expect(todoConfirmationButton("Delete todo").disabled).toBe(true);
+    await click(todoConfirmationButton("Delete todo"));
+    expect(current.removeTodo).not.toHaveBeenCalled();
+    expect(host!.querySelector(".notes-task-removed")).toBeNull();
+    const remaining = await current.notes({ target: { kind: "notes", notes_id: current.info.notes_id }, operation: { op: "todo_list", filter: "all" } });
+    expect(remaining.result).toMatchObject({ kind: "todos", todos: [changed] });
+    expect(query<HTMLTextAreaElement>('[aria-label="New comment Markdown"]').value).toBe("Comment draft to preserve");
   });
 
   it("does not let a late detail-close frame steal a new task title's focus after the original row disappears", async () => {

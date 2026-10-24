@@ -270,6 +270,8 @@ Canonical tasks retain durable stages and dependencies while schedules drive bou
 
 - One todos.md owns list/board: hidden stable IDs and optional Backlog/Doing metadata establish membership, checkbox Done; reopen restores open lane, moves retain source order without ranks, and unboard keeps todo/comments. [Owner](crates/cockpit-core/src/notes/todos.rs). Rationale: The board is not another task database.
 
+- Todo deletion is an explicit inline confirmation in Todos, Kanban and task detail, separate from unboarding; capture the reviewed selector and block confirmation after a source revision change until reopened. Retain comment threads and unsaved drafts, with backend ownership/nested-task refusals unchanged. [Owner](src/app/notes/TodoDelete.tsx). Rationale: Discoverable removal must not delete an unreviewed version or silently cascade.
+
 - Decision replacement creates a linked new record without rewriting predecessor; recorded timestamps/comment creation/author metadata survive edits, and optional author labels are unverified text. [Owner](crates/cockpit-core/src/notes/decisions.rs). Rationale: Edits cannot fabricate historical authorship.
 
 - Use bounded no-follow reads, stable advisory lock inodes, revision-checked surgical edits and atomic publication; preserve unrelated bytes and reject stale/malformed/ambiguous boundaries. External writers ignoring locks can race the final check, so no filesystem-wide CAS is promised. [Owner](crates/cockpit-core/src/notes/fs.rs). Rationale: Safe splices require participation, not inferred exclusivity.

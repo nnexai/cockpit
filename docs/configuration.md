@@ -259,6 +259,10 @@ Scheduling/waits/cleanup wake from registered durable notifications and relevant
 
 Each Notes UUID owns `scratchpad.md`, `todos.md`, `decisions/<decisionId>.md` and `comments/<todoId>/<commentId>.md`; registry/lock metadata is under `.cockpit/`. Opening an unbound Space creates nothing; create and attach are explicit. POSIX UI recipes pin both root and UUID and escape shell-sensitive paths. In an uninstalled checkout use `target/debug/cockpit` instead of installed `cockpit-cli`.
 
+In the Notes UI, Todos exposes a visible trash action on each row. Task details and the Kanban card menu also offer **Delete todo**. Deletion requires an inline confirmation; **Keep** or Escape cancels it. This removes the task from `todos.md`, not just the board, and cannot be undone in Cockpit. Saved comments and unsaved drafts are retained. **Remove from board** remains a separate action that keeps the todo. A changed task must be reviewed again before deletion; nested tasks must be removed or moved before their parent can be deleted.
+
+Scratchpad, Todos, Kanban and Decisions share Notes toolbar, spacing and footer conventions. Todos uses a readable centered column with visible row actions; Todos and Kanban expose the same `todos.md` source location. Decision search and creation share a row, with status and ordering grouped below it. Existing draft recovery, source/preview modes and narrow-pane detail navigation remain available.
+
 ```sh
 cockpit-cli notes --current target
 cockpit-cli notes --current target --create
