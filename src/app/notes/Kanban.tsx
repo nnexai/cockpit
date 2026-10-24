@@ -8,7 +8,6 @@ import { NotesEditorScope } from "./MarkdownEditor";
 import { NotesKeyboardSensor, NotesMouseSensor, NotesTouchSensor } from "./notesSensors";
 import { UiIcon } from "../UiIcon";
 import { TodoDeletePanel, TodoDeleteTrigger, useTodoDelete } from "./TodoDelete";
-import { TodosSourceButton } from "./TodosSourceButton";
 const boardPositions = new Map<string, { left: number; columns: Record<NotesColumn, number> }>();
 
 const columns: NotesColumn[] = ["backlog", "doing", "done"];
@@ -66,7 +65,7 @@ function Card({ todo, model, onDetails, count, selected, dragBusy }: { todo: Not
     <TodoDeletePanel todo={todo} surface="kanban" />
   </li>;
 }
-export function Kanban({ model, folder, onDetails, counts, selectedId, hidden = false }: { model: NotesModel; folder: string; onDetails(todo: NotesTodo, opener: HTMLElement): void; counts: Record<string, number>; selectedId: string | null; hidden?: boolean }) {
+export function Kanban({ model, onDetails, counts, selectedId, hidden = false }: { model: NotesModel; onDetails(todo: NotesTodo, opener: HTMLElement): void; counts: Record<string, number>; selectedId: string | null; hidden?: boolean }) {
   const [active, setActive] = useState<NotesTodo | null>(null);
   const dragSnapshot = useRef<NotesTodo | null>(null);
   const keyboardDestination = useRef<NotesColumn | null>(null);
@@ -135,7 +134,6 @@ export function Kanban({ model, folder, onDetails, counts, selectedId, hidden = 
   }} onBlurCapture={event => {
     if (event.target instanceof HTMLElement && event.target.classList.contains("kanban-card-handle")) cancelGesture();
   }}>
-    <form className="notes-add-form notes-toolbar" id="kanbanAddForm" onSubmit={event => { event.preventDefault(); const text = model.drafts.addCard; if (text.trim()) void model.mutate({ op: "todo_add", text, lane: "backlog" }, () => model.updateDrafts(current => current.addCard === text ? { ...current, addCard: "" } : current)); }}><UiIcon name="plus" /><input id="kanbanAddInput" aria-label="Add a card to Backlog" placeholder="Add a card to Backlog…" value={model.drafts.addCard} onChange={event => model.updateDrafts(current => ({ ...current, addCard: event.target.value }))} /><button id="kanbanAddBtn" className="notes-primary" type="submit" disabled={model.busy || !model.drafts.addCard.trim() || model.error?.code === "notes_outcome_unknown"}>Add</button></form>
     <span id="notes-drag-instructions" className="sr-only">Space or Enter picks up. Left and Right choose a column. Space or Enter drops. Escape or Tab cancels. Order follows todos.md, not drop position.</span>
     <DndContext sensors={sensors} collisionDetection={collision} autoScroll={{ enabled: true }} accessibility={{ restoreFocus: false, announcements: dragAnnouncements, screenReaderInstructions: { draggable: "Use Space or Enter to pick up, Left or Right to choose a column, Space or Enter to drop, Escape or Tab to cancel. Tasks stay in file order." } }} cancelDrop={({ active: source }) => {
       const captured = dragSnapshot.current;
@@ -172,8 +170,7 @@ export function Kanban({ model, folder, onDetails, counts, selectedId, hidden = 
       announce(`Moving ${captured.text} to ${labels[to]}. File order kept.`);
       void model.mutate(operation, response => { if (response.result.kind === "todo") movedId = todoIdentity(response.result.todo); }).then(success => { announce(success ? `${captured.text} moved to ${labels[to]}. File order kept.` : "Move not confirmed. Current location refreshed; no retry was sent."); restore(movedId); });
     }}>
-      <div className="notes-meta-row"><span className="notes-meta-summary kanban-meta-summary">{tasks.length} on board</span><div className="kanban-chips" role="group" aria-label="Jump to column">{columns.map(column => <DropZone column={column} chip key={column} destination={active ? destination : undefined}><button type="button" className="kanban-chip" data-col={column} aria-label={`Jump to ${labels[column]} column`} onClick={() => board.current?.querySelector(`[data-col="${column}"]`)?.scrollIntoView({ block: "nearest", inline: "start" })}>{labels[column]} <span>{tasks.filter(todo => columnFor(todo) === column).length}</span></button></DropZone>)}</div><div className="notes-meta-actions"><TodosSourceButton folder={folder} /></div></div>
-      {!tasks.length ? <div className="notes-empty notes-board-empty" id="kanbanEmptyHint"><UiIcon name="grid" /><p>No cards. Add one above or put a todo on the board.</p><button type="button" className="notes-primary" onClick={() => document.getElementById("kanbanAddInput")?.focus()}><UiIcon name="plus" />Add a card</button></div> : null}
+      <div className="kanban-chips" role="group" aria-label="Jump to column">{columns.map(column => <DropZone column={column} chip key={column} destination={active ? destination : undefined}><button type="button" className="kanban-chip" data-col={column} aria-label={`Jump to ${labels[column]} column`} onClick={() => board.current?.querySelector(`[data-col="${column}"]`)?.scrollIntoView({ block: "nearest", inline: "start" })}>{labels[column]} <span>{tasks.filter(todo => columnFor(todo) === column).length}</span></button></DropZone>)}</div>
       <div className="kanban-board" id="kanbanBoard" ref={board} onScrollCapture={event => {
         const saved = boardPositions.get(scope) ?? { left: 0, columns: { backlog: 0, doing: 0, done: 0 } };
         if (event.target === event.currentTarget) saved.left = event.currentTarget.scrollLeft;
@@ -187,7 +184,16 @@ export function Kanban({ model, folder, onDetails, counts, selectedId, hidden = 
         const members = tasks.filter(todo => columnFor(todo) === column);
         const before = active ? members.find(todo => todo.line > active.line) : undefined;
         const marker = active && destination === column ? <li className="kanban-insertion">{labels[column]} · {column === "done" ? "Check task" : active.done ? "Reopen task" : "Keep open"} · file order</li> : null;
-        return <DropZone column={column} key={column} destination={active ? destination : undefined}><h3><span className="kanban-lane-dot" aria-hidden="true" />{labels[column]} <span className="notes-count">{members.length}</span><button type="button" className="notes-icon-button kanban-lane-add" aria-label="Add a card to Backlog" title="Add a card to Backlog" onClick={() => document.getElementById("kanbanAddInput")?.focus()}><UiIcon name="plus" /></button></h3><ul className="kanban-card-list">{members.map(todo => <Fragment key={todoIdentity(todo)}>{before === todo ? marker : null}<Card todo={todo} model={model} onDetails={(task, opener) => { if (!dragSuppress.current) onDetails(task, opener); }} count={todo.id ? counts[todo.id] : undefined} selected={selectedId === todo.id} dragBusy={Boolean(active)} /></Fragment>)}{!before ? marker : null}{!members.length ? <li className="notes-empty">No cards.</li> : null}</ul></DropZone>;
+        return <DropZone column={column} key={column} destination={active ? destination : undefined}>
+          <h3><span className={`notes-lane-dot is-${column}`} aria-hidden="true" />{labels[column]} <span className="notes-count">{members.length}</span></h3>
+          <ul className="kanban-card-list">
+            {column === "backlog" ? <li className="kanban-add">
+              <form className="notes-add-form" id="kanbanAddForm" onSubmit={event => { event.preventDefault(); const text = model.drafts.addCard; if (text.trim()) void model.mutate({ op: "todo_add", text, lane: "backlog" }, () => model.updateDrafts(current => current.addCard === text ? { ...current, addCard: "" } : current)); }}><UiIcon name="plus" /><input id="kanbanAddInput" aria-label="Add a card to Backlog" placeholder="Add a card…" value={model.drafts.addCard} onChange={event => model.updateDrafts(current => ({ ...current, addCard: event.target.value }))} /><button id="kanbanAddBtn" className="notes-primary" type="submit" disabled={model.busy || !model.drafts.addCard.trim() || model.error?.code === "notes_outcome_unknown"}>Add</button></form>
+            </li> : null}
+            {members.map(todo => <Fragment key={todoIdentity(todo)}>{before === todo ? marker : null}<Card todo={todo} model={model} onDetails={(task, opener) => { if (!dragSuppress.current) onDetails(task, opener); }} count={todo.id ? counts[todo.id] : undefined} selected={selectedId === todo.id} dragBusy={Boolean(active)} /></Fragment>)}{!before ? marker : null}
+            {!members.length ? <li className="notes-empty kanban-empty" id={column === "backlog" && !tasks.length ? "kanbanEmptyHint" : undefined}>{column === "backlog" ? "Add a card here or put a todo on the board." : "No cards."}</li> : null}
+          </ul>
+        </DropZone>;
       })}</div>
       <DragOverlay>{active ? <div className="kanban-drag-ghost">{active.text}<small>{destination ? labels[destination] : "Choose a column"} · file order</small></div> : null}</DragOverlay>
     </DndContext>

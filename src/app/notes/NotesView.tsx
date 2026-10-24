@@ -13,7 +13,6 @@ import { Decisions } from "./Decisions";
 import { AgentAccess } from "./AgentAccess";
 import { RetainedDrafts } from "./RetainedDrafts";
 import { TodoDeleteProvider, TodoDeleteRow, TodoDeleteTrigger } from "./TodoDelete";
-import { TodosSourceButton } from "./TodosSourceButton";
 import "./notes.css";
 
 type ViewTab = "scratchpad" | "todos" | "kanban" | "decisions";
@@ -34,7 +33,7 @@ function readSurface(notesId: string): ViewState {
   } catch { /* Session state remains available when persistent browser storage is disabled. */ }
   return fallback;
 }
-function NotesContent({ client, info }: { client: CockpitClient; info: NotesTargetInfo }) {
+function NotesContent({ client, info, onClose }: { client: CockpitClient; info: NotesTargetInfo; onClose(): void }) {
   const model = useNotes(client, info);
   const [surface, setSurface] = useState(() => readSurface(info.notes_id));
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -129,6 +128,7 @@ function NotesContent({ client, info }: { client: CockpitClient; info: NotesTarg
   const activeDetail = showDetail && surface.selectedTodo && (surface.tab === "kanban" || surface.tab === "todos");
   const visibleTodos = model.todos.filter(todo => !surface.hideCompleted || !todo.done);
   return <NotesEditorScope value={info.notes_id}><TodoDeleteProvider model={model} surface={`${surface.tab}/${activeDetail ? surface.selectedTodo : ""}`}>
+    <header className="notes-bar">
     <div className="notes-tabs" role="tablist" aria-label="Notes views">{tabs.map(tab => {
       const n = tab === "todos" ? model.todos.filter(todo => !todo.done).length : tab === "kanban" ? model.todos.filter(todo => todo.lane !== null).length : model.decisions.length;
       const name = tab === "todos" ? `Todos — ${n} open` : tab === "kanban" ? `Kanban — ${n} on board` : tab === "decisions" ? `Decisions — ${n} ${n === 1 ? "record" : "records"} (Current and History)` : tabLabels[tab];
@@ -138,30 +138,36 @@ function NotesContent({ client, info }: { client: CockpitClient; info: NotesTarg
         const next = event.key === "Home" ? tabs[0] : event.key === "End" ? tabs[3] : tabs[(tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : 3)) % 4];
         setSurface(current => ({ ...current, tab: next })); document.getElementById(`f-${next}`)?.focus();
       }
-    }}><UiIcon name={tab === "scratchpad" ? "file" : tab === "todos" ? "check" : tab === "kanban" ? "grid" : "library"} /><span>{tabLabels[tab]}</span>{tab !== "scratchpad" ? <span className="notes-tab-count" aria-hidden="true">{tab === "todos" ? model.todos.filter(todo => !todo.done).length : tab === "kanban" ? model.todos.filter(todo => todo.lane !== null).length : model.decisions.length}</span> : null}</button>;
+    }}><span>{tabLabels[tab]}</span></button>;
     })}</div>
+    <div className="notes-bar-actions">
+      {surface.tab === "scratchpad" && scratch ? <><span className={`notes-save-state${model.busy ? " is-saving" : scratch.value === scratch.base ? " is-saved" : " is-draft"}`} role="status"><span className="notes-save-dot" aria-hidden="true" /><span className="notes-bar-label">{model.busy ? "Saving…" : scratch.value === scratch.base ? "Saved" : "Draft kept"}</span><span className="sr-only"> · scratchpad.md</span></span>{scratch.value !== scratch.base ? <button className="notes-primary notes-bar-action" type="button" aria-label="Save scratchpad" title="Save scratchpad (Ctrl+S)" disabled={model.busy || unknown || scratch.conflict} onClick={() => void saveScratchpad()}><UiIcon name="check" /><span className="notes-bar-label">Save</span></button> : null}</> : null}
+      {surface.tab === "todos" ? <button className="notes-bar-action" id="toggleCompletedBtn" type="button" aria-label="Hide completed" title="Hide completed" aria-pressed={surface.hideCompleted} onClick={() => setSurface(current => ({ ...current, hideCompleted: !current.hideCompleted }))}><UiIcon name="check" /><span className="notes-bar-label">Hide completed</span></button> : null}
+      <AgentAccess info={info} model={model} todo={selectedTodo} decisionId={surface.selectedDecision} view={surface.tab} />
+      <button className="notes-icon-button" type="button" aria-label="Close Notes" title="Close Notes" onClick={onClose}><UiIcon name="close" /></button>
+    </div>
+    </header>
     <div className={`notes-panels${activeDetail ? " has-detail" : ""}`}>
       <section id="notes-scratchpad-panel" className="notes-scratchpad" role="tabpanel" aria-labelledby="f-scratchpad" hidden={surface.tab !== "scratchpad"}>
-        {scratch ? <><MarkdownEditor label="Scratchpad Markdown" value={scratch.value} onChange={value => model.updateDrafts(current => ({ ...current, scratchpad: { ...scratch, value } }))} onSave={() => void saveScratchpad()} />
+        {scratch ? <>
           {scratch.conflict ? <div className="notes-conflict" role="alert"><p>Scratchpad changed elsewhere. Current saved version:</p><details><summary>Show saved Markdown</summary><small className="notes-conflict-saved-label">Saved version (read-only)</small><MarkdownPreview content={model.scratchpad?.content ?? ""} /></details><button type="button" disabled={model.busy || unknown || savingMine} onClick={() => void saveScratchpad(true)}>Keep mine and save</button><button type="button" onClick={() => { if (model.scratchpad) model.updateDrafts(current => ({ ...current, scratchpad: changedDraft(model.scratchpad!.content, model.scratchpad!.content, model.scratchpad!.revision) })); }}>Reload (discard my draft)</button><p className="notes-conflict-consequence">Keep mine overwrites the saved version. Reload discards your draft.</p></div> : null}
-          <div className="notes-save-status notes-actionbar"><span className={`notes-save-state${model.busy ? " is-saving" : scratch.value === scratch.base ? " is-saved" : " is-draft"}`} role="status"><span className="notes-save-dot" aria-hidden="true" />{model.busy ? "Saving Notes…" : scratch.value === scratch.base ? "Saved · scratchpad.md" : "Draft kept · not yet saved"}</span><button className="notes-primary" type="button" disabled={model.busy || unknown || scratch.conflict || scratch.value === scratch.base} onClick={() => void saveScratchpad()}>Save scratchpad</button></div></> : <p>Loading scratchpad…</p>}
+          <MarkdownEditor label="Scratchpad Markdown" value={scratch.value} onChange={value => model.updateDrafts(current => ({ ...current, scratchpad: { ...scratch, value } }))} onSave={() => void saveScratchpad()} />
+        </> : <p>Loading scratchpad…</p>}
       </section>
       <section id="notes-todos-panel" className="notes-todos notes-task-main" role="tabpanel" aria-labelledby="f-todos" hidden={surface.tab !== "todos"}>
         <div className="notes-column">
         <form className="notes-add-form notes-toolbar" onSubmit={event => { event.preventDefault(); const text = model.drafts.addTodo; if (text.trim()) void model.mutate({ op: "todo_add", text, lane: null }, () => model.updateDrafts(current => current.addTodo === text ? { ...current, addTodo: "" } : current)); }}><UiIcon name="plus" /><input id="todoAddInput" aria-label="Add a todo" placeholder="Add a todo…" value={model.drafts.addTodo} onChange={event => model.updateDrafts(current => ({ ...current, addTodo: event.target.value }))} /><button className="notes-primary" id="todoAddBtn" type="submit" disabled={model.busy || unknown || !model.drafts.addTodo.trim()}>Add</button></form>
-        <div className="notes-meta-row"><span className="notes-meta-summary">{model.todos.filter(todo => !todo.done).length} open · {model.todos.filter(todo => todo.done).length} done</span><div className="notes-meta-actions"><button className="notes-toggle-chip" id="toggleCompletedBtn" type="button" aria-pressed={surface.hideCompleted} onClick={() => setSurface(current => ({ ...current, hideCompleted: !current.hideCompleted }))}><UiIcon name="check" />Hide completed</button><TodosSourceButton folder={info.folder} /></div></div>
         <ul id="todoList" className="notes-todo-list">{visibleTodos.map(todo => {
           const adopt = !todo.id || todo.problems.includes("duplicate_id");
           return <TodoDeleteRow todo={todo} selected={surface.selectedTodo === todo.id} key={todoIdentity(todo)}>
           <label className="notes-check"><input type="checkbox" aria-label={`Complete ${todo.text}`} checked={todo.done} disabled={model.busy || unknown} onChange={() => void model.mutate({ op: "todo_set_done", todo: todoSelector(todo), done: !todo.done })} /></label><TodoTitle model={model} todo={todo} />
-          <div className="notes-row-actions"><button className={`notes-todo-comments${adopt ? " is-adopt" : ""}`} type="button" title={adopt ? "Adopt task & comments — adds an id to this task in todos.md" : undefined} aria-label={!todo.id || todo.problems.includes("duplicate_id") ? "Adopt task & comments" : counts[todo.id] === undefined ? "Comments" : `Comments ${counts[todo.id]}`} onClick={event => void openDetails(todo, event.currentTarget)} disabled={model.busy || unknown || todo.problems.includes("metadata_malformed") || todo.problems.includes("lazy_continuation")}>{adopt ? <><UiIcon name="plus" /><span className="notes-adopt-label">Adopt</span></> : <UiIcon name="comment" />}{todo.id && (counts[todo.id] ?? 0) > 0 ? <span className="notes-comment-count">{counts[todo.id]}</span> : null}</button>{todo.lane ? <button className="todo-board-chip notes-todo-secondary notes-icon-button" type="button" aria-label={`On board · ${todo.done ? "Done" : todo.lane === "doing" ? "Doing" : "Backlog"}`} title={`On board · ${todo.done ? "Done" : todo.lane === "doing" ? "Doing" : "Backlog"}`} onClick={() => { setSurface(current => ({ ...current, tab: "kanban" })); setShowDetail(false); requestAnimationFrame(() => { const cards = document.querySelectorAll<HTMLElement>(".kanban-card"); const card = Array.from(cards).find(node => node.dataset.todoId === (todoIdentity(todo))); card?.scrollIntoView({ block: "nearest", inline: "nearest" }); card?.querySelector<HTMLElement>("textarea")?.focus({ preventScroll: true }); }); }}><span className="todo-board-lane" aria-hidden="true">{todo.done ? "Dn" : todo.lane === "doing" ? "Do" : "B"}</span></button> : <button className="todo-promote-btn notes-todo-secondary notes-icon-button" type="button" aria-label="+ Board" title="+ Board" disabled={model.busy || unknown} onClick={() => void model.mutate({ op: "kanban_promote", todo: todoSelector(todo) })}><UiIcon name="grid" /></button>}<TodoDeleteTrigger todo={todo} surface="todos" /></div>
+          <div className="notes-row-actions"><button className={`notes-todo-comments${adopt ? " is-adopt" : ""}`} type="button" title={adopt ? "Adopt task & comments — adds an id to this task in todos.md" : undefined} aria-label={!todo.id || todo.problems.includes("duplicate_id") ? "Adopt task & comments" : counts[todo.id] === undefined ? "Comments" : `Comments ${counts[todo.id]}`} onClick={event => void openDetails(todo, event.currentTarget)} disabled={model.busy || unknown || todo.problems.includes("metadata_malformed") || todo.problems.includes("lazy_continuation")}>{adopt ? <><UiIcon name="plus" /><span className="notes-adopt-label">Adopt</span></> : <UiIcon name="comment" />}{todo.id && (counts[todo.id] ?? 0) > 0 ? <span className="notes-comment-count">{counts[todo.id]}</span> : null}</button>{todo.lane ? <button className="todo-board-chip" type="button" aria-label={`On board · ${todo.done ? "Done" : todo.lane === "doing" ? "Doing" : "Backlog"}`} title={`On board · ${todo.done ? "Done" : todo.lane === "doing" ? "Doing" : "Backlog"}`} onClick={() => { setSurface(current => ({ ...current, tab: "kanban" })); setShowDetail(false); requestAnimationFrame(() => { const cards = document.querySelectorAll<HTMLElement>(".kanban-card"); const card = Array.from(cards).find(node => node.dataset.todoId === (todoIdentity(todo))); card?.scrollIntoView({ block: "nearest", inline: "nearest" }); card?.querySelector<HTMLElement>("textarea")?.focus({ preventScroll: true }); }); }}><span className={`notes-lane-dot is-${todo.done ? "done" : todo.lane}`} aria-hidden="true" /><span className="todo-board-lane" aria-hidden="true">{todo.done ? "Done" : todo.lane === "doing" ? "Doing" : "Backlog"}</span></button> : <button className="todo-promote-btn notes-todo-secondary notes-icon-button" type="button" aria-label="+ Board" title="+ Board" disabled={model.busy || unknown} onClick={() => void model.mutate({ op: "kanban_promote", todo: todoSelector(todo) })}><UiIcon name="grid" /></button>}<TodoDeleteTrigger todo={todo} surface="todos" /></div>
         </TodoDeleteRow>;
         })}</ul>
         {model.todos.length && !visibleTodos.length ? <p className="notes-empty notes-todos-filtered-empty">All tasks are completed and hidden.</p> : null}
-        {!model.todos.length ? <div className="notes-empty notes-empty-actionable"><span className="notes-empty-icon"><UiIcon name="check" /></span><p>No todos yet. Add one above.</p><button type="button" onClick={() => document.getElementById("todoAddInput")?.focus()}>Add a todo</button></div> : null}
         </div>
       </section>
-      <section id="notes-kanban-panel" className="notes-task-main" role="tabpanel" aria-labelledby="f-kanban" hidden={surface.tab !== "kanban"}>{surface.tab === "kanban" ? <Kanban model={model} folder={info.folder} onDetails={(todo, opener) => void openDetails(todo, opener)} counts={counts} selectedId={surface.selectedTodo} /> : null}</section>
+      <section id="notes-kanban-panel" className="notes-task-main" role="tabpanel" aria-labelledby="f-kanban" hidden={surface.tab !== "kanban"}>{surface.tab === "kanban" ? <Kanban model={model} onDetails={(todo, opener) => void openDetails(todo, opener)} counts={counts} selectedId={surface.selectedTodo} /> : null}</section>
       <section id="notes-decisions-panel" role="tabpanel" aria-labelledby="f-decisions" hidden={surface.tab !== "decisions"}><Decisions model={model} selectedId={surface.selectedDecision} onSelect={selectedDecision => setSurface(current => ({ ...current, selectedDecision }))} /></section>
       {activeDetail ? <TaskDetail key={surface.selectedTodo} model={model} todo={selectedTodo} todoId={surface.selectedTodo!} onClose={closeDetails} onCount={(id, count) => setCounts(current => current[id] === count ? current : { ...current, [id]: count })} /> : null}
     </div>
@@ -176,7 +182,6 @@ function NotesContent({ client, info }: { client: CockpitClient; info: NotesTarg
       </div>
     </div>
     <RetainedDrafts model={model} />
-    <AgentAccess info={info} model={model} todo={selectedTodo} decisionId={surface.selectedDecision} />
   </TodoDeleteProvider></NotesEditorScope>;
 }
 
@@ -283,9 +288,17 @@ export function NotesView({ client, space, onClose }: { client: CockpitClient; s
     });
   };
   const candidate = catalog.status === "ready" ? catalog.entries.find(entry => entry.notes_id === selected) : undefined;
-  return <section id="cockpit-notes" className="notes-view" ref={root} tabIndex={-1} aria-label="Notes" aria-busy={busy || loading || (picker && catalog.status === "loading")} onKeyDown={event => { if (event.key === "Escape" && !event.defaultPrevented && !event.nativeEvent.isComposing) { event.preventDefault(); if (confirmTransfer) cancelTransfer(); else if (picker) closePicker(); else onClose(); } }}>
-    <header className="notes-view-header"><div className="notes-view-context"><UiIcon name="file" /><h2>Notes</h2><span className="notes-space-label">{space?.label ?? "Select a Space"}</span></div><button className="notes-icon-button" type="button" aria-label="Close Notes" onClick={onClose}><UiIcon name="close" /></button></header>
-    {info ? <NotesContent key={info.notes_id} client={client} info={info} /> : <div className={`notes-binding${picker ? " notes-binding-picker" : " notes-binding-empty"}`}>
+  return <section id="cockpit-notes" className="notes-view" ref={root} tabIndex={-1} aria-label="Notes" aria-busy={busy || loading || (picker && catalog.status === "loading")} onKeyDown={event => {
+    if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    const disclosure = root.current?.querySelector<HTMLDetailsElement>(".notes-agent-access[open], .notes-decision-more[open]");
+    if (disclosure) { disclosure.open = false; disclosure.querySelector<HTMLElement>("summary")?.focus(); }
+    else if (confirmTransfer) cancelTransfer();
+    else if (picker) closePicker();
+    else onClose();
+  }}>
+    {!info ? <header className="notes-view-header"><div className="notes-view-context"><h2>Notes</h2><span className="notes-space-label">{space?.label ?? "Select a Space"}</span></div><button className="notes-icon-button" type="button" aria-label="Close Notes" onClick={onClose}><UiIcon name="close" /></button></header> : null}
+    {info ? <NotesContent key={info.notes_id} client={client} info={info} onClose={onClose} /> : <div className={`notes-binding${picker ? " notes-binding-picker" : " notes-binding-empty"}`}>
       {!target ? <p>Select a Space to open its notes.</p> : picker ? <>
         <h3>Attach existing notes</h3><p>Choose the exact Notes ID. Files stay outside the repository.</p>
         {catalog.status === "loading" ? <p>Finding existing notes…</p> : catalog.status === "error" ? <div className="notes-error" role="alert"><span>{catalog.problem.message} <code>{catalog.problem.code}</code></span><button ref={catalogRetry} type="button" onClick={() => void loadCatalog()}>Retry reading catalog</button></div> : catalog.status === "ready" ? catalog.entries.length ? <div className="notes-catalog">{catalog.entries.map(entry => <label key={entry.notes_id}><input type="radio" name="notes-attach" checked={selected === entry.notes_id} onChange={() => { setSelected(entry.notes_id); setConfirmTransfer(false); }} /><span>{entry.label ? `Last called ${entry.label}` : "Untitled notes"}<code>{entry.notes_id}</code><small>{entry.bound ? "Attached elsewhere" : "Not attached"}</small></span></label>)}</div> : <p>No existing notes found.</p> : null}

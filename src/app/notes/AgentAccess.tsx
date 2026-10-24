@@ -1,9 +1,18 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { UiIcon } from "../UiIcon";
 import type { NotesTargetInfo, NotesTodo } from "../../protocol/generated/v1";
 import type { NotesModel } from "./useNotes";
 
-export function AgentAccess({ info, model, todo, decisionId }: { info: NotesTargetInfo; model: NotesModel; todo: NotesTodo | null; decisionId: string | null }) {
+export function AgentAccess({ info, model, todo, decisionId, view }: { info: NotesTargetInfo; model: NotesModel; todo: NotesTodo | null; decisionId: string | null; view: "scratchpad" | "todos" | "kanban" | "decisions" }) {
+  const disclosure = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const closeOutside = (event: PointerEvent) => {
+      const node = disclosure.current;
+      if (node?.open && event.target instanceof Node && !node.contains(event.target)) node.open = false;
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, []);
   const [copyStatus, setCopyStatus] = useState("");
   const copyCommand = async (label: string, value: string) => {
     setCopyStatus("");
@@ -49,27 +58,32 @@ export function AgentAccess({ info, model, todo, decisionId }: { info: NotesTarg
   const resolve = commands[0];
   const groups: [string, string[][]][] = [["Scratchpad", commands.slice(1, 4)], ["Todos", commands.slice(4, 8)], ["Board", commands.slice(8, 13)], ["Decisions", commands.slice(13, 18)], ["Comments", commands.slice(18)]];
   const renderCommand = ([label, command]: string[]) => <div className="notes-agent-command" key={label}>
-    <label><span>{label}</span><input readOnly value={command} onClick={event => event.currentTarget.select()} /></label>
+    <label><span>{label}</span><input readOnly value={command} title={command} onClick={event => event.currentTarget.select()} /></label>
     <button type="button" className="notes-agent-copy" aria-label={`Copy ${label}`} title={`Copy ${label}`} onClick={() => void copyCommand(label, command)}><UiIcon name="copy" /></button>
   </div>;
-  return <details className="notes-agent-access" id="agentAccessDetails">
-    <summary className="notes-agent-summary">
+  return <details ref={disclosure} className="notes-agent-access" id="agentAccessDetails" onKeyDown={event => {
+    if (event.key !== "Escape" || !event.currentTarget.open) return;
+    event.preventDefault(); event.stopPropagation();
+    event.currentTarget.open = false;
+    event.currentTarget.querySelector<HTMLElement>("summary")?.focus();
+  }}>
+    <summary className="notes-agent-summary" aria-label="Files and agent access" title="Files and agent access">
       <UiIcon name="terminal" />
-      <span>Agent access</span>
-      <span className="notes-agent-summary-meta">cockpit-cli</span>
-      <span className="notes-disclosure-chevron"><UiIcon name="down" /></span>
     </summary>
     <div className="notes-agent-body notes-agent-overlay">
       <div className="notes-agent-scroll">
+        <h3>Files &amp; agent access</h3>
         <p>Real commands use the same Markdown files and revision checks as these controls. Resolve once and pin this Notes ID; a Space change will not retarget it. Replace placeholders with the IDs/revisions returned by reads. Never retry an unconfirmed write automatically.</p>
-        <label>Notes UUID<input readOnly value={info.notes_id} onClick={event => event.currentTarget.select()} /></label>
-        <label>Folder outside the repository<input readOnly value={info.folder} onClick={event => event.currentTarget.select()} /></label>
+        {renderCommand(["Notes UUID", info.notes_id])}
+        {renderCommand(["Folder outside the repository", info.folder])}
+        {renderCommand(["Scratchpad file", `${info.folder}/scratchpad.md`])}
+        {renderCommand(["Todos Markdown file", `${info.folder}/todos.md`])}
         <div className="notes-agent-commands">
           {renderCommand(resolve)}
-          {groups.map(([heading, entries]) => <section className="notes-agent-group" key={heading}>
-            <h4 className="notes-agent-group-heading">{heading}</h4>
+          {groups.map(([heading, entries]) => <details className="notes-agent-group" key={heading} open={heading.toLowerCase() === (view === "kanban" ? "board" : view)}>
+            <summary className="notes-agent-group-heading">{heading}<span className="notes-disclosure-chevron"><UiIcon name="down" /></span></summary>
             <div className="notes-agent-group-commands">{entries.map(renderCommand)}</div>
-          </section>)}
+          </details>)}
         </div>
         <p>All four surfaces plus comments support real read/write. Additional verbs: todo remove, catalog, target --create / --attach. Use cockpit-cli notes --help for flags. Imported todos use --ref until an explicit edit adopts a stable ID.</p>
       </div>
