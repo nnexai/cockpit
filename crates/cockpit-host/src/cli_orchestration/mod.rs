@@ -417,15 +417,14 @@ impl TaskArgs {
         let writing = !matches!(&self.command, TaskCommand::List | TaskCommand::Show { .. } | TaskCommand::Inputs { .. });
         let context = Context::open(&self.common, writing).await?;
         let root = context.task_root(&self.common, writing).await?;
-        if let Some(task) = self.command.step_args() {
-            if task.revision.is_none() {
+        if let Some(task) = self.command.step_args()
+            && task.revision.is_none() {
                 let snapshot = context.snapshot(Some(root.clone())).await?;
                 let revision = snapshot.board.as_ref().and_then(|board| board.tasks.iter()
                     .find(|view| view.task.task_id == task.task)).map(|view| view.task.task_revision.clone())
                     .ok_or_else(|| CliError::new("task_not_found", "Task is not in the caller's root"))?;
                 task.revision = Some(revision);
             }
-        }
         let action = match self.command {
             TaskCommand::List => {
                 let snapshot = context.snapshot(Some(root)).await?;
@@ -451,11 +450,10 @@ impl TaskArgs {
             }
             TaskCommand::Inputs { task, self_task } => {
                 let snapshot = context.snapshot(Some(root.clone())).await?;
-                let task = if self_task || task.is_none() {
-                    context.own_run(&snapshot)?.task_id.clone()
-                        .ok_or_else(|| CliError::new("task_not_assigned", "The caller has no assigned canonical task"))?
-                } else {
-                    task.expect("explicit input task")
+                let task = match task {
+                    Some(task) if !self_task => task,
+                    _ => context.own_run(&snapshot)?.task_id.clone()
+                        .ok_or_else(|| CliError::new("task_not_assigned", "The caller has no assigned canonical task"))?,
                 };
                 let board = snapshot.board.ok_or_else(|| CliError::new("root_not_found", "Task board does not exist"))?;
                 let task = board.tasks.iter().find(|view| view.task.task_id == task).map(|view| &view.task)

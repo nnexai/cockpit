@@ -10,11 +10,10 @@ pub(super) fn register(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -
     let index = job.run_index;
     let run = &ctx.state.runs[index];
     let root_id = run.root_id.clone();
-    if let Some(task_id) = &run.task_id {
-        if ctx.locked.tasks(&root_id)?.task(task_id)?.checked {
+    if let Some(task_id) = &run.task_id
+        && ctx.locked.tasks(&root_id)?.task(task_id)?.checked {
             return Err(error("task_accepted", "Accepted tasks cannot be claimed"));
         }
-    }
     if let Some(result) = super::resume::replay(ctx, operation_id, DurableOperationKind::RunRegister, &action)? {
         return Ok(Applied::Document(result));
     }

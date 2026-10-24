@@ -8,7 +8,8 @@ use cockpit_protocol::{
     browser_feedback::BrowserFeedbackAck,
     browser_view::{
         BrowserDraftRecoveryAction, BrowserDraftRecoveryRequest, BrowserViewCaptureCommand,
-        BrowserViewCommandOutcome, BrowserViewDocumentCommandContext, BrowserViewFrameDescriptor,
+        BrowserViewCommandOutcome, BrowserViewDocumentCommandContext, BrowserViewDocumentState,
+        BrowserViewFrameDescriptor,
     },
 };
 
@@ -100,8 +101,7 @@ impl BrowserService {
         command: &BrowserViewCaptureCommand,
         capture_id: &str,
         descriptor: &BrowserViewFrameDescriptor,
-        frame_id: String,
-        frame_generation: u64,
+        document: BrowserViewDocumentState,
     ) -> Result<(), InspectionError> {
         let _operation = self.operation_lock.lock().await;
         let receipt = self.annotation_receipt(target, attachment).await?;
@@ -138,9 +138,9 @@ impl BrowserService {
             browser_instance: attachment.browser_incarnation.clone(),
             inline_provenance: Some(BrowserInlineCaptureProvenance {
                 target_id: descriptor.target_id.clone(),
-                frame_id,
+                frame_id: document.frame_id,
                 document_generation: descriptor.document_generation,
-                frame_generation,
+                frame_generation: document.frame_generation,
                 stream_epoch: descriptor.stream_epoch,
                 frame_sequence: descriptor.frame_sequence,
                 viewport_revision: descriptor.viewport_revision,
@@ -203,7 +203,7 @@ impl BrowserService {
                     &association_key,
                     &draft_id,
                     expected_revision,
-                    annotation,
+                    *annotation,
                 )?,
             }),
             BrowserDraftRecoveryAction::RemoveAnnotation {

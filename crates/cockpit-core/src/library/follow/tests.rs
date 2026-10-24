@@ -484,10 +484,11 @@ async fn listed_page_fetch_not_found_stays_failed_until_absence_is_confirmed() {
     let f = fixture(DC, false, 200);
     let service = &f.base.service;
     let (_, follow_id) = follow(service, "SD").await;
-    let mut site = f.provider.site();
-    site.fetch_failures.insert("111".into());
-    site.pages.get_mut("111").unwrap().version += 1;
-    drop(site);
+    {
+        let mut site = f.provider.site();
+        site.fetch_failures.insert("111".into());
+        site.pages.get_mut("111").unwrap().version += 1;
+    }
 
     let report = refresh(service, LibraryRefreshRequest::Follow { follow_id }).await;
     assert_eq!(report.failed, 1);

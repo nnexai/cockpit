@@ -578,13 +578,12 @@ fn quote(body: &str, output: &mut Output) -> Result<(), InspectionError> {
 
 fn parameter(element: &Element<'_>, name: &str) -> Result<Option<String>, InspectionError> {
     for child in &element.children {
-        if let Node::Element(child) = child {
-            if child.name == "ac:parameter" && child.attr("ac:name") == Some(name) {
+        if let Node::Element(child) = child
+            && child.name == "ac:parameter" && child.attr("ac:name") == Some(name) {
                 let mut output = Output::default();
                 raw_text(child, &mut output)?;
                 return Ok(Some(output.0));
             }
-        }
     }
     Ok(None)
 }
@@ -644,19 +643,17 @@ fn macro_body(
             } else {
                 // Preserve explicit source links without inventing dynamic macro results.
                 for child in &element.children {
-                    if let Node::Element(child) = child {
-                        if matches!(child.name, "a" | "ac:link") {
+                    if let Node::Element(child) = child
+                        && matches!(child.name, "a" | "ac:link") {
                             render(child, context, depth, output)?;
                         }
-                    }
                 }
-                if let Some(url) = parameter(element, "url")? {
-                    if let Some(destination) = safe_url(&url, context, false) {
+                if let Some(url) = parameter(element, "url")?
+                    && let Some(destination) = safe_url(&url, context, false) {
                         let mut label = Output::default();
                         escaped(&url, &mut label)?;
                         link(&label.0, Some(&destination), false, output)?;
                     }
-                }
             }
             Ok(())
         }
@@ -704,14 +701,13 @@ fn resource_link(
         if attachment.child("ri:page").is_none() {
             destination = attachment_url(&fallback, context, image);
         }
-        if image && destination.is_none() && safe_url(&fallback, context, true).is_some() {
-            if let Ok(mut url) = Url::parse(context.instance) {
+        if image && destination.is_none() && safe_url(&fallback, context, true).is_some()
+            && let Ok(mut url) = Url::parse(context.instance) {
                 if let Ok(mut path) = url.path_segments_mut() {
                     path.clear().push(&fallback);
                 }
                 destination = Some(markdown_destination(&url.path()[1..]));
             }
-        }
     } else if let Some(url) = element.child("ri:url") {
         let value = url.attr("ri:value").unwrap_or("");
         fallback = if image { String::new() } else { value.into() };
@@ -722,11 +718,10 @@ fn resource_link(
         fallback = anchor.into();
         destination = safe_url(&format!("#{anchor}"), context, image);
     }
-    if image {
-        if let Some(alt) = element.attr("ac:alt") {
+    if image
+        && let Some(alt) = element.attr("ac:alt") {
             fallback = alt.into();
         }
-    }
     if label.trim().is_empty() {
         let mut escaped_label = Output::default();
         escaped(&fallback, &mut escaped_label)?;

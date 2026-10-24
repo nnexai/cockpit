@@ -15,11 +15,14 @@ use tokio::time::timeout;
 
 const MAX_FRAME_SIZE: usize = 2 * 1024 * 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
 const MAX_HANDSHAKE_FRAMES: usize = 256;
 const SNAPSHOT_CODEC: &str = "shell.snapshot.v1";
 const SURFACE_CODEC: &str = "shell.surface.v1";
 const DELTA_CODEC: &str = "endpoint.surface-delta.v1";
 const MAX_DELTA_SPANS: usize = 4096;
+
+type PopupParts = (Option<HerdrPopup>, Option<(u16, u16)>);
 
 fn malformed(message: impl Into<String>) -> InspectionError {
     InspectionError::new("shell_malformed", message)
@@ -718,7 +721,7 @@ impl<'a> Decoder<'a> {
             },
         }))
     }
-    fn popup(&mut self) -> Result<(Option<HerdrPopup>, Option<(u16, u16)>), InspectionError> {
+    fn popup(&mut self) -> Result<PopupParts, InspectionError> {
         if !self.flag()? {
             return Ok((None, None));
         }

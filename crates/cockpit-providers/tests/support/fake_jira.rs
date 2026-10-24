@@ -80,10 +80,7 @@ impl FakeJira {
                 let mut bytes = Vec::new();
                 let mut buffer = [0u8; 1024];
                 while !bytes.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let count = match stream.read(&mut buffer) {
-                        Ok(count) => count,
-                        Err(_) => 0,
-                    };
+                    let count = stream.read(&mut buffer).unwrap_or_default();
                     if count == 0 {
                         break;
                     }

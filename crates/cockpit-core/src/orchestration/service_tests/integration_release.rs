@@ -121,10 +121,10 @@ impl ReleasedIntegration {
             expected_result_message_id: result_message_id.clone(), expected_task_revision: task_revision.clone(),
             integration: Integration::Integrated {
                 operation_id, accepted_result_message_id: result_message_id.clone(),
-                accepted_task_revision: task_revision.clone(), source: self.source.clone(),
+                accepted_task_revision: task_revision.clone(), source: Box::new(self.source.clone()),
                 target_repository_key: repository_key.clone(), target_ref: "refs/heads/main".into(),
                 target_commit: self.target_commit.clone(), method: IntegrationMethod::Ancestor,
-                mappings: Vec::new(), checks: vec![passed_check("target contract scenario")],
+                mappings: Vec::new().into(), checks: vec![passed_check("target contract scenario")],
                 integrator_run_id: self.root.clone(), verified_at: String::new(),
             },
         }
@@ -192,7 +192,7 @@ async fn root_and_operator_record_released_removed_source_using_only_catalog_mai
         let OrchestrationActionResult::IntegrationRecorded { receipt } = response.result else { panic!("expected integration receipt") };
         assert!(!receipt.duplicate);
         let Integration::Integrated { source, target_commit, verified_at, .. } = &receipt.integration else { panic!("expected verified integration") };
-        assert_eq!(source, &case.source);
+        assert_eq!(**source, case.source);
         assert_eq!(target_commit, &case.target_commit);
         assert!(!verified_at.is_empty());
         assert_eq!(case.fixture.run(&case.worker).integration, receipt.integration);
@@ -409,7 +409,7 @@ async fn automatic_reconciliation_of_released_source_requires_passed_exact_targe
         if target_checks == 2 {
             assert!(matches!(integration, Integration::Integrated {
                 method: IntegrationMethod::Ancestor, source, target_commit, ..
-            } if source == case.source && target_commit == case.target_commit));
+            } if *source == case.source && target_commit == case.target_commit));
         } else {
             assert_eq!(integration, Integration::Pending);
             assert_eq!(case.fixture.state_bytes(), before);

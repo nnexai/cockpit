@@ -281,8 +281,8 @@ pub(crate) async fn branch_metadata(
                 fields.next()?,
             ])
         })();
-        if let Some([full_ref, name, remote, remote_ref, track]) = values {
-            if fields.next().is_none() {
+        if let Some([full_ref, name, remote, remote_ref, track]) = values
+            && fields.next().is_none() {
                 return Ok(Some(BranchMetadata {
                     full_ref: full_ref.into(),
                     name: name.into(),
@@ -291,7 +291,6 @@ pub(crate) async fn branch_metadata(
                     track: track.into(),
                 }));
             }
-        }
         return Err(crate::InspectionError::new(
             "git_read_failed",
             "Git returned invalid branch metadata.",

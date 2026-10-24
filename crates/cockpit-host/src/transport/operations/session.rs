@@ -5,7 +5,7 @@ use cockpit_protocol::{
         FocusRequest, FocusResponse, ResourceMutationRequest, ResourceMutationResponse,
         SessionListResponse, SessionSnapshotResponse, SpaceGitActionRequest,
         SpaceGitActionResponse, SpaceGitStatusResponse, StatusResponse,
-        SpaceServiceStatusResponse,
+        SpaceServiceStatusRequest, SpaceServiceStatusResponse,
         SpaceTagChangeRequest, SpaceTagsResponse,
     },
 };
@@ -14,7 +14,10 @@ use crate::transport::{
     Transport,
     error::OperationError,
     guard::{valid_resource_id, valid_session_id},
-    limits::{MUTATION_BYTES, SerializationLimitError, check_serialized_size},
+    limits::{
+        MUTATION_BYTES, SPACE_SERVICE_STATUS_MAX_PANES, SerializationLimitError,
+        check_serialized_size,
+    },
 };
 
 pub async fn status(
@@ -66,10 +69,27 @@ pub async fn space_git_status(
 pub async fn space_service_status(
     service: &CockpitService,
     _transport: Transport,
-    session_id: String,
+    (session_id, request): (String, SpaceServiceStatusRequest),
 ) -> Result<SpaceServiceStatusResponse, OperationError> {
+    if !valid_session_id(&session_id) {
+        return Err(OperationError::rejected(
+            "invalid_session_id",
+            "Invalid session id",
+        ));
+    }
+    if request.server_instance.is_empty()
+        || request.server_instance.len() > 256
+        || request.server_instance.chars().any(char::is_control)
+        || request.pane_ids.len() > SPACE_SERVICE_STATUS_MAX_PANES
+        || request.pane_ids.iter().any(|id| !valid_resource_id(id))
+    {
+        return Err(OperationError::rejected(
+            "invalid_space_service_status_request",
+            "Expected a bounded service-status pane set with a valid server identity",
+        ));
+    }
     service
-        .space_service_status(&session_id)
+        .space_service_status(&session_id, &request)
         .await
         .map_err(Into::into)
 }

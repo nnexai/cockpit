@@ -32,11 +32,10 @@ pub(super) fn resolve_conversation(
     let mut session_id = agree(session, inherited_session)?;
     if let Some(harness) = &harness {
         identity_value(harness)?;
-        if harness == "omp" {
-            if let Some(path) = file {
+        if harness == "omp"
+            && let Some(path) = file {
                 session_id = agree(session_id, Some(read_omp_session_file(path)?))?;
             }
-        }
     }
     let Some(session_id) = session_id else { return Ok(None); };
     identity_value(&session_id)?;
@@ -71,14 +70,14 @@ pub(super) fn job_actor(args: &OrchestrationArgs) -> Result<Option<Actor>, CliEr
             return Err(CliError::new("credential_mismatch", "Launch attachment and credential differ"));
         }
     }
-    Ok(Some(Actor::Agent(AgentCaller {
+    Ok(Some(Actor::Agent(Box::new(AgentCaller {
         assignment_generation: auth.assignment_generation,
         auth, conversation,
         endpoint_identity: String::new(), session_id: String::new(),
         workspace_id: String::new(), tab_id: String::new(), pane_id: String::new(),
         boot_id: None, terminal_id: None, native_session_id: None,
         actual_agent_kind: None, process: None,
-    })))
+    }))))
 }
 
 impl Context {

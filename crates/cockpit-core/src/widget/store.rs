@@ -78,7 +78,7 @@ impl Store {
         self.sequence += 1;
         let _ = events.send(WidgetEvent::Upserted {
             sequence: self.sequence,
-            widget: summary,
+            widget: Box::new(summary),
         });
     }
     pub fn emit_remove(

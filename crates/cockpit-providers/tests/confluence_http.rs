@@ -387,9 +387,8 @@ async fn pagination_rebuilds_cursor_and_offset_requests_with_filters_and_reports
         assert_eq!(requests.len(), 4);
         for (index, req) in requests.iter().enumerate() {
             let url = Url::parse(&format!(
-                "{}{}",
-                format!("http://127.0.0.1:{}", server.port),
-                req.target
+                "http://127.0.0.1:{}{}",
+                server.port, req.target
             ))
             .unwrap();
             let query = url

@@ -208,13 +208,12 @@ pub(super) fn finalize_layout(
     layout: &mut StepLayout,
 ) {
     for index in 0..layout.nodes.len() {
-        if let Some(id) = layout.nodes[index].step_id {
-            if let Some(previous) = layout.by_id.insert(id, index) {
+        if let Some(id) = layout.nodes[index].step_id
+            && let Some(previous) = layout.by_id.insert(id, index) {
                 node_diagnostic(&mut layout.nodes[index], "duplicate step UUID");
                 node_diagnostic(&mut layout.nodes[previous], "duplicate step UUID");
                 layout.identity_invalid = true;
             }
-        }
     }
     if layout.identity_invalid {
         diagnose(

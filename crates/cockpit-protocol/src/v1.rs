@@ -139,11 +139,18 @@ pub enum ServiceStatus {
     Unhealthy,
 }
 
-/// A live service mapped to its current Space through Herdr IDs.
+/// Live panes observed by the caller in one Herdr server incarnation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceServiceStatusRequest {
+    pub server_instance: String,
+    pub pane_ids: Vec<String>,
+}
+
+/// A registry service whose pane is live; callers resolve its current Space.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 pub struct SpaceServiceStatus {
     pub key: String,
-    pub space_id: String,
     pub pane_id: String,
     pub tab_id: Option<String>,
     pub title: String,
@@ -470,7 +477,7 @@ pub enum SessionStreamMessage {
         session_id: String,
         generation: u32,
         sequence: u32,
-        snapshot: SessionSnapshotResponse,
+        snapshot: Box<SessionSnapshotResponse>,
     },
     Stale {
         session_id: String,

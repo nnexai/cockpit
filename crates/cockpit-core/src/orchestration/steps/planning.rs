@@ -9,19 +9,34 @@ use super::{
 };
 use crate::InspectionError;
 
+/// Shared planning state: the source document, its parsed layout, and the
+/// mutable node model, change flags and byte patches a plan writes into.
+pub(super) struct PlanCtx<'a, 'b> {
+    pub(super) source: &'a str,
+    pub(super) context: &'b StepParseContext,
+    pub(super) layout: &'b StepLayout,
+    pub(super) nodes: &'b mut Vec<ModelNode>,
+    pub(super) before: &'b [Summary],
+    pub(super) affected: &'b mut [bool],
+    pub(super) patches: &'b mut Vec<BytePatch<'a>>,
+}
+
 pub(super) fn plan_add<'a>(
-    source: &'a str,
-    context: &StepParseContext,
-    layout: &StepLayout,
-    nodes: &mut Vec<ModelNode>,
-    before: &[Summary],
-    affected: &mut [bool],
-    patches: &mut Vec<BytePatch<'a>>,
+    plan: PlanCtx<'a, '_>,
     step_id: Uuid,
     parent_step_id: Option<Uuid>,
     before_step_id: Option<Uuid>,
     title: &'a str,
 ) -> Result<(), InspectionError> {
+    let PlanCtx {
+        source,
+        context,
+        layout,
+        nodes,
+        before,
+        affected,
+        patches,
+    } = plan;
     let scalars = title_valid(title)?;
     let dest = destination(layout, parent_step_id, before_step_id)?;
     if dest.parent.is_none()
@@ -89,18 +104,21 @@ pub(super) fn plan_add<'a>(
 }
 
 pub(super) fn plan_move<'a>(
-    source: &'a str,
-    context: &StepParseContext,
-    layout: &StepLayout,
-    nodes: &mut Vec<ModelNode>,
-    before: &[Summary],
-    affected: &mut [bool],
-    patches: &mut Vec<BytePatch<'a>>,
+    plan: PlanCtx<'a, '_>,
     step_id: Uuid,
     parent_step_id: Option<Uuid>,
     before_step_id: Option<Uuid>,
     previous_limits: [usize; 4],
 ) -> Result<(), InspectionError> {
+    let PlanCtx {
+        source,
+        context,
+        layout,
+        nodes,
+        before,
+        affected,
+        patches,
+    } = plan;
     let index = target(layout, step_id)?;
     let range = owned_subtree(layout, index)?;
     let end = layout.nodes[index].subtree_end_index;

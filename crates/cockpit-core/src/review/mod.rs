@@ -127,7 +127,7 @@ impl ReviewService {
     /// Resolve one file from the immutable change inventory. The first access
     /// performs the bounded Git/source read and persists that payload so later
     /// file switches, comments, and reopens reuse the same frozen content.
-    pub(super) async fn materialize_file(
+    async fn materialize_file(
         &self,
         stored: StoredSnapshot,
         file_id: &str,

@@ -135,8 +135,8 @@ fn claim_for<'a>(state: &'a OrchestrationState, run: &Run) -> Result<&'a claims:
 }
 
 fn source_binding(state: &OrchestrationState, run: &Run, accepted: bool) -> Result<SourceBinding, InspectionError> {
-    if accepted && run.stage == RunStage::Closed && run.close_reason == Some(CloseReason::Accepted) {
-        if let Some(claim) = state.checkout_claims.iter().find(|claim|
+    if accepted && run.stage == RunStage::Closed && run.close_reason == Some(CloseReason::Accepted)
+        && let Some(claim) = state.checkout_claims.iter().find(|claim|
             Some(claim.claim_id.as_str()) == run.checkout_claim_id.as_deref()
                 && claim.state == claims::ClaimState::Released) {
             if run.checkout.as_ref() != Some(&claim.checkout) || claim.holder.is_some() {
@@ -144,7 +144,6 @@ fn source_binding(state: &OrchestrationState, run: &Run, accepted: bool) -> Resu
             }
             return Ok(SourceBinding::Released { claim_id: claim.claim_id.clone(), revision: claim.revision });
         }
-    }
     let claim = claim_for(state, run)?;
     Ok(SourceBinding::Live { claim_id: claim.claim_id.clone(), revision: claim.revision,
         holder: claim.holder.clone().expect("verified holder") })
@@ -271,11 +270,10 @@ impl OrchestrationService {
                     let source = state.runs[index].source_output.clone().ok_or_else(|| error("source_output_required", "Accepted source is missing"))?;
                     let Integration::Integrated { target_repository_key, integrator_run_id, .. } = &record.integration else { unreachable!() };
                     let integrator = &state.runs[scoped_index(&state, &request.session_id, integrator_run_id)?];
-                    if let Actor::Agent(agent) = actor {
-                        if state.runs[credentials::validate_caller(&state, agent)?.run_index].run_id != *integrator_run_id {
+                    if let Actor::Agent(agent) = actor
+                        && state.runs[credentials::validate_caller(&state, agent)?.run_index].run_id != *integrator_run_id {
                             return Err(error("actor_forbidden", "Integrator identity must be the authenticated job"));
                         }
-                    }
                     if integrator.root_id != state.runs[index].root_id {
                         return Err(error("actor_forbidden", "Integrator and accepted source must belong to the same root"));
                     }
@@ -320,9 +318,8 @@ async fn integration_target(state: &OrchestrationState, session: &str, root: &st
         && run.project.as_ref().is_some_and(|project| project.key == key)) {
         let Some(checkout) = run.checkout.as_ref().filter(|checkout| Some(checkout.key.as_str()) != source_key
             && checkout.git.as_ref().is_some_and(|git| run.run_id == root || git.common_dir == git.worktree_git_dir)) else { continue };
-        if let Ok((project, actual)) = project_identity::resolve_directory(Path::new(&checkout.path), None, None).await {
-            if project.key == key && actual == *checkout { known.push(checkout.clone()); }
-        }
+        if let Ok((project, actual)) = project_identity::resolve_directory(Path::new(&checkout.path), None, None).await
+            && project.key == key && actual == *checkout { known.push(checkout.clone()); }
     }
     // A known root checkout is the explicit integrator location, before catalog discovery.
     if let Some(checkout) = known.iter().find(|checkout| state.runs.iter().any(|run|
@@ -480,10 +477,10 @@ fn automatic_record(run: &Run, receipt: &Integration) -> Option<IntegrationRecor
         expected_result_message_id: result_message_id.into(), expected_task_revision: task_revision.into(),
         integration: Integration::Integrated {
             operation_id, accepted_result_message_id: result_message_id.into(),
-            accepted_task_revision: task_revision.into(), source: source.clone(),
+            accepted_task_revision: task_revision.into(), source: Box::new(source.clone()),
             target_repository_key: target_repository_key.clone(), target_ref: target_ref.clone(),
             target_commit: target_commit.clone(), method: IntegrationMethod::Ancestor,
-            mappings: Vec::new(), checks: target_checks.clone(), integrator_run_id: integrator_run_id.clone(),
+            mappings: Vec::new().into(), checks: target_checks.clone(), integrator_run_id: integrator_run_id.clone(),
             verified_at: String::new(),
         },
     })
@@ -663,7 +660,7 @@ async fn verify_integration(record: &IntegrationRecord, source: &SourceOutput, s
     let Integration::Integrated { operation_id, accepted_result_message_id, accepted_task_revision,
         source: reported_source, target_ref, target_commit, method, mappings, checks: target_checks, .. } = &record.integration else { unreachable!() };
     if operation_id != &record.operation_id || accepted_result_message_id != &record.expected_result_message_id
-        || accepted_task_revision != &record.expected_task_revision || reported_source != source
+        || accepted_task_revision != &record.expected_task_revision || **reported_source != *source
         || output_identity(source) != (record.expected_result_message_id.as_str(), record.expected_task_revision.as_str()) {
         return Err(error("integration_conflict", "Integration must retain the exact accepted source and operation identity"));
     }
@@ -812,13 +809,13 @@ mod tests {
                 expected_result_message_id: "result".into(), expected_task_revision: "scope".into(),
                 integration: Integration::Integrated {
                     operation_id, accepted_result_message_id: "result".into(), accepted_task_revision: "scope".into(),
-                    source: self.source.clone(), target_repository_key: self.project.key.clone(),
+                    source: Box::new(self.source.clone()), target_repository_key: self.project.key.clone(),
                     target_ref: "refs/heads/main".into(), target_commit: target_commit.clone(), method,
                     mappings: vec![IntegrationMapping {
                         source_commits: commits.clone(), target_commits: self.target_commits.clone(),
                         source_paths: vec!["contract.txt".into()], target_paths: vec!["contract.txt".into()],
                         explanation: Some("Adapted the full accepted contract to target implementation".into()),
-                    }],
+                    }].into(),
                     checks: vec![CheckOutcome { contract: "changed contract".into(),
                         command_or_scenario: "target contract scenario".into(), outcome: status,
                         evidence: Some(format!("Target scenario observed at {target_commit}")), limitation: None }],
@@ -832,7 +829,7 @@ mod tests {
     async fn released_source_uses_complete_same_repository_output_after_removal() {
         let case = GitCase::new(false).await;
         let mut run = new_run("worker", "session", RunKind::Worker, "worker".into(),
-            "root", Some("root".into()), Some("task".into()), 1);
+            "root", RunLineage { parent_run_id: Some("root".into()), task_id: Some("task".into()) }, 1);
         run.project = Some(case.project.clone());
         run.checkout = Some(case.source_checkout.clone());
         run.setup = Some(SetupSummary {
@@ -877,7 +874,7 @@ mod tests {
 
     #[test]
     fn successful_result_uses_current_scope_not_original_launch_revision() {
-        let mut run = new_run("worker", "session", RunKind::Worker, "worker".into(), "root", Some("root".into()), Some("task".into()), 1);
+        let mut run = new_run("worker", "session", RunKind::Worker, "worker".into(), "root", RunLineage { parent_run_id: Some("root".into()), task_id: Some("task".into()) }, 1);
         run.task_revision_at_start = Some("original launch scope".into());
         run.assignment_generation = Some(1);
         let conversation = ConversationIdentity { harness: "test".into(), session_id: "worker-conversation".into() };
@@ -910,7 +907,7 @@ mod tests {
     async fn ancestry_requires_the_actual_source_head_and_fresh_target_ref() {
         let case = GitCase::new(false).await;
         let mut record = case.record(IntegrationMethod::Ancestor, CheckStatus::Passed);
-        if let Integration::Integrated { mappings, .. } = &mut record.integration { mappings.clear(); }
+        if let Integration::Integrated { mappings, .. } = &mut record.integration { *mappings = Box::default(); }
         assert!(verify_integration(&record, &case.source, Path::new(&case.source_checkout.path), &case.target_checkout).await.is_err());
         git(&case.target_path, &["merge", "--no-ff", "worker", "-m", "integrate actual source ancestry"]);
         let integrated_head = git(&case.target_path, &["rev-parse", "HEAD"]).trim().to_owned();
@@ -951,7 +948,7 @@ mod tests {
         git(&case.source_path, &["commit", "-m", "later output not accepted"]);
         let later_head = git(&case.source_path, &["rev-parse", "HEAD"]).trim().to_owned();
         std::fs::write(case.source_path.join("draft.txt"), "preserved draft\n").unwrap();
-        let mut run = new_run("worker", "session", RunKind::Worker, "worker".into(), "root", Some("root".into()), Some("task".into()), 1);
+        let mut run = new_run("worker", "session", RunKind::Worker, "worker".into(), "root", RunLineage { parent_run_id: Some("root".into()), task_id: Some("task".into()) }, 1);
         run.project = Some(case.project.clone());
         run.checkout = Some(case.source_checkout.clone());
         run.setup = Some(SetupSummary {
@@ -975,7 +972,7 @@ mod tests {
     async fn automatic_containment_requires_existing_exact_target_check_receipt() {
         let case = GitCase::new(false).await;
         let mut run = new_run("accepted", "session", RunKind::Worker, "worker".into(),
-            "root", Some("root".into()), Some("task".into()), 1);
+            "root", RunLineage { parent_run_id: Some("root".into()), task_id: Some("task".into()) }, 1);
         run.source_output = Some(case.source.clone());
         assert!(automatic_record(&run, &Integration::Pending).is_none(),
             "passed source checks never manufacture a target receipt");

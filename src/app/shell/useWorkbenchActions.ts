@@ -61,9 +61,9 @@ export function useWorkbenchActions(props: WorkbenchProps, runtime: WorkbenchSta
   };
   const focusService = (service: SpaceServiceStatus) => {
     if (modalOpen || mutationBusy || state.sync !== "live") return;
-    const pane = snapshot?.panes.find(candidate => candidate.id === service.pane_id && candidate.space_id === service.space_id);
-    const tab = pane ? allTabs.find(candidate => candidate.id === pane.tab_id && candidate.space_id === service.space_id) : undefined;
-    if (!pane || !tab || (service.tab_id !== null && service.tab_id !== tab.id)) return;
+    const pane = snapshot?.panes.find(candidate => candidate.id === service.pane_id);
+    const tab = pane ? snapshot?.tabs.find(candidate => candidate.id === pane.tab_id && candidate.space_id === pane.space_id) : undefined;
+    if (!pane || !tab || !snapshot?.spaces.some(space => space.id === pane.space_id) || (service.tab_id !== null && service.tab_id !== tab.id)) return;
     leave("focus");
     if (narrowViewport) drawerFocusTarget.current = { spaceId: pane.space_id, paneId: pane.id };
     onFocus({ kind: "pane", target_id: pane.id }, { spaceId: pane.space_id, tabId: pane.tab_id, paneId: pane.id });

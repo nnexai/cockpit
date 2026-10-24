@@ -568,7 +568,7 @@ fn decode_digest(digest: &str) -> Option<[u8; 32]> {
         return None;
     }
     let mut bytes = [0u8; 32];
-    for (out, pair) in bytes.iter_mut().zip(digest.as_bytes().chunks_exact(2)) {
+    for (out, pair) in bytes.iter_mut().zip(digest.as_bytes().as_chunks::<2>().0) {
         let nibble = |byte| match byte {
             b'0'..=b'9' => Some(byte - b'0'),
             b'a'..=b'f' => Some(byte - b'a' + 10),

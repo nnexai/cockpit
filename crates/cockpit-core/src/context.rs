@@ -254,16 +254,14 @@ impl ContextService {
             }
         }
         let mut review_repository_ids = Vec::new();
-        if let Some(cwd) = &cwd {
-            if let Ok(repository) = self.projects.cached_discover_checkout(cwd).await {
-                if let Ok(root) = verified_repository_root(
+        if let Some(cwd) = &cwd
+            && let Ok(repository) = self.projects.cached_discover_checkout(cwd).await
+                && let Ok(root) = verified_repository_root(
                     &self.configuration, Path::new(&repository.checkout_path), repository.repository_id, repository.name,
                 ).await {
                     review_repository_ids.push(root.repository_id.clone());
                     roots.push(root);
                 }
-            }
-        }
         let selected_catalog = if selected_repositories.is_empty() {
             Vec::new()
         } else {
@@ -535,14 +533,13 @@ pub(crate) fn read_directory(
         ));
     }
     let directory_revision = metadata_revision(&metadata);
-    if let Some(expected) = request.revision.as_deref() {
-        if expected != directory_revision {
+    if let Some(expected) = request.revision.as_deref()
+        && expected != directory_revision {
             return Err(InspectionError::new(
                 "context_stale_revision",
                 "directory changed since it was listed",
             ));
         }
-    }
     let (mut entries, truncated) = scan_directory_entries(authorized, &directory, &relative)?;
     let after = directory.dir_metadata().map_err(|error| {
         InspectionError::new("context_directory_unavailable", error.to_string())
@@ -609,14 +606,13 @@ pub(crate) fn read_document(
         )
     })?;
     let revision = metadata_revision(&before);
-    if let Some(expected) = request.expected_revision.as_deref() {
-        if expected != revision {
+    if let Some(expected) = request.expected_revision.as_deref()
+        && expected != revision {
             return Err(InspectionError::new(
                 "context_stale_revision",
                 "context file changed since it was listed",
             ));
         }
-    }
     let mut result = ContextDocument {
         binding_id: request.binding_id.clone(),
         root_id: authorized.root.root_id.clone(),
@@ -662,7 +658,6 @@ pub(crate) fn read_document(
         &parent,
         &leaf,
         &before,
-        &revision,
         offset,
         max_bytes,
         &mut result,
@@ -721,16 +716,14 @@ fn scan_directory_entries(
 ) -> Result<(Vec<ContextEntry>, bool), InspectionError> {
     let mut entries = Vec::new();
     let mut truncated = false;
-    let mut scanned_entries = 0usize;
     let read_dir = directory.entries().map_err(|error| {
         InspectionError::new("context_directory_unavailable", error.to_string())
     })?;
-    for item in read_dir {
+    for (scanned_entries, item) in read_dir.enumerate() {
         if scanned_entries >= MAX_DIRECTORY_SCAN {
             truncated = true;
             break;
         }
-        scanned_entries += 1;
         let item = match item {
             Ok(item) => item,
             Err(error) => {
@@ -802,7 +795,6 @@ fn read_document_bytes(
     parent: &Dir,
     leaf: &Path,
     before: &Metadata,
-    revision: &str,
     offset: u64,
     max_bytes: usize,
     result: &mut ContextDocument,
@@ -837,6 +829,7 @@ fn read_document_bytes(
         );
         return Ok(None);
     }
+    let revision = metadata_revision(before);
     if metadata_revision(&opened) != revision {
         return Err(InspectionError::new(
             "context_changed_during_read",
@@ -1331,7 +1324,7 @@ fn open_dir_nofollow_absolute(path: &Path) -> std::io::Result<Dir> {
 fn is_symlink_open_error(error: &std::io::Error) -> bool {
     #[cfg(unix)]
     {
-        return error.raw_os_error() == Some(nix::libc::ELOOP);
+        error.raw_os_error() == Some(nix::libc::ELOOP)
     }
     #[cfg(not(unix))]
     {
@@ -1352,7 +1345,7 @@ fn filesystem_identity(metadata: &Metadata) -> String {
     #[cfg(unix)]
     {
         use cap_std::fs::MetadataExt;
-        return format!("{}:{}", metadata.dev(), metadata.ino());
+        format!("{}:{}", metadata.dev(), metadata.ino())
     }
     #[cfg(not(unix))]
     {

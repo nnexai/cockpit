@@ -509,20 +509,22 @@ async fn manual_dirty_linked_removal_without_setup_journals_before_force_dispatc
     let request = manual_request(&preview, WorkspaceTeardownAction::RemoveOwnedWorktree);
     let result = fixture.service.teardown_execute("session", &request).await.unwrap();
     assert_eq!(result.outcome, WorkspaceTeardownOutcome::Completed);
-    let requests = fixture.adapter.remove_requests.lock();
-    assert_eq!(requests.len(), 1);
-    assert!(requests[0].force);
-    assert_eq!(requests[0].endpoint_identity, "endpoint");
-    assert_eq!(requests[0].workspace_id, "workspace");
-    assert_eq!(requests[0].checkout_path, fixture.checkout.to_string_lossy());
-    drop(requests);
-    let observed = fixture.adapter.receipts_at_remove.lock();
-    assert_eq!(observed.len(), 1);
-    assert!(observed[0].manual);
-    assert_eq!(observed[0].operation_id, request.operation_id);
-    assert_eq!(observed[0].checkout_path, request.expected_checkout_path);
-    assert_eq!(observed[0].state, TeardownReceiptState::Pending);
-    drop(observed);
+    {
+        let requests = fixture.adapter.remove_requests.lock();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].force);
+        assert_eq!(requests[0].endpoint_identity, "endpoint");
+        assert_eq!(requests[0].workspace_id, "workspace");
+        assert_eq!(requests[0].checkout_path, fixture.checkout.to_string_lossy());
+    }
+    {
+        let observed = fixture.adapter.receipts_at_remove.lock();
+        assert_eq!(observed.len(), 1);
+        assert!(observed[0].manual);
+        assert_eq!(observed[0].operation_id, request.operation_id);
+        assert_eq!(observed[0].checkout_path, request.expected_checkout_path);
+        assert_eq!(observed[0].state, TeardownReceiptState::Pending);
+    }
     assert_eq!(fixture.service.store.read_teardown_receipt(&request.operation_id).unwrap().unwrap().state,
         TeardownReceiptState::Completed);
     assert!(fixture.service.teardown_recoveries("session").unwrap().recoveries.is_empty());

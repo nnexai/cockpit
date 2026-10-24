@@ -111,15 +111,15 @@ fn scalar(value: &str) -> Result<Option<String>, ()> {
         }
         return Err(());
     }
-    if value.starts_with('\'') {
+    if let Some(rest) = value.strip_prefix('\'') {
         let mut result = String::new();
-        let mut chars = value[1..].char_indices().peekable();
+        let mut chars = rest.char_indices().peekable();
         while let Some((index, ch)) = chars.next() {
             if ch == '\'' {
                 if chars.peek().is_some_and(|(_, ch)| *ch == '\'') {
                     chars.next();
                     result.push('\'');
-                } else if scalar_tail(&value[index + 2..]) {
+                } else if scalar_tail(&rest[index + 1..]) {
                     return Ok(Some(result));
                 } else {
                     return Err(());
@@ -391,7 +391,7 @@ pub(super) fn regular_entry(dir: &Dir, name: &str) -> Result<bool, InspectionErr
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(fs::error(
             "notes_unsafe_path",
-            &format!("Cannot inspect Notes entry: {error}"),
+            format!("Cannot inspect Notes entry: {error}"),
         )),
     }
 }
@@ -836,9 +836,7 @@ mod tests {
         let updated = splice_update(&record, Some("Inserted"), None);
         assert_eq!(
             updated,
-            format!(
-                "---\r\nrecorded: 2026-10-05T10:00:00Z\r\ncustom: untouched\r\n---\r\n# Inserted\n\nPreamble 🧭\r\n\r\nNo heading\r\n"
-            )
+            "---\r\nrecorded: 2026-10-05T10:00:00Z\r\ncustom: untouched\r\n---\r\n# Inserted\n\nPreamble 🧭\r\n\r\nNo heading\r\n".to_string()
         );
     }
 

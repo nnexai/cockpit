@@ -28,6 +28,7 @@ section!(
         SpaceGitRefusal,
         ServiceStatus,
         SpaceServiceStatus,
+        SpaceServiceStatusRequest,
         SpaceServiceStatusResponse,
         SpaceTags,
         SpaceTagsResponse,

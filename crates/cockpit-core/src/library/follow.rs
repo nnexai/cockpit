@@ -483,16 +483,8 @@ impl LibraryService {
                     break;
                 }
                 let planned = &job.tag;
-                self.save_follow_page_result(
-                    store,
-                    operation,
-                    follow,
-                    planned.row.as_ref().expect("listed page"),
-                    planned.old.clone(),
-                    planned.reason.map(|reason| reason.to_string()),
-                    result,
-                )
-                .await?;
+                self.save_follow_page_result(store, operation, follow, planned, result)
+                    .await?;
             }
             drop(leases);
             if cancelled {
@@ -599,11 +591,12 @@ impl LibraryService {
         store: &Arc<Store>,
         operation: &str,
         follow: &LibraryFollowSummary,
-        page: &SpacePage,
-        old: Option<LibraryIndexEntry>,
-        reason: Option<String>,
+        planned: &plan::Planned<'_, SpacePage>,
         result: Result<crate::sources::SourceAsset, InspectionError>,
     ) -> Result<(), InspectionError> {
+        let page = planned.row.as_ref().expect("listed page");
+        let old = planned.old.clone();
+        let reason = planned.reason.map(|reason| reason.to_string());
         let id = page_item_id(follow, &page.page_id);
         let failed = |message: String| -> Result<(), InspectionError> {
             let title = if page.title.is_empty() {

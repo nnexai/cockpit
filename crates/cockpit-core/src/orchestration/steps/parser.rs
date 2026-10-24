@@ -95,8 +95,7 @@ pub(super) fn collect_events(
                     &mut line_cursor,
                     &mut stack,
                     layout,
-                    checked,
-                    range,
+                    TaskMarker { checked, range },
                 )?;
             }
             _ => {}
@@ -109,16 +108,21 @@ pub(super) fn collect_events(
     })
 }
 
+struct TaskMarker {
+    checked: bool,
+    range: Range<usize>,
+}
+
 fn record_task_marker(
     source: &str,
     context: &StepParseContext,
     physical: &[Line],
     line_cursor: &mut usize,
-    stack: &mut Vec<Frame>,
+    stack: &mut [Frame],
     layout: &mut StepLayout,
-    checked: bool,
-    range: Range<usize>,
+    marker: TaskMarker,
 ) -> Result<(), InspectionError> {
+    let TaskMarker { checked, range } = marker;
     let checkbox_offset = range.end.saturating_sub(2);
     if checkbox_offset == context.top_checkbox_offset {
         if let Some(frame) = stack.last_mut() {

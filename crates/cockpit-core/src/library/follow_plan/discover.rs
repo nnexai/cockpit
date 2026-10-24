@@ -26,8 +26,8 @@ impl LibraryService {
                 self.discover_pages(store, state, follow, space_key, window, now)
                     .await
             }
-            LibraryFollowSource::JiraQuery { jql, mode } => {
-                self.discover_issues(store, state, follow, jql, *mode, window, now)
+            LibraryFollowSource::JiraQuery { .. } => {
+                self.discover_issues(store, state, follow, &follow.source, window, now)
                     .await
             }
         }
@@ -135,11 +135,14 @@ impl LibraryService {
         store: &Arc<Store>,
         state: &mut State,
         follow: &LibraryFollowSummary,
-        jql: &str,
-        mode: LibraryFollowMode,
+        follow_source: &LibraryFollowSource,
         window: Window,
         now: i64,
     ) -> Result<(u32, bool), InspectionError> {
+        let LibraryFollowSource::JiraQuery { jql, mode } = follow_source else {
+            unreachable!("discover_issues requires a Jira query source");
+        };
+        let mode = *mode;
         let listing = JiraFollowPlan::list(self, follow, jql, window, Pass::Background)
             .await?
             .expect("background listing is not cancellable");

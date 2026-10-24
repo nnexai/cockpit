@@ -175,7 +175,7 @@ pub(super) enum TaskCommand {
         #[arg(long)]
         doc_revision: Option<String>,
         #[command(flatten)]
-        launch: LaunchArgs,
+        launch: Box<LaunchArgs>,
     },
     /// Stop future scheduling; does not cancel or stop an existing attempt.
     ScheduleCancel {
@@ -1110,10 +1110,24 @@ impl RunCommand {
                 to,
                 original_task_revision,
                 original_claim_id,
-            } => common.report_action(
-                kind, submission_id(message_id, "Message")?, summary, outcome, source_output_file, plan, plan_file, stdin, to,
-                original_task_revision, original_claim_id,
-            )?,
+            } => {
+                let message_id = submission_id(message_id, "Message")?;
+                let plan = match plan {
+                    Some(plan) => Some(bounded(plan)?),
+                    None => read_input(plan_file, stdin)?,
+                };
+                OrchestrationAction::Report {
+                    message_id,
+                    kind: kind.into(),
+                    outcome: outcome.map(Into::into),
+                    summary: bounded(summary)?,
+                    plan,
+                    to_run_id: to,
+                    source_output: source_output_file.map(read_json_file).transpose()?,
+                    original_task_revision,
+                    original_claim_id,
+                }
+            },
             Self::IntegrationRecord { record_file } => OrchestrationAction::IntegrationRecord {
                 record: read_json_file(record_file)?,
             },
@@ -1200,39 +1214,4 @@ impl RunCommand {
     pub(super) fn caller_required(&self) -> bool {
         !matches!(self, Self::Start { .. } | Self::List { .. } | Self::Show { self_run: false, .. })
     }
-}
-
-
-impl OrchestrationArgs {
-    pub(super) fn report_action(
-        &self,
-        kind: ReportKindArg,
-        message_id: String,
-        summary: String,
-        outcome: Option<OutcomeArg>,
-        source_output_file: Option<PathBuf>,
-        plan: Option<String>,
-        plan_file: Option<PathBuf>,
-        stdin: bool,
-        to: Option<String>,
-        original_task_revision: Option<String>,
-        original_claim_id: Option<String>,
-    ) -> Result<OrchestrationAction, CliError> {
-        let plan = match plan {
-            Some(plan) => Some(bounded(plan)?),
-            None => read_input(plan_file, stdin)?,
-        };
-        Ok(OrchestrationAction::Report {
-            message_id,
-            kind: kind.into(),
-            outcome: outcome.map(Into::into),
-            summary: bounded(summary)?,
-            plan,
-            to_run_id: to,
-            source_output: source_output_file.map(read_json_file).transpose()?,
-            original_task_revision,
-            original_claim_id,
-        })
-    }
-
 }

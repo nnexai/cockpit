@@ -111,15 +111,13 @@ impl QuotaService {
         if !memory.collecting
             && now >= memory.retry_at_ms
             && (memory.recheck || due(&memory.snapshot.omp, now, request.agents_working))
-        {
-            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            && let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 memory.collecting = true;
                 let service = Arc::clone(self);
                 runtime.spawn(async move {
                     service.refresh(request.agents_working).await;
                 });
             }
-        }
         response(&memory.snapshot, now, memory.collecting)
     }
     async fn refresh(self: Arc<Self>, agents_working: bool) {
@@ -305,14 +303,12 @@ fn apply(
             for value in &mut values {
                 if value.state == QuotaProviderState::Unavailable
                     && value.error == Some(QuotaErrorCode::UsageUnavailable)
-                {
-                    if let Some(previous) = record.providers.iter().find(|previous| {
+                    && let Some(previous) = record.providers.iter().find(|previous| {
                         previous.provider == value.provider && !previous.accounts.is_empty()
                     }) {
                         value.accounts = previous.accounts.clone();
                         value.state = QuotaProviderState::Available;
                     }
-                }
             }
             record.providers = values;
             record.failures = 0;

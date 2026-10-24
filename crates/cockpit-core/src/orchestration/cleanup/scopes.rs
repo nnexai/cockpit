@@ -402,7 +402,7 @@ fn scope_operation(run: &Run) -> String {
 }
 
 fn identity_digest_scope(scope: &OwnedProcessScope) -> Result<String, InspectionError> {
-    let bytes = serde_json::to_vec(scope).map_err(|error| super::super::error("scope_identity", &error.to_string()))?;
+    let bytes = serde_json::to_vec(scope).map_err(|error| super::super::error("scope_identity", error.to_string()))?;
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
@@ -440,7 +440,7 @@ mod tests {
             let service = OrchestrationService { store: OrchestrationStore::open(&root).unwrap(), revision,
                 notifications: std::sync::Mutex::new(None), launch_config: Default::default() };
             let mut run = new_run(&id(), "scope-tests", RunKind::Worker, "generic worker".into(),
-                "root", Some("root".into()), None, 1);
+                "root", RunLineage { parent_run_id: Some("root".into()), task_id: None }, 1);
             run.stage = RunStage::Closed;
             run.close_reason = Some(CloseReason::Accepted);
             run.cleanup_policy = Some(WorkerCleanupPolicy::OwnedWhenSafe);
@@ -474,9 +474,9 @@ mod tests {
                 outcome: Some(ReportOutcome::Succeeded), summary: "complete".into(), plan: None,
                 source_output: Some(source.clone()), at: now() });
             run.integration = Integration::Integrated { operation_id: id(), accepted_result_message_id: "result".into(),
-                accepted_task_revision: "scope".into(), source, target_repository_key: "repository".into(),
+                accepted_task_revision: "scope".into(), source: Box::new(source), target_repository_key: "repository".into(),
                 target_ref: "refs/heads/main".into(), target_commit: "b".repeat(40), method: IntegrationMethod::Ancestor,
-                mappings: Vec::new(), checks, integrator_run_id: "root".into(), verified_at: now() };
+                mappings: Vec::new().into(), checks, integrator_run_id: "root".into(), verified_at: now() };
             run.retirement = retirement::retirement_for_accepted(&run, RetirementTrigger::Accept, "scope", &now());
             run.retirement.as_mut().unwrap().state = RetirementState::Retired { at: now(), terminal: TerminalOutcome::ClosedByCockpit };
             let locked = service.store.lock().unwrap();
@@ -662,7 +662,7 @@ mod tests {
         let mut state = locked.read().unwrap();
         state.runs[0] = run.clone();
         let mut successor = new_run(&successor_id, &run.session_id, RunKind::Worker, "successor".into(),
-            &run.root_id, Some(run.root_id.clone()), run.task_id.clone(), 2);
+            &run.root_id, RunLineage { parent_run_id: Some(run.root_id.clone()), task_id: run.task_id.clone() }, 2);
         successor.assignment_generation = Some(2);
         state.runs.push(successor);
         state.task_ownership.push(TaskOwnership { root_id: run.root_id.clone(), task_id: run.task_id.clone().unwrap(),
@@ -733,7 +733,7 @@ mod tests {
         }
         run.result.as_mut().unwrap().source_output = Some(source.clone());
         if let Integration::Integrated { source: integrated, target_repository_key, target_commit, .. } = &mut run.integration {
-            *integrated = source.clone(); *target_repository_key = project.key; *target_commit = head;
+            **integrated = source.clone(); *target_repository_key = project.key; *target_commit = head;
         }
         run.retirement = retirement::retirement_for_accepted(&run, RetirementTrigger::Accept, "scope", &now());
         run.retirement.as_mut().unwrap().state = RetirementState::Retired { at: now(), terminal: TerminalOutcome::AlreadyAbsent };
@@ -808,7 +808,7 @@ mod tests {
             let locked = fixture.service.store.lock().unwrap();
             let mut state = locked.read().unwrap();
             let mut root = new_run(&fixture.run.root_id, &fixture.run.session_id, RunKind::Supervisor,
-                "liaison".into(), &fixture.run.root_id, None, None, 1);
+                "liaison".into(), &fixture.run.root_id, RunLineage::default(), 1);
             root.stage = RunStage::Active;
             state.runs.push(root);
             assert!(state.owned_resources.is_empty(), "borrowed checkout has no fabricated filesystem ownership");

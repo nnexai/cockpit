@@ -143,7 +143,8 @@ pub(crate) fn snapshot(
         RuntimeObservation::Unavailable { .. } => HashMap::new(),
     };
     let (attention, questions) = project_attention(
-        &runs, &inboxes, &observations, &intents, &run_by_id, &state.messages, clock, now,
+        &runs, &inboxes, &observations, &intents, &run_by_id, &state.messages,
+        AttentionClock { at: clock, text: now },
     );
     let board = project_board(boards, selected_root, state, &intents)?;
     let mut open_counts: HashMap<&str, u32> = HashMap::new();
@@ -214,6 +215,13 @@ pub(crate) fn redact_agent_capabilities(snapshot: &mut OrchestrationSnapshot) {
     }
 }
 
+/// Snapshot instant: parsed for age checks, raw text for projected timestamps.
+#[derive(Clone, Copy)]
+struct AttentionClock<'a> {
+    at: OffsetDateTime,
+    text: &'a str,
+}
+
 fn project_attention(
     runs: &[&Run],
     inboxes: &HashMap<&str, Vec<&Message>>,
@@ -221,8 +229,7 @@ fn project_attention(
     intents: &[&TaskIntent],
     run_by_id: &HashMap<&str, &Run>,
     events: &[Message],
-    clock: OffsetDateTime,
-    now: &str,
+    clock: AttentionClock<'_>,
 ) -> (Vec<Attention>, Vec<QuestionStatus>) {
     let mut attention = Vec::new();
     let mut questions = Vec::new();
@@ -234,8 +241,8 @@ fn project_attention(
             inbox,
             question.as_ref(),
             observations.get(run.run_id.as_str()).copied(),
-            clock,
-            now,
+            clock.at,
+            clock.text,
             &mut attention,
         );
         if let Some(question) = question {
@@ -255,7 +262,7 @@ fn project_attention(
         if intent.state == IntentState::Conflict {
             let since = run_by_id
                 .get(intent.run_id.as_str())
-                .map_or(now, |run| run.updated_at.as_str());
+                .map_or(clock.text, |run| run.updated_at.as_str());
             attention.push(Attention {
                 kind: AttentionKind::IntentConflict,
                 run_id: Some(intent.run_id.clone()),
@@ -305,8 +312,8 @@ fn project_board(
                     } else if matches!(run.stage, RunStage::Queued | RunStage::Starting) { AttemptState::Starting }
                     else { AttemptState::Running },
                 });
-                if let Some(code) = view.task.diagnostic.as_deref() {
-                    if !board
+                if let Some(code) = view.task.diagnostic.as_deref()
+                    && !board
                         .diagnostics
                         .iter()
                         .any(|diagnostic| diagnostic.code == code)
@@ -317,7 +324,6 @@ fn project_board(
                                 .to_owned(),
                         });
                     }
-                }
             }
             Some(board)
         }
@@ -528,24 +534,20 @@ fn derive_attention(
             since: since.to_owned(),
         })
     };
-    match run.stage {
-        RunStage::Reported => add(
-            AttentionKind::ToAccept,
-            run.result
-                .as_ref()
-                .map_or(&run.updated_at, |report| &report.at),
-            None,
-        ),
-        _ => {}
-    }
-    if let Some(dispatch) = &run.dispatch {
-        if matches!(
+    if run.stage == RunStage::Reported { add(
+        AttentionKind::ToAccept,
+        run.result
+            .as_ref()
+            .map_or(&run.updated_at, |report| &report.at),
+        None,
+    ) }
+    if let Some(dispatch) = &run.dispatch
+        && matches!(
             dispatch.step,
             DispatchStep::SetupUnknown | DispatchStep::LaunchUnknown | DispatchStep::NeedsReview
         ) {
             add(AttentionKind::DispatchUnknown, &dispatch.updated_at, None);
         }
-    }
     let needs_input = question
         .filter(|question| matches!(&question.receipt, QuestionReceipt::Unresolved));
     if let Some(question) = needs_input {
@@ -596,8 +598,7 @@ fn derive_attention(
                 && run.result.is_none()
                 && needs_input.is_none()
                 && matches!(observation.agent_status.as_deref(), Some("idle" | "done"))
-            {
-                if let Some(brief) = work {
+                && let Some(brief) = work {
                     let mut since = brief.created_at.as_str();
                     if let Some(report) = &run.last_report {
                         since = latest_time(since, &report.at);
@@ -609,7 +610,6 @@ fn derive_attention(
                         add(AttentionKind::IdleWithoutReport, since, Some(brief.seq));
                     }
                 }
-            }
         }
         Presence::Unobserved => {}
     }

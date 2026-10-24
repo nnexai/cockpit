@@ -205,11 +205,10 @@ pub(crate) fn row(
     if let Some(phase) = record.phases.iter_mut().find(|phase| phase.state == LibraryPhaseState::Running) {
         phase.done += 1;
     }
-    if let Some(entry) = entry {
-        if !record.item_ids.contains(&entry.item_id) {
+    if let Some(entry) = entry
+        && !record.item_ids.contains(&entry.item_id) {
             record.item_ids.push(entry.item_id.clone());
         }
-    }
     if let Some(report) = &mut record.report {
         match outcome {
             LibraryReportOutcome::New => report.new += 1,

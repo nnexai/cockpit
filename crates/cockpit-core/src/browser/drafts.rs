@@ -110,7 +110,7 @@ struct StoredCapturePreparation {
     context: BrowserCaptureContext,
 }
 enum RecoveryMutation {
-    Upsert(BrowserViewDraftAnnotation),
+    Upsert(Box<BrowserViewDraftAnnotation>),
     Remove(String),
 }
 
@@ -766,7 +766,7 @@ impl BrowserDraftStore {
                     .iter_mut()
                     .find(|current| current.id == annotation.id)
                 {
-                    *current = annotation;
+                    *current = *annotation;
                 } else {
                     if draft.annotations.len() >= 64 {
                         return Err(InspectionError::new(
@@ -774,7 +774,7 @@ impl BrowserDraftStore {
                             "Draft has the maximum of 64 annotations",
                         ));
                     }
-                    draft.annotations.push(annotation);
+                    draft.annotations.push(*annotation);
                 }
             }
             RecoveryMutation::Remove(annotation_id) => {
@@ -850,7 +850,7 @@ impl BrowserDraftStore {
             association_key,
             draft_id,
             expected_revision,
-            RecoveryMutation::Upsert(annotation),
+            RecoveryMutation::Upsert(Box::new(annotation)),
         )
     }
 

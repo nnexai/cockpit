@@ -1,5 +1,15 @@
 use super::*;
 
+/// Per-group inputs shared by the standalone inventory steps.
+#[derive(Clone, Copy)]
+struct StandaloneGroupCtx<'a> {
+    group: &'a str,
+    entries: &'a [LibraryIndexEntry],
+    provider: &'a str,
+    is_issue: bool,
+    now: i64,
+}
+
 impl LibraryService {
     pub(super) async fn discover_standalone(
         &self,
@@ -32,16 +42,19 @@ impl LibraryService {
             freeze_inventory(state, &group, &entries, is_issue, config, now);
             save(store, state)?; // durable cohort before the first remote request
             let mut attempted_size = 100;
+            let group_ctx = StandaloneGroupCtx {
+                group: &group,
+                entries: &entries,
+                provider,
+                is_issue,
+                now,
+            };
             let result = self
                 .execute_standalone_inventory(
                     store,
                     state,
                     config,
-                    &group,
-                    &entries,
-                    provider,
-                    is_issue,
-                    now,
+                    group_ctx,
                     report,
                     &mut attempted_size,
                 )
@@ -128,14 +141,11 @@ impl LibraryService {
         store: &Store,
         state: &mut State,
         config: &LibrarySyncConfiguration,
-        group: &str,
-        entries: &[LibraryIndexEntry],
-        provider: &str,
-        is_issue: bool,
-        now: i64,
+        ctx: StandaloneGroupCtx<'_>,
         report: &mut LibrarySyncTick,
         attempted_size: &mut usize,
     ) -> Result<bool, InspectionError> {
+        let StandaloneGroupCtx { group, provider, .. } = ctx;
         let cancel = AtomicBool::new(false);
         // Yield among due groups and leave publication a turn even for providers
         // without request-accounting support.
@@ -158,7 +168,7 @@ impl LibraryService {
             let end = (progress.cursor + size).min(progress.ids.len());
             let ids = progress.ids[progress.cursor..end].to_vec();
             let (observed, candidates) = self
-                .list_standalone_chunk(group, entries, provider, is_issue, &ids, now, &cancel)
+                .list_standalone_chunk(ctx, &ids, &cancel)
                 .await?;
             // Never advance a cursor without all the chunk's candidates.
             for work in candidates {
@@ -190,14 +200,17 @@ impl LibraryService {
 
     async fn list_standalone_chunk(
         &self,
-        group: &str,
-        entries: &[LibraryIndexEntry],
-        provider: &str,
-        is_issue: bool,
+        ctx: StandaloneGroupCtx<'_>,
         ids: &[String],
-        now: i64,
         cancel: &AtomicBool,
     ) -> Result<(BTreeSet<String>, Vec<Candidate>), InspectionError> {
+        let StandaloneGroupCtx {
+            group,
+            entries,
+            provider,
+            is_issue,
+            now,
+        } = ctx;
         let mut observed = BTreeSet::new();
         let mut candidates = Vec::new();
         if is_issue {

@@ -139,7 +139,7 @@ async fn tab_delivery_rechecks_focus_and_requires_duplicate_risk_acknowledgement
     adapter.change_on_focus.store(false, std::sync::atomic::Ordering::SeqCst);
     adapter.snapshot.lock().await.snapshot.focused_tab_id = Some("w1:t1".into());
     let target = adapter.targets.lock().await[1].clone();
-    service.persist_outcome("unknown-operation", &key, &[id.clone()], Some(target.clone()),
+    service.persist_outcome("unknown-operation", &key, std::slice::from_ref(&id), Some(target.clone()),
         CommentPasteState::OutcomeUnknown, "unknown").unwrap();
     let mut request = send(tab_scope("w1:t1"), id.clone());
     let error = service.send_feedback(request.clone()).await.unwrap_err();
@@ -183,7 +183,7 @@ async fn cleanup_retries_failed_discard_and_removes_only_its_association_work() 
         (&key, &id, &paste_targets[1]),
         (&other_key, &other_id, &paste_targets[0]),
     ] {
-        service.persist_outcome(association, association, &[annotation.clone()],
+        service.persist_outcome(association, association, std::slice::from_ref(annotation),
             Some(paste_target.clone()), CommentPasteState::OutcomeUnknown, "unknown").unwrap();
     }
     drop(paste_targets);

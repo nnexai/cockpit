@@ -267,7 +267,7 @@ impl Fixture {
 
     fn setup(&self, run_id: &str) {
         self.service.record_dispatch(run_id, DispatchUpdate::SetupPlanned {
-            setup: SetupSummary {
+            setup: Box::new(SetupSummary {
                 operation_id: None, generation: None, workspace_id: Some("test-space".into()),
                 checkout_path: if self.run(run_id).kind == RunKind::Worker {
                     self.root.join("checkouts").join(run_id).to_string_lossy().into_owned()
@@ -276,7 +276,7 @@ impl Fixture {
                 base_commit: None,
                 effects: vec!["Open isolated existing Space".into()], warnings: Vec::new(),
                 project_workspace_id: None,
-            },
+            }),
         }).unwrap();
     }
     fn root_actor(&self, root_id: &str) -> Actor {
@@ -290,7 +290,7 @@ impl Fixture {
     fn neutral_actor(&self, run_id: &str) -> Actor {
         let run = self.run(run_id);
         let auth = self.auth(run_id, if run.kind == RunKind::Worker { JobRole::Worker } else { JobRole::Root });
-        Actor::Agent(AgentCaller {
+        Actor::Agent(Box::new(AgentCaller {
             assignment_generation: auth.assignment_generation,
             auth,
             conversation: Some(run.attachment.as_ref().and_then(|attachment| attachment.conversation.clone())
@@ -299,7 +299,7 @@ impl Fixture {
             workspace_id: String::new(), tab_id: String::new(), pane_id: String::new(),
             boot_id: None, terminal_id: None, native_session_id: None,
             actual_agent_kind: None, process: None,
-        })
+        }))
     }
 
     fn launch_and_bind(&self, run_id: &str) -> Actor {
@@ -347,11 +347,11 @@ impl Fixture {
             .record_dispatch(
                 run_id,
                 DispatchUpdate::TabReceipt {
-                    location: location.clone(),
-                    launch_shell_identity: Some(NativeShellIdentity {
+                    location: Box::new(location.clone()),
+                    launch_shell_identity: Some(Box::new(NativeShellIdentity {
                         process: NativeProcessIdentity { pid: 11, start_ticks: 12, kernel_boot_id: Some("kernel-one".into()) },
                         executable_device: "1".into(), executable_inode: "2".into(), argv_digest: "a".repeat(64),
-                    }),
+                    })),
                     process_scope: None,
                 },
             )
@@ -363,7 +363,7 @@ impl Fixture {
                 pid: 42, start_ticks: 123, kernel_boot_id: Some("kernel-one".into()),
             });
         });
-        Actor::Agent(AgentCaller {
+        Actor::Agent(Box::new(AgentCaller {
             auth: self.auth(run_id, if run.kind == RunKind::Worker { JobRole::Worker } else { JobRole::Root }),
             assignment_generation: run.assignment_generation,
             conversation: Some(run.attachment.as_ref().and_then(|attachment| attachment.conversation.clone())
@@ -382,7 +382,7 @@ impl Fixture {
                 start_ticks: 123,
                 kernel_boot_id: Some("kernel-one".into()),
             }),
-        })
+        }))
     }
 
 

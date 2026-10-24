@@ -621,8 +621,10 @@ mod tests {
     fn json_safe_revision_exhaustion_preserves_the_document() {
         let fixture = Fixture::new();
         let store = fixture.open();
-        let mut state = OrchestrationState::default();
-        state.revision = super::super::MAX_SAFE_COUNTER;
+        let state = OrchestrationState {
+            revision: super::super::MAX_SAFE_COUNTER,
+            ..Default::default()
+        };
         crate::project_store::atomic_write_json(store.store.state_dir(), "state.json", &state)
             .unwrap();
         let before = store.store.state_dir().read("state.json").unwrap();

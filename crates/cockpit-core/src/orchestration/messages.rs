@@ -300,14 +300,13 @@ fn upward(
     let target = requested
         .or(run.parent_run_id.as_deref())
         .unwrap_or(&run.run_id);
-    if target != run.run_id || run.parent_run_id.is_some() {
-        if !is_ancestor(state, target, &run.run_id) {
+    if (target != run.run_id || run.parent_run_id.is_some())
+        && !is_ancestor(state, target, &run.run_id) {
             return Err(error(
                 "not_ancestor",
                 "Reports and observations may only address strict ancestors",
             ));
         }
-    }
     let mut recipient = run_index(state, target)?;
     for _ in 0..state.runs.len() {
         if state.runs[recipient].stage != RunStage::Closed {

@@ -248,11 +248,10 @@ pub(in crate::orchestration) fn admit_caller(state: &OrchestrationState, caller:
         || (job.role == JobRole::Worker && (request.root_id != run.root_id || request.run_id.as_deref() != Some(run.run_id.as_str()))) {
         return Err(error("actor_forbidden", "Cleanup requires the exact authenticated root or owning worker"));
     }
-    if let Some(target) = &request.run_id {
-        if state.runs[scoped_index(state, &run.session_id, target)?].root_id != request.root_id {
+    if let Some(target) = &request.run_id
+        && state.runs[scoped_index(state, &run.session_id, target)?].root_id != request.root_id {
             return Err(error("actor_forbidden", "Cleanup target is outside the root"));
         }
-    }
     Ok(job.run_index)
 }
 
@@ -441,9 +440,8 @@ impl OrchestrationService {
         for resource in state.owned_resources.iter().filter(|resource|
             resource.cleanup.state != CleanupState::Removed
                 && state.runs.iter().any(|run| run.run_id == resource.run_id && run.stage == RunStage::Closed)) {
-            if let OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } = &resource.identity {
-                if !identity.common_dir.is_empty() { paths.insert(std::path::PathBuf::from(&identity.common_dir)); }
-            }
+            if let OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } = &resource.identity
+                && !identity.common_dir.is_empty() { paths.insert(std::path::PathBuf::from(&identity.common_dir)); }
         }
         for run in state.runs.iter().filter(|run| run.stage == RunStage::Closed
             && run.close_reason == Some(CloseReason::Accepted) && !git_integration_eligible(run)
@@ -465,11 +463,10 @@ impl OrchestrationService {
         let scheduled_roots: std::collections::BTreeSet<_> = state.task_ownership.iter()
             .filter(|ownership| ownership.schedule.is_some()).map(|ownership| ownership.root_id.as_str()).collect();
         for run in state.runs.iter().filter(|run| scheduled_roots.contains(run.root_id.as_str())) {
-            if let Some(ProjectSource::Git { common_dir }) = run.project.as_ref().map(|project| &project.source) {
-                if !common_dir.is_empty() && !paths.contains(std::path::Path::new(common_dir)) {
+            if let Some(ProjectSource::Git { common_dir }) = run.project.as_ref().map(|project| &project.source)
+                && !common_dir.is_empty() && !paths.contains(std::path::Path::new(common_dir)) {
                     paths.insert(std::path::PathBuf::from(common_dir));
                 }
-            }
         }
         Ok(paths.into_iter().collect())
     }
@@ -483,11 +480,10 @@ impl OrchestrationService {
             || (job.role == JobRole::Worker && (request.root_id != run.root_id || request.run_id.as_deref() != Some(run.run_id.as_str()))) {
             return Err(error("actor_forbidden", "Cleanup bootstrap is scoped to the authenticated root or own worker"));
         }
-        if let Some(target) = &request.run_id {
-            if state.runs[scoped_index(&state, &run.session_id, target)?].root_id != request.root_id {
+        if let Some(target) = &request.run_id
+            && state.runs[scoped_index(&state, &run.session_id, target)?].root_id != request.root_id {
                 return Err(error("actor_forbidden", "Cleanup target is outside the authenticated root"));
             }
-        }
         Ok(run.clone())
     }
 
@@ -609,13 +605,11 @@ impl OrchestrationService {
                 matches!(&resource.identity, OwnedResourceIdentity::WorkerTerminal { identity }
                     if resource.run_id == run.run_id && identity.attachment_id.as_deref() == Some(attachment.attachment_id.as_str())
                         && identity.attachment_epoch == Some(attachment.epoch))));
-            if !terminal_captured {
-                if let Some(identity) = Self::terminal_capture_identity(&saved, run) {
-                    if Self::terminal_capture_observed(herdr, run, &identity).await {
+            if !terminal_captured
+                && let Some(identity) = Self::terminal_capture_identity(&saved, run)
+                    && Self::terminal_capture_observed(herdr, run, &identity).await {
                         identities.push(OwnedResourceIdentity::WorkerTerminal { identity });
                     }
-                }
-            }
             if identities.is_empty() && !limitation { continue; }
             let locked = self.store.lock()?;
             let mut state = locked.read()?;
@@ -629,9 +623,8 @@ impl OrchestrationService {
             let before = state.owned_resources.len();
             let mut conflict = false;
             for identity in identities {
-                if let OwnedResourceIdentity::WorkerTerminal { identity: terminal } = &identity {
-                    if Self::terminal_capture_identity(&state, fresh).as_ref() != Some(terminal) { continue; }
-                }
+                if let OwnedResourceIdentity::WorkerTerminal { identity: terminal } = &identity
+                    && Self::terminal_capture_identity(&state, fresh).as_ref() != Some(terminal) { continue; }
                 let conflicts = state.owned_resources.iter().any(|resource| same_resource(&resource.identity, &identity)
                     && (resource.identity != identity || resource.run_id != fresh.run_id || resource.root_id != fresh.root_id));
                 if conflicts {
@@ -737,11 +730,10 @@ impl OrchestrationService {
             if queued.cleanup.state == CleanupState::Removed { continue; }
             let Some(_lease) = self.execution_lease(&queued.run_id)? else { continue };
             if matches!(queued.kind, OwnedResourceKind::FixtureSet | OwnedResourceKind::Scratch)
-                && queued.cleanup.effects.iter().any(|effect| matches!(effect.state, CleanupEffectState::Intent | CleanupEffectState::Unknown)) {
-                if let Ok(receipts) = super::fixture_resources::effect_receipts(&queued).await {
+                && queued.cleanup.effects.iter().any(|effect| matches!(effect.state, CleanupEffectState::Intent | CleanupEffectState::Unknown))
+                && let Ok(receipts) = super::fixture_resources::effect_receipts(&queued).await {
                     self.record_constituent_receipts(&queued, receipts)?;
                 }
-            }
             let (resource, run, blocked, drained, directory_released, state) = {
                 let state = self.store.lock()?.read()?;
                 let Some(resource) = state.owned_resources.iter().find(|r| r.resource_id == queued.resource_id) else { continue };

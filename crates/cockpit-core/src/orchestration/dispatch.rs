@@ -84,7 +84,7 @@ fn pending_operation_delay(run: &Run, timeout_ms: u64) -> Option<Duration> {
             let elapsed = super::parse_time(&dispatch.updated_at)
                 .map(|started| (time::OffsetDateTime::now_utc() - started).whole_milliseconds().max(0) as u64)
                 .unwrap_or(timeout_ms);
-            Some(Duration::from_millis(timeout_ms.saturating_sub(elapsed).max(1).min(250)))
+            Some(Duration::from_millis(timeout_ms.saturating_sub(elapsed).clamp(1, 250)))
         }
         DispatchStep::LaunchUnknown | DispatchStep::NeedsReview if dispatch.step == DispatchStep::LaunchUnknown || recovery_close_pending(run) => {
             let elapsed = super::parse_time(&dispatch.updated_at)
@@ -232,12 +232,11 @@ impl Dispatcher {
                         }
                     }
                 }
-                if let Ok(paths) = dispatcher.service.cleanup_ref_watch_paths() {
-                    if dispatcher.service.watch_cleanup_refs(&paths).is_err() {
+                if let Ok(paths) = dispatcher.service.cleanup_ref_watch_paths()
+                    && dispatcher.service.watch_cleanup_refs(&paths).is_err() {
                         files = None;
                         watcher_retry = Some(tokio::time::Instant::now() + watcher_backoff);
                     }
-                }
                 let _ = dispatcher.service.recover_intents();
                 dispatcher.schedule_ready().await;
                 if let Ok(queue) = dispatcher.service.dispatch_queue() {
@@ -410,11 +409,10 @@ impl Dispatcher {
                     std::path::Path::new(&space.cwd), repository.as_ref().map(|source| source.repository_id.clone()),
                     Some(workspace_id.clone()),
                 ).await?;
-                if let Some(repository) = repository.as_ref() {
-                    if !matches!(&project.source, cockpit_protocol::orchestration::ProjectSource::Git { common_dir } if common_dir == &repository.common_dir) {
+                if let Some(repository) = repository.as_ref()
+                    && !matches!(&project.source, cockpit_protocol::orchestration::ProjectSource::Git { common_dir } if common_dir == &repository.common_dir) {
                         return Err(InspectionError::new("repository_identity_conflict", "Source Space repository changed"));
                     }
-                }
                 let checkout = matches!(target, DispatchTarget::ExistingSpace { .. }).then_some(checkout);
                 (project, checkout, Some(space.cwd.clone()))
             }
@@ -704,12 +702,12 @@ impl Dispatcher {
             if operation.step != WorkspaceOperationStep::CheckoutPrepared {
                 return Err(InspectionError::new("attempt_directory_unproven", "Private attempt directory creation needs its exact filesystem receipt"));
             }
-            self.service.record_dispatch(&run.run_id, DispatchUpdate::SetupPlanned { setup: SetupSummary {
+            self.service.record_dispatch(&run.run_id, DispatchUpdate::SetupPlanned { setup: Box::new(SetupSummary {
                 operation_id: Some(operation.operation_id), generation: Some(operation.plan.generation),
                 workspace_id: None, checkout_path: operation.plan.checkout_path, repository_id: None,
                 branch: None, base: None, base_commit: None, ownership: Some(operation.plan.ownership),
                 effects: operation.plan.effects, warnings: operation.plan.warnings, project_workspace_id: Some(source),
-            } })?;
+            }) })?;
             return Ok(());
         }
         let setup = match target {
@@ -837,7 +835,7 @@ impl Dispatcher {
         self.service.record_dispatch(
             &run.run_id,
             DispatchUpdate::SetupPlanned {
-                setup,
+                setup: Box::new(setup),
             },
         )?;
         Ok(())
@@ -1041,8 +1039,11 @@ impl Dispatcher {
         let command = direct_agent_command(run, args);
         let configuration = self.projects.configuration();
         let launch = crate::process_scope::agent_launch(
-            &self.settings.cli_path, std::path::Path::new(&configuration.state_root), self.service.store_identity(),
-            &run.run_id, &run.kind, attachment.epoch, &format!("Cockpit {:?} {}", run.kind, run.run_id),
+            &self.settings.cli_path, std::path::Path::new(&configuration.state_root),
+            crate::process_scope::AgentLaunchIdentity {
+                store_identity: self.service.store_identity(), run_id: &run.run_id, kind: &run.kind, epoch: attachment.epoch,
+            },
+            &format!("Cockpit {:?} {}", run.kind, run.run_id),
             run.launch_config.process_scope, command,
         )?;
         let scope_unit = launch.unit.clone();
@@ -1054,7 +1055,7 @@ impl Dispatcher {
                     launch_attempt,
                     endpoint_identity: runtime.endpoint_identity.clone(),
                     scope_unit: scope_unit.clone(),
-                    latch: Some(latch.clone()),
+                    latch: Some(Box::new(latch.clone())),
                     staging_workspace_id: Some(workspace_id.clone()),
                 },
             )?;
@@ -1158,7 +1159,7 @@ impl Dispatcher {
             };
             let launch_shell_identity = read_launch_shell(self.herdr.as_ref(), &location).await;
             self.service.record_dispatch(&run.run_id, DispatchUpdate::TabReceipt {
-                location, launch_shell_identity, process_scope: None,
+                location: Box::new(location), launch_shell_identity: launch_shell_identity.map(Box::new), process_scope: None,
             })?;
         let waiting = self.service.run_for_review(&run.session_id, &run.run_id)?;
         self.place_actor(&waiting).await
@@ -1188,7 +1189,7 @@ impl Dispatcher {
         let Some(scope) = crate::process_scope::capture(unit, &shell.process).await? else { return Ok(None) };
         if runtime.peer_process.as_ref().is_none_or(|peer| peer.kernel_boot_id != scope.member.kernel_boot_id) { return Ok(None); }
         self.service.record_dispatch(&run.run_id, DispatchUpdate::TabReceipt {
-            location, launch_shell_identity: Some(shell), process_scope: None,
+            location: Box::new(location), launch_shell_identity: Some(Box::new(shell)), process_scope: None,
         })?;
         let recovered = self.service.run_for_review(&run.session_id, &run.run_id)?;
         self.service.record_pre_move_scope(&recovered, scope)?;
@@ -1256,14 +1257,13 @@ impl Dispatcher {
             let location = run.attachment.as_ref().and_then(|attachment| attachment.location.clone())
                 .ok_or_else(|| InspectionError::new("launch_receipt_missing", "Waiting actor physical receipt is missing"))?;
             let shell = read_launch_shell(self.herdr.as_ref(), &location).await;
-            if run.attachment.as_ref().is_some_and(|attachment| attachment.process.is_none() || attachment.shell.is_none()) {
-                if let Some(shell) = shell.as_ref() {
+            if run.attachment.as_ref().is_some_and(|attachment| attachment.process.is_none() || attachment.shell.is_none())
+                && let Some(shell) = shell.as_ref() {
                     self.service.record_dispatch(&run.run_id, DispatchUpdate::TabReceipt {
-                        location, launch_shell_identity: Some(shell.clone()), process_scope: None,
+                        location: Box::new(location), launch_shell_identity: Some(Box::new(shell.clone())), process_scope: None,
                     })?;
                     run = self.service.run_for_review(&run.session_id, &run.run_id)?;
                 }
-            }
             let scope = match (run.dispatch.as_ref().and_then(|dispatch| dispatch.scope_unit.as_deref()), shell.as_ref()) {
                 (Some(unit), Some(shell)) => crate::process_scope::capture(unit, &shell.process).await?,
                 _ => None,
@@ -1292,8 +1292,8 @@ impl Dispatcher {
                 format!("cockpit:{}:{}:move:{}:{}", self.service.store_identity(), run.run_id,
                     run.attachment.as_ref().map_or(0, |attachment| attachment.epoch), dispatch.launch_attempt).as_bytes(),
             ).to_string());
-            if dispatch.move_operation_id.is_none() {
-                if self.service.record_move_intent(&run, source.clone(), &operation_id)? {
+            if dispatch.move_operation_id.is_none()
+                && self.service.record_move_intent(&run, source.clone(), &operation_id)? {
                     run = self.service.run_for_review(&run.session_id, &run.run_id)?;
                     if let Err(error) = self.herdr.move_pane_to_new_space(
                         &run.session_id, &source, &run.label, &source.launch_tag,
@@ -1302,7 +1302,6 @@ impl Dispatcher {
                         run = self.service.run_for_review(&run.session_id, &run.run_id)?;
                     }
                 }
-            }
             // A durable MoveIntent is never reissued, even if a fresh snapshot
             // still shows the source pane: the original request may be in flight.
             let runtime = self.herdr.runtime(&run.session_id).await?;
@@ -1528,10 +1527,10 @@ async fn schedule_source_materialized(
     if let Some(Integration::Integrated {
         accepted_result_message_id, accepted_task_revision, source: integrated_source,
         target_repository_key, target_commit, mappings, checks, ..
-    }) = source.integration.as_ref() {
-        if accepted_result_message_id == &source.result_message_id
+    }) = source.integration.as_ref()
+        && accepted_result_message_id == &source.result_message_id
             && accepted_task_revision == &source.task_revision
-            && integrated_source == &source.source_output
+            && integrated_source.as_ref() == &source.source_output
             && target_repository_key == project_key
             && !checks.is_empty() && checks.iter().all(|check| check.outcome == CheckStatus::Passed)
         {
@@ -1547,7 +1546,6 @@ async fn schedule_source_materialized(
             }
             if included { return Ok(true); }
         }
-    }
     let SourceOutput::Code { head_commit, commits, .. } = &source.source_output else { return Ok(true) };
     for commit in std::iter::once(head_commit).chain(commits.iter().filter(|commit| *commit != head_commit)) {
         if !schedule_commit_included(path, commit, base).await? { return Ok(false); }
@@ -1789,7 +1787,7 @@ pub(super) fn cancelled_launch_processes_stopped(run: &Run) -> Result<bool, Insp
     let shell = run.attachment.as_ref().and_then(|attachment| attachment.shell.as_ref())
         .ok_or_else(|| unproven("original launch-shell identity was not recorded"))?;
     let machine = run.attachment.as_ref().and_then(|a| a.machine_id.as_deref());
-    for process in std::iter::once(&shell.process).chain(run.attachment.as_ref().and_then(|attachment| attachment.process.as_ref()).into_iter()) {
+    for process in std::iter::once(&shell.process).chain(run.attachment.as_ref().and_then(|attachment| attachment.process.as_ref())) {
         if process.start_ticks == 0 || process.kernel_boot_id.as_deref().is_none_or(str::is_empty) {
             return Err(unproven("original process fingerprint is incomplete"));
         }
@@ -2255,10 +2253,9 @@ impl Dispatcher {
                 pane.pane_id == location.pane_id || pane.terminal_id == location.terminal_id);
             let pane = matching.next();
             let ambiguous = matching.next().is_some();
-            let cause = if runtime.endpoint_identity != location.endpoint_identity
-                || !super::optional_available(&location.boot_id, &runtime.boot_id)
-                || pane.is_none() || ambiguous { Some("target_changed") } else {
-                let pane = pane.expect("unique hint target");
+            let cause = match pane {
+                Some(pane) if !ambiguous && runtime.endpoint_identity == location.endpoint_identity
+                    && super::optional_available(&location.boot_id, &runtime.boot_id) => {
                 if pane.pane_id != location.pane_id || pane.terminal_id != location.terminal_id
                     || pane.workspace_id != location.workspace_id || pane.tab_id != location.tab_id
                     || pane.tab_label != location.launch_tag
@@ -2268,6 +2265,8 @@ impl Dispatcher {
                 else if pane.launch_pending { Some("launch_pending") }
                 else if !matches!(pane.agent_status.as_deref(), Some("idle" | "done")) { Some("busy_or_blocked") }
                 else { None }
+                }
+                _ => Some("target_changed"),
             };
             if let Some(cause) = cause {
                 self.service.record_hint(&hint, HintState::Deferred, Some(cause.into()))?;

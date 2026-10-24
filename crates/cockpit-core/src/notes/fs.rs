@@ -111,11 +111,10 @@ fn child_os(dir: &Dir, name: &std::ffi::OsStr, create: bool) -> Result<Dir, Insp
         }
         Ok(_) => {}
         Err(e) if e.kind() == io::ErrorKind::NotFound && create => {
-            if let Err(e) = dir.create_dir(name) {
-                if e.kind() != io::ErrorKind::AlreadyExists {
+            if let Err(e) = dir.create_dir(name)
+                && e.kind() != io::ErrorKind::AlreadyExists {
                     return Err(io_error(e));
                 }
-            }
         }
         Err(e) => return Err(io_error(e)),
     }
@@ -257,14 +256,13 @@ pub(super) fn publish_with_source(
                 "Notes document changed before publish; re-read before retrying",
             ));
         }
-        if let Some((source_name, expected)) = source {
-            if read(dir, source_name, max)?.revision != expected.revision {
+        if let Some((source_name, expected)) = source
+            && read(dir, source_name, max)?.revision != expected.revision {
                 return Err(error(
                     "notes_conflict",
                     "Source decision changed before replacement publish",
                 ));
             }
-        }
         dir.rename(&tmp, dir, name)
             .and_then(|_| dir.open(".")?.sync_all())
             .map_err(outcome_unknown)

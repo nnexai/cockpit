@@ -51,14 +51,13 @@ impl ReviewService {
             ReviewSide::Old => diff.file.old_revision.as_deref(),
             ReviewSide::New => diff.file.new_revision.as_deref(),
         };
-        if let Some(requested) = source_revision {
-            if Some(requested) != expected {
+        if let Some(requested) = source_revision
+            && Some(requested) != expected {
                 return Err(InspectionError::new(
                     "review_source_stale",
                     "source continuation revision does not match the frozen file",
                 ));
             }
-        }
         let change = stored
             .changes
             .get(&diff.file.file_id)
@@ -273,7 +272,6 @@ impl ReviewService {
         let current = tokio::task::spawn_blocking(move || {
             worktree_source_identity(&checkout, &path)
                 .transpose()
-                .map_err(|error| error)
         })
         .await
         .map_err(|error| InspectionError::new("review_task", error.to_string()))??;
@@ -315,7 +313,6 @@ impl ReviewService {
         let current = tokio::task::spawn_blocking(move || {
             worktree_source_identity(&checkout, &path)
                 .transpose()
-                .map_err(|error| error)
         })
         .await
         .map_err(|error| InspectionError::new("review_task", error.to_string()))??;

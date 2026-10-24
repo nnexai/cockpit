@@ -32,6 +32,8 @@ const MAX_COMMENT_BYTES: usize = 8 * 1024;
 const MAX_REVIEW_STATE_READS_IN_FLIGHT: usize = 4;
 
 type ReviewStateKey = (String, u32, String, bool);
+type DocumentReadKey = (String, String);
+type DocumentReadResult = Result<(String, Option<String>), String>;
 
 struct CommentEvidence {
     binding_id: String,
@@ -708,8 +710,7 @@ impl CommentsService {
         }
         let session_id = &evidence.session_id;
         let pane_id = &evidence.viewer_id;
-        let mut reads: HashMap<(String, String), Result<(String, Option<String>), String>> =
-            HashMap::new();
+        let mut reads: HashMap<DocumentReadKey, DocumentReadResult> = HashMap::new();
         for draft in &mut batch.drafts {
             if draft.file_ref.root_id != evidence.root_id {
                 draft.source_state = CommentSourceState::Unavailable;
@@ -720,8 +721,8 @@ impl CommentsService {
                 let result = self
                     .context
                     .document(
-                        &session_id,
-                        &pane_id,
+                        session_id,
+                        pane_id,
                         &ContextDocumentRequest {
                             binding_id: evidence.binding_id.clone(),
                             root_id: evidence.root_id.clone(),
@@ -897,7 +898,7 @@ fn require_owner(
 }
 
 fn validate_comment_text(text: &str) -> Result<(), InspectionError> {
-    if text.as_bytes().len() > MAX_COMMENT_BYTES {
+    if text.len() > MAX_COMMENT_BYTES {
         return Err(InspectionError::new(
             "comments_limit",
             "comment text exceeds the 8 KiB limit",

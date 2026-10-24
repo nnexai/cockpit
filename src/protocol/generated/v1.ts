@@ -239,7 +239,9 @@ export type SpaceGitRefusal = "not_fast_forward" | "local_changes" | "remote_rej
 
 export type ServiceStatus = "starting" | "healthy" | "unhealthy";
 
-export type SpaceServiceStatus = { key: string, space_id: string, pane_id: string, tab_id: string | null, title: string, status: ServiceStatus, port: number | null, };
+export type SpaceServiceStatus = { key: string, pane_id: string, tab_id: string | null, title: string, status: ServiceStatus, port: number | null, };
+
+export type SpaceServiceStatusRequest = { server_instance: string, pane_ids: Array<string>, };
 
 export type SpaceServiceStatusResponse = { session_id: string, services: Array<SpaceServiceStatus>, };
 

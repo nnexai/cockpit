@@ -175,12 +175,11 @@ impl OrchestrationService {
             matches!(r.state, ResourceRequestState::Queued | ResourceRequestState::Blocked)
                 && current_requester(&snapshot, r) && compatible(&snapshot, r) && !occupied(&snapshot, r)) {
             let checkout = source_checkout(&snapshot, record);
-            if let Some(checkout) = checkout {
-                if canonical_resource(&record.resource_key).is_ok()
+            if let Some(checkout) = checkout
+                && canonical_resource(&record.resource_key).is_ok()
                     && verify_checkout_source(checkout, &record.source_identity).await.is_ok() {
                     observed.insert(record.request_id.as_str(), checkout);
                 }
-            }
         }
         let locked = self.store.lock()?;
         let mut state = locked.read()?;
@@ -455,13 +454,13 @@ mod tests {
             let root_id = Uuid::from_u128(1).to_string();
             let worker_id = Uuid::from_u128(2).to_string();
             let mut root = new_run(&root_id, "test", RunKind::Supervisor,
-                "root".into(), &root_id, None, None, 1);
+                "root".into(), &root_id, RunLineage::default(), 1);
             root.stage = RunStage::Active;
             root.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
                 harness: root.launch_config.harness_kind.clone(), session_id: "root-chat".into(),
             });
             let mut worker = new_run(&worker_id, "test", RunKind::Worker,
-                "worker".into(), &root_id, Some(root_id.clone()), Some(id()), 1);
+                "worker".into(), &root_id, RunLineage { parent_run_id: Some(root_id.clone()), task_id: Some(id()) }, 1);
             worker.stage = RunStage::Working;
             worker.assignment_generation = Some(1);
             worker.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
@@ -470,14 +469,14 @@ mod tests {
             let mut state = OrchestrationState { runs: vec![root, worker], ..Default::default() };
             credentials::test_job_auth(&mut state, 0, JobRole::Root);
             let auth = credentials::test_job_auth(&mut state, 1, JobRole::Worker);
-            let actor = Actor::Agent(AgentCaller {
+            let actor = Actor::Agent(Box::new(AgentCaller {
                 auth, conversation: Some(state.runs[1].attachment.as_ref().unwrap().conversation.clone().unwrap()),
                 assignment_generation: Some(1),
                 endpoint_identity: String::new(), session_id: String::new(),
                 workspace_id: String::new(), tab_id: String::new(), pane_id: String::new(),
                 boot_id: None, terminal_id: None, native_session_id: None,
                 actual_agent_kind: None, process: None,
-            });
+            }));
             let worker = job(&state, &actor).unwrap();
             Self { state, worker, actor }
         }

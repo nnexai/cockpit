@@ -398,7 +398,7 @@ export function Spaces({ spaces, tags, tagEditorRequest, editorSuspended = false
                 ? <button type="button" className={`space-chevron${hiddenGitProblem ? " has-git-problem" : ""}`} tabIndex={-1} aria-disabled={busy || undefined} aria-label={`${row.expanded ? "Collapse" : "Expand"} ${space.label}${hiddenUrgency}${hiddenGitProblem ? " (worktree Git problem)" : ""}`} aria-expanded={row.expanded} onClick={() => { if (!busy) toggleRepository(row.repositoryKey!); }}><UiIcon name={row.expanded ? "down" : "right"} /></button>
                 : null}
             </div>
-            {row.first && services.get(space.id)?.length ? <div className="space-service-list" role="group" aria-label={`Services in ${space.label}`}>
+            {row.first && services.get(space.id)?.length ? <div className={`space-service-list${row.kind === "child" ? ` is-child${row.connector === "└─" ? " is-last" : ""}` : ""}`} role="group" aria-label={`Services in ${space.label}`}>
               {services.get(space.id)!.map(service => {
                 const id = `service:${space.id}:${service.key}`;
                 const label = [service.title, service.status, service.port === null ? null : `port ${service.port}`].filter(Boolean).join(", ");

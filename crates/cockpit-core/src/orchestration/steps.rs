@@ -195,12 +195,11 @@ fn union_ranges(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
     ranges.sort_unstable_by_key(|r| (r.start, r.end));
     let mut result: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
     for range in ranges {
-        if let Some(last) = result.last_mut() {
-            if range.start <= last.end {
+        if let Some(last) = result.last_mut()
+            && range.start <= last.end {
                 last.end = last.end.max(range.end);
                 continue;
             }
-        }
         result.push(range);
     }
     result
@@ -863,13 +862,15 @@ pub(crate) fn plan<'a>(
             title,
         } => {
             planning::plan_add(
-                source,
-                context,
-                layout,
-                &mut nodes,
-                &before,
-                &mut affected,
-                &mut patches,
+                planning::PlanCtx {
+                    source,
+                    context,
+                    layout,
+                    nodes: &mut nodes,
+                    before: &before,
+                    affected: &mut affected,
+                    patches: &mut patches,
+                },
                 step_id,
                 parent_step_id,
                 before_step_id,
@@ -915,13 +916,15 @@ pub(crate) fn plan<'a>(
             before_step_id,
         } => {
             planning::plan_move(
-                source,
-                context,
-                layout,
-                &mut nodes,
-                &before,
-                &mut affected,
-                &mut patches,
+                planning::PlanCtx {
+                    source,
+                    context,
+                    layout,
+                    nodes: &mut nodes,
+                    before: &before,
+                    affected: &mut affected,
+                    patches: &mut patches,
+                },
                 step_id,
                 parent_step_id,
                 before_step_id,

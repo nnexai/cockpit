@@ -820,14 +820,25 @@ async fn mutation_route_rejects_malformed_and_oversized_bodies() {
 }
 
 #[tokio::test]
-async fn space_service_status_route_uses_the_live_session_contract() {
+async fn space_service_status_route_reads_the_supplied_pane_set_without_snapshot_or_mutation() {
     let root = fixture_root();
+    let authority = test_authority();
+    let mutation_calls = Arc::new(AtomicUsize::new(0));
+    let live = live_service_with_counter(
+        Err(InspectionError::new("snapshot_forbidden", "must not fetch a snapshot")),
+        mutation_calls.clone(),
+    );
     let request = || Request::builder()
+        .method("POST")
         .uri("/api/v1/sessions/session-1/space-services")
-        .header("host", test_authority().to_string())
-        .body(axum::body::Body::empty())
+        .header("host", authority.to_string())
+        .header("origin", format!("http://{authority}"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            r#"{"server_instance":"0123456789abcdef","pane_ids":["w1A:p1"]}"#,
+        ))
         .expect("service-status request");
-    let response = build_router(live_service(Ok(snapshot())), &root, test_authority())
+    let response = build_router(live, &root, authority)
         .expect("router")
         .oneshot(request())
         .await
@@ -837,14 +848,142 @@ async fn space_service_status_route_uses_the_live_session_contract() {
     let body: cockpit_protocol::v1::SpaceServiceStatusResponse =
         serde_json::from_slice(&bytes).expect("typed service-status body");
     assert_eq!(body.session_id, "session-1");
+    assert!(body.services.is_empty());
+    assert_eq!(mutation_calls.load(Ordering::Relaxed), 0);
 
-    let response = build_router(service(), &root, test_authority())
+    let response = build_router(service(), &root, authority)
         .expect("router")
         .oneshot(request())
         .await
         .expect("service-status inspection error");
     assert_eq!(response.status(), 503);
+
+    let response = build_router(service(), &root, authority)
+        .expect("router")
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/sessions/session-1/space-services")
+                .header("host", authority.to_string())
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 405, "the snapshot-based GET contract is gone");
     std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn space_service_status_route_requires_origin_and_bounded_typed_body() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(live_service(Ok(snapshot())), &root, authority).unwrap();
+    let valid = serde_json::json!({
+        "server_instance": "0123456789abcdef", "pane_ids": ["w1A:p1"],
+    });
+    let trusted = format!("http://{authority}");
+    let mut unknown = valid.clone();
+    unknown["space_id"] = serde_json::json!("space-1");
+    let mut oversized = valid.clone();
+    oversized["server_instance"] = serde_json::json!("x".repeat(1024 * 1024));
+    for (origin, body, status, code) in [
+        (None, valid.to_string(), 400, "request_origin_required"),
+        (
+            Some("http://untrusted.test"), valid.to_string(),
+            403, "invalid_request_authority",
+        ),
+        (
+            Some(trusted.as_str()), unknown.to_string(),
+            400, "invalid_space_service_status_request",
+        ),
+        (
+            Some(trusted.as_str()), r#"{"server_instance":"server"}"#.to_owned(),
+            400, "invalid_space_service_status_request",
+        ),
+        (
+            Some(trusted.as_str()), "{".to_owned(),
+            400, "invalid_space_service_status_request",
+        ),
+        (
+            Some(trusted.as_str()), oversized.to_string(),
+            413, "invalid_space_service_status_request",
+        ),
+    ] {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/sessions/session-1/space-services")
+            .header("host", authority.to_string())
+            .header("content-type", "application/json");
+        if let Some(origin) = origin {
+            request = request.header("origin", origin);
+        }
+        let response = router.clone()
+            .oneshot(request.body(axum::body::Body::from(body)).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+        let bytes = axum::body::to_bytes(response.into_body(), 4096).await.unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(error["code"], code);
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn space_service_status_request_bounds_apply_to_gateway_and_native() {
+    use cockpit_host::transport::{Transport, operations::session::space_service_status};
+    use cockpit_protocol::v1::{ErrorResponse, SpaceServiceStatusRequest};
+
+    let live = live_service(Err(InspectionError::new(
+        "snapshot_forbidden", "must not fetch a snapshot",
+    )));
+    for transport in [Transport::Gateway, Transport::Native] {
+        for (server_instance, pane_ids) in [
+            ("".to_owned(), vec![]),
+            ("x".repeat(257), vec![]),
+            ("é".repeat(129), vec![]),
+            ("server\u{0085}".to_owned(), vec![]),
+            ("server".to_owned(), vec!["pane".to_owned(); 4097]),
+            ("server".to_owned(), vec!["".to_owned()]),
+            ("server".to_owned(), vec!["x".repeat(129)]),
+            ("server".to_owned(), vec!["pane/1".to_owned()]),
+            ("server".to_owned(), vec!["pane\n1".to_owned()]),
+        ] {
+            let error = space_service_status(
+                &live, transport, ("session-1".to_owned(), SpaceServiceStatusRequest {
+                    server_instance, pane_ids,
+                }),
+            ).await.unwrap_err();
+            assert_eq!(ErrorResponse::from(error).code, "invalid_space_service_status_request");
+        }
+        let request = SpaceServiceStatusRequest {
+            server_instance: "server".to_owned(), pane_ids: vec![],
+        };
+        let error = space_service_status(&live, transport, ("bad.session".to_owned(), request))
+            .await.unwrap_err();
+        assert_eq!(ErrorResponse::from(error).code, "invalid_session_id");
+    }
+
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(live, &root, authority).unwrap();
+    for pane_ids in [vec![], vec!["x".repeat(128); 4096]] {
+        let body = serde_json::json!({
+            "server_instance": "x".repeat(256), "pane_ids": pane_ids,
+        });
+        let response = router.clone().oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/sessions/session-1/space-services")
+                .header("host", authority.to_string())
+                .header("origin", format!("http://{authority}"))
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), 200, "empty and maximum valid pane sets are accepted");
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]

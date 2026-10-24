@@ -25,7 +25,7 @@ pub trait SessionSink: Send {
 
 #[derive(Debug)]
 pub enum Event {
-    Snapshot(Result<SessionSnapshotResponse, InspectionError>),
+    Snapshot(Result<Box<SessionSnapshotResponse>, InspectionError>),
     Subscribed(Result<(), InspectionError>),
     Change(Option<SessionChange>),
     Delivered(bool),
@@ -52,7 +52,7 @@ enum Fetch {
 
 #[derive(Debug)]
 enum AfterDelivery {
-    Subscribe(SessionSnapshotResponse),
+    Subscribe(Box<SessionSnapshotResponse>),
     Boundary,
     BoundarySnapshot,
     LiveSnapshot,
@@ -145,7 +145,7 @@ impl SessionStream {
     fn snapshot(
         &mut self,
         fetch: Fetch,
-        result: Result<SessionSnapshotResponse, InspectionError>,
+        result: Result<Box<SessionSnapshotResponse>, InspectionError>,
     ) -> Command {
         let snapshot = match result {
             Ok(snapshot) if snapshot.session_id == self.session_id => snapshot,
@@ -165,7 +165,7 @@ impl SessionStream {
             Fetch::Live => AfterDelivery::LiveSnapshot,
         };
         self.phase = Phase::Sending(after);
-        Command::Emit(self.snapshot_message(snapshot))
+        Command::Emit(self.snapshot_message(*snapshot))
     }
 
     fn snapshot_failure(&mut self, fetch: Fetch, code: String, message: String) -> Command {
@@ -244,7 +244,7 @@ impl SessionStream {
                 match after {
                     AfterDelivery::Subscribe(snapshot) => {
                         self.phase = Phase::Subscribe;
-                        Command::Subscribe(snapshot)
+                        Command::Subscribe(*snapshot)
                     }
                     AfterDelivery::Boundary => self.fetch(Fetch::Boundary),
                     AfterDelivery::BoundarySnapshot | AfterDelivery::LiveSnapshot => {
@@ -291,7 +291,7 @@ impl SessionStream {
             session_id: self.session_id.clone(),
             generation: self.generation,
             sequence: self.sequence,
-            snapshot,
+            snapshot: Box::new(snapshot),
         }
     }
 
@@ -354,12 +354,15 @@ pub async fn pump<S: SessionSink>(
                 // Keep the old feed through the backoff; drop it only when restarting.
                 subscription = None;
                 tokio::select! {
-                    result = service.session_snapshot(&stream.session_id) => Event::Snapshot(result),
+                    result = service.session_snapshot(&stream.session_id) => {
+                        Event::Snapshot(result.map(Box::new))
+                    }
                     incoming = sink.incoming() => Event::Client(incoming),
                 }
             }
             Command::FetchSnapshot { race_client: false } => {
-                Event::Snapshot(service.session_snapshot(&stream.session_id).await)
+                let snapshot = service.session_snapshot(&stream.session_id).await;
+                Event::Snapshot(snapshot.map(Box::new))
             }
             Command::Subscribe(snapshot) => {
                 tokio::select! {
@@ -431,7 +434,7 @@ mod tests {
                 session_id: "session".to_owned(),
                 generation,
                 sequence,
-                snapshot: snapshot(),
+                snapshot: Box::new(snapshot()),
             },
         );
     }
@@ -457,7 +460,7 @@ mod tests {
 
     fn gateway_live(stream: &mut SessionStream) {
         assert_snapshot(
-            stream.step(Event::Snapshot(Ok(snapshot()))),
+            stream.step(Event::Snapshot(Ok(Box::new(snapshot())))),
             stream.generation,
             stream.sequence,
         );
@@ -467,7 +470,7 @@ mod tests {
         ));
         assert_fetch(stream.step(Event::Subscribed(Ok(()))), false);
         assert_snapshot(
-            stream.step(Event::Snapshot(Ok(snapshot()))),
+            stream.step(Event::Snapshot(Ok(Box::new(snapshot())))),
             stream.generation,
             stream.sequence,
         );
@@ -481,7 +484,7 @@ mod tests {
         let (mut stream, first) = SessionStream::native("session".to_owned(), snapshot());
         assert_snapshot(first, 1, 1);
         assert_fetch(stream.step(Event::Delivered(true)), false);
-        assert_snapshot(stream.step(Event::Snapshot(Ok(snapshot()))), 1, 2);
+        assert_snapshot(stream.step(Event::Snapshot(Ok(Box::new(snapshot())))), 1, 2);
         assert!(matches!(
             stream.step(Event::Delivered(true)),
             Command::AwaitChange
@@ -545,7 +548,7 @@ mod tests {
             stream.step(Event::Change(Some(SessionChange::Changed))),
             false,
         );
-        assert_snapshot(stream.step(Event::Snapshot(Ok(snapshot()))), 3, 1);
+        assert_snapshot(stream.step(Event::Snapshot(Ok(Box::new(snapshot())))), 3, 1);
         assert!(matches!(
             stream.step(Event::Delivered(true)),
             Command::AwaitChange
@@ -564,7 +567,7 @@ mod tests {
                 stream.step(Event::Change(Some(SessionChange::Changed))),
                 false,
             );
-            assert_snapshot(stream.step(Event::Snapshot(Ok(snapshot()))), 7, u32::MAX);
+            assert_snapshot(stream.step(Event::Snapshot(Ok(Box::new(snapshot())))), 7, u32::MAX);
             assert!(matches!(
                 stream.step(Event::Delivered(true)),
                 Command::AwaitChange
@@ -634,7 +637,7 @@ mod tests {
                 false,
             );
             assert_snapshot(
-                stream.step(Event::Snapshot(Ok(snapshot()))),
+                stream.step(Event::Snapshot(Ok(Box::new(snapshot())))),
                 u32::MAX,
                 u32::MAX,
             );
@@ -673,14 +676,14 @@ mod tests {
         assert_fetch(first, true);
         assert_fetch(stream.step(Event::Client(Incoming::Activity)), true);
         assert_eq!((stream.generation, stream.sequence), (1, 1));
-        assert_snapshot(stream.step(Event::Snapshot(Ok(snapshot()))), 1, 1);
+        assert_snapshot(stream.step(Event::Snapshot(Ok(Box::new(snapshot())))), 1, 1);
         let Command::Subscribe(initial) = stream.step(Event::Delivered(true)) else {
             panic!("Expected subscription");
         };
         assert_eq!(initial, snapshot());
         assert_fetch(stream.step(Event::Client(Incoming::Activity)), true);
         assert_eq!((stream.generation, stream.sequence), (1, 2));
-        assert_snapshot(stream.step(Event::Snapshot(Ok(snapshot()))), 1, 2);
+        assert_snapshot(stream.step(Event::Snapshot(Ok(Box::new(snapshot())))), 1, 2);
     }
 
     #[test]
@@ -723,7 +726,7 @@ mod tests {
                 let result = if mismatched {
                     let mut other = snapshot();
                     other.session_id = "other".to_owned();
-                    Ok(other)
+                    Ok(Box::new(other))
                 } else {
                     Err(InspectionError::new("unavailable", "unavailable"))
                 };
@@ -755,7 +758,7 @@ mod tests {
             let result = if mismatched {
                 let mut other = snapshot();
                 other.session_id = "other".to_owned();
-                Ok(other)
+                Ok(Box::new(other))
             } else {
                 Err(InspectionError::new("failed", "failed"))
             };
@@ -774,7 +777,7 @@ mod tests {
     #[test]
     fn gateway_boundary_failures_retry_instead_of_entering_live() {
         let (mut stream, _) = SessionStream::gateway("session".to_owned());
-        assert_snapshot(stream.step(Event::Snapshot(Ok(snapshot()))), 1, 1);
+        assert_snapshot(stream.step(Event::Snapshot(Ok(Box::new(snapshot())))), 1, 1);
         assert!(matches!(
             stream.step(Event::Delivered(true)),
             Command::Subscribe(_)
@@ -793,7 +796,7 @@ mod tests {
     #[test]
     fn gateway_subscription_failure_retries() {
         let (mut stream, _) = SessionStream::gateway("session".to_owned());
-        assert_snapshot(stream.step(Event::Snapshot(Ok(snapshot()))), 1, 1);
+        assert_snapshot(stream.step(Event::Snapshot(Ok(Box::new(snapshot())))), 1, 1);
         assert!(matches!(
             stream.step(Event::Delivered(true)),
             Command::Subscribe(_)

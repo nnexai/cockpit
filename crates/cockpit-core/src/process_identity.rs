@@ -213,8 +213,8 @@ pub(crate) fn managed_build_identity(
     source: &std::path::Path,
     machine: &str,
 ) -> io::Result<NativeShellIdentity> {
-    if same_machine_process_running(process, Some(machine))? != true
-        || same_machine_process_running(scope, Some(machine))? != true {
+    if !same_machine_process_running(process, Some(machine))?
+        || !same_machine_process_running(scope, Some(machine))? {
         return Err(io::Error::other("build or managed job incarnation is absent"));
     }
     let pid = i32::try_from(process.pid).map_err(io::Error::other)?;
@@ -508,8 +508,8 @@ mod tests {
         let pid = std::process::id() as i32;
         let start = start_identity(pid).unwrap();
         assert_eq!(start_identity(pid), Some(start));
-        assert_eq!(incarnation_running(pid, start).unwrap(), true);
-        assert_eq!(incarnation_running(pid, start.wrapping_add(1)).unwrap(), false);
+        assert!(incarnation_running(pid, start).unwrap());
+        assert!(!incarnation_running(pid, start.wrapping_add(1)).unwrap());
         assert!(start_identity(0).is_none());
         assert_eq!(incarnation_running(0, start).unwrap_err().kind(), io::ErrorKind::InvalidInput);
     }
@@ -633,11 +633,10 @@ mod tests {
         child.stdin.as_mut().unwrap().write_all(b"go\n").unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         let replacement = loop {
-            if let Ok(fresh) = executable_identity(pid, start) {
-                if fresh != baseline {
+            if let Ok(fresh) = executable_identity(pid, start)
+                && fresh != baseline {
                     break Some(fresh);
                 }
-            }
             if Instant::now() >= deadline {
                 break None;
             }

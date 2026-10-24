@@ -38,9 +38,9 @@ pub struct SnapshotQuery {
     pub root_id: Option<String>,
 }
 
-pub fn snapshot_input() -> impl FnOnce(
-    (Path<String>, Result<Query<SnapshotQuery>, QueryRejection>),
-) -> Result<OrchestrationSnapshotRequest, OperationError> {
+type SnapshotInput = (Path<String>, Result<Query<SnapshotQuery>, QueryRejection>);
+
+pub fn snapshot_input() -> impl FnOnce(SnapshotInput) -> Result<OrchestrationSnapshotRequest, OperationError> {
     |(path, query)| {
         let session_id =
             http_input::session(Reject("invalid_session_id", "Session ID is invalid"))((path,))?;
@@ -55,12 +55,12 @@ pub fn snapshot_input() -> impl FnOnce(
     }
 }
 
-pub fn mutation_input() -> impl FnOnce(
-    (
-        Path<String>,
-        Result<Json<OrchestrationMutationRequest>, JsonRejection>,
-    ),
-) -> Result<OrchestrationMutationRequest, OperationError> {
+type MutationInput = (
+    Path<String>,
+    Result<Json<OrchestrationMutationRequest>, JsonRejection>,
+);
+
+pub fn mutation_input() -> impl FnOnce(MutationInput) -> Result<OrchestrationMutationRequest, OperationError> {
     |(path, body)| {
         let (session_id, request): (String, OrchestrationMutationRequest) =
             http_input::session_body(
@@ -80,9 +80,9 @@ pub fn mutation_input() -> impl FnOnce(
     }
 }
 
-pub fn project_root_lookup_input() -> impl FnOnce(
-    (Path<String>, Result<Json<ProjectRootLookupRequest>, JsonRejection>),
-) -> Result<ProjectRootLookupRequest, OperationError> {
+type ProjectRootLookupInput = (Path<String>, Result<Json<ProjectRootLookupRequest>, JsonRejection>);
+
+pub fn project_root_lookup_input() -> impl FnOnce(ProjectRootLookupInput) -> Result<ProjectRootLookupRequest, OperationError> {
     |(path, body)| {
         let (session_id, request): (String, ProjectRootLookupRequest) =
             http_input::session_body(

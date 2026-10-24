@@ -115,7 +115,7 @@ impl OrchestrationService {
             let run = &mut state.runs[index];
             match update {
                 DispatchUpdate::SetupPlanned { setup } => {
-                    run.setup = Some(setup);
+                    run.setup = Some(*setup);
                     run.stage = RunStage::Starting;
                     run.dispatch = Some(dispatch(DispatchStep::SetupPending));
                 }
@@ -159,7 +159,7 @@ impl OrchestrationService {
                     d.scope_unit = scope_unit;
                     d.pre_move_scope = None;
                     d.latch_state = latch.as_ref().map(|_| AgentLatchState::Awaiting);
-                    d.latch = latch;
+                    d.latch = latch.map(|receipt| *receipt);
                     d.source_location = None;
                     d.move_operation_id = None;
                     d.staging_workspace_id = staging_workspace_id;
@@ -193,18 +193,18 @@ impl OrchestrationService {
                     if launch_shell_identity.as_ref().is_some_and(|shell|
                         attachment.process.as_ref().is_some_and(|saved| saved != &shell.process))
                         || process_scope.as_ref().is_some_and(|scope|
-                            attachment.process_scope.as_ref().is_some_and(|saved| saved != scope)) {
+                            attachment.process_scope.as_ref().is_some_and(|saved| saved != scope.as_ref())) {
                         return Err(error("attachment_conflict", "Late launch receipt differs from the current physical incarnation"));
                     }
                     if let Some(machine) = launch_shell_identity.as_ref().and_then(|shell| crate::process_identity::verified_machine_id(&shell.process)) {
                         attachment.machine_id = Some(machine);
                     }
-                    attachment.location = Some(location);
+                    attachment.location = Some(*location);
                     if attachment.launch_mode == Some(AttachmentLaunchMode::DirectProcess) && attachment.process.is_none() {
                         attachment.process = launch_shell_identity.as_ref().map(|shell| shell.process.clone());
                     }
-                    if let Some(shell) = launch_shell_identity { attachment.shell = Some(shell); }
-                    if let Some(scope) = process_scope { attachment.process_scope = Some(scope); }
+                    if let Some(shell) = launch_shell_identity { attachment.shell = Some(*shell); }
+                    if let Some(scope) = process_scope { attachment.process_scope = Some(*scope); }
                     attachment.updated_at = now();
                 }
             }
@@ -256,11 +256,10 @@ impl OrchestrationService {
             }
             let inputs = super::runs::input_snapshot(&state, &locked, &run.session_id, &run.root_id,
                 run.task_id.as_deref().expect("task guarded"))?;
-            if let Some(verified_base) = super::runs::materialized_inputs(&inputs, &project, input_facts)? {
-                if base_commit.as_ref() != Some(&verified_base) {
+            if let Some(verified_base) = super::runs::materialized_inputs(&inputs, &project, input_facts)?
+                && base_commit.as_ref() != Some(&verified_base) {
                     return Err(error("dependency_input_changed", "Checkout HEAD changed after accepted input verification"));
                 }
-            }
         }
         if state.runs[index].attachment.is_none() {
             state.runs[index].attachment = Some(ExecutionAttachment {
@@ -552,13 +551,11 @@ impl OrchestrationService {
         }
         let run = &mut state.runs[index];
         run.setup = Some(setup);
-        if run.run_id == run.root_id && run.task_id.is_none() {
-            if let Some(project) = &mut run.project {
-                if project.source_workspace_id.is_none() {
+        if run.run_id == run.root_id && run.task_id.is_none()
+            && let Some(project) = &mut run.project
+                && project.source_workspace_id.is_none() {
                     project.source_workspace_id = Some(location.workspace_id.clone());
                 }
-            }
-        }
         let attachment = run.attachment.as_mut().expect("fenced incarnation");
         attachment.location = Some(location);
         attachment.updated_at = now();
@@ -585,20 +582,18 @@ impl OrchestrationService {
             || expected.dispatch.as_ref().is_none_or(|previous| previous.move_operation_id != dispatch.move_operation_id) {
             return Ok(None);
         }
-        if to == AgentLatchState::ReleaseIntent {
-            if let Some(task_id) = &run.task_id {
+        if to == AgentLatchState::ReleaseIntent
+            && let Some(task_id) = &run.task_id {
                 let document = locked.tasks(&run.root_id)?;
                 let task = document.task(task_id)?;
                 dependencies::DependencyGraph::new(&document.tasks).require(task)?;
                 let project = run.project.as_ref().ok_or_else(|| error("dependency_input_unavailable", "Launch has no resolved source project"))?;
                 let snapshot = super::runs::input_snapshot(&state, &locked, &run.session_id, &run.root_id, task_id)?;
-                if let Some(base) = super::runs::materialized_inputs(&snapshot, project, input_facts)? {
-                    if run.setup.as_ref().and_then(|setup| setup.base_commit.as_ref()) != Some(&base) {
+                if let Some(base) = super::runs::materialized_inputs(&snapshot, project, input_facts)?
+                    && run.setup.as_ref().and_then(|setup| setup.base_commit.as_ref()) != Some(&base) {
                         return Err(error("dependency_input_changed", "Launch checkout no longer has the reserved input base"));
                     }
-                }
             }
-        }
         let registered = has_current_binding(&state, run);
         let run = &mut state.runs[index];
         let dispatch = run.dispatch.as_mut().expect("fenced launch");

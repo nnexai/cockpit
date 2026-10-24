@@ -61,12 +61,12 @@ macro_rules! cockpit_operations {
             }
             { id: space_service_status, ctx: service, out: ::cockpit_protocol::v1::SpaceServiceStatusResponse,
               call: $crate::transport::operations::session::space_service_status,
-              native: cockpit_space_service_status(session_id: ::std::string::String)
-                  => $crate::transport::native_input::typed(),
-              http: get "/api/v1/sessions/{session_id}/space-services"
-                  (path: ::axum::extract::Path<::std::string::String>)
-                  => $crate::transport::http_input::session($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"));
-                  limit = none; origin = none;
+              native: cockpit_space_service_status(session_id: ::std::string::String, request: ::cockpit_protocol::v1::SpaceServiceStatusRequest)
+                  => $crate::transport::native_input::typed2(),
+              http: post "/api/v1/sessions/{session_id}/space-services"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::v1::SpaceServiceStatusRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::session_sized_body($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"), $crate::transport::http_input::Reject("invalid_space_service_status_request", "Expected a bounded JSON service-status request with valid fields"));
+                  limit = $crate::transport::limits::SPACE_SERVICE_STATUS_BYTES; origin = method;
                   guard = none; status = service
             }
             { id: space_tags, ctx: service, out: ::cockpit_protocol::v1::SpaceTagsResponse,

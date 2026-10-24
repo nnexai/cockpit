@@ -202,8 +202,8 @@ impl ProjectHerdrAdapter for NestedDirectoryAdapter {
             .lock()
             .expect("worktree requests")
             .push(request.clone());
-        if request.mode == WorkspaceSetupMode::Open && request.open_existing_worktree && self.snapshot.lock().is_none() {
-            if let Some(inventory) = self.inventory.lock().as_mut() {
+        if request.mode == WorkspaceSetupMode::Open && request.open_existing_worktree && self.snapshot.lock().is_none()
+            && let Some(inventory) = self.inventory.lock().as_mut() {
                 let entry = inventory.worktrees.iter_mut().find(|entry| entry.checkout_path == request.checkout_path)
                     .ok_or_else(|| InspectionError::new("test_adapter_unused", "checkout missing from fixture inventory"))?;
                 entry.open_workspace_id = Some("workspace".to_owned());
@@ -216,7 +216,6 @@ impl ProjectHerdrAdapter for NestedDirectoryAdapter {
                     already_open: false,
                 });
             }
-        }
         if request.mode == WorkspaceSetupMode::Open && request.open_existing_worktree && self.snapshot.lock().is_some() {
             let inventory = self.inventory.lock().clone();
             if let Some(inventory) = inventory {

@@ -1037,7 +1037,7 @@ fn inbox_next_wait_and_capture_options_are_bounded() {
             "--capture-file", "/tmp/private/mail.json", "--json",
         ]).unwrap().command else { panic!("expected inbox") };
         assert!(matches!(args.command, InboxCommand::Next { wait: seconds, deliverable: true, capture_file: Some(path) }
-            if seconds == wait.parse::<u64>().unwrap() && path == PathBuf::from("/tmp/private/mail.json")));
+            if seconds == wait.parse::<u64>().unwrap() && path == *"/tmp/private/mail.json"));
         assert!(args.common.json);
     }
     let TestCommand::Inbox(args) = TestCli::try_parse_from(["test", "inbox", "next"]).unwrap().command

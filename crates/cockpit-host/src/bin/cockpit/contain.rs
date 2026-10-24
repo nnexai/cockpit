@@ -28,14 +28,13 @@ pub(crate) struct ContainArgs {
 pub(crate) async fn run(args: ContainArgs) -> u8 {
     if args.argv.is_empty() { return 2; }
     #[cfg(target_os = "linux")]
-    if !args.in_scope && preconditions(&args.unit) && probe().await {
-        if let Ok(runtime) = verified_manager_runtime() {
+    if !args.in_scope && preconditions(&args.unit) && probe().await
+        && let Ok(runtime) = verified_manager_runtime() {
             match scope_command(&args, &runtime) {
                 Ok(command) => return execute(command),
                 Err(error) => { eprintln!("contain: {error}"); return 126; }
             }
         }
-    }
     // Unsupported systems, missing delegation, old systemd versions (without
     // --expand-environment=no) and probe failure run the original command. No
     // receipt can be captured: this does not fake containment.

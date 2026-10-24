@@ -44,14 +44,13 @@ pub(crate) fn read_media(
         .symlink_metadata(&leaf)
         .map_err(|error| media_metadata_error(&error))?;
     let revision = metadata_revision(&before);
-    if let Some(expected) = request.expected_revision.as_deref() {
-        if expected != revision {
+    if let Some(expected) = request.expected_revision.as_deref()
+        && expected != revision {
             return Err(InspectionError::new(
                 "context_stale_revision",
                 "context media changed since it was listed",
             ));
         }
-    }
     validate_file(&before)?;
 
     if before.len() > max_bytes as u64 {
@@ -265,7 +264,7 @@ fn parse_png_header(bytes: &[u8]) -> Result<(u32, u32), InspectionError> {
                 idat_closed = true;
             }
             if chunk_type == *b"IEND" {
-                if data.len() != 0 || !saw_idat || chunk_end != bytes.len() {
+                if !data.is_empty() || !saw_idat || chunk_end != bytes.len() {
                     return Err(invalid_png());
                 }
                 return dimensions.ok_or_else(invalid_png);

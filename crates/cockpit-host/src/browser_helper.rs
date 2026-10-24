@@ -52,13 +52,15 @@ pub struct BrowserViewNativeSubscription {
     pub endpoint: String,
     pub grant: BrowserViewFrameGrant,
 }
+type AdmissionGates = Mutex<HashMap<(String, String), Weak<Mutex<()>>>>;
+
 pub(crate) struct BrowserHelperSupervisor {
     state_root: PathBuf,
     /// Incarnation is part of the registry key so a restarted Chromium can
     associations: Mutex<HashMap<(String, String), Vec<String>>>,
     /// Serializes only opens for the same verified browser incarnation. The
     /// helper itself remains unregistered until its first frame is ready.
-    admission_gates: Mutex<HashMap<(String, String), Weak<Mutex<()>>>>,
+    admission_gates: AdmissionGates,
     /// The packaged file has one publication path across all incarnations.
     materialization: Mutex<()>,
     views: Mutex<HashMap<String, ManagedView>>,
@@ -89,17 +91,7 @@ pub(crate) struct RetiredView {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum HelperInput {
-    Attach {
-        association_key: String,
-        browser_incarnation: String,
-        view_id: String,
-        stream_epoch: u64,
-        target_id: String,
-        cdp_endpoint: String,
-        playwright_core: String,
-        viewport: HelperViewport,
-        frame_grant: BrowserViewFrameGrant,
-    },
+    Attach(Box<HelperAttach>),
     AttachView {
         view_id: String,
         stream_epoch: u64,
@@ -115,6 +107,19 @@ enum HelperInput {
     Command {
         request: BrowserViewCommandRequest,
     },
+}
+
+#[derive(Serialize)]
+struct HelperAttach {
+    association_key: String,
+    browser_incarnation: String,
+    view_id: String,
+    stream_epoch: u64,
+    target_id: String,
+    cdp_endpoint: String,
+    playwright_core: String,
+    viewport: HelperViewport,
+    frame_grant: BrowserViewFrameGrant,
 }
 #[derive(Serialize)]
 struct HelperViewport {
@@ -259,7 +264,7 @@ impl BrowserHelperSupervisor {
                 "Private browser helper has no stdout",
             )
         })?;
-        let initial = HelperInput::Attach {
+        let initial = HelperInput::Attach(Box::new(HelperAttach {
             association_key: attachment.association_key.clone(),
             browser_incarnation: attachment.browser_incarnation.clone(),
             view_id: view_id.clone(),
@@ -273,7 +278,7 @@ impl BrowserHelperSupervisor {
                 device_pixel_ratio: request.viewport.device_pixel_ratio,
             },
             frame_grant: frame_grant.clone(),
-        };
+        }));
         let snapshot = Arc::new(Mutex::new(empty_snapshot()));
         let barrier = Arc::new(Mutex::new(()));
         let latest_frame = Arc::new(Mutex::new(None));
@@ -286,17 +291,21 @@ impl BrowserHelperSupervisor {
         let task_retired = self.retired_tx.clone();
         let mut task = tokio::spawn(async move {
             run_helper(
-                child,
-                stdin,
-                stdout,
+                HelperProcess {
+                    child,
+                    stdin,
+                    stdout,
+                },
                 &mut input_rx,
                 initial,
-                task_snapshot,
-                task_barrier,
-                task_retired,
-                task_responses,
-                task_events,
-                task_latest_frame,
+                HelperShared {
+                    snapshot: task_snapshot,
+                    barrier: task_barrier,
+                    retired: task_retired,
+                    responses: task_responses,
+                    events: task_events,
+                    latest_frame: task_latest_frame,
+                },
                 ready_tx,
                 first_frame_tx,
             )
@@ -569,7 +578,7 @@ impl BrowserHelperSupervisor {
                 let event = match replace_event_metadata(event, metadata) {
                     BrowserViewEvent::Attached { metadata, .. } => BrowserViewEvent::Attached {
                         metadata,
-                        snapshot: value.clone(),
+                        snapshot: Box::new(value.clone()),
                     },
                     event => event,
                 };
@@ -907,12 +916,11 @@ impl BrowserHelperSupervisor {
         }
         if last_view {
             let _ = managed.input.send(HelperInput::Detach).await;
-            if let Some(mut task) = managed.task.lock().await.take() {
-                if timeout(HELPER_STOP_TIMEOUT, &mut task).await.is_err() {
+            if let Some(mut task) = managed.task.lock().await.take()
+                && timeout(HELPER_STOP_TIMEOUT, &mut task).await.is_err() {
                     task.abort();
                     let _ = task.await;
                 }
-            }
         } else {
             let _ = managed
                 .input
@@ -982,12 +990,11 @@ impl BrowserHelperSupervisor {
         }
         if last_view {
             let _ = managed.input.send(HelperInput::Detach).await;
-            if let Some(mut task) = managed.task.lock().await.take() {
-                if timeout(HELPER_STOP_TIMEOUT, &mut task).await.is_err() {
+            if let Some(mut task) = managed.task.lock().await.take()
+                && timeout(HELPER_STOP_TIMEOUT, &mut task).await.is_err() {
                     task.abort();
                     let _ = task.await;
                 }
-            }
         } else {
             let _ = managed
                 .input
@@ -1116,21 +1123,42 @@ fn set_private_permissions(path: &Path, file: bool) -> Result<(), InspectionErro
     Ok(())
 }
 
-async fn run_helper(
-    _child: Child,
-    mut stdin: tokio::process::ChildStdin,
+struct HelperProcess {
+    child: Child,
+    stdin: tokio::process::ChildStdin,
     stdout: tokio::process::ChildStdout,
-    input: &mut mpsc::Receiver<HelperInput>,
-    initial: HelperInput,
+}
+
+struct HelperShared {
     snapshot: Arc<Mutex<BrowserViewSnapshot>>,
     barrier: Arc<Mutex<()>>,
     retired: mpsc::UnboundedSender<RetiredView>,
     responses: Arc<Mutex<HashMap<String, oneshot::Sender<BrowserViewCommandResponse>>>>,
     events: broadcast::Sender<BrowserViewEvent>,
     latest_frame: Arc<Mutex<Option<BrowserViewFrameDescriptor>>>,
+}
+
+async fn run_helper(
+    process: HelperProcess,
+    input: &mut mpsc::Receiver<HelperInput>,
+    initial: HelperInput,
+    shared: HelperShared,
     ready: oneshot::Sender<Result<(String, BrowserViewSnapshot), InspectionError>>,
     first_frame: oneshot::Sender<Result<BrowserViewFrameDescriptor, InspectionError>>,
 ) {
+    let HelperProcess {
+        child: _child,
+        mut stdin,
+        stdout,
+    } = process;
+    let HelperShared {
+        snapshot,
+        barrier,
+        retired,
+        responses,
+        events,
+        latest_frame,
+    } = shared;
     let mut ready = Some(ready);
     let mut first_frame = Some(first_frame);
     // Helper metadata and published metadata use different clocks: the host
@@ -1201,7 +1229,7 @@ async fn run_helper(
                                 BrowserViewEvent::Attached { metadata, .. } => {
                                     BrowserViewEvent::Attached {
                                         metadata,
-                                        snapshot: value.clone(),
+                                        snapshot: Box::new(value.clone()),
                                     }
                                 }
                                 event => event,
@@ -1484,7 +1512,7 @@ fn apply_event_snapshot(
 ) {
     match event {
         BrowserViewEvent::Attached { snapshot: next, .. } if attached_is_current => {
-            *snapshot = next.clone();
+            *snapshot = next.as_ref().clone();
         }
         BrowserViewEvent::Attached { .. } => {}
         BrowserViewEvent::TargetsChanged {

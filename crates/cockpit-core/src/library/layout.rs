@@ -215,7 +215,7 @@ mod tests {
 
     #[test]
     fn truncates_segments_and_tags_on_utf8_boundaries() {
-        let long = format!("{}", "界".repeat(200));
+        let long = "界".repeat(200).to_string();
         assert!(segment(&long).len() <= 255);
         let tagged_name = tagged(&long, "id");
         assert!(tagged_name.len() + 3 <= 255);

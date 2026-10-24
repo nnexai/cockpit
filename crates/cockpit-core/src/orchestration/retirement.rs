@@ -108,12 +108,11 @@ pub(crate) fn close_accepted(state: &mut OrchestrationState, index: usize, trigg
                 text: format!("Physical retirement {} recorded; logical acceptance is not consumer-exit proof.", retirement.retirement_id) });
         }
     }
-    if let Some(task_id) = &run.task_id {
-        if let Some(ownership) = state.task_ownership.iter_mut().find(|ownership|
+    if let Some(task_id) = &run.task_id
+        && let Some(ownership) = state.task_ownership.iter_mut().find(|ownership|
             ownership.root_id == run.root_id && ownership.task_id == *task_id) {
             ownership.schedule = None;
         }
-    }
 }
 
 pub(crate) fn blockers(state: &OrchestrationState, run: &Run) -> Vec<RetirementBlocker> {

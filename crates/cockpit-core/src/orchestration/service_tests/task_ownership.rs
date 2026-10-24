@@ -124,7 +124,7 @@ fn blocked_dependencies_never_replace_the_current_live_worker() {
     let root = fixture.root();
     let source = fixture.create_task(&root, "Prerequisite");
     canonical_check(&fixture, &root, &source.task_id, true);
-    let task = related_task(&fixture, &root, &[source.task_id.clone()], None);
+    let task = related_task(&fixture, &root, std::slice::from_ref(&source.task_id), None);
     let (old, _) = execute_task(&fixture, &root, &task);
     canonical_check(&fixture, &root, &source.task_id, false);
     let supervisor = fixture.root_actor(&root);
@@ -143,7 +143,7 @@ fn dependency_changes_outside_target_bytes_gate_content_accept_sendback_and_disp
     let root = fixture.root();
     let source = fixture.create_task(&root, "Prerequisite");
     canonical_check(&fixture, &root, &source.task_id, true);
-    let task = related_task(&fixture, &root, &[source.task_id.clone()], None);
+    let task = related_task(&fixture, &root, std::slice::from_ref(&source.task_id), None);
     let run_id = fixture.start(&root, &task);
     fixture.setup(&run_id);
     let actor = fixture.launch_and_bind(&run_id);
@@ -185,7 +185,7 @@ fn acceptance_recovery_rechecks_unpublished_prerequisites_but_never_rolls_back_p
             let root = fixture.root();
             let source = fixture.create_task(&root, "Prerequisite");
             canonical_check(&fixture, &root, &source.task_id, true);
-            let task = related_task(&fixture, &root, &[source.task_id.clone()], None);
+            let task = related_task(&fixture, &root, std::slice::from_ref(&source.task_id), None);
             let (run_id, actor) = execute_task(&fixture, &root, &task);
             fixture.apply(&actor, fixture.successful_result(&actor)).unwrap();
             fixture.pending_intent(&root, &task, &run_id);
@@ -207,7 +207,7 @@ fn acceptance_recovery_rechecks_unpublished_prerequisites_but_never_rolls_back_p
                     let document = locked.tasks(&root).unwrap();
                     let source = document.task(&source.task_id).unwrap();
                     document.set_dependencies(&source.task_id, &source.task_revision, &document.doc_revision,
-                        &[task.task_id.clone()]).unwrap();
+                        std::slice::from_ref(&task.task_id)).unwrap();
                 }
             }
             let target_revision = fixture.task(&root, &task.task_id).task_revision;
@@ -383,7 +383,7 @@ fn starting_waiting_work_is_non_destructive_but_checked_or_invalid_tasks_are_rej
     let fixture = Fixture::new();
     let root = fixture.root();
     let source = fixture.create_task(&root, "Waiting prerequisite");
-    let waiting = related_task(&fixture, &root, &[source.task_id.clone()], None);
+    let waiting = related_task(&fixture, &root, std::slice::from_ref(&source.task_id), None);
     let run_id = fixture.start(&root, &waiting);
     assert_eq!(fixture.run(&run_id).stage, RunStage::Queued);
     let supervisor = fixture.root_actor(&root);
@@ -1469,7 +1469,7 @@ fn first_credentialed_call_can_claim_before_physical_receipt_without_late_stage_
     assert_eq!(fixture.run(&worker).stage, RunStage::Working);
     let generation = ownership(&fixture, &root, &task).generation;
     fixture.service.record_dispatch(&worker, DispatchUpdate::TabReceipt {
-        location: physical.location.unwrap(), launch_shell_identity: physical.shell, process_scope: None,
+        location: Box::new(physical.location.unwrap()), launch_shell_identity: physical.shell.map(Box::new), process_scope: None,
     }).unwrap();
     let receipt = fixture.run(&worker);
     assert_eq!(receipt.stage, RunStage::Working);
@@ -1538,7 +1538,7 @@ fn durable_unknown_move_reconciles_exact_terminal_but_never_resends() {
     assert_eq!(placed.attachment.as_ref().unwrap().location.as_ref().unwrap().workspace_id, location.workspace_id);
     let bytes = fixture.state_bytes();
     assert!(fixture.service.record_dispatch(&worker, DispatchUpdate::TabReceipt {
-        location: source, launch_shell_identity: staged.attachment.as_ref().unwrap().shell.clone(), process_scope: None,
+        location: Box::new(source), launch_shell_identity: staged.attachment.as_ref().unwrap().shell.clone().map(Box::new), process_scope: None,
     }).is_err());
     assert_eq!(fixture.state_bytes(), bytes);
 }

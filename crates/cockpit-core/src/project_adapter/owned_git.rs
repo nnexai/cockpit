@@ -223,9 +223,8 @@ async fn checkout_present(identity: &OwnedGitIdentity, expected: &str, entries: 
         None => return Err(refusal("Detached checkout binding changed")),
     }
     if removal {
-        if identity.branch_ref.is_some() {
-            if branch_tip(identity, budget).await?.as_deref() != Some(expected) { return Err(refusal("Owned direct branch tip changed")); }
-        }
+        if identity.branch_ref.is_some()
+            && branch_tip(identity, budget).await?.as_deref() != Some(expected) { return Err(refusal("Owned direct branch tip changed")); }
         clean_checkout(&identity.checkout_path, budget).await?;
     }
     exact_directory(&identity.checkout_path, &identity.checkout_device, &identity.checkout_inode)?;

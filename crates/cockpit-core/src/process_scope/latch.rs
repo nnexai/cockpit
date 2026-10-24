@@ -94,7 +94,7 @@ fn decode(frame: &[u8], nonce: &str) -> Result<BTreeMap<String, String>, Inspect
     if frame.len() != size { return Err(failure("latch_payload_invalid", "incomplete or extra placement frame data")); }
     let payload_end = size - CHECKSUM;
     let payload = &frame[HEADER..payload_end];
-    if &Sha256::digest(payload)[..] != &frame[payload_end..] {
+    if Sha256::digest(payload)[..] != frame[payload_end..] {
         return Err(failure("latch_payload_invalid", "placement frame checksum mismatch"));
     }
     let payload: Payload = serde_json::from_slice(payload).map_err(|e| failure("latch_payload_invalid", e.to_string()))?;
@@ -103,13 +103,21 @@ fn decode(frame: &[u8], nonce: &str) -> Result<BTreeMap<String, String>, Inspect
     Ok(payload.env)
 }
 
+/// Identity of the run an agent launch belongs to.
+pub struct AgentLaunchIdentity<'a> {
+    pub store_identity: &'a str,
+    pub run_id: &'a str,
+    pub kind: &'a RunKind,
+    pub epoch: u64,
+}
+
 /// `base` is the configured state root, not its orchestration subdirectory.
 /// Journal this receipt before opening a terminal. Each call creates a fresh
 /// FIFO; abandoned attempts are never reused or retrospectively authorized.
 pub fn agent_launch(
-    cli_path: &Path, base: &Path, store_identity: &str, run_id: &str, kind: &RunKind,
-    epoch: u64, description: &str, scope: ScopeMode, argv: Vec<String>,
+    cli_path: &Path, base: &Path, identity: AgentLaunchIdentity<'_>, description: &str, scope: ScopeMode, argv: Vec<String>,
 ) -> Result<AgentLaunch, InspectionError> {
+    let AgentLaunchIdentity { store_identity, run_id, kind, epoch } = identity;
     if argv.is_empty() || !cli_path.is_absolute() || cli_path.to_str().is_none() {
         return Err(failure("latch_launch_invalid", "absolute Cockpit CLI and nonempty literal harness argv required"));
     }
@@ -445,9 +453,8 @@ mod unix {
                     Ok(Ok(bytes)) => filled += bytes,
                 }
                 if filled >= HEADER && expected.is_none() { expected = Some(frame_size(&frame[..filled])?); }
-                if let Some(expected) = expected {
-                    if filled >= expected { return decode(&frame[..filled], &receipt.nonce); }
-                }
+                if let Some(expected) = expected
+                    && filled >= expected { return decode(&frame[..filled], &receipt.nonce); }
                 if filled == MAX_FRAME { return Err(failure("latch_payload_invalid", "oversized placement frame")); }
             }
         };
@@ -495,7 +502,7 @@ mod tests {
     fn fifo_release_refuses_absent_reader_replacement_symlink_and_wrong_nonce() {
         let base = std::env::temp_dir().join(format!("cockpit-latch-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&base).unwrap();
-        let launch = agent_launch(Path::new("/usr/bin/cockpit"), &base, "store", "run", &RunKind::Worker, 1, "label", ScopeMode::Off, vec!["harness".into()]).unwrap();
+        let launch = agent_launch(Path::new("/usr/bin/cockpit"), &base, AgentLaunchIdentity { store_identity: "store", run_id: "run", kind: &RunKind::Worker, epoch: 1 }, "label", ScopeMode::Off, vec!["harness".into()]).unwrap();
         assert_eq!(release_latch(&launch.receipt, &BTreeMap::new()).unwrap_err().code, "latch_reader_absent");
         let mut wrong = launch.receipt.clone(); wrong.nonce = "a".repeat(32);
         assert_eq!(release_latch(&wrong, &BTreeMap::new()).unwrap_err().code, "latch_identity_invalid");
@@ -515,7 +522,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("cockpit-latch-stream-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&base).unwrap();
         let env = BTreeMap::from([("COCKPIT_WORKSPACE_ID".into(), "placed".into())]);
-        let launch = agent_launch(Path::new("/usr/bin/cockpit"), &base, "store", "run", &RunKind::Worker, 1, "label", ScopeMode::Off, vec!["harness".into()]).unwrap();
+        let launch = agent_launch(Path::new("/usr/bin/cockpit"), &base, AgentLaunchIdentity { store_identity: "store", run_id: "run", kind: &RunKind::Worker, epoch: 1 }, "label", ScopeMode::Off, vec!["harness".into()]).unwrap();
         assert!(!latch_ready(&launch.receipt).unwrap());
         assert_eq!(latch_startup(&launch.receipt).unwrap(), None);
         let receipt = launch.receipt.clone();
@@ -535,7 +542,7 @@ mod tests {
         assert!(!PathBuf::from(format!("{}.ready", launch.receipt.latch)).exists());
         assert!(release_latch(&launch.receipt, &env).is_err());
 
-        let partial = agent_launch(Path::new("/usr/bin/cockpit"), &base, "store", "run", &RunKind::Worker, 2, "label", ScopeMode::Off, vec!["harness".into()]).unwrap();
+        let partial = agent_launch(Path::new("/usr/bin/cockpit"), &base, AgentLaunchIdentity { store_identity: "store", run_id: "run", kind: &RunKind::Worker, epoch: 2 }, "label", ScopeMode::Off, vec!["harness".into()]).unwrap();
         let receipt = partial.receipt.clone();
         let deadline = unix::monotonic_ns() + 500_000_000;
         let reader = tokio::spawn(async move { wait_latch(&receipt, deadline, false).await });

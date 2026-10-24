@@ -289,7 +289,7 @@ class AppFixture {
     sessions: this.sessionsCalls,
     sessionSnapshot: this.snapshotCalls,
     spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
-    spaceServiceStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, services: [] })),
+    spaceServiceStatus: vi.fn<CockpitClient["spaceServiceStatus"]>(async (sessionId, _request, _signal) => ({ session_id: sessionId, services: [] })),
     spaceTags: vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: snapshot(sessionId).server_instance, catalog: [], spaces: [] })),
     changeSpaceTag: vi.fn(async () => { throw new Error("Unexpected Space tag change in terminal fixture"); }),
     spaceGitAction: vi.fn(async () => { throw new Error("Unexpected Git action in terminal fixture"); }),
@@ -540,6 +540,27 @@ it.each(["own_tab", "cross_source"] as const)("reveals an %s widget without chan
 });
 
 describe("mounted App mutation and session ordering", () => {
+  it("discovers services from the live pane set and focuses the exact registry pane", async () => {
+    const fixture = new AppFixture();
+    vi.mocked(fixture.client.spaceServiceStatus).mockResolvedValue({
+      session_id: "session-1",
+      services: [
+        { key: "dev", pane_id: "pane-2", tab_id: "tab-2", title: "dev server", status: "healthy", port: null },
+        { key: "stale", pane_id: "pane-1", tab_id: "missing-tab", title: "stale service", status: "starting", port: null },
+      ],
+    });
+    await mount(fixture);
+    expect(fixture.client.spaceServiceStatus).toHaveBeenCalledWith(
+      "session-1", { server_instance: snapshot("session-1").server_instance, pane_ids: ["pane-1", "pane-2"] }, expect.any(AbortSignal),
+    );
+    const service = container.querySelector<HTMLButtonElement>('[data-row-id="service:space-1:dev"]');
+    expect(service?.textContent).toContain("dev server");
+    expect(container.querySelector('[data-row-id="service:space-1:stale"]')).toBeNull();
+    click(service!);
+    await settle();
+    expect(fixture.focusCalls).toHaveBeenLastCalledWith("session-1", { kind: "pane", target_id: "pane-2" });
+  });
+
   it("prefers Git's current branch and upstream position over outdated Herdr metadata", async () => {
     const fixture = new AppFixture();
     vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", spaces: [{ space_id: "space-1", source: "pane_folder", checkout: { state: "branch", root: "/repo", branch: "main", upstream: { state: "tracked", name: "origin/main", ahead: 2, behind: 1 } } }] });

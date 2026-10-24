@@ -1,8 +1,8 @@
 import * as Wire from "../protocol/generated/validate";
 import { parseWire, tryParseWire } from "./wire";
 import { CLIENT } from "./clientPolicy";
-import type { SpaceServiceStatusResponse, SpaceTagsResponse, SpaceTagChangeRequest } from "../protocol/generated/v1";
-export type { ServiceStatus, SpaceServiceStatus, SpaceServiceStatusResponse, SpaceTags, SpaceTagsResponse, SpaceTagChangeRequest } from "../protocol/generated/v1";
+import type { SpaceServiceStatusRequest, SpaceServiceStatusResponse, SpaceTagsResponse, SpaceTagChangeRequest } from "../protocol/generated/v1";
+export type { ServiceStatus, SpaceServiceStatus, SpaceServiceStatusRequest, SpaceServiceStatusResponse, SpaceTags, SpaceTagsResponse, SpaceTagChangeRequest } from "../protocol/generated/v1";
 import type {
   OrchestrationSnapshotRequest, OrchestrationSnapshot,
   OrchestrationMutationRequest, OrchestrationMutationResponse,
@@ -412,7 +412,7 @@ export interface CockpitClient {
   sessions(): Promise<SessionListResponse>;
   sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<CockpitSessionSnapshot>;
   spaceGitStatus(sessionId: string, signal?: AbortSignal): Promise<SpaceGitStatusResponse>;
-  spaceServiceStatus(sessionId: string, signal?: AbortSignal): Promise<SpaceServiceStatusResponse>;
+  spaceServiceStatus(sessionId: string, request: SpaceServiceStatusRequest, signal?: AbortSignal): Promise<SpaceServiceStatusResponse>;
   spaceTags(sessionId: string, signal?: AbortSignal): Promise<SpaceTagsResponse>;
   changeSpaceTag(sessionId: string, request: SpaceTagChangeRequest): Promise<SpaceTagsResponse>;
   spaceGitAction(sessionId: string, request: SpaceGitActionRequest): Promise<SpaceGitActionResponse>;
@@ -546,6 +546,7 @@ export function parseBrowserFeedbackSendResponse(value: unknown): BrowserFeedbac
 export function parseBrowserFeedbackAck(value: unknown): BrowserFeedbackAck { return parseWire(value, Wire.wireBrowserFeedbackAck, CLIENT); }
 export function parseSessionSnapshotResponse(value: unknown): SessionSnapshotResponse { return parseWire(value, Wire.wireSessionSnapshotResponse, CLIENT); }
 export function parseSpaceGitStatusResponse(value: unknown): SpaceGitStatusResponse { return parseWire(value, Wire.wireSpaceGitStatusResponse, CLIENT); }
+export function parseSpaceServiceStatusRequest(value: unknown): SpaceServiceStatusRequest { return parseWire(value, Wire.wireSpaceServiceStatusRequest, CLIENT); }
 export function parseSpaceServiceStatusResponse(value: unknown): SpaceServiceStatusResponse { return parseWire(value, Wire.wireSpaceServiceStatusResponse, CLIENT); }
 export function parseSpaceTagsResponse(value: unknown): SpaceTagsResponse { return parseWire(value, Wire.wireSpaceTagsResponse, CLIENT); }
 export function parseSpaceGitActionResponse(value: unknown): SpaceGitActionResponse { return parseWire(value, Wire.wireSpaceGitActionResponse, CLIENT); }

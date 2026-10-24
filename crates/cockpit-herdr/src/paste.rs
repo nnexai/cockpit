@@ -353,7 +353,7 @@ impl CommentPasteAdapter for HerdrCliAdapter {
         target: &CommentPasteTarget,
         framed_payload: &str,
     ) -> Result<(), InspectionError> {
-        if framed_payload.as_bytes().len() > MAX_PASTE_BYTES {
+        if framed_payload.len() > MAX_PASTE_BYTES {
             return Err(InspectionError::new(
                 "comments_paste_input_bounded",
                 "framed paste exceeds the 64 KiB Herdr limit",

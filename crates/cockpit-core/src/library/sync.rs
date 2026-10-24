@@ -476,8 +476,8 @@ impl LibraryService {
             // Give startup/manual work priority. Overdue windows coalesce; no replay loop.
             tokio::time::sleep(Duration::from_secs(60)).await;
             loop {
-                if let Ok(store) = service.open() {
-                    if let Ok(owner) = store.lease("sync:scheduler") {
+                if let Ok(store) = service.open()
+                    && let Ok(owner) = store.lease("sync:scheduler") {
                         let _owner = owner;
                         loop {
                             let _ = lane::scope_background(
@@ -488,7 +488,6 @@ impl LibraryService {
                             tokio::time::sleep(Duration::from_secs(60)).await;
                         }
                     }
-                }
                 tokio::time::sleep(Duration::from_secs(60)).await;
             }
         });
@@ -585,8 +584,8 @@ impl LibraryService {
             }
             save(store, &state)?; // crash lease and fixed bounds precede remote work
             let mut failure = None;
-            if delta_due {
-                if let Some(window) = state.sources[&follow.follow_id].window {
+            if delta_due
+                && let Some(window) = state.sources[&follow.follow_id].window {
                     match self
                         .discover_follow(store, &mut state, follow, Some(window), now)
                         .await
@@ -607,7 +606,6 @@ impl LibraryService {
                         Err(e) => failure = Some(e.code),
                     }
                 }
-            }
             if inventory_due {
                 match self
                     .discover_follow(store, &mut state, follow, None, now)

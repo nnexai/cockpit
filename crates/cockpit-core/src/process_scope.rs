@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use crate::InspectionError;
 
 mod latch;
-pub use latch::{AgentLaunch, ScopeStartup, agent_launch, latch_deadline_ns, latch_ready, latch_startup, release_latch, wait_latch};
+pub use latch::{AgentLaunch, AgentLaunchIdentity, ScopeStartup, agent_launch, latch_deadline_ns, latch_ready, latch_startup, release_latch, wait_latch};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeLaunch {
@@ -295,7 +295,7 @@ mod linux {
         let proc = directory("/proc", &member.pid.to_string()).map_err(|e| error(e.to_string()))?;
         let text = bounded_file(&proc, "cgroup").map_err(|e| error(e.to_string()))?;
         if process_group(&text)? != group { return Err(error("recorded live member left the owned scope")); }
-        Ok(process_identity::incarnation_running(pid, member.start_ticks).map_err(|e| error(e.to_string()))?)
+        process_identity::incarnation_running(pid, member.start_ticks).map_err(|e| error(e.to_string()))
     }
 
     fn validate(scope: &OwnedProcessScope) -> Result<(), InspectionError> {
@@ -448,7 +448,7 @@ mod linux {
         fn membership_and_events_require_unambiguous_kernel_evidence() {
             assert_eq!(process_group("0::/a\n").unwrap(), "/a");
             for text in ["1:cpu:/a\n", "0::/a\n0::/b\n", "0::relative"] { assert!(process_group(text).is_err()); }
-            assert_eq!(parse_populated("populated 0\nfrozen 0\n").unwrap(), false);
+            assert!(!parse_populated("populated 0\nfrozen 0\n").unwrap());
             for text in ["frozen 0", "populated 2", "populated 0\npopulated 1", "populated 0 extra"] { assert!(parse_populated(text).is_err()); }
         }
         #[test]

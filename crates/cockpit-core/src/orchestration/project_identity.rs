@@ -36,12 +36,11 @@ pub(crate) fn revalidate_checkout(checkout: &CheckoutIdentity) -> Result<(), Ins
     if directory(Path::new(&checkout.path))? != (checkout.path.clone(), checkout.directory_identity.clone()) {
         return Err(changed());
     }
-    if let Some(git) = &checkout.git {
-        if directory(Path::new(&git.common_dir))?.0 != git.common_dir
-            || directory(Path::new(&git.worktree_git_dir))?.0 != git.worktree_git_dir {
+    if let Some(git) = &checkout.git
+        && (directory(Path::new(&git.common_dir))?.0 != git.common_dir
+            || directory(Path::new(&git.worktree_git_dir))?.0 != git.worktree_git_dir) {
             return Err(changed());
         }
-    }
     Ok(())
 }
 
@@ -264,12 +263,11 @@ pub(crate) fn revalidate_root_recovery(state: &super::store::OrchestrationState,
         if run.dispatch.is_some() { restored_root_receipt_checkout(run)?; }
         revalidate_checkout(checkout)?;
     }
-    if let Some(shell) = &proof.idle_shell {
-        if process_identity::executable_identity(shell.process.pid as i32, shell.process.start_ticks).ok().as_ref() != Some(shell)
-            || !matches!(process_identity::incarnation_foreground(shell.process.pid as i32, shell.process.start_ticks), Ok(true)) {
+    if let Some(shell) = &proof.idle_shell
+        && (process_identity::executable_identity(shell.process.pid as i32, shell.process.start_ticks).ok().as_ref() != Some(shell)
+            || !matches!(process_identity::incarnation_foreground(shell.process.pid as i32, shell.process.start_ticks), Ok(true))) {
             return Err(root_container_unproven());
         }
-    }
     Ok(())
 }
 

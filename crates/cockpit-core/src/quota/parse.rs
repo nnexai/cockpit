@@ -117,17 +117,12 @@ pub(super) fn omp(bytes: &[u8], now: u64) -> Result<Vec<ProviderRecord>, QuotaEr
                 QuotaProviderState::Unsupported,
                 Some(QuotaErrorCode::Unsupported),
             )
-        } else if input
-            .accounts_without_usage
-            .iter()
-            .any(|account| account.provider == source)
+        } else if reported
+            || input
+                .accounts_without_usage
+                .iter()
+                .any(|account| account.provider == source)
         {
-            empty(
-                provider,
-                QuotaProviderState::Unavailable,
-                Some(QuotaErrorCode::UsageUnavailable),
-            )
-        } else if reported {
             empty(
                 provider,
                 QuotaProviderState::Unavailable,

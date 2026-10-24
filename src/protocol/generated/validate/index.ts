@@ -220,6 +220,7 @@ export const wireRegistry = {
   "SpaceGitRefusal": D19.wireSpaceGitRefusal,
   "ServiceStatus": D19.wireServiceStatus,
   "SpaceServiceStatus": D19.wireSpaceServiceStatus,
+  "SpaceServiceStatusRequest": D19.wireSpaceServiceStatusRequest,
   "SpaceServiceStatusResponse": D19.wireSpaceServiceStatusResponse,
   "SpaceTags": D19.wireSpaceTags,
   "SpaceTagsResponse": D19.wireSpaceTagsResponse,

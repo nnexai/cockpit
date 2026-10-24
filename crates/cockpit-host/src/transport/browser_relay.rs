@@ -19,7 +19,7 @@ use tokio_tungstenite::{
     WebSocketStream,
     tungstenite::{
         Message,
-        handshake::server::{Request as WsRequest, Response as WsResponse},
+        handshake::server::{Callback, ErrorResponse, Request as WsRequest, Response as WsResponse},
         protocol::WebSocketConfig,
     },
 };
@@ -165,6 +165,27 @@ fn valid_browser_socket_origin(origin: &str) -> bool {
     )
 }
 
+struct BrowserSocketValidator<'a> {
+    expected_host: &'a str,
+}
+
+impl Callback for BrowserSocketValidator<'_> {
+    fn on_request(
+        self,
+        request: &WsRequest,
+        response: WsResponse,
+    ) -> Result<WsResponse, ErrorResponse> {
+        if validate_browser_socket_request(request, self.expected_host).is_ok() {
+            Ok(response)
+        } else {
+            Err(WsResponse::builder()
+                .status(403)
+                .body(Some("Forbidden".to_owned()))
+                .expect("valid websocket rejection response"))
+        }
+    }
+}
+
 fn validate_browser_socket_request(request: &WsRequest, expected_host: &str) -> Result<(), ()> {
     let host = request
         .headers()
@@ -189,16 +210,7 @@ async fn browser_socket_accept(
     tokio::time::timeout(PEER_TIMEOUT, async {
         let (stream, _) = listener.accept().await.map_err(|_| ())?;
         stream.set_nodelay(true).map_err(|_| ())?;
-        let callback = |request: &WsRequest, response: WsResponse| {
-            if validate_browser_socket_request(request, expected_host).is_ok() {
-                Ok(response)
-            } else {
-                Err(WsResponse::builder()
-                    .status(403)
-                    .body(Some("Forbidden".to_owned()))
-                    .expect("valid websocket rejection response"))
-            }
-        };
+        let callback = BrowserSocketValidator { expected_host };
         let mut config = WebSocketConfig::default();
         config.max_message_size = Some(MAX_MESSAGE_BYTES);
         config.max_frame_size = Some(MAX_MESSAGE_BYTES);
@@ -345,7 +357,7 @@ async fn send_attached(
     send_browser_socket_json(
         socket,
         serde_json::json!({
-            "kind": "event", "event": BrowserViewEvent::Attached { metadata, snapshot },
+            "kind": "event", "event": BrowserViewEvent::Attached { metadata, snapshot: Box::new(snapshot) },
         }),
         cancel_notify,
     )
@@ -383,19 +395,21 @@ impl BrowserRelay {
             .clone()
             .unwrap_or_default();
         send_attached(&mut socket, self.snapshot, self.stream_epoch, cancel_notify).await?;
-        let mut outstanding = None;
+        let mut cursor = RelayCursor {
+            target_id,
+            stream_epoch: self.stream_epoch,
+            outstanding: None,
+        };
         let relay_result = relay_loop(
             &mut socket,
             &mut frame,
             &mut self.events,
-            target_id,
-            self.stream_epoch,
-            &mut outstanding,
+            &mut cursor,
             cancelled,
             cancel_notify,
         )
         .await;
-        if let Some(sequence) = outstanding {
+        if let Some(sequence) = cursor.outstanding {
             let _ = tokio::time::timeout(IO_TIMEOUT, frame.send_credit("discard", sequence)).await;
         }
         close_socket(&mut socket).await;
@@ -409,11 +423,10 @@ async fn forward_event(
     socket: &mut BrowserSocket,
     cancel_notify: &Notify,
 ) -> RelayResult {
-    if let BrowserViewEvent::Attached { snapshot, .. } = &event {
-        if let Some(target) = &snapshot.displayed_target_id {
+    if let BrowserViewEvent::Attached { snapshot, .. } = &event
+        && let Some(target) = &snapshot.displayed_target_id {
             target_id.clone_from(target);
         }
-    }
     if let BrowserViewEvent::TargetsChanged {
         displayed_target_id: Some(target),
         ..
@@ -528,21 +541,31 @@ async fn forward_frame(
     Ok(true)
 }
 
+/// Per-connection relay state shared by the metadata, credit and frame paths.
+struct RelayCursor {
+    target_id: String,
+    stream_epoch: u64,
+    outstanding: Option<u64>,
+}
+
 async fn relay_loop(
     socket: &mut BrowserSocket,
     frame: &mut FrameConnection,
     events: &mut broadcast::Receiver<BrowserViewEvent>,
-    mut target_id: String,
-    stream_epoch: u64,
-    outstanding: &mut Option<u64>,
+    cursor: &mut RelayCursor,
     cancelled: &AtomicBool,
     cancel_notify: &Notify,
 ) -> RelayResult {
+    let RelayCursor {
+        target_id,
+        stream_epoch,
+        outstanding,
+    } = cursor;
     while !cancelled.load(Ordering::Acquire) {
         tokio::select! {
             _ = cancel_notify.notified() => break,
             event = events.recv() => match event {
-                Ok(event) => forward_event(event, &mut target_id, socket, cancel_notify).await?,
+                Ok(event) => forward_event(event, target_id, socket, cancel_notify).await?,
                 Err(_) => {
                     let _ = send_browser_socket_json(socket, serde_json::json!({
                         "kind": "error", "code": "browser_metadata_closed", "message": "Browser metadata stream closed",
@@ -563,7 +586,7 @@ async fn relay_loop(
             },
             incoming = frame.recv() => match incoming {
                 Ok(Some(payload)) => {
-                    if !forward_frame(payload, &target_id, stream_epoch, socket, frame, outstanding, cancel_notify).await? {
+                    if !forward_frame(payload, target_id, *stream_epoch, socket, frame, outstanding, cancel_notify).await? {
                         break;
                     }
                 }

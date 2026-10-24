@@ -98,21 +98,18 @@ fn validate_report_stage(
     kind: ReportKind,
     outcome_present: bool,
 ) -> Result<(), InspectionError> {
-    match kind {
-        ReportKind::Result => {
-            if run.stage != RunStage::Working
-                && !(run.parent_run_id.is_none() && run.stage == RunStage::Active)
-            {
-                return Err(error(
-                    "invalid_stage",
-                    "Result requires a working run or active root",
-                ));
-            }
-            if !outcome_present {
-                return Err(error("invalid_report", "Result requires an outcome"));
-            }
+    if kind == ReportKind::Result {
+        if run.stage != RunStage::Working
+            && !(run.parent_run_id.is_none() && run.stage == RunStage::Active)
+        {
+            return Err(error(
+                "invalid_stage",
+                "Result requires a working run or active root",
+            ));
         }
-        _ => {}
+        if !outcome_present {
+            return Err(error("invalid_report", "Result requires an outcome"));
+        }
     }
     Ok(())
 }

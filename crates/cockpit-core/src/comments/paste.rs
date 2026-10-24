@@ -262,14 +262,11 @@ fn load_stored_receipt(
             ));
         }
     }
-    let mut record = match read_json_bounded::<StoredReceipt>(
+    let mut record = read_json_bounded::<StoredReceipt>(
         state.state_dir(),
         &name,
         MAX_STORED_RECEIPT_BYTES,
-    ) {
-        Ok(record) => record,
-        Err(error) => return Err(error),
-    };
+    )?;
     if recover_pending && record.receipt.state == CommentPasteState::Pending {
         record.receipt.state = CommentPasteState::OutcomeUnknown;
         record.receipt.completed_at = Some(timestamp());
@@ -830,7 +827,7 @@ impl CommentsService {
                 framed,
                 payload_hash,
             } => (framed, payload_hash),
-            PayloadCheck::Rejected(receipt) => return Ok(receipt),
+            PayloadCheck::Rejected(receipt) => return Ok(*receipt),
         };
         if let Err(error) = adapter.focus_comment_paste_target(&request.target).await {
             return self

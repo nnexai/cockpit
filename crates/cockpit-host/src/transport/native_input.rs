@@ -67,10 +67,12 @@ pub fn session_value<T: DeserializeOwned>(
     move |(session, value)| Ok((session, decode(value, limit, domain)?))
 }
 
+type PairValue<T> = (String, String, T);
+
 pub fn pair_value<T: DeserializeOwned>(
     limit: usize,
     domain: &'static str,
-) -> impl FnOnce((String, String, Value)) -> Result<(String, String, T), OperationError> {
+) -> impl FnOnce((String, String, Value)) -> Result<PairValue<T>, OperationError> {
     move |(session, resource, value)| Ok((session, resource, decode(value, limit, domain)?))
 }
 

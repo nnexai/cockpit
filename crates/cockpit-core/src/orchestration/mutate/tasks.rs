@@ -85,11 +85,10 @@ pub(in crate::orchestration) fn create(
     let edges = normalize_task_edges(&depends_on)?;
     let follow = follow_up_of.as_deref().map(tasks_md::validate_uuid)
         .transpose()?.map(|id| id.to_string());
-    if !edges.is_empty() || follow.is_some() {
-        if expected_doc_revision.is_none() || (follow.is_some() && source_revision.is_none()) {
+    if (!edges.is_empty() || follow.is_some())
+        && (expected_doc_revision.is_none() || (follow.is_some() && source_revision.is_none())) {
             return Err(error("invalid_task", "Relationships require document and follow-up source fences"));
         }
-    }
     if follow.is_none() && source_revision.is_some() {
         return Err(error("invalid_task", "Source revision requires follow_up_of"));
     }
@@ -114,7 +113,7 @@ pub(in crate::orchestration) fn create(
     }
     Ok(Applied::Document(OrchestrationActionResult::Task {
         task: document.create_authoring_with_id(&task_id, &title, &description,
-            &edges, follow.as_deref(), expected_doc_revision.as_deref(), source_revision.as_deref())?,
+            &edges, follow.as_deref(), (expected_doc_revision.as_deref(), source_revision.as_deref()))?,
     }))
 }
 
@@ -135,8 +134,8 @@ pub(in crate::orchestration) fn update(
     task_content_target(state, actor, caller, session_id, &root_id, &task_id, &document)?;
     if let Some(t) = &title { bounded(t, 256)?; }
     if let Some(d) = &description { bounded(d, 16 * 1024)?; }
-    if matches!(actor, Actor::Agent(_)) {
-        if let Some(run) = projection::current_task_run(state, &root_id, &task_id)
+    if matches!(actor, Actor::Agent(_))
+        && let Some(run) = projection::current_task_run(state, &root_id, &task_id)
             .filter(|run| run.stage == RunStage::Working)
             .filter(|_| caller.is_some_and(|index| state.runs[index].run_id == root_id))
         {
@@ -161,7 +160,6 @@ pub(in crate::orchestration) fn update(
             };
             return Ok(Applied::Published(response));
         }
-    }
     Ok(Applied::Document(OrchestrationActionResult::Task {
         task: document.update(&task_id, &expected_task_revision, title.as_deref(), description.as_deref())?,
     }))
@@ -470,21 +468,21 @@ mod tests {
             let store = OrchestrationStore::open(&directory).unwrap();
             let root_id = id();
             let mut root = new_run(&root_id, "task-job-auth", RunKind::Adopted,
-                "Root".into(), &root_id, None, None, 1);
+                "Root".into(), &root_id, RunLineage::default(), 1);
             root.stage = RunStage::Active;
             root.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
                 harness: "test".into(), session_id: "root-conversation".into(),
             });
             let locked = store.lock().unwrap();
             let task = locked.tasks(&root_id).unwrap().create_authoring_with_id(
-                &id(), "Own task", "Own canonical content", &[], None, None, None,
+                &id(), "Own task", "Own canonical content", &[], None, (None, None),
             ).unwrap();
             let sibling = locked.tasks(&root_id).unwrap().create_authoring_with_id(
-                &id(), "Sibling task", "Other canonical content", &[], None, None, None,
+                &id(), "Sibling task", "Other canonical content", &[], None, (None, None),
             ).unwrap();
             drop(locked);
             let mut worker = new_run(&id(), "task-job-auth", RunKind::Worker,
-                "Worker".into(), &root_id, Some(root_id.clone()), Some(task.task_id.clone()), 1);
+                "Worker".into(), &root_id, RunLineage { parent_run_id: Some(root_id.clone()), task_id: Some(task.task_id.clone()) }, 1);
             worker.stage = RunStage::Working;
             worker.assignment_generation = Some(1);
             worker.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
@@ -522,7 +520,7 @@ mod tests {
         fn actor(&mut self, index: usize, role: JobRole) -> Actor {
             // These actors are already registered, not merely staged bootstrap credentials.
             let auth = credentials::test_job_auth(&mut self.state, index, role);
-            Actor::Agent(AgentCaller {
+            Actor::Agent(Box::new(AgentCaller {
                 auth,
                 conversation: Some(self.state.runs[index].attachment.as_ref().unwrap().conversation.clone().unwrap()),
                 assignment_generation: self.state.runs[index].assignment_generation,
@@ -530,7 +528,7 @@ mod tests {
                 workspace_id: String::new(), tab_id: String::new(), pane_id: String::new(),
                 boot_id: None, terminal_id: None, native_session_id: None,
                 actual_agent_kind: None, process: None,
-            })
+            }))
         }
 
         fn content(&self, actor: &Actor, index: usize, task: &Task) -> Result<(), InspectionError> {
@@ -698,7 +696,7 @@ mod tests {
             &fixture.state.runs[0].run_id).is_err());
         let other_id = id();
         let mut other = new_run(&other_id, "task-job-auth", RunKind::Adopted,
-            "Other root".into(), &other_id, None, None, 1);
+            "Other root".into(), &other_id, RunLineage::default(), 1);
         other.stage = RunStage::Active;
         fixture.state.runs.push(other);
         assert!(task_root_authority(&fixture.state, &root, Some(0), "task-job-auth", &other_id).is_err());

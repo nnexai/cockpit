@@ -326,7 +326,8 @@ mod tests {
         CheckoutIdentity { key: key.into(), path: path.into(), directory_identity: DirectoryIdentity { device: "1".into(), inode: "2".into() }, git: None }
     }
     fn worker(state: &mut OrchestrationState, id: &str) -> AttachmentReference {
-        let run = super::super::new_run(id, "session", RunKind::Worker, id.into(), "root", Some("root".into()), Some("task".into()), 1);
+        let run = super::super::new_run(id, "session", RunKind::Worker, id.into(), "root",
+            super::super::RunLineage { parent_run_id: Some("root".into()), task_id: Some("task".into()) }, 1);
         let reference = AttachmentReference { run_id: id.into(), attachment_id: run.attachment.as_ref().unwrap().attachment_id.clone(), attachment_epoch: 1 };
         state.runs.push(run);
         reference
@@ -432,7 +433,8 @@ mod tests {
         use cockpit_protocol::orchestration::{NativeProcessIdentity, RunLocation, RunStage, DispatchStep};
         let mut original = OrchestrationState::default();
         let id = Uuid::new_v4().to_string();
-        let mut root = super::super::new_run(&id, "session", RunKind::Supervisor, "Root".into(), &id, None, None, 1);
+        let mut root = super::super::new_run(&id, "session", RunKind::Supervisor, "Root".into(), &id,
+            super::super::RunLineage::default(), 1);
         root.stage = RunStage::Active;
         let attachment = root.attachment.as_mut().unwrap();
         attachment.state = AttachmentState::Disconnected;

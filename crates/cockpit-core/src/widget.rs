@@ -204,14 +204,13 @@ impl WidgetService {
                 "owner HTML byte limit reached",
             ));
         }
-        if live_index.is_none() {
-            if existing.is_some_and(|tab| tab.live.len() >= WIDGET_MAX_LIVE_PER_TAB) {
+        if live_index.is_none()
+            && existing.is_some_and(|tab| tab.live.len() >= WIDGET_MAX_LIVE_PER_TAB) {
                 return Err(InspectionError::new(
                     "widget_limit",
                     "tab already has eight live widgets",
                 ));
             }
-        }
         let title = request
             .title
             .as_deref()

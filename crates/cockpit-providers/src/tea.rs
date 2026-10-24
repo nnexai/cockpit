@@ -115,8 +115,7 @@ impl TeaSourceProvider {
     ) -> Result<(Value, Option<String>), InspectionError> {
         let review: Value = serde_json::from_slice(
             &self
-                .command(&vec![
-                    "pulls".into(),
+                .command(&["pulls".into(),
                     index.to_string(),
                     "--output".into(),
                     "json".into(),
@@ -125,8 +124,7 @@ impl TeaSourceProvider {
                     "--repo".into(),
                     repo.into(),
                     "--login".into(),
-                    self.login.clone(),
-                ])
+                    self.login.clone()])
                 .await?,
         )
         .map_err(|_| {
@@ -159,8 +157,7 @@ impl TeaSourceProvider {
     ) -> Result<(Issue, Option<String>), InspectionError> {
         let issue: Issue = serde_json::from_slice(
             &self
-                .command(&vec![
-                    "issues".into(),
+                .command(&["issues".into(),
                     index.to_string(),
                     "--output".into(),
                     "json".into(),
@@ -169,8 +166,7 @@ impl TeaSourceProvider {
                     "--repo".into(),
                     repo.into(),
                     "--login".into(),
-                    self.login.clone(),
-                ])
+                    self.login.clone()])
                 .await?,
         )
         .map_err(|_| {
@@ -215,7 +211,7 @@ impl TeaSourceProvider {
                     ])
                     .await?,
             )?;
-            let full = page_comments.len() == COMMENTS_PER_PAGE as usize;
+            let full = page_comments.len() == COMMENTS_PER_PAGE;
             comments.extend(page_comments);
             if !full {
                 break;
@@ -262,7 +258,7 @@ impl TeaSourceProvider {
                     "Tea pull-request comment JSON did not match the verified contract",
                 )
             })?;
-            let full = page_comments.len() == COMMENTS_PER_PAGE as usize;
+            let full = page_comments.len() == COMMENTS_PER_PAGE;
             comments.extend(page_comments);
             if !full {
                 break;
@@ -291,8 +287,7 @@ impl TeaSourceProvider {
     ) -> Result<Vec<Value>, InspectionError> {
         let review_comments: Vec<Value> = serde_json::from_slice(
             &self
-                .command(&vec![
-                    "pulls".into(),
+                .command(&["pulls".into(),
                     "review-comments".into(),
                     index.to_string(),
                     "--output".into(),
@@ -302,8 +297,7 @@ impl TeaSourceProvider {
                     "--repo".into(),
                     repo.into(),
                     "--login".into(),
-                    self.login.clone(),
-                ])
+                    self.login.clone()])
                 .await?,
         )
         .map_err(|_| {
@@ -322,8 +316,7 @@ impl TeaSourceProvider {
         index: u64,
         review: Value,
         source_url: Option<String>,
-        comments: Vec<Value>,
-        review_comments: Vec<Value>,
+        (comments, review_comments): (Vec<Value>, Vec<Value>),
     ) -> Result<SourceAsset, InspectionError> {
         let TeaReviewRendering {
             title,
@@ -359,13 +352,15 @@ impl TeaSourceProvider {
             }),
             fields: issue_fields(
                 item_type,
-                Some(status),
-                value_string(&review, &["priority"]),
-                assignee,
-                author,
-                created,
-                updated,
-                comment_count,
+                IssueFieldValues {
+                    status: Some(status),
+                    priority: value_string(&review, &["priority"]),
+                    assignee,
+                    author,
+                    created,
+                    updated,
+                    comment_count,
+                },
             ),
             attachments: Vec::new(),
         })
@@ -410,13 +405,15 @@ impl TeaSourceProvider {
             }),
             fields: issue_fields(
                 item_type,
-                Some(status.unwrap_or_else(|| "open".into())),
-                issue.priority,
-                assignee,
-                Some(author.unwrap_or_else(|| "Unknown".into())),
-                created,
-                updated,
-                comment_count,
+                IssueFieldValues {
+                    status: Some(status.unwrap_or_else(|| "open".into())),
+                    priority: issue.priority,
+                    assignee,
+                    author: Some(author.unwrap_or_else(|| "Unknown".into())),
+                    created,
+                    updated,
+                    comment_count,
+                },
             ),
             attachments: Vec::new(),
         })
@@ -430,8 +427,7 @@ impl TeaSourceProvider {
     ) -> Result<TeaItem, InspectionError> {
         let wiki: Value = serde_json::from_slice(
             &self
-                .command(&vec![
-                    "wiki".into(),
+                .command(&["wiki".into(),
                     "view".into(),
                     page.into(),
                     "--output".into(),
@@ -439,8 +435,7 @@ impl TeaSourceProvider {
                     "--repo".into(),
                     repo.into(),
                     "--login".into(),
-                    self.login.clone(),
-                ])
+                    self.login.clone()])
                 .await?,
         )
         .map_err(|_| {
@@ -478,9 +473,11 @@ impl TeaSourceProvider {
         }
         Ok(TeaItem::Wiki {
             wiki,
-            source_url,
-            title,
-            body,
+            content: WikiContent {
+                source_url,
+                title,
+                body,
+            },
         })
     }
 
@@ -491,7 +488,7 @@ impl TeaSourceProvider {
         page: &str,
     ) -> Result<String, InspectionError> {
         let source_revision = if let Some(revision) =
-            value_string(&wiki, &["sha", "updated"]).filter(|value| !value.is_empty())
+            value_string(wiki, &["sha", "updated"]).filter(|value| !value.is_empty())
         {
             revision
         } else {
@@ -542,11 +539,14 @@ impl TeaSourceProvider {
         request: &SourceFetchRequest,
         repo: String,
         page: String,
-        source_url: String,
-        title: String,
-        body: String,
+        content: WikiContent,
         source_revision: String,
     ) -> SourceAsset {
+        let WikiContent {
+            source_url,
+            title,
+            body,
+        } = content;
         SourceAsset {
             source: SourceRef {
                 provider_id: self.provider_id.clone(),
@@ -730,8 +730,7 @@ fn text_field(key: &str, value: impl Into<String>) -> FrontmatterField {
     }
 }
 
-fn issue_fields(
-    item_type: &str,
+struct IssueFieldValues {
     status: Option<String>,
     priority: Option<String>,
     assignee: Option<String>,
@@ -739,7 +738,18 @@ fn issue_fields(
     created: Option<String>,
     updated: Option<String>,
     comment_count: usize,
-) -> Vec<FrontmatterField> {
+}
+
+fn issue_fields(item_type: &str, values: IssueFieldValues) -> Vec<FrontmatterField> {
+    let IssueFieldValues {
+        status,
+        priority,
+        assignee,
+        author,
+        created,
+        updated,
+        comment_count,
+    } = values;
     let mut fields = vec![text_field("item_type", item_type)];
     for (key, value) in [
         ("status", status.map(|value| status_value(&value))),
@@ -791,7 +801,7 @@ fn frontmatter_timestamp(value: &str) -> String {
     let mut value = value.to_owned();
     if let Some(dot) = value.find('.') {
         let suffix = value[dot..]
-            .find(|character| matches!(character, '+' | '-' | 'Z'))
+            .find(['+', '-', 'Z'])
             .map(|offset| dot + offset)
             .unwrap_or(value.len());
         value.replace_range(dot..suffix, "");
@@ -800,7 +810,8 @@ fn frontmatter_timestamp(value: &str) -> String {
         .get(19..)
         .and_then(|suffix| suffix.find(['+', '-']).map(|offset| offset + 19))
         .unwrap_or(value.len());
-    if value[zone..].len() == 5 && value[zone..].as_bytes()[1..].iter().all(u8::is_ascii_digit) {
+    let tail = &value.as_bytes()[zone..];
+    if tail.len() == 5 && tail[1..].iter().all(u8::is_ascii_digit) {
         value.insert(zone + 3, ':');
     }
     value
@@ -1144,15 +1155,15 @@ fn append_review_metadata(body: &mut String, review: &Value) -> Result<(), Inspe
         MAX_COMMENT_BYTES,
     )?;
     for (label, value) in [
-        ("Base", value_reference(&review, "base")),
+        ("Base", value_reference(review, "base")),
         (
             "Base commit",
-            value_string(&review, &["base_commit", "base-commit"]),
+            value_string(review, &["base_commit", "base-commit"]),
         ),
-        ("Head", value_reference(&review, "head")),
+        ("Head", value_reference(review, "head")),
         (
             "Head commit",
-            value_string(&review, &["head_commit", "head-commit"]),
+            value_string(review, &["head_commit", "head-commit"]),
         ),
     ] {
         if let Some(value) = value {
@@ -1206,7 +1217,7 @@ fn render_review(
     comments: Vec<Value>,
     review_comments: &[Value],
 ) -> Result<TeaReviewRendering, InspectionError> {
-    let title = value_string(&review, &["title"]).ok_or_else(|| {
+    let title = value_string(review, &["title"]).ok_or_else(|| {
         InspectionError::new("source_provider_contract", "Tea pull request has no title")
     })?;
     let item_type = "Pull request";
@@ -1215,7 +1226,7 @@ fn render_review(
     } else if review.get("merged").and_then(Value::as_bool) == Some(true) {
         "merged".into()
     } else {
-        status_value(&value_string(&review, &["state"]).unwrap_or_else(|| "open".into()))
+        status_value(&value_string(review, &["state"]).unwrap_or_else(|| "open".into()))
     };
     let author = review
         .get("user")
@@ -1225,15 +1236,15 @@ fn render_review(
         .get("assignees")
         .or_else(|| review.get("assignee"))
         .and_then(|value| person_name(Some(value)));
-    let created = value_string(&review, &["created", "created_at"]);
-    let updated = value_string(&review, &["updated", "updated_at"]);
+    let created = value_string(review, &["created", "created_at"]);
+    let updated = value_string(review, &["updated", "updated_at"]);
     let comment_count = comments.len();
     let status_line = capitalize_status(&status);
     let mut summary = vec![format!("**{item_type}**"), format!("**{status_line}**")];
     if let Some(author) = &author {
         summary.push(format!("Author {author}"));
     }
-    if let Some(priority) = value_string(&review, &["priority"]) {
+    if let Some(priority) = value_string(review, &["priority"]) {
         summary.push(format!("Priority {priority}"));
     }
     summary.push(assignee.as_deref().map_or_else(
@@ -1241,7 +1252,7 @@ fn render_review(
         |assignee| format!("Assignee {assignee}"),
     ));
     let mut body = format!("{}\n", summary.join(" · "));
-    let description = demote_headings(&value_string(&review, &["body"]).unwrap_or_default(), 3);
+    let description = demote_headings(&value_string(review, &["body"]).unwrap_or_default(), 3);
     if !description.trim().is_empty() {
         append_bounded(&mut body, "\n## Description\n\n", MAX_COMMENT_BYTES)?;
         append_bounded(&mut body, &description, MAX_COMMENT_BYTES)?;
@@ -1260,14 +1271,18 @@ fn render_review(
     })
 }
 
+pub(crate) struct WikiContent {
+    source_url: String,
+    title: String,
+    body: String,
+}
+
 pub(crate) enum TeaItem {
-    Issue(Issue, Option<String>),
+    Issue(Box<Issue>, Option<String>),
     Review(Value, Option<String>),
     Wiki {
         wiki: Value,
-        source_url: String,
-        title: String,
-        body: String,
+        content: WikiContent,
     },
 }
 
@@ -1300,7 +1315,7 @@ impl Forge for TeaSourceProvider {
         match kind {
             ArtifactKind::Issue(index) => {
                 let (issue, url) = self.fetch_issue(request, repo, *index).await?;
-                Ok(TeaItem::Issue(issue, url))
+                Ok(TeaItem::Issue(Box::new(issue), url))
             }
             ArtifactKind::Review(index) => {
                 let (review, url) = self.fetch_review(request, repo, *index).await?;
@@ -1343,23 +1358,18 @@ impl Forge for TeaSourceProvider {
         let (repo, kind) = identity;
         match (kind, item, comments) {
             (ArtifactKind::Issue(_), TeaItem::Issue(issue, url), TeaComments::Issue(comments)) => {
-                self.assemble_issue(request, repo, issue, url, comments)
+                self.assemble_issue(request, repo, *issue, url, comments)
             }
             (
                 ArtifactKind::Review(index),
                 TeaItem::Review(review, url),
                 TeaComments::Review(comments, positions),
-            ) => self.assemble_review(request, repo, index, review, url, comments, positions),
+            ) => self.assemble_review(request, repo, index, review, url, (comments, positions)),
             (
                 ArtifactKind::Wiki(page),
-                TeaItem::Wiki {
-                    source_url,
-                    title,
-                    body,
-                    ..
-                },
+                TeaItem::Wiki { content, .. },
                 TeaComments::Wiki(revision),
-            ) => Ok(self.assemble_wiki(request, repo, page, source_url, title, body, revision)),
+            ) => Ok(self.assemble_wiki(request, repo, page, content, revision)),
             _ => unreachable!("comments belong to the fetched item kind"),
         }
     }
@@ -1391,8 +1401,7 @@ impl SourceProvider for TeaSourceProvider {
             ArtifactKind::Issue(index) => {
                 let issue: Issue = serde_json::from_slice(
                     &self
-                        .command(&vec![
-                            "issues".into(),
+                        .command(&["issues".into(),
                             index.to_string(),
                             "--output".into(),
                             "json".into(),
@@ -1401,8 +1410,7 @@ impl SourceProvider for TeaSourceProvider {
                             "--repo".into(),
                             repo,
                             "--login".into(),
-                            self.login.clone(),
-                        ])
+                            self.login.clone()])
                         .await?,
                 )
                 .map_err(|_| {
@@ -1430,8 +1438,7 @@ impl SourceProvider for TeaSourceProvider {
             ArtifactKind::Review(index) => {
                 let review: Value = serde_json::from_slice(
                     &self
-                        .command(&vec![
-                            "pulls".into(),
+                        .command(&["pulls".into(),
                             index.to_string(),
                             "--output".into(),
                             "json".into(),
@@ -1440,8 +1447,7 @@ impl SourceProvider for TeaSourceProvider {
                             "--repo".into(),
                             repo,
                             "--login".into(),
-                            self.login.clone(),
-                        ])
+                            self.login.clone()])
                         .await?,
                 )
                 .map_err(|_| {

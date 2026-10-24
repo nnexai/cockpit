@@ -619,7 +619,7 @@ fn encode_client_message(message: &ClientMessage) -> io::Result<Vec<u8>> {
             cell_height_px,
             pixel_mouse,
         } => bincode::serde::encode_to_vec(
-            &(
+            (
                 0_u32,
                 version,
                 cols,
@@ -630,7 +630,7 @@ fn encode_client_message(message: &ClientMessage) -> io::Result<Vec<u8>> {
             ),
             config,
         ),
-        ClientMessage::Input { data } => bincode::serde::encode_to_vec(&(1_u32, data), config),
+        ClientMessage::Input { data } => bincode::serde::encode_to_vec((1_u32, data), config),
         ClientMessage::Resize {
             cols,
             rows,
@@ -638,7 +638,7 @@ fn encode_client_message(message: &ClientMessage) -> io::Result<Vec<u8>> {
             cell_height_px,
             pixel_mouse,
         } => bincode::serde::encode_to_vec(
-            &(
+            (
                 3_u32,
                 cols,
                 rows,
@@ -648,7 +648,7 @@ fn encode_client_message(message: &ClientMessage) -> io::Result<Vec<u8>> {
             ),
             config,
         ),
-        ClientMessage::Detach => bincode::serde::encode_to_vec(&4_u32, config),
+        ClientMessage::Detach => bincode::serde::encode_to_vec(4_u32, config),
         ClientMessage::AttachScroll {
             source,
             direction,
@@ -657,11 +657,11 @@ fn encode_client_message(message: &ClientMessage) -> io::Result<Vec<u8>> {
             row,
             modifiers,
         } => bincode::serde::encode_to_vec(
-            &(6_u32, source, direction, lines, column, row, modifiers),
+            (6_u32, source, direction, lines, column, row, modifiers),
             config,
         ),
         ClientMessage::ControlTerminal { target, takeover } => {
-            bincode::serde::encode_to_vec(&(8_u32, target, takeover), config)
+            bincode::serde::encode_to_vec((8_u32, target, takeover), config)
         }
         ClientMessage::AttachMouse {
             kind,
@@ -670,7 +670,7 @@ fn encode_client_message(message: &ClientMessage) -> io::Result<Vec<u8>> {
             modifiers,
             lines,
         } => bincode::serde::encode_to_vec(
-            &(16_u32, kind, position, geometry, modifiers, lines),
+            (16_u32, kind, position, geometry, modifiers, lines),
             config,
         ),
     };
@@ -829,7 +829,7 @@ mod tests {
     fn terminal_frame(seq: u64, full: bool, bytes: &[u8]) -> Vec<u8> {
         framed(
             bincode::serde::encode_to_vec(
-                &(1_u32, seq, 80_u16, 24_u16, full, bytes),
+                (1_u32, seq, 80_u16, 24_u16, full, bytes),
                 bincode::config::standard(),
             )
             .unwrap(),

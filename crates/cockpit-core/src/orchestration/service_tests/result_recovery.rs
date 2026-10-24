@@ -356,7 +356,8 @@ fn nested_reports_and_question_pointers_wake_root_once_without_forwarding_subage
     let original = fixture.run(&run_id);
     let mut stale = worker;
     caller_mut(&mut stale).auth.attachment_epoch += 1;
-    for actor in [&stale] {
+    {
+        let actor = &stale;
         let action = report(ReportKind::NeedsInput, None, None);
         let OrchestrationAction::Report { message_id, .. } = &action else {
             unreachable!()

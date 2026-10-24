@@ -333,9 +333,11 @@ fn no_extension_context_registration_uses_private_capability_without_live_herdr(
     let run_id = "00000000-0000-4000-8000-000000000003";
     let credential_id = "00000000-0000-4000-8000-000000000001";
     let attachment_id = "00000000-0000-4000-8000-000000000002";
-    let mut launch = cockpit_protocol::projects::OrchestrationConfiguration::default();
-    launch.harness_kind = "other".into();
-    launch.command = "other".into();
+    let launch = cockpit_protocol::projects::OrchestrationConfiguration {
+        harness_kind: "other".into(),
+        command: "other".into(),
+        ..Default::default()
+    };
     let run = serde_json::json!({
         "session_id":"physical", "brief":"", "run_id":run_id, "kind":"supervisor",
         "label":"neutral", "root_id":run_id, "attempt":1, "assignment_generation":null,

@@ -7,6 +7,12 @@ use cockpit_protocol::library::*;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, io::{Read, Write}, path::Path, sync::Arc};
 
+/// What a save asks the attachment stage to download.
+pub(super) struct AttachmentIntent<'a> {
+    pub(super) download_all: bool,
+    pub(super) request: Option<&'a LibraryAttachmentRequest>,
+}
+
 fn io(e: std::io::Error) -> InspectionError { error("library_unavailable", e.to_string()) }
 fn unsafe_download() -> InspectionError {
     error("source_capability_unavailable", "the provider cannot download attachments safely")
@@ -117,9 +123,10 @@ impl LibraryService {
 
     pub(super) async fn prepare_attachments(
         &self, store: &Arc<Store>, operation: &str, asset: &mut SourceAsset,
-        old: Option<&LibraryIndexEntry>, download_all: bool, request: Option<&LibraryAttachmentRequest>,
+        old: Option<&LibraryIndexEntry>, intent: AttachmentIntent<'_>,
         confirmed: Option<&[LibraryConflictFile]>,
     ) -> Result<Option<Prepared>, InspectionError> {
+        let AttachmentIntent { download_all, request } = intent;
         let stage = store.stage()?;
         let mut prepared = Prepared { stage, files: vec![], partial: false, reason: None };
         let mut ids = BTreeSet::new();
@@ -221,7 +228,7 @@ impl LibraryService {
                     cancelled?;
                     return Ok(None);
                 }
-                result = self.sources.download_attachment(&asset.source.provider_id, &asset.source.resource_type, &asset.source.canonical_id, &attachment, &[], &dest, &dest_path, budget) => result,
+                result = self.sources.download_attachment(&asset.source, &attachment, &[], &dest, &dest_path, budget) => result,
             };
             if operations::cancelled(store, operation)? { return Ok(None); }
             let actual = super::folder_io::open_absolute_dir_nofollow(&dest_path).map_err(|_| unsafe_download())?;

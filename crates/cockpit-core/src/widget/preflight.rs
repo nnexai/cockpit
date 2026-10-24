@@ -56,11 +56,9 @@ pub fn sanitize(input: &str) -> Result<Preflight, InspectionError> {
         if let NodeData::Element {
             template_contents, ..
         } = &node.data
-        {
-            if let Some(contents) = template_contents.borrow().as_ref() {
+            && let Some(contents) = template_contents.borrow().as_ref() {
                 pending.push(contents.clone());
             }
-        }
     }
     // Fixed, deduplicated diagnostics never echo arbitrary author text into
     // terminal output or Cockpit chrome.

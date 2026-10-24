@@ -11,8 +11,8 @@ pub(super) fn parse_issue_details(
         .and_then(Value::as_str)
         .ok_or_else(|| contract_error("GitLab issue has no author username"))?
         .to_owned();
-    let state = required_string(&value, "state", "GitLab issue")?;
-    required_string_array(&value, "labels", "GitLab issue")?;
+    let state = required_string(value, "state", "GitLab issue")?;
+    required_string_array(value, "labels", "GitLab issue")?;
     let mut assignees = value
         .get("assignees")
         .and_then(Value::as_array)
@@ -38,8 +38,8 @@ pub(super) fn parse_issue_details(
         }
         None => return Err(contract_error("GitLab issue has no milestone field")),
     }
-    let created_at = required_string(&value, "created_at", "GitLab issue")?;
-    let updated_at = required_string(&value, "updated_at", "GitLab issue")?;
+    let created_at = required_string(value, "created_at", "GitLab issue")?;
+    let updated_at = required_string(value, "updated_at", "GitLab issue")?;
     let description = match value.get("description") {
         Some(Value::Null) => String::new(),
         Some(Value::String(description)) => description.clone(),
@@ -79,13 +79,13 @@ pub(super) fn parse_review_refs(
     value: &Value,
     project: &ProjectFacts,
 ) -> Result<(String, Option<String>, Option<String>), InspectionError> {
-    let target_branch = required_string(&value, "target_branch", "GitLab merge request")?;
+    let target_branch = required_string(value, "target_branch", "GitLab merge request")?;
     if !valid_branch(&target_branch) {
         return Err(contract_error(
             "GitLab merge request target branch is invalid",
         ));
     }
-    let source_branch = optional_string(&value, "source_branch", "GitLab merge request")?;
+    let source_branch = optional_string(value, "source_branch", "GitLab merge request")?;
     if source_branch
         .as_deref()
         .is_some_and(|branch| !valid_branch(branch))
@@ -104,15 +104,14 @@ pub(super) fn parse_review_refs(
                 .and_then(Value::as_str)
         })
         .map(str::to_owned);
-    if let Some(sha) = &head_sha {
-        if !valid_commit(sha) {
+    if let Some(sha) = &head_sha
+        && !valid_commit(sha) {
             return Err(contract_error(
                 "GitLab merge request head commit is invalid",
             ));
         }
-    }
-    let target_project_id = value_u64(&value, "target_project_id")
-        .or_else(|| value_u64(&value, "project_id"))
+    let target_project_id = value_u64(value, "target_project_id")
+        .or_else(|| value_u64(value, "project_id"))
         .ok_or_else(|| contract_error("GitLab merge request has no target project ID"))?;
     if target_project_id != project.id {
         return Err(identity_error(
@@ -127,7 +126,7 @@ pub(super) fn parse_discussion(
     review_url: &str,
     notes: &mut Vec<ReviewNote>,
 ) -> Result<(), InspectionError> {
-    let discussion_id = required_string(&discussion, "id", "GitLab discussion")?;
+    let discussion_id = required_string(discussion, "id", "GitLab discussion")?;
     let raw_notes = discussion
         .get("notes")
         .and_then(Value::as_array)
@@ -168,18 +167,18 @@ pub(super) fn parse_comment(
     value: &Value,
     issue_url: &str,
 ) -> Result<CommentFacts, InspectionError> {
-    let id = value_u64(&value, "id")
+    let id = value_u64(value, "id")
         .ok_or_else(|| contract_error("GitLab issue comment has no numeric ID"))?;
-    let body = required_string(&value, "body", "GitLab issue comment")?;
+    let body = required_string(value, "body", "GitLab issue comment")?;
     let author = value
         .get("author")
         .and_then(|author| author.get("username"))
         .and_then(Value::as_str)
         .ok_or_else(|| contract_error("GitLab issue comment has no author username"))?
         .to_owned();
-    let created_at = required_string(&value, "created_at", "GitLab issue comment")?;
-    let updated_at = required_string(&value, "updated_at", "GitLab issue comment")?;
-    let url = comment_url(issue_url, &value, id)?;
+    let created_at = required_string(value, "created_at", "GitLab issue comment")?;
+    let updated_at = required_string(value, "updated_at", "GitLab issue comment")?;
+    let url = comment_url(issue_url, value, id)?;
     Ok(CommentFacts {
         id,
         author,
@@ -197,7 +196,7 @@ pub(super) fn review_diagnostics(
     approvals_complete: bool,
 ) -> Vec<ProjectDiagnostic> {
     let mut diagnostics = Vec::new();
-    if review.source_branch.as_deref().map_or(true, str::is_empty) {
+    if review.source_branch.as_deref().is_none_or(str::is_empty) {
         diagnostics.push(review_diagnostic(
             "source_branch_unavailable",
             "GitLab merge request source branch is unavailable",
@@ -207,7 +206,7 @@ pub(super) fn review_diagnostics(
     if review
         .head_sha
         .as_deref()
-        .map_or(true, |sha| !valid_commit(sha))
+        .is_none_or(|sha| !valid_commit(sha))
     {
         diagnostics.push(review_diagnostic(
             "source_commit_unavailable",
@@ -573,7 +572,7 @@ pub(super) fn rfc3339_seconds(timestamp: &str) -> String {
     let mut value = timestamp.to_owned();
     if let Some(dot) = value.find('.') {
         let suffix = value[dot..]
-            .find(|character| matches!(character, '+' | '-' | 'Z'))
+            .find(['+', '-', 'Z'])
             .map(|offset| dot + offset)
             .unwrap_or(value.len());
         value.replace_range(dot..suffix, "");

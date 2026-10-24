@@ -81,13 +81,11 @@ fn parse_ts_meta(input: ParseStream<'_>) -> syn::Result<Meta> {
 }
 
 fn string_value(meta: &Meta, owner: &str) -> Result<String, String> {
-    if let Meta::NameValue(value) = meta {
-        if let Expr::Lit(lit) = &value.value {
-            if let syn::Lit::Str(value) = &lit.lit {
+    if let Meta::NameValue(value) = meta
+        && let Expr::Lit(lit) = &value.value
+            && let syn::Lit::Str(value) = &lit.lit {
                 return Ok(value.value());
             }
-        }
-    }
     Err(format!("{owner}: expected a string attribute value"))
 }
 
@@ -103,13 +101,12 @@ pub(super) fn check_name(
         ));
     }
     let ts = ts_attrs(attrs, owner)?;
-    if let Some(name) = ts.rename {
-        if name != de {
+    if let Some(name) = ts.rename
+        && name != de {
             return Err(format!(
                 "{owner}: ts rename {name:?} differs from serde name {de:?}"
             ));
         }
-    }
     for (key, ts_rule) in [
         ("rename_all", ts.rename_all),
         ("rename_all_fields", ts.rename_all_fields),

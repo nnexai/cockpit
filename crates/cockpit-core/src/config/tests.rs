@@ -856,8 +856,10 @@ fn orchestration_configuration_rejects_removed_extension_and_model_fields() {
         assert!(toml::from_str::<OrchestrationConfiguration>(value).is_err());
     }
     for value in ["", "bad\nharness", &"x".repeat(513)] {
-        let mut configuration = OrchestrationConfiguration::default();
-        configuration.harness_kind = value.into();
+        let configuration = OrchestrationConfiguration {
+            harness_kind: value.into(),
+            ..OrchestrationConfiguration::default()
+        };
         assert_eq!(validate_orchestration(&configuration).unwrap_err().code, "invalid_orchestration_harness_kind");
     }
 }

@@ -16,13 +16,13 @@ impl Fixture {
         let service = OrchestrationService { store, revision, notifications: std::sync::Mutex::new(None), launch_config: Default::default() };
         let locked = service.store.lock().unwrap();
         let mut state = locked.read().unwrap();
-        let mut root = new_run(ROOT, SESSION, RunKind::Supervisor, "root".into(), ROOT, None, None, 1);
+        let mut root = new_run(ROOT, SESSION, RunKind::Supervisor, "root".into(), ROOT, RunLineage::default(), 1);
         root.stage = RunStage::Active;
         state.runs.push(root);
         locked.save(&mut state).unwrap();
         let task_id = uuid::Uuid::new_v4().to_string();
         let task = locked.tasks(ROOT).unwrap().create_authoring_with_id(
-            &task_id, "Retire exact worker", "Preserve files", &[], None, None, None,
+            &task_id, "Retire exact worker", "Preserve files", &[], None, (None, None),
         ).unwrap();
         let mut worker = worker();
         worker.task_id = Some(task.task_id.clone());
@@ -89,7 +89,7 @@ impl Fixture {
 impl Drop for Fixture { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.path); } }
 
 fn worker() -> Run {
-    let mut run = new_run("12345678-1234-4234-8234-123456789abd", SESSION, RunKind::Worker, "12345678-1234-4234-8234-123456789abd".into(), ROOT, Some(ROOT.into()), None, 7);
+    let mut run = new_run("12345678-1234-4234-8234-123456789abd", SESSION, RunKind::Worker, "12345678-1234-4234-8234-123456789abd".into(), ROOT, RunLineage { parent_run_id: Some(ROOT.into()), task_id: None }, 7);
     run.stage = RunStage::Reported;
     run.assignment_generation = Some(1);
     run.cleanup_policy = Some(WorkerCleanupPolicy::OwnedWhenSafe);
@@ -294,7 +294,7 @@ fn operator_resolution_uses_current_revision_but_not_a_different_result() {
         OrchestrationAction::IntentResolve { intent_id: intent.intent_id, apply: false }).unwrap();
     fixture.mutate(&Actor::Operator(OperatorOrigin::Browser),
         OrchestrationAction::SendBack { run_id: fixture.run().run_id, text: "Report against the reviewed current scope".into() }).unwrap();
-    fixture.mutate(&Actor::Agent(fixture.caller()), OrchestrationAction::Report {
+    fixture.mutate(&Actor::Agent(Box::new(fixture.caller())), OrchestrationAction::Report {
         message_id: "fresh-result".into(), kind: ReportKind::Result, outcome: Some(ReportOutcome::Succeeded),
         summary: "Current non-code output".into(), plan: None,
         source_output: Some(SourceOutput::NonCode {
@@ -355,7 +355,7 @@ fn open_descendant_runs_block_close_and_closed_history_does_not() {
     let fixture = Fixture::new(); fixture.accept();
     fixture.edit(|s| {
         let child = new_run("child", SESSION, RunKind::Worker, "child".into(), ROOT,
-            Some(s.runs[1].run_id.clone()), None, 1);
+            RunLineage { parent_run_id: Some(s.runs[1].run_id.clone()), task_id: None }, 1);
         s.runs.push(child);
     });
     let run_id = fixture.run().run_id;
@@ -475,7 +475,7 @@ fn closed_worker_cannot_append_messages_or_register_again() {
         OrchestrationAction::Annotate { run_id: fixture.run().run_id, text: "late annotation".into() },
     ] {
         let before = std::fs::read(fixture.service.base().join("state.json")).unwrap();
-        assert!(fixture.mutate(&Actor::Agent(fixture.caller()), action.clone()).is_err(), "{action:?}");
+        assert!(fixture.mutate(&Actor::Agent(Box::new(fixture.caller())), action.clone()).is_err(), "{action:?}");
         assert_eq!(std::fs::read(fixture.service.base().join("state.json")).unwrap(), before);
     }
 }
@@ -784,7 +784,7 @@ fn replacement_retirement_uses_durable_root_authority_without_inventing_result_p
     assert!(matches!(record.state, RetirementState::Waiting { .. }));
     previous.retirement = Some(record.clone());
     let mut successor = new_run(&successor_id, SESSION, RunKind::Worker, "successor".into(),
-        ROOT, Some(ROOT.into()), previous.task_id.clone(), 8);
+        ROOT, RunLineage { parent_run_id: Some(ROOT.into()), task_id: previous.task_id.clone() }, 8);
     successor.assignment_generation = Some(2);
     let mut state = OrchestrationState { runs: vec![previous.clone(), successor],
         task_ownership: vec![TaskOwnership { root_id: ROOT.into(), task_id: previous.task_id.clone().unwrap(),

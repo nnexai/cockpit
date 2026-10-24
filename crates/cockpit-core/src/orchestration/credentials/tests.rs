@@ -114,8 +114,7 @@ impl Fixture {
         worker_record.conversation = worker.attachment.as_ref().unwrap().conversation.clone();
         let root_auth = read_job_auth(&root_path).unwrap();
         let worker_auth = read_job_auth(&worker_path).unwrap();
-        let mut state = OrchestrationState::default();
-        state.task_ownership = vec![TaskOwnership {
+        let task_ownership = vec![TaskOwnership {
             root_id: worker.root_id.clone(),
             task_id: worker.task_id.clone().unwrap(),
             generation: worker.assignment_generation.unwrap(),
@@ -126,9 +125,13 @@ impl Fixture {
             }),
             schedule: None,
         }];
-        state.runs = vec![root, worker];
-        state.credentials = vec![root_record, worker_record];
-        state.checkout_claims = vec![claim];
+        let state = OrchestrationState {
+            task_ownership,
+            runs: vec![root, worker],
+            credentials: vec![root_record, worker_record],
+            checkout_claims: vec![claim],
+            ..Default::default()
+        };
         Self { base, state, root_auth, worker_auth, worker_path }
     }
 

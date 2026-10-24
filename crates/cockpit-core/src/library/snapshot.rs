@@ -43,8 +43,7 @@ impl LibraryService {
                 }
             }
             let old = self.entry(store, &asset_id)?;
-            if old.is_some() && !request.refresh_existing && !request.download_attachments {
-                let saved = old.as_ref().expect("existing item");
+            if let Some(saved) = old.as_ref().filter(|_| !request.refresh_existing && !request.download_attachments) {
                 if !saved.summary.refs.contains(&LibraryItemRef::Manual) {
                     store.add_ref(&asset_id, LibraryItemRef::Manual)?;
                 }
@@ -170,11 +169,10 @@ impl LibraryService {
                 assignee: row.assignee.clone(),
             });
         }
-        if old.is_none() {
-            if let Some(reference) = reference {
+        if old.is_none()
+            && let Some(reference) = reference {
                 refs::insert_ref(&mut entry.summary, reference.clone());
             }
-        }
         Ok((entry, is_confluence))
     }
 }

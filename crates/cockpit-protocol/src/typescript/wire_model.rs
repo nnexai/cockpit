@@ -180,12 +180,11 @@ fn validate_container(container: &ast::Container<'_>, owner: &str) -> Result<(),
     )?;
     reject_default_path(container.attrs.default(), owner)?;
     let ts = attrs::ts_attrs(&container.original.attrs, owner)?;
-    if let Some(tag) = ts.tag {
-        if !matches!(container.attrs.tag(), attr::TagType::Internal { tag: serde_tag } if tag == *serde_tag)
+    if let Some(tag) = ts.tag
+        && !matches!(container.attrs.tag(), attr::TagType::Internal { tag: serde_tag } if tag == *serde_tag)
         {
             return Err(format!("{owner}: ts tag differs from serde tag"));
         }
-    }
     Ok(())
 }
 

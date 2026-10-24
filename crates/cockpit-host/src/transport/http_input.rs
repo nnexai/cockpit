@@ -14,6 +14,10 @@ use super::{
     guard::{valid_resource_id, valid_session_id},
 };
 
+type OpResult<T> = Result<T, OperationError>;
+type IdPair = (String, String);
+type JsonBody<T> = Result<Json<T>, JsonRejection>;
+
 #[derive(Clone, Copy)]
 pub struct Reject(pub &'static str, pub &'static str);
 
@@ -46,7 +50,7 @@ pub fn session(reject: Reject) -> impl FnOnce((Path<String>,)) -> Result<String,
 
 pub fn pair(
     reject: Reject,
-) -> impl FnOnce((Path<(String, String)>,)) -> Result<(String, String), OperationError> {
+) -> impl FnOnce((Path<IdPair>,)) -> OpResult<IdPair> {
     move |(Path((session, resource)),)| {
         if !valid_session_id(&session) || !valid_resource_id(&resource) {
             return Err(reject.error());
@@ -58,7 +62,7 @@ pub fn pair(
 /// Workspace operation ids are passed through: only the session path is checked.
 pub fn session_pair_path(
     reject: Reject,
-) -> impl FnOnce((Path<(String, String)>,)) -> Result<(String, String), OperationError> {
+) -> impl FnOnce((Path<IdPair>,)) -> OpResult<IdPair> {
     move |(Path((session, id)),)| {
         if !valid_session_id(&session) {
             return Err(reject.error());
@@ -77,7 +81,7 @@ pub fn body<T>(
 pub fn session_body<T>(
     path: Reject,
     body: Reject,
-) -> impl FnOnce((Path<String>, Result<Json<T>, JsonRejection>)) -> Result<(String, T), OperationError>
+) -> impl FnOnce((Path<String>, JsonBody<T>)) -> OpResult<(String, T)>
 {
     move |(Path(session), request)| {
         if !valid_session_id(&session) {
@@ -91,9 +95,7 @@ pub fn session_body<T>(
 pub fn pair_body<T>(
     path: Reject,
     body: Reject,
-) -> impl FnOnce(
-    (Path<(String, String)>, Result<Json<T>, JsonRejection>),
-) -> Result<(String, String, T), OperationError> {
+) -> impl FnOnce((Path<IdPair>, JsonBody<T>)) -> OpResult<(String, String, T)> {
     move |(Path((session, resource)), request)| {
         if !valid_session_id(&session) || !valid_resource_id(&resource) {
             return Err(path.error());
@@ -103,11 +105,11 @@ pub fn pair_body<T>(
     }
 }
 
-/// Space Git alone preserves an oversized-body 413 in its mapped rejection.
+/// Preserve an oversized-body 413 in a session request's mapped rejection.
 pub fn session_sized_body<T>(
     path: Reject,
     body: Reject,
-) -> impl FnOnce((Path<String>, Result<Json<T>, JsonRejection>)) -> Result<(String, T), OperationError>
+) -> impl FnOnce((Path<String>, JsonBody<T>)) -> OpResult<(String, T)>
 {
     move |(Path(session), request)| {
         if !valid_session_id(&session) {
@@ -158,7 +160,7 @@ pub fn mapped_query<T>(
 
 /// Default Json extraction already happened; operations own post-decode checks.
 pub fn session_json<T>()
--> impl FnOnce((Path<String>, Json<T>)) -> Result<(String, T), OperationError> {
+-> impl FnOnce((Path<String>, Json<T>)) -> OpResult<(String, T)> {
     |(Path(session), Json(value))| Ok((session, value))
 }
 

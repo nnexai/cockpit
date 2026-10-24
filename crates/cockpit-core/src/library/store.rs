@@ -116,6 +116,8 @@ struct Intent {
     move_inventory: Option<Vec<MarkerFile>>,
 }
 
+type IndexIdentity = (u64, u64, u64, Option<cap_std::time::SystemTime>);
+
 pub(crate) struct Store {
     pub path: PathBuf,
     pub root: Dir,
@@ -126,7 +128,7 @@ pub(crate) struct Store {
     journal: Dir,
     locks: Dir,
     max_items: usize,
-    index_cache: Mutex<Option<((u64, u64, u64, Option<cap_std::time::SystemTime>), Arc<Index>)>>,
+    index_cache: Mutex<Option<(IndexIdentity, Arc<Index>)>>,
     #[cfg(test)]
     pub fault: std::sync::Mutex<Option<&'static str>>,
     #[cfg(test)]
@@ -703,8 +705,8 @@ impl Store {
         } else {
             method
         };
-        if let Some(old) = &old {
-            if old.summary.kind != LibraryItemKind::FolderCopy {
+        if let Some(old) = &old
+            && old.summary.kind != LibraryItemKind::FolderCopy {
                 let owned = owned_roots(old);
                 for name in owned_roots(&entry) {
                     if exists(&target_root, &target_name)?
@@ -721,7 +723,6 @@ impl Store {
                     }
                 }
             }
-        }
         let id = Uuid::new_v4().to_string();
         let mut intent = Intent {
             schema: INTENT_SCHEMA,
@@ -746,11 +747,10 @@ impl Store {
         let result = self.apply_publication(
             &stage, &target_root, &target_name, &mut intent, &mut index,
         );
-        if let Err(e) = &result {
-            if e.code != "library_test_crash" {
+        if let Err(e) = &result
+            && e.code != "library_test_crash" {
                 self.recover()?;
             }
-        }
         result
     }
     pub fn remove(&self, id: &str, revision: &str) -> Result<(), InspectionError> {
@@ -993,11 +993,10 @@ impl Store {
             self.fault("move_index_commit")?;
             self.finish(&intent)
         })();
-        if let Err(error) = &result {
-            if error.code != "library_test_crash" {
+        if let Err(error) = &result
+            && error.code != "library_test_crash" {
                 self.recover()?;
             }
-        }
         result?;
         self.prune_empty(intent.source.as_deref().unwrap())?;
         Ok(moved_entry)

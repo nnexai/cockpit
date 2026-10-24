@@ -351,7 +351,7 @@ async fn identical_bytes_replace_when_content_kind_changes() {
         assert_eq!(summary.content.sha256, hash);
         assert_eq!(summary.change, WidgetChange::Replaced);
         assert!(
-            matches!(stream.events.try_recv().unwrap(), WidgetEvent::Upserted { widget, .. } if widget == summary)
+            matches!(stream.events.try_recv().unwrap(), WidgetEvent::Upserted { widget, .. } if *widget == summary)
         );
         let body = f
             .service
@@ -518,7 +518,7 @@ async fn identical_content_clears_only_a_retained_selection_through_replacement(
         assert_eq!(after.change, WidgetChange::Replaced);
         assert!(after.selection.is_none());
         assert!(
-            matches!(stream.events.try_recv().unwrap(), WidgetEvent::Upserted { widget, .. } if widget == after)
+            matches!(stream.events.try_recv().unwrap(), WidgetEvent::Upserted { widget, .. } if *widget == after)
         );
         assert_eq!(f.service.store.lock().html_bytes, html_bytes);
         assert_eq!(

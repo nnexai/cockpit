@@ -688,13 +688,13 @@ pub fn resolve_artifact(
             ));
         }
     };
-    return Ok(ProjectArtifact {
+    Ok(ProjectArtifact {
         provider_id: provider.id.clone(),
         kind: kind.into(),
         canonical_id,
         original_url: original_url.into(),
         canonical_url: parsed.to_string(),
-    });
+    })
 }
 
 /// Resolve the raw GitLab issue/work-item URL before URL normalization can
@@ -866,13 +866,13 @@ fn raw_url_path(value: &str) -> Option<&str> {
     let scheme_end = value.find("://")?;
     let authority_start = scheme_end + 3;
     let path_start = value[authority_start..]
-        .find(|character| matches!(character, '/' | '?' | '#'))
+        .find(['/', '?', '#'])
         .map(|offset| authority_start + offset)?;
     if value.as_bytes()[path_start] != b'/' {
         return None;
     }
     let path_end = value[path_start..]
-        .find(|character| matches!(character, '?' | '#'))
+        .find(['?', '#'])
         .map(|offset| path_start + offset)
         .unwrap_or(value.len());
     Some(&value[path_start..path_end])

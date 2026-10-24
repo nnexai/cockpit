@@ -254,18 +254,18 @@ impl GitlabSourceProvider {
         identity: &ResolvedIdentity,
         project: &ProjectFacts,
     ) -> Result<IssueFacts, InspectionError> {
-        let project_id = value_u64(&value, "project_id")
+        let project_id = value_u64(value, "project_id")
             .ok_or_else(|| contract_error("GitLab issue has no project ID"))?;
         if project_id != project.id {
             return Err(identity_error("GitLab returned a different issue project"));
         }
         let iid =
-            value_u64(&value, "iid").ok_or_else(|| contract_error("GitLab issue has no IID"))?;
+            value_u64(value, "iid").ok_or_else(|| contract_error("GitLab issue has no IID"))?;
         if iid != identity.iid {
             return Err(identity_error("GitLab returned a different issue IID"));
         }
-        let title = required_string(&value, "title", "GitLab issue")?;
-        let issue_type = required_string(&value, "issue_type", "GitLab issue")?;
+        let title = required_string(value, "title", "GitLab issue")?;
+        let issue_type = required_string(value, "issue_type", "GitLab issue")?;
         if issue_type != "issue" {
             return Err(unsupported_type_error(
                 "GitLab work-item URL is not an issue",
@@ -281,7 +281,7 @@ impl GitlabSourceProvider {
                 "GitLab returned a different issue reference",
             ));
         }
-        let web_url = required_string(&value, "web_url", "GitLab issue")?;
+        let web_url = required_string(value, "web_url", "GitLab issue")?;
         verify_issue_url(
             &self.base_url,
             &web_url,
@@ -366,7 +366,7 @@ impl GitlabSourceProvider {
         value: &Value,
         identity: &ResolvedIdentity,
     ) -> Result<ReviewDetails, InspectionError> {
-        let title = required_string(&value, "title", "GitLab merge request")?;
+        let title = required_string(value, "title", "GitLab merge request")?;
         let description = match value.get("description") {
             Some(Value::Null) => String::new(),
             Some(Value::String(description)) => description.clone(),
@@ -381,19 +381,19 @@ impl GitlabSourceProvider {
                 ));
             }
         };
-        let state = required_string(&value, "state", "GitLab merge request")?;
+        let state = required_string(value, "state", "GitLab merge request")?;
         let author = value
             .get("author")
             .and_then(|author| author.get("username"))
             .and_then(Value::as_str)
             .ok_or_else(|| contract_error("GitLab merge request has no author username"))?
             .to_owned();
-        let labels = required_string_array(&value, "labels", "GitLab merge request")?;
-        let assignees = username_array(&value, "assignees", "GitLab merge request")?;
-        let reviewers = username_array(&value, "reviewers", "GitLab merge request")?;
-        let created_at = required_string(&value, "created_at", "GitLab merge request")?;
-        let updated_at = required_string(&value, "updated_at", "GitLab merge request")?;
-        let web_url = required_string(&value, "web_url", "GitLab merge request")?;
+        let labels = required_string_array(value, "labels", "GitLab merge request")?;
+        let assignees = username_array(value, "assignees", "GitLab merge request")?;
+        let reviewers = username_array(value, "reviewers", "GitLab merge request")?;
+        let created_at = required_string(value, "created_at", "GitLab merge request")?;
+        let updated_at = required_string(value, "updated_at", "GitLab merge request")?;
+        let web_url = required_string(value, "web_url", "GitLab merge request")?;
         verify_review_url(
             &self.base_url,
             &web_url,
@@ -1275,7 +1275,7 @@ fn hex_digest(input: &[u8]) -> String {
 
 pub(crate) enum GitlabItem {
     Issue(ProjectFacts, IssueFacts),
-    Review(ProjectFacts, ReviewFacts),
+    Review(ProjectFacts, Box<ReviewFacts>),
 }
 
 pub(crate) enum GitlabComments {
@@ -1316,7 +1316,7 @@ impl Forge for GitlabSourceProvider {
         let project = self.fetch_project(identity, budget).await?;
         if identity.artifact.kind == "review" {
             let review = self.fetch_review(identity, &project, budget).await?;
-            Ok(GitlabItem::Review(project, review))
+            Ok(GitlabItem::Review(project, Box::new(review)))
         } else {
             let issue = self.fetch_issue(identity, &project, budget).await?;
             Ok(GitlabItem::Issue(project, issue))
@@ -1356,7 +1356,7 @@ impl Forge for GitlabSourceProvider {
                 self.assemble_issue(request, identity, issue, comments, complete, budget)
             }
             (GitlabItem::Review(_, review), GitlabComments::Review(comments)) => {
-                self.assemble_review(request, identity, review, comments, budget)
+                self.assemble_review(request, identity, *review, comments, budget)
             }
             _ => unreachable!("comments belong to the fetched item kind"),
         }

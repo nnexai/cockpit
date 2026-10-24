@@ -369,12 +369,14 @@ fn late_conversation_receipt_sync_keeps_one_original_effect_identity() {
     }
 }
 
+type Mutate = fn(&mut RetirementIdentity);
+
 #[test]
 fn receipt_joins_refuse_every_physical_difference_and_conflicting_conversation() {
     let creation = terminal_identity();
     let mut accepted = creation.clone();
     accepted.conversation = Some(ConversationIdentity { harness: "omp".into(), session_id: "late-chat".into() });
-    let changes: &[(&str, fn(&mut RetirementIdentity))] = &[
+    let changes: &[(&str, Mutate)] = &[
         ("attachment ID", |i| i.attachment_id = Some("other".into())),
         ("attachment absent", |i| i.attachment_id = None),
         ("attachment epoch", |i| i.attachment_epoch = Some(2)),
@@ -934,9 +936,8 @@ async fn terminal_capture_defers_preexec_and_stale_cache_then_preserves_exact_po
     child.0.stdin.as_mut().unwrap().write_all(b"go\n").unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     let postexec = loop {
-        if let Ok(fresh) = crate::process_identity::executable_identity(pid, start) {
-            if fresh != preexec { break fresh; }
-        }
+        if let Ok(fresh) = crate::process_identity::executable_identity(pid, start)
+            && fresh != preexec { break fresh; }
         assert!(Instant::now() < deadline, "private child did not exec");
         std::thread::sleep(Duration::from_millis(10));
     };

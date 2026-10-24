@@ -229,7 +229,7 @@ fn owner(
     let names = fields
         .iter()
         .map(|field| field.name.as_str())
-        .chain(tag.into_iter());
+        .chain(tag);
     writeln!(out.interfaces[6], "  {}: {};", quote(id), union(names)).unwrap();
     if let Some(tag) = tag {
         writeln!(out.interfaces[5], "  {}: {};", quote(id), quote(tag)).unwrap();

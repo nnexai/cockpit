@@ -131,7 +131,7 @@ fn digest_matches_revision(digest: &[u8], revision: &str) -> bool {
     revision.len() == digest.len() * 2
         && digest
             .iter()
-            .zip(revision.as_bytes().chunks_exact(2))
+            .zip(revision.as_bytes().as_chunks::<2>().0)
             .all(|(byte, pair)| {
                 pair[0] == HEX[(byte >> 4) as usize] && pair[1] == HEX[(byte & 15) as usize]
             })
@@ -232,11 +232,13 @@ impl<'a> TaskDocument<'a> {
 
     /// Graph validation and fresh actor authority belong to the locked core caller.
     /// Exact retries perform no append and therefore need not replay old graph fences.
+    /// `fences` is `(expected_doc_revision, source_revision)`.
     pub(crate) fn create_authoring_with_id(
         &self, task_id: &str, title: &str, description: &str,
         depends_on: &[String], follow_up_of: Option<&str>,
-        expected_doc_revision: Option<&str>, source_revision: Option<&str>,
+        fences: (Option<&str>, Option<&str>),
     ) -> Result<Task, InspectionError> {
+        let (expected_doc_revision, source_revision) = fences;
         self.require_lock()?;
         validate_authoring_creation(title, description)?;
         let task_id = validate_uuid(task_id)?.to_string();
@@ -274,11 +276,10 @@ impl<'a> TaskDocument<'a> {
         } else if expected_doc_revision.is_some_and(|revision| revision != self.doc_revision) {
             return Err(conflict());
         }
-        if let Some(source) = follow.as_deref() {
-            if source_revision != Some(self.task(source)?.task_revision.as_str()) {
+        if let Some(source) = follow.as_deref()
+            && source_revision != Some(self.task(source)?.task_revision.as_str()) {
                 return Err(conflict());
             }
-        }
         let mut append = String::new();
         if self.bytes.is_empty() { append.push_str("# Tasks\n\n"); }
         else if !self.bytes.ends_with(b"\n") { append.push_str(eol); }
@@ -1603,7 +1604,7 @@ mod tests {
         let description = format!(
             "Example\n```md\n<!-- cockpit-relations: depends_on={SOURCE} -->\n- [ ] Example <!-- cockpit-step: {STEP} -->\n```\n"
         );
-        let task = doc.create_authoring_with_id(TASK, "Examples", &description, &[], None, None, None).unwrap();
+        let task = doc.create_authoring_with_id(TASK, "Examples", &description, &[], None, (None, None)).unwrap();
         assert!(task.depends_on.is_empty());
         assert!(task.relations_diagnostic.is_none());
         assert!(task.steps.is_empty());
@@ -1675,35 +1676,35 @@ mod tests {
         let fixture = Fixture::new();
         let lock = fixture.store.lock().unwrap();
         let source = lock.tasks(&fixture.root_id).unwrap()
-            .create_authoring_with_id(SOURCE, "Source", "", &[], None, None, None).unwrap();
+            .create_authoring_with_id(SOURCE, "Source", "", &[], None, (None, None)).unwrap();
         let doc = lock.tasks(&fixture.root_id).unwrap();
         let edges = vec![SOURCE.to_owned()];
         let before = fixture.bytes();
         assert_eq!(doc.create_authoring_with_id(TASK, "Follow-up", "Description", &edges, Some(SOURCE),
-            Some("stale"), Some(&source.task_revision)).unwrap_err().code, "task_revision_conflict");
+            (Some("stale"), Some(&source.task_revision))).unwrap_err().code, "task_revision_conflict");
         assert_eq!(doc.create_authoring_with_id(TASK, "Follow-up", "Description", &edges, Some(SOURCE),
-            Some(&doc.doc_revision), Some("stale")).unwrap_err().code, "task_revision_conflict");
+            (Some(&doc.doc_revision), Some("stale"))).unwrap_err().code, "task_revision_conflict");
         assert_eq!(fixture.bytes(), before);
         let task = doc.create_authoring_with_id(TASK, "Follow-up", "Description", &edges, Some(SOURCE),
-            Some(&doc.doc_revision), Some(&source.task_revision)).unwrap();
+            (Some(&doc.doc_revision), Some(&source.task_revision))).unwrap();
         let doc = lock.tasks(&fixture.root_id).unwrap();
         let before = fixture.bytes();
         assert_eq!(doc.create_authoring_with_id(TASK, "Follow-up", "Description", &edges, Some(SOURCE),
-            None, Some("stale")).unwrap_err().code, "invalid_task");
+            (None, Some("stale"))).unwrap_err().code, "invalid_task");
         assert_eq!(doc.create_authoring_with_id(TASK, "Follow-up", "Description", &edges, Some(SOURCE),
-            Some("stale"), None).unwrap_err().code, "invalid_task");
+            (Some("stale"), None)).unwrap_err().code, "invalid_task");
         assert_eq!(doc.create_authoring_with_id(SOURCE, "Source", "", &[], None,
-            None, Some("stale")).unwrap_err().code, "invalid_task");
+            (None, Some("stale"))).unwrap_err().code, "invalid_task");
         assert_eq!(doc.create_authoring_with_id(TASK, "Follow-up",
             &"x".repeat(MAX_TASK_TEXT_BYTES - 1), &edges, Some(SOURCE),
-            Some("stale"), Some("stale")).unwrap_err().code, "invalid_task");
+            (Some("stale"), Some("stale"))).unwrap_err().code, "invalid_task");
         assert_eq!(fixture.bytes(), before);
         let retry = doc.create_authoring_with_id(TASK, "Follow-up", "Description", &edges, Some(SOURCE),
-            Some("stale"), Some("stale")).unwrap();
+            (Some("stale"), Some("stale"))).unwrap();
         assert_eq!(retry.task_revision, task.task_revision);
         assert_eq!(fixture.bytes(), before);
         assert_eq!(doc.create_authoring_with_id(TASK, "Changed", "Description", &edges, Some(SOURCE),
-            Some(&doc.doc_revision), Some(&source.task_revision)).unwrap_err().code, "task_id_conflict");
+            (Some(&doc.doc_revision), Some(&source.task_revision))).unwrap_err().code, "task_id_conflict");
         assert_eq!(doc.set_dependencies(TASK, &task.task_revision, "stale", &edges).unwrap_err().code,
             "task_revision_conflict");
         assert_eq!(doc.set_dependencies(TASK, "stale", &doc.doc_revision, &edges).unwrap_err().code,
@@ -1769,7 +1770,7 @@ mod tests {
         let lock = fixture.store.lock().unwrap();
         let doc = lock.tasks(&fixture.root_id).unwrap();
         let description = "x".repeat(MAX_TASK_TEXT_BYTES - 1);
-        assert_eq!(doc.create_authoring_with_id(TASK, "Too large", &description, &[], None, None, None)
+        assert_eq!(doc.create_authoring_with_id(TASK, "Too large", &description, &[], None, (None, None))
             .unwrap_err().code, "invalid_task");
         assert!(read_document(fixture.store.tasks_dir(), &fixture.root_id).unwrap().tasks.is_empty());
         let original = format!(

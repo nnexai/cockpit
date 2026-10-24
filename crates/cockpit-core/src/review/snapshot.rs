@@ -35,6 +35,16 @@ pub(super) struct Change {
     pub(super) new_revision: Option<String>,
 }
 
+/// Identity of the request that a cached snapshot must match to be reused.
+struct ReusableIdentity<'a> {
+    session_id: &'a str,
+    pane_id: &'a str,
+    repository: &'a RepositoryCandidate,
+    source_id: &'a str,
+    base_revision: Option<&'a str>,
+    revisions: &'a RevisionTokens,
+}
+
 impl ReviewService {
     pub async fn snapshot(
         &self,
@@ -106,17 +116,19 @@ impl ReviewService {
                     .position(|entry| entry.key == cache_key && entry.revisions == before);
                 index.and_then(|index| entries.remove(index))
             };
-            if let Some(entry) = cached {
-                if let Some(snapshot) = self
+            if let Some(entry) = cached
+                && let Some(snapshot) = self
                     .reusable_snapshot(
                         &entry,
-                        session_id,
-                        pane_id,
                         request,
-                        &repository,
-                        &source_id,
-                        base_revision.as_deref(),
-                        &before,
+                        ReusableIdentity {
+                            session_id,
+                            pane_id,
+                            repository: &repository,
+                            source_id: &source_id,
+                            base_revision: base_revision.as_deref(),
+                            revisions: &before,
+                        },
                     )
                     .await?
                 {
@@ -127,7 +139,6 @@ impl ReviewService {
                     entries.push_front(entry);
                     return Ok(snapshot);
                 }
-            }
             let (files, changes, mut diagnostics, truncated, collected_base_revision) = self
                 .collect(&checkout, request, &before, base_revision.clone())
                 .await?;
@@ -203,14 +214,17 @@ impl ReviewService {
     async fn reusable_snapshot(
         &self,
         entry: &ReviewCacheEntry,
-        session_id: &str,
-        pane_id: &str,
         request: &ReviewSnapshotRequest,
-        repository: &RepositoryCandidate,
-        source_id: &str,
-        base_revision: Option<&str>,
-        revisions: &RevisionTokens,
+        identity: ReusableIdentity<'_>,
     ) -> Result<Option<ReviewSnapshot>, InspectionError> {
+        let ReusableIdentity {
+            session_id,
+            pane_id,
+            repository,
+            source_id,
+            base_revision,
+            revisions,
+        } = identity;
         self.authorize_review_viewer(session_id, pane_id, &request.binding_id)
             .await?;
         let Ok(Some(stored)) = self.load_snapshot(&entry.snapshot.review_id).await else {
@@ -490,14 +504,13 @@ impl ReviewService {
                     file.additions = statistics.additions;
                     file.deletions = statistics.deletions;
                     file.binary = statistics.binary;
-                } else if comparison == ReviewComparison::Untracked {
-                    if let Some(source) =
+                } else if comparison == ReviewComparison::Untracked
+                    && let Some(source) =
                         path.and_then(|path| read_worktree_source(checkout, path).ok())
                     {
                         file.additions = source.total_lines;
                         file.deletions = source.total_lines.map(|_| 0);
                     }
-                }
                 files.push(file);
                 changes_by_id.insert(file_id, change);
             }

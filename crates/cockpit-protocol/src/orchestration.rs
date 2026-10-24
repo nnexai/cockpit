@@ -640,9 +640,9 @@ pub enum Integration {
     Pending,
     NotApplicable { reason: String, result_message_id: String },
     Integrated { operation_id: String, accepted_result_message_id: String,
-        accepted_task_revision: String, source: SourceOutput,
+        accepted_task_revision: String, source: Box<SourceOutput>,
         target_repository_key: String, target_ref: String, target_commit: String,
-        method: IntegrationMethod, mappings: Vec<IntegrationMapping>,
+        method: IntegrationMethod, mappings: Box<[IntegrationMapping]>,
         checks: Vec<CheckOutcome>, integrator_run_id: String, verified_at: String },
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

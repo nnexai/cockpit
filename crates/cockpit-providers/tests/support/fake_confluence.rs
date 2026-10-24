@@ -471,11 +471,10 @@ fn serve(mut stream: TcpStream, mode: Mode, port: u16, state: &Mutex<State>) {
         if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
             break;
         }
-        if let Some((key, value)) = line.split_once(':') {
-            if key.eq_ignore_ascii_case("authorization") {
+        if let Some((key, value)) = line.split_once(':')
+            && key.eq_ignore_ascii_case("authorization") {
                 authorization = Some(value.trim().to_string());
             }
-        }
     }
     let mut words = first.split_whitespace();
     let method = words.next().unwrap().to_string();
@@ -489,11 +488,10 @@ fn serve(mut stream: TcpStream, mode: Mode, port: u16, state: &Mutex<State>) {
             authorized: authorization.as_deref() == Some(&format!("Bearer {TOKEN}")),
             authorization_present: authorization.is_some(),
         });
-        if let Some((path, cancel)) = &state.cancel_after_path {
-            if path == url.path() {
+        if let Some((path, cancel)) = &state.cancel_after_path
+            && path == url.path() {
                 cancel.store(true, Ordering::Relaxed);
             }
-        }
         route(mode, &url, &state)
     };
     let reason = match response.status {

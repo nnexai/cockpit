@@ -21,6 +21,7 @@ export interface WireTypes {
   "SpaceGitRefusal": V1.SpaceGitRefusal;
   "ServiceStatus": V1.ServiceStatus;
   "SpaceServiceStatus": V1.SpaceServiceStatus;
+  "SpaceServiceStatusRequest": V1.SpaceServiceStatusRequest;
   "SpaceServiceStatusResponse": V1.SpaceServiceStatusResponse;
   "SpaceTags": V1.SpaceTags;
   "SpaceTagsResponse": V1.SpaceTagsResponse;
@@ -83,6 +84,7 @@ export interface WireOwners {
   "SpaceGitActionOutcome[up_to_date]": Extract<V1.SpaceGitActionOutcome, { "result": "up_to_date" }>;
   "SpaceGitActionOutcome[refused]": Extract<V1.SpaceGitActionOutcome, { "result": "refused" }>;
   "SpaceServiceStatus": V1.SpaceServiceStatus;
+  "SpaceServiceStatusRequest": V1.SpaceServiceStatusRequest;
   "SpaceServiceStatusResponse": V1.SpaceServiceStatusResponse;
   "SpaceTags": V1.SpaceTags;
   "SpaceTagsResponse": V1.SpaceTagsResponse;
@@ -197,12 +199,13 @@ export interface WireFields {
   "SpaceGitActionOutcome[refused].reason": (Extract<V1.SpaceGitActionOutcome, { "result": "refused" }>)["reason"];
   "SpaceGitActionOutcome[refused].detail": (Extract<V1.SpaceGitActionOutcome, { "result": "refused" }>)["detail"];
   "SpaceServiceStatus.key": (V1.SpaceServiceStatus)["key"];
-  "SpaceServiceStatus.space_id": (V1.SpaceServiceStatus)["space_id"];
   "SpaceServiceStatus.pane_id": (V1.SpaceServiceStatus)["pane_id"];
   "SpaceServiceStatus.tab_id": (V1.SpaceServiceStatus)["tab_id"];
   "SpaceServiceStatus.title": (V1.SpaceServiceStatus)["title"];
   "SpaceServiceStatus.status": (V1.SpaceServiceStatus)["status"];
   "SpaceServiceStatus.port": (V1.SpaceServiceStatus)["port"];
+  "SpaceServiceStatusRequest.server_instance": (V1.SpaceServiceStatusRequest)["server_instance"];
+  "SpaceServiceStatusRequest.pane_ids": (V1.SpaceServiceStatusRequest)["pane_ids"];
   "SpaceServiceStatusResponse.session_id": (V1.SpaceServiceStatusResponse)["session_id"];
   "SpaceServiceStatusResponse.services": (V1.SpaceServiceStatusResponse)["services"];
   "SpaceTags.space_id": (V1.SpaceTags)["space_id"];
@@ -423,7 +426,8 @@ export interface WireFieldNames {
   "SpaceGitActionOutcome[updated]": "commits";
   "SpaceGitActionOutcome[up_to_date]": never;
   "SpaceGitActionOutcome[refused]": "reason" | "detail";
-  "SpaceServiceStatus": "key" | "space_id" | "pane_id" | "tab_id" | "title" | "status" | "port";
+  "SpaceServiceStatus": "key" | "pane_id" | "tab_id" | "title" | "status" | "port";
+  "SpaceServiceStatusRequest": "server_instance" | "pane_ids";
   "SpaceServiceStatusResponse": "session_id" | "services";
   "SpaceTags": "space_id" | "tags";
   "SpaceTagsResponse": "session_id" | "server_instance" | "catalog" | "spaces";
@@ -582,7 +586,8 @@ export interface WireCheckpointFieldNames {
   "SpaceGitActionOutcome[updated]": "commits" | "result";
   "SpaceGitActionOutcome[up_to_date]": "result";
   "SpaceGitActionOutcome[refused]": "reason" | "detail" | "result";
-  "SpaceServiceStatus": "key" | "space_id" | "pane_id" | "tab_id" | "title" | "status" | "port";
+  "SpaceServiceStatus": "key" | "pane_id" | "tab_id" | "title" | "status" | "port";
+  "SpaceServiceStatusRequest": "server_instance" | "pane_ids";
   "SpaceServiceStatusResponse": "session_id" | "services";
   "SpaceTags": "space_id" | "tags";
   "SpaceTagsResponse": "session_id" | "server_instance" | "catalog" | "spaces";
@@ -686,6 +691,7 @@ export type WireOptionalField =
 
 export type WireListField =
   | "SpaceGitStatusResponse.spaces"
+  | "SpaceServiceStatusRequest.pane_ids"
   | "SpaceServiceStatusResponse.services"
   | "SpaceTags.tags"
   | "SpaceTagsResponse.catalog"

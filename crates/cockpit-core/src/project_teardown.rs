@@ -179,7 +179,7 @@ pub(crate) fn cleanup_owned_head<'a>(
         target_repository_key, method, mappings, verified_at, .. } = &run.integration else {
         return Err(InspectionError::new("waiting_integration", "accepted output requires integration or fresh containment in the root target"));
     };
-    if verified_at.is_empty() || integrated != source || target_repository_key != repository_key
+    if verified_at.is_empty() || integrated.as_ref() != source || target_repository_key != repository_key
         || accepted_result_message_id != result_message_id || accepted_task_revision != task_revision {
         return Err(InspectionError::new("integration_unverified", "validated integration does not cover this exact accepted checkout output"));
     }
@@ -600,28 +600,30 @@ mod tests {
         assert!(cleanup_owned_head(&identity, &run, None).is_err());
         run.integration = Integration::Integrated {
             operation_id:"integration".into(), accepted_result_message_id:"result".into(),
-            accepted_task_revision:"task-revision".into(), source:source.clone(),
+            accepted_task_revision:"task-revision".into(), source:Box::new(source.clone()),
             target_repository_key:canonical_project_key.clone(), target_ref:"refs/heads/main".into(),
             target_commit:"c".repeat(40), method:IntegrationMethod::RecordedAdaptation,
-            mappings:vec![], checks:vec![], integrator_run_id:"integrator".into(), verified_at:"verified".into(),
+            mappings:vec![].into(), checks:vec![], integrator_run_id:"integrator".into(), verified_at:"verified".into(),
         };
         assert!(cleanup_owned_head(&identity, &run, None).is_err());
         if let Integration::Integrated { mappings, .. } = &mut run.integration {
-            mappings.push(IntegrationMapping {
+            *mappings = vec![IntegrationMapping {
                 source_commits:vec!["b".repeat(40)], target_commits:vec!["c".repeat(40)],
                 source_paths:vec!["source.rs".into()], target_paths:vec!["target.rs".into()], explanation:Some("validated adaptation".into()),
-            });
+            }].into();
         }
         assert_eq!(cleanup_owned_head(&identity, &run, None).unwrap(), "b".repeat(40));
         assert_ne!(canonical_project_key, identity.repository_key, "canonical project hash is not the raw Git key");
         let mut wrong_source_key = run.clone();
-        if let Integration::Integrated { source: SourceOutput::Code { repository_key, .. }, .. } = &mut wrong_source_key.integration {
-            *repository_key = identity.repository_key.clone();
+        if let Integration::Integrated { source, .. } = &mut wrong_source_key.integration {
+            if let SourceOutput::Code { repository_key, .. } = &mut **source {
+                *repository_key = identity.repository_key.clone();
+            }
         }
         if let Integration::Integrated { target_repository_key, source, .. } = &mut wrong_source_key.integration {
             *target_repository_key = identity.repository_key.clone();
-            wrong_source_key.source_output = Some(source.clone());
-            wrong_source_key.result.as_mut().unwrap().source_output = Some(source.clone());
+            wrong_source_key.source_output = Some(*source.clone());
+            wrong_source_key.result.as_mut().unwrap().source_output = Some(*source.clone());
         }
         assert!(cleanup_owned_head(&identity, &wrong_source_key, None).is_err());
         let mut wrong_target_key = run.clone();

@@ -346,14 +346,13 @@ impl ProjectStore {
         let stored = self.read_stored_operation(&name)?;
         let mut operation = stored.operation;
         let mut owned_checkout = stored.owned_checkout;
-        if let Some(expected) = expected_generation {
-            if operation.generation != expected {
+        if let Some(expected) = expected_generation
+            && operation.generation != expected {
                 return Err(InspectionError::new(
                     "stale_generation",
                     "operation generation is no longer current",
                 ));
             }
-        }
         let generation = operation.generation.checked_add(1).ok_or_else(|| {
             InspectionError::new("invalid_generation", "operation generation overflow")
         })?;
@@ -787,11 +786,10 @@ pub(crate) fn prepare_root(path: &Path, kind: &str) -> Result<(PathBuf, Dir), In
                     }
                     Ok(_) => {}
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                        if let Err(error) = dir.create_dir(name) {
-                            if error.kind() != io::ErrorKind::AlreadyExists {
+                        if let Err(error) = dir.create_dir(name)
+                            && error.kind() != io::ErrorKind::AlreadyExists {
                                 return Err(map_io(error, "root_create"));
                             }
-                        }
                     }
                     Err(error) => return Err(map_io(error, "root_stat")),
                 }

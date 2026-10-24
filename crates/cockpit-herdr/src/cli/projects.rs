@@ -493,13 +493,12 @@ fn parse_worktree_status(porcelain: &[u8]) -> Result<WorktreeStatus, InspectionE
         }
         // Porcelain v1 -z emits the destination first, followed by a separate
         // source-path record for renames and copies. The source is not a change.
-        if record[..2].iter().any(|status| matches!(*status, b'R' | b'C')) {
-            if take_porcelain_record(&mut remaining)?.is_empty() {
+        if record[..2].iter().any(|status| matches!(*status, b'R' | b'C'))
+            && take_porcelain_record(&mut remaining)?.is_empty() {
                 return Err(InspectionError::new(
                     "malformed_worktree_status", "Git rename or copy has no source path",
                 ));
             }
-        }
         count += 1;
         if entries.len() < 50 {
             entries.push(String::from_utf8_lossy(&record[3..]).into_owned());

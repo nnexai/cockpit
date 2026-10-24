@@ -347,23 +347,23 @@ impl BrowserService {
                 .panes
                 .iter()
                 .any(|pane| pane.tab_id == receipt.tab_id);
-            let result = if changed || tab.is_none() || empty {
-                self.close(&mut receipt).await.map(|_| ())
-            } else {
-                let tab = tab.expect("present tab");
-                receipt.space_id = tab.space_id.clone();
-                receipt.tab_label = tab.label.clone();
-                if let Some(space) = source
-                    .snapshot
-                    .spaces
-                    .iter()
-                    .find(|space| space.id == tab.space_id)
-                {
-                    receipt.space_label = space.label.clone();
+            let Some(tab) = tab.filter(|_| !changed && !empty) else {
+                if let Err(error) = self.close(&mut receipt).await {
+                    first_error.get_or_insert(error);
                 }
-                self.status(&mut receipt).await.map(|_| ())
+                continue;
             };
-            if let Err(error) = result {
+            receipt.space_id = tab.space_id.clone();
+            receipt.tab_label = tab.label.clone();
+            if let Some(space) = source
+                .snapshot
+                .spaces
+                .iter()
+                .find(|space| space.id == tab.space_id)
+            {
+                receipt.space_label = space.label.clone();
+            }
+            if let Err(error) = self.status(&mut receipt).await {
                 first_error.get_or_insert(error);
             }
         }
@@ -702,8 +702,8 @@ impl BrowserService {
         }
         let live = self.inspect_live(receipt).await;
         receipt.opened_tab = None;
-        if receipt.intent == ReceiptIntent::Launch {
-            if let Ok(incarnation) = &live {
+        if receipt.intent == ReceiptIntent::Launch
+            && let Ok(incarnation) = &live {
                 receipt.state = ReceiptState::Open;
                 receipt.owner_id = self.owner_id.clone();
                 receipt.intent = ReceiptIntent::None;
@@ -716,7 +716,6 @@ impl BrowserService {
                     "browser launch was reconciled",
                 ));
             }
-        }
         if matches!(
             receipt.intent,
             ReceiptIntent::LaunchNavigation | ReceiptIntent::TabNew

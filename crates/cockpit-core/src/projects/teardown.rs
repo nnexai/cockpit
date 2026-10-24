@@ -227,11 +227,9 @@ impl ProjectService {
         for operation in self.store.list()? {
             if self.store.owned_checkout(&operation.operation_id)?.and_then(|j| j.bind)
                 .is_some_and(|bind| bind.move_operation_id == *creation_operation_id)
-            {
-                if matched.replace(operation.operation_id).is_some() {
+                && matched.replace(operation.operation_id).is_some() {
                     return Err(InspectionError::new("association_conflict", "move operation belongs to multiple setup journals"));
                 }
-            }
         }
         Ok(matched.unwrap_or_else(|| creation_operation_id.clone()))
     }
@@ -258,11 +256,10 @@ impl ProjectService {
                     Ok(head) => head,
                     Err(error) => return Ok(CleanupEvaluation::Waiting(cleanup_reason(CleanupReasonClass::Reconcilable, error))),
                 };
-                if let Some(merged) = merged {
-                    if let Err(error) = merged.reprove().await {
+                if let Some(merged) = merged
+                    && let Err(error) = merged.reprove().await {
                         return Ok(CleanupEvaluation::Waiting(cleanup_reason(CleanupReasonClass::Reconcilable, error)));
                     }
-                }
                 let present = crate::project_adapter::inspect_owned_git(
                     identity, head, matches!(resource.identity, OwnedResourceIdentity::Worktree { .. }),
                     self.configuration.limits.git_timeout_ms as u64,
@@ -394,12 +391,11 @@ impl ProjectService {
             // Re-observe the exact sealed scope and private release CAS after
             // other async inspections, adjacent to the non-force Git effect.
             project_teardown::owned_consumers_quiescent(resource, run, proof).await?;
-            if let Some(merged) = merged {
-                if let Err(error) = merged.reprove().await {
+            if let Some(merged) = merged
+                && let Err(error) = merged.reprove().await {
                     return Ok(CleanupEffectOutcome { state: CleanupEffectState::Refused, evidence: None,
                         reason: Some(cleanup_reason(CleanupReasonClass::Reconcilable, error)), effects: Vec::new() });
                 }
-            }
         }
         let result = match &resource.identity {
             OwnedResourceIdentity::Worktree { identity } => crate::project_adapter::remove_owned_worktree(

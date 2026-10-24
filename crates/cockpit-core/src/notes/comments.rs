@@ -207,7 +207,7 @@ fn add_comment(
         // Quoting prevents a label containing '#', ':', or YAML syntax
         // from becoming metadata structure or losing part of its value.
         let scalar = serde_json::to_string(&author)
-            .map_err(|error| fs::error("notes_invalid_input", &error.to_string()))?;
+            .map_err(|error| fs::error("notes_invalid_input", error.to_string()))?;
         content.push_str("author: ");
         content.push_str(&scalar);
         content.push('\n');

@@ -49,7 +49,7 @@ async fn linked_root_head_watch_ignores_index_objects_and_head_lock_churn() {
     std::fs::create_dir_all(git_dir.join("objects")).unwrap();
     std::fs::write(git_dir.join("HEAD"), "old head").unwrap();
     let mut changes = fixture.service.changes().unwrap();
-    fixture.service.watch_cleanup_refs(&[git_dir.clone()]).unwrap();
+    fixture.service.watch_cleanup_refs(std::slice::from_ref(&git_dir)).unwrap();
     for relative in ["index", "HEAD.lock", "objects/object"] {
         std::fs::write(git_dir.join(relative), "unrelated churn").unwrap();
     }

@@ -129,7 +129,7 @@ fn cache_dir(cache_root: &Path) -> Option<Dir> {
     static STARTUP_SWEEP: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
     let mut swept = STARTUP_SWEEP.lock().unwrap_or_else(|p| p.into_inner());
     if !*swept {
-        let _ = sweep(&dir, "", 0);
+        sweep(&dir, "", 0);
         *swept = true;
     }
     Some(dir)
@@ -308,7 +308,7 @@ fn sweep(dir: &Dir, target: &str, new_bytes: u64) {
         total = total.saturating_add(metadata.len());
         files.push(Entry { name, age_ms, bytes: metadata.len() });
     }
-    files.sort_by(|left, right| right.age_ms.cmp(&left.age_ms));
+    files.sort_by_key(|entry| std::cmp::Reverse(entry.age_ms));
     let target_existing = files.iter().find(|entry| entry.name == target).map_or(0, |entry| entry.bytes);
     total = total.saturating_sub(target_existing);
     let mut count_after_write = files.len() + usize::from(!target.is_empty() && target_existing == 0);

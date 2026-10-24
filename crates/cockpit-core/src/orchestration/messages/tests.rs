@@ -109,7 +109,7 @@ fn state() -> OrchestrationState {
 }
 
 fn main_actor(run_id: &str) -> Actor {
-    Actor::Agent(AgentCaller {
+    Actor::Agent(Box::new(AgentCaller {
         auth: fixture_auth(run_id),
         conversation: Some(conversation(run_id)),
         assignment_generation: (run_id != "root").then_some(1),
@@ -123,7 +123,7 @@ fn main_actor(run_id: &str) -> Actor {
         native_session_id: None,
         actual_agent_kind: Some("omp".into()),
         process: Some(native_process()),
-    })
+    }))
 }
 
 
@@ -655,11 +655,10 @@ fn committed_result_replays_after_state_reload_without_a_semantic_write() {
         OrchestrationActionResult::Message { duplicate: true, .. }));
     assert_eq!(serde_json::to_value(&recovered).unwrap(), before);
     let mut changed = result;
-    if let OrchestrationAction::Report { source_output, .. } = &mut changed {
-        if let Some(SourceOutput::NonCode { artifacts, .. }) = source_output {
+    if let OrchestrationAction::Report { source_output, .. } = &mut changed
+        && let Some(SourceOutput::NonCode { artifacts, .. }) = source_output {
             artifacts.push("different-output".into());
         }
-    }
     assert_error(&mut recovered, &worker, 1, &changed, "message_id_conflict");
 }
 
@@ -930,7 +929,8 @@ fn message_and_annotation_authority_is_directional_and_append_only() {
         }
     }
     assert_eq!(state.runs[2].stage, RunStage::Working);
-    for target in ["worker"] {
+    {
+        let target = "worker";
         mutation(
             &mut state,
             &actor,

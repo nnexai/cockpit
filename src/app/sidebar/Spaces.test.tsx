@@ -17,7 +17,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 const space = (id: string): SpaceSummary => ({ id, label: id, number: 1, tab_count: 1, pane_count: 1, focused: false, agent_status: "idle", git: null });
-const service: SpaceServiceStatus = { key: "dev", space_id: "app", pane_id: "pane", tab_id: null, title: "dev server", status: "starting", port: 5173 };
+const service: SpaceServiceStatus = { key: "dev", pane_id: "pane", tab_id: null, title: "dev server", status: "starting", port: 5173 };
 function props(): ComponentProps<typeof Spaces> {
   return {
     spaces: [space("app"), space("other")], services: new Map([["app", [service]]]), pendingServiceKey: null, onSelectService: vi.fn(),
@@ -84,7 +84,7 @@ it("keeps parent services visible when worktrees collapse and never promotes chi
   const root = createRoot(host);
   const parent = { ...space("app"), git: { repository_key: "repo", repository: "repo", branch: "main", checkout_path: "/repo", is_linked_worktree: false } };
   const child = { ...space("child"), git: { ...parent.git, branch: "topic", checkout_path: "/child", is_linked_worktree: true } };
-  const childService = { ...service, key: "child-dev", space_id: "child", pane_id: "child-pane", title: "child server" };
+  const childService = { ...service, key: "child-dev", pane_id: "child-pane", title: "child server" };
   const current = { ...props(), spaces: [parent, child], services: new Map([["app", [service]], ["child", [childService]]]) };
   try {
     await act(async () => root.render(createElement(Spaces, current)));

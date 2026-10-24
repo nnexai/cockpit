@@ -150,8 +150,7 @@ pub(super) fn owned_inventory(
         .as_deref()
         .and_then(|path| path.strip_prefix(&format!("{}/", entry.summary.item_path)))
         .filter(|name| component(name))
-    {
-        if exists(dir, document)? {
+        && exists(dir, document)? {
             let (hash, bytes) = file_hash(dir, document)?;
             files.push(MarkerFile {
                 path: document.to_owned(),
@@ -159,7 +158,6 @@ pub(super) fn owned_inventory(
                 bytes,
             });
         }
-    }
     if exists(dir, crate::library::layout::FILES_DIR)? {
         let files_dir = dir
             .open_dir_nofollow(crate::library::layout::FILES_DIR)

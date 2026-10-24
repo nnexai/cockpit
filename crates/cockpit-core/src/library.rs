@@ -463,8 +463,8 @@ impl LibraryService {
                 format!("Reference depth must be 0 to {MAX_REFERENCE_DEPTH}"),
             ));
         }
-        if !folder::recognizes(&request.input) {
-            if let Some((query, provider_id)) =
+        if !folder::recognizes(&request.input)
+            && let Some((query, provider_id)) =
                 self.jira_query(&request.input, request.provider_id.as_deref())?
             {
                 if !request.follow {
@@ -475,7 +475,6 @@ impl LibraryService {
                 }
                 return self.start_jira_follow_add(request, query, provider_id).await;
             }
-        }
         if request.follow {
             return self.start_follow_add(request).await;
         }
@@ -938,8 +937,8 @@ impl LibraryService {
             let _lock = store.shared()?;
             store.index()?.items
         };
-        if is_confluence {
-            if let Some(parent_id) = field_string(&asset, "parent_id") {
+        if is_confluence
+            && let Some(parent_id) = field_string(&asset, "parent_id") {
                 entry.summary.parent_item_id = index_items
                     .iter()
                     .find(|candidate| {
@@ -952,7 +951,6 @@ impl LibraryService {
                     })
                     .map(|candidate| candidate.summary.item_id.clone());
             }
-        }
         resolve_asset_path(&mut entry, &asset, old.as_ref(), &index_items);
         if let Some(old) = &old {
             let check = {
@@ -969,7 +967,7 @@ impl LibraryService {
         // Any provider's attachments go through the same staging; the download
         // gate (`SourceService::attachment_downloads`) decides who may download.
         let prepared = if is_confluence || !asset.attachments.is_empty() {
-            let Some(prepared) = self.prepare_attachments(store, operation, &mut asset, old.as_ref(), download_all, attachment_request, confirmed).await? else {
+            let Some(prepared) = self.prepare_attachments(store, operation, &mut asset, old.as_ref(), attachments::AttachmentIntent { download_all, request: attachment_request }, confirmed).await? else {
                 return Ok(());
             };
             entry.summary.attachments = attachments::summaries(&asset);
@@ -1011,21 +1009,19 @@ impl LibraryService {
                 confirmed,
                 reference.as_ref(),
             ) {
-                if e.code == "library_conflict" {
-                    if let Some(old) = old {
+                if e.code == "library_conflict"
+                    && let Some(old) = old {
                         return self.record_conflict(store, operation, old, e.message);
                     }
-                }
                 return Err(e);
             }
         }
         // An existing item gains its reference only after the save succeeded, and
         // through the index so a concurrent reference change is never overwritten.
-        if old.is_some() {
-            if let Some(reference) = reference {
+        if old.is_some()
+            && let Some(reference) = reference {
                 store.add_ref(&entry.summary.item_id, reference)?;
             }
-        }
         operations::row(
             store,
             operation,

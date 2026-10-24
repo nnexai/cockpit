@@ -314,14 +314,13 @@ fn append_comment(
     {
         append_bounded(body, &format!(" · edited {}", local_timestamp(updated)))?;
     }
-    if review {
-        if let Some(path) = comment.path.as_deref() {
+    if review
+        && let Some(path) = comment.path.as_deref() {
             append_bounded(body, &format!(" · review on {path}"))?;
             if let Some(line) = comment.line {
                 append_bounded(body, &format!(":{line}"))?;
             }
         }
-    }
     append_bounded(body, "\n")?;
     if let Some(url) = comment.html_url.as_deref().or(comment.url.as_deref()) {
         append_bounded(body, &format!("[#{id}]({url})"))?;
@@ -343,7 +342,7 @@ fn local_timestamp(value: &str) -> String {
 fn rfc3339_seconds(value: &str) -> String {
     if let Some(dot) = value.find('.') {
         let suffix = value[dot..]
-            .find(|character| matches!(character, '+' | '-' | 'Z'))
+            .find(['+', '-', 'Z'])
             .map(|offset| dot + offset)
             .unwrap_or(value.len());
         format!("{}{}", &value[..dot], &value[suffix..])
@@ -681,14 +680,14 @@ impl Forge for GithubSourceProvider {
     ) -> Result<Self::Comments, InspectionError> {
         let (repository, kind, number) = identity;
         let mut comments: Vec<(bool, Comment)> = self
-            .fetch_comments(&repository, "issues", *number)
+            .fetch_comments(repository, "issues", *number)
             .await?
             .into_iter()
             .map(|comment| (false, comment))
             .collect();
         if *kind == GithubKind::PullRequest {
             comments.extend(
-                self.fetch_comments(&repository, "pulls", *number)
+                self.fetch_comments(repository, "pulls", *number)
                     .await?
                     .into_iter()
                     .map(|comment| (true, comment)),

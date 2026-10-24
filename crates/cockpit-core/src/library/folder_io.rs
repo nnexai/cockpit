@@ -456,13 +456,13 @@ fn identity(metadata: &Metadata) -> String {
     #[cfg(unix)]
     {
         use cap_std::fs::MetadataExt;
-        return format!(
+        format!(
             "{}:{}:{}:{}",
             metadata.dev(),
             metadata.ino(),
             metadata.len(),
             metadata.mtime_nsec()
-        );
+        )
     }
     #[cfg(not(unix))]
     {
@@ -474,7 +474,7 @@ fn object_identity(metadata: &Metadata) -> String {
     #[cfg(unix)]
     {
         use cap_std::fs::MetadataExt;
-        return format!("{}:{}", metadata.dev(), metadata.ino());
+        format!("{}:{}", metadata.dev(), metadata.ino())
     }
     #[cfg(not(unix))]
     {
@@ -486,7 +486,7 @@ fn hardlinked(metadata: &Metadata) -> bool {
     #[cfg(unix)]
     {
         use cap_std::fs::MetadataExt;
-        return metadata.nlink() > 1;
+        metadata.nlink() > 1
     }
     #[cfg(not(unix))]
     {
@@ -502,7 +502,7 @@ fn native_executable(metadata: &Metadata, bytes: &[u8]) -> bool {
         if metadata.mode() & 0o111 == 0 {
             return false;
         }
-        return bytes.starts_with(b"\x7fELF")
+        bytes.starts_with(b"\x7fELF")
             || matches!(
                 bytes.get(..4),
                 Some(
@@ -511,7 +511,7 @@ fn native_executable(metadata: &Metadata, bytes: &[u8]) -> bool {
                         | [0xcf, 0xfa, 0xed, 0xfe]
                         | [0xce, 0xfa, 0xed, 0xfe]
                 )
-            );
+            )
     }
     #[cfg(not(unix))]
     {

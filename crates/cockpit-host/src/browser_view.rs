@@ -158,7 +158,7 @@ async fn run_events(
     };
     if !send_json(
         &mut socket,
-        &BrowserViewEvent::Attached { metadata, snapshot },
+        &BrowserViewEvent::Attached { metadata, snapshot: Box::new(snapshot) },
     )
     .await
     {

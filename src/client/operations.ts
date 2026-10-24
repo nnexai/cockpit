@@ -66,7 +66,7 @@ import {
   parseBrowserFeedbackSendRequest, parseBrowserFeedbackSendResponse, parseBrowserRequest, parseBrowserResponse, 
   parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest, parseFocusRequest, parseFocusResponse, 
   parseResourceMutationRequest, parseResourceMutationResponse, parseSessionListResponse, 
-  parseSessionSnapshotResponse, parseSpaceGitStatusResponse, parseSpaceServiceStatusResponse, parseSpaceTagsResponse, matchSpaceGitActionResponse, parseStatusResponse,
+  parseSessionSnapshotResponse, parseSpaceGitStatusResponse, parseSpaceServiceStatusRequest, parseSpaceServiceStatusResponse, parseSpaceTagsResponse, matchSpaceGitActionResponse, parseStatusResponse,
   validateSessionId, validateResourceId, type CockpitClient,
 } from "./CockpitClient";
 import type { FocusRequest, ResourceMutationRequest, SpaceGitActionRequest, SpaceTagChangeRequest } from "../protocol/generated/v1";
@@ -93,7 +93,7 @@ type OperationRow<K extends OperationName> = {
   encode: (backend: Backend, ...args: Parameters<CockpitClient[K]>) => EncodedOperation<Awaited<ReturnType<CockpitClient[K]>>>;
   direct?: "both" | "native";
   throwNativeValidation?: true;
-  nativeAbort?: "snapshot" | "widget";
+  nativeAbort?: "read" | "widget";
 };
 type OperationTable = { [K in OperationName]: OperationRow<K> };
 
@@ -909,7 +909,7 @@ const operations: OperationTable = {
       };
     },
   },
-  sessionSnapshot: { direct: "both", nativeAbort: "snapshot",
+  sessionSnapshot: { direct: "both", nativeAbort: "read",
     encode(_backend, sessionId, signal) {
       validateSessionId(sessionId); signal?.throwIfAborted();
       return {
@@ -933,15 +933,16 @@ const operations: OperationTable = {
       };
     },
   },
-  spaceServiceStatus: { direct: "both",
-    encode(backend, sessionId, signal) {
+  spaceServiceStatus: { direct: "both", nativeAbort: "read",
+    encode(_backend, sessionId, request, signal) {
       validateSessionId(sessionId); signal?.throwIfAborted();
+      const body = parseSpaceServiceStatusRequest(request);
       return {
         operation: "Space service status",
-        http: { method: "GET", route: () => `/api/v1/sessions/${encodeURIComponent(sessionId)}/space-services`, signal: () => signal },
-        tauri: { command: "cockpit_space_service_status", args: () => ({ sessionId }) },
+        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(sessionId)}/space-services`, json: () => body, signal: () => signal },
+        tauri: { command: "cockpit_space_service_status", args: () => ({ sessionId, request: body }) },
         parse: parseSpaceServiceStatusResponse,
-        matchIdentity: (response) => { if (backend === "native") signal?.throwIfAborted(); if (response.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Space service status belongs to another session"); return response; },
+        matchIdentity: (response) => { signal?.throwIfAborted(); if (response.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Space service status belongs to another session"); return response; },
       };
     },
   },
@@ -1054,7 +1055,7 @@ const operations: OperationTable = {
   },
 };
 
-function snapshotAbortable<R>(pending: Promise<R>, signal?: AbortSignal): Promise<R> {
+function readAbortable<R>(pending: Promise<R>, signal?: AbortSignal): Promise<R> {
   if (!signal) return pending;
   return new Promise<R>((resolve, reject) => {
     const abort = () => reject(signal.reason);
@@ -1085,8 +1086,8 @@ export function bindOperations(backend: Backend, transport: OperationTransport):
         const dispatch = () => {
           let pending = transport(encoded);
           if (encoded.matchIdentity) pending = pending.then(encoded.matchIdentity);
-          if (backend === "native" && row.nativeAbort === "snapshot") {
-            pending = snapshotAbortable(pending, args[1] as AbortSignal | undefined);
+          if (backend === "native" && row.nativeAbort === "read") {
+            pending = readAbortable(pending, encoded.http.signal?.());
           }
           return pending;
         };

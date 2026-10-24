@@ -428,11 +428,10 @@ async fn run_bounded_command_inner(
     };
     // A download must not leave a descendant writing after the leader exits.
     #[cfg(unix)]
-    if staging.is_some() {
-        if let Some(pid) = child.pid {
+    if staging.is_some()
+        && let Some(pid) = child.pid {
             kill_process_group(pid);
         }
-    }
     child.reaped = true;
     child.child.take();
     if let Some((dir, budget)) = staging {

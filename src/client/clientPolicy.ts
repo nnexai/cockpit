@@ -2,6 +2,7 @@ import type { TypedWirePolicy } from "../protocol/generated/validate";
 import type { WireFailure } from "../protocol/generated/validate/runtime";
 import { definePolicy, messageTable } from "./wire";
 
+const encoder = new TextEncoder();
 const nonempty = (v: string) => v.length > 0;
 const id = (v: string) => v.length > 0 && v.length <= 512;
 const nullableId = (v: string | null) => v === null || id(v);
@@ -151,6 +152,7 @@ const messages = {
   SpaceGitActionResponse: "Space Git action response is missing required fields",
   ServiceStatus: "Service status is malformed",
   SpaceServiceStatus: "Space service status is malformed",
+  SpaceServiceStatusRequest: "Space service status request is malformed",
   SpaceServiceStatusResponse: "Space service status response is missing required fields",
   SessionSummary: "Session summary is missing required fields",
   SessionListResponse: "Session list response is missing required fields",
@@ -237,7 +239,7 @@ const order: NonNullable<TypedWirePolicy["order"]> = {
 };
 
 const wire: TypedWirePolicy = {
-  exact: new Set(["BrowserCleanupStatus"]),
+  exact: new Set(["BrowserCleanupStatus", "SpaceServiceStatusRequest"]),
   // These were casts or pass-through arrays in the original parser; validation still runs.
   raw: new Set([
     "HerdrIdentity", "BrowserAction", "BrowserAssociation", "BrowserElementEvidence", "CommentPasteTarget", "BrowserPageEvidence.viewport",
@@ -269,8 +271,11 @@ const wire: TypedWirePolicy = {
     "BrowserFeedbackResponse.captures": { max: 256 }, "BrowserFeedbackAckRequest.ids": { max: 10_000 },
     "BrowserFeedbackSendRequest.ids": { max: 10_000 }, "BrowserFeedbackDeliveryStatus.selected_ids": { max: 64 },
     "BrowserFeedbackLookup.deliveries": { max: 64 },
+    "SpaceServiceStatusRequest.pane_ids": { max: 4096 },
   },
   fields: {
+    "SpaceServiceStatusRequest.server_instance": (v) => v.length > 0 && v.length <= 256 && encoder.encode(v).length <= 256 && !/[\u0000-\u001f\u007f-\u009f]/.test(v),
+    "SpaceServiceStatusRequest.pane_ids": (v) => v.every(resourceId),
     "BrowserTarget.session_id": nonempty, "BrowserTarget.tab_id": (v) => v === null || nonempty(v), "BrowserTarget.pane_id": (v) => v === null || nonempty(v),
     "BrowserAssociation.tab_id": nonempty,
     "BrowserCleanupScope[tab].session_id": id, "BrowserCleanupScope[tab].tab_id": id,

@@ -237,7 +237,7 @@ fn scan(text: &str, jira: Option<&str>, relation: &str, out: &mut Collector<'_>)
                 })
                 .unwrap_or(tail.len());
             let candidate = tail[..end]
-                .trim_end_matches(|character: char| matches!(character, ',' | '.' | ';' | ':'));
+                .trim_end_matches([',', '.', ';', ':']);
             if candidate.len() > "https://".len() && candidate.len() <= MAX_REFERENCE_URL_BYTES {
                 out.push(
                     ReferenceTarget::Url {
@@ -379,13 +379,20 @@ struct Node {
     references: Vec<SourceReference>,
 }
 
+/// The nodes resolved at one traversal level, with that level's depth.
+#[derive(Clone, Copy)]
+struct Wave<'a> {
+    nodes: &'a [Node],
+    depth: u32,
+}
+
 struct Prepared {
     request: SourceFetchRequest,
     expected: SourceRef,
 }
 
 enum Classified {
-    Ready(Prepared),
+    Ready(Box<Prepared>),
     /// A URL of a configured Confluence provider; needs the provider to say
     /// whether it is a page.
     Confluence {
@@ -501,7 +508,9 @@ impl SourceService {
             }
             let Some(mut candidates) = self
                 .resolve_pending(
-                    &pending, &frontier, level, &mut visited, deadline, cancel, &mut result,
+                    &pending,
+                    Wave { nodes: &frontier, depth: level },
+                    &mut visited, deadline, cancel, &mut result,
                 )
                 .await
             else {
@@ -586,8 +595,7 @@ impl SourceService {
     async fn resolve_pending(
         &self,
         pending: &[Pending],
-        frontier: &[Node],
-        level: u32,
+        wave: Wave<'_>,
         visited: &mut BTreeSet<String>,
         deadline: Instant,
         cancel: &AtomicBool,
@@ -643,7 +651,7 @@ impl SourceService {
                 Some(Classified::Ready(prepared)) => {
                     if visited.insert(source_id(&prepared.expected)) {
                         candidates.push(Candidate {
-                            prepared,
+                            prepared: *prepared,
                             from: pending.from,
                             relation: pending.relation.clone(),
                         });
@@ -652,8 +660,8 @@ impl SourceService {
                 Some(Classified::Failed { code, message }) => {
                     result.failures.push(RelatedFailure {
                         target: pending.target.display(),
-                        from_label: frontier[pending.from].label.clone(),
-                        depth: level,
+                        from_label: wave.nodes[pending.from].label.clone(),
+                        depth: wave.depth,
                         code,
                         message,
                     });
@@ -824,7 +832,7 @@ fn prepared(
     artifact_url: String,
     authority: SourceAuthority,
 ) -> Classified {
-    Classified::Ready(Prepared {
+    Classified::Ready(Box::new(Prepared {
         expected: SourceRef {
             provider_id: provider_id.clone(),
             provider_instance: authority.provider_instance.clone(),
@@ -836,7 +844,7 @@ fn prepared(
             artifact_url,
             authority,
         },
-    })
+    }))
 }
 
 async fn fetch_related(

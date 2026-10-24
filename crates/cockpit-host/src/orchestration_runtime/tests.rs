@@ -453,7 +453,7 @@ async fn resume_same_boot_dead_root_missing_container_reserves_only_root_epoch_o
         "holder":{"run_id":worker.run_id,"attachment_id":"worker-attachment","attachment_epoch":1},
         "transition_operation_id":null
     });
-    fixture.publish_with_claims(&[run.clone(), worker.clone()], &[claim.clone()]);
+    fixture.publish_with_claims(&[run.clone(), worker.clone()], std::slice::from_ref(&claim));
     let resolved = resolve_resume_input(&fixture.service, &empty_observation(), &run).await.unwrap();
     assert!(resolved.writer_exit_proof.is_none(), "root exit is not an all-consumer cleanup proof");
     assert!(resolved.root_main_recovery.is_some());
@@ -491,7 +491,7 @@ async fn resume_root_refuses_live_missing_container_and_unsettled_dispatch() {
     let fixture = Fixture::new();
     let live = ForegroundPty::new();
     let run = root_with_process(live.shell.process.pid);
-    fixture.publish(&[run.clone()]);
+    fixture.publish(std::slice::from_ref(&run));
     let refused = resolve_resume_input(&fixture.service, &empty_observation(), &run).await.unwrap();
     assert!(refused.root_main_recovery.is_none());
     assert!(refused.attachment_observation.is_none());
@@ -528,7 +528,7 @@ async fn resume_root_refuses_pending_foreign_ambiguous_and_different_live_pid_oc
     let run = dead_root();
     let shell = ForegroundPty::new();
     for occupant in 0..9 {
-        fixture.publish(&[run.clone()]);
+        fixture.publish(std::slice::from_ref(&run));
         let mut herdr = shell.herdr(true);
         match occupant {
             0 => herdr.runtime.panes[0].launch_pending = true,
@@ -599,7 +599,7 @@ async fn resume_live_root_reattaches_restored_endpoint_with_current_authenticate
         actual_agent_kind: Some(NativeAgentKind::Other("test-harness".into())),
         process: Some(process.shell.process.clone()),
     };
-    let registration = fixture.service.mutate_resolved(&Actor::Agent(agent.clone()), OrchestrationMutationRequest {
+    let registration = fixture.service.mutate_resolved(&Actor::Agent(Box::new(agent.clone())), OrchestrationMutationRequest {
         session_id: "fixture".into(), expected_revision: None,
         action: OrchestrationAction::RunRegister { operation_id: uuid::Uuid::new_v4().to_string() },
     }, &ResolvedMutationInput::default()).unwrap();
@@ -644,7 +644,7 @@ async fn resume_live_root_refuses_different_foreground_incarnation() {
     let original = ForegroundPty::new();
     let other = ForegroundPty::new();
     let run = root_with_process(original.shell.process.pid);
-    fixture.publish(&[run.clone()]);
+    fixture.publish(std::slice::from_ref(&run));
     let herdr = other.herdr(true);
     let refused = resolve_resume_input(&fixture.service, &herdr, &run).await.unwrap();
     assert!(refused.writer_exit_proof.is_none());
@@ -677,7 +677,7 @@ async fn resume_worker_retains_reboot_all_consumer_proof_and_offline_refusal() {
         "transition_operation_id":null
     });
     drop(process);
-    fixture.publish_with_claims(&[worker.clone()], &[claim.clone()]);
+    fixture.publish_with_claims(&[worker.clone()], std::slice::from_ref(&claim));
     let refused = resolve_resume_input(&fixture.service, &empty_observation(), &worker).await.unwrap();
     assert!(refused.writer_exit_proof.is_none());
     assert!(refused.root_main_recovery.is_none());
@@ -1333,7 +1333,7 @@ async fn operator_adopt_resolves_exact_pane_with_generic_harness_without_process
         pane_id: location.pane_id.clone(), boot_id: None, terminal_id: location.terminal_id.clone(),
         native_session_id: None, actual_agent_kind: None, process: None,
     };
-    let agent = Actor::Agent(caller.clone());
+    let agent = Actor::Agent(Box::new(caller.clone()));
     let registration_request = OrchestrationMutationRequest {
         session_id: "fixture".into(), expected_revision: None,
         action: OrchestrationAction::RunRegister { operation_id: uuid::Uuid::new_v4().to_string() },

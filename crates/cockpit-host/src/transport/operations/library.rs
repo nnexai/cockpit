@@ -28,9 +28,9 @@ pub struct ListingQuery {
     pub offset: Option<u32>,
 }
 
-pub fn listing_input()
--> impl FnOnce((Result<Query<ListingQuery>, QueryRejection>,)) -> Result<Option<u32>, OperationError>
-{
+type ListingArgs = (Result<Query<ListingQuery>, QueryRejection>,);
+
+pub fn listing_input() -> impl FnOnce(ListingArgs) -> Result<Option<u32>, OperationError> {
     |args| {
         http_input::mapped_query(Reject(
             "invalid_library_request",

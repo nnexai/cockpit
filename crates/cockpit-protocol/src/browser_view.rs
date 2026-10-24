@@ -419,7 +419,7 @@ pub struct BrowserViewEventMetadata {
 pub enum BrowserViewEvent {
     Attached {
         metadata: BrowserViewEventMetadata,
-        snapshot: BrowserViewSnapshot,
+        snapshot: Box<BrowserViewSnapshot>,
     },
     TargetsChanged {
         metadata: BrowserViewEventMetadata,
@@ -827,7 +827,7 @@ pub enum BrowserDraftRecoveryAction {
         draft_id: String,
         #[ts(type = "number")]
         expected_revision: u64,
-        annotation: BrowserViewDraftAnnotation,
+        annotation: Box<BrowserViewDraftAnnotation>,
     },
     RemoveAnnotation {
         draft_id: String,
@@ -949,7 +949,7 @@ pub enum BrowserViewCommand {
         draft_id: Option<String>,
         #[ts(type = "number | null")]
         expected_revision: Option<u64>,
-        command: BrowserViewDraftCommand,
+        command: Box<BrowserViewDraftCommand>,
     },
 }
 
@@ -992,18 +992,19 @@ impl BrowserViewCommandRequest {
             {
                 Err("browser view capture annotation count exceeds bounds")
             }
-            BrowserViewCommand::Draft {
-                command: BrowserViewDraftCommand::UpsertAnnotation { annotation },
-                ..
-            } if annotation.points.len() > BROWSER_VIEW_MAX_ANNOTATION_POINTS => {
-                Err("browser view draft annotation points exceed bounds")
-            }
-            BrowserViewCommand::Draft {
-                command: BrowserViewDraftCommand::SaveCapture { annotation_ids, .. },
-                ..
-            } if annotation_ids.len() > BROWSER_VIEW_MAX_CAPTURE_ANNOTATIONS => {
-                Err("browser view capture annotation count exceeds bounds")
-            }
+            BrowserViewCommand::Draft { command, .. } => match command.as_ref() {
+                BrowserViewDraftCommand::UpsertAnnotation { annotation }
+                    if annotation.points.len() > BROWSER_VIEW_MAX_ANNOTATION_POINTS =>
+                {
+                    Err("browser view draft annotation points exceed bounds")
+                }
+                BrowserViewDraftCommand::SaveCapture { annotation_ids, .. }
+                    if annotation_ids.len() > BROWSER_VIEW_MAX_CAPTURE_ANNOTATIONS =>
+                {
+                    Err("browser view capture annotation count exceeds bounds")
+                }
+                _ => Ok(()),
+            },
             _ => Ok(()),
         }
     }
@@ -1015,7 +1016,7 @@ impl BrowserViewCommandRequest {
 pub enum BrowserViewCommandOutcome {
     None,
     Snapshot {
-        snapshot: BrowserViewSnapshot,
+        snapshot: Box<BrowserViewSnapshot>,
     },
     Control {
         control: BrowserViewControlState,
@@ -1050,7 +1051,7 @@ pub enum BrowserViewCommandResponse {
         #[ts(type = "number")]
         stream_epoch: u64,
         request_id: String,
-        outcome: BrowserViewCommandOutcome,
+        outcome: Box<BrowserViewCommandOutcome>,
     },
     Rejected {
         view_id: String,
@@ -1146,8 +1147,8 @@ fn validate_browser_url(value: &str) -> Result<(), &'static str> {
         if remainder.is_empty() {
             return Err("invalid_browser_url: browser URL must not be empty");
         }
-        if remainder.starts_with("//") {
-            let authority = remainder[2..]
+        if let Some(after_slashes) = remainder.strip_prefix("//") {
+            let authority = after_slashes
                 .split(['/', '?', '#'])
                 .next()
                 .unwrap_or_default();

@@ -9,6 +9,7 @@ import {
   parseSessionSnapshotResponse,
   parseSpaceGitStatusResponse,
   parseSpaceGitActionResponse,
+  parseSpaceServiceStatusRequest,
   parseSpaceServiceStatusResponse,
   parseSpaceTagsResponse,
   parseStatusResponse,
@@ -30,7 +31,7 @@ import {
 } from "./streamOrder";
 import { parseViewerContext, parseViewerSourceOptions, parseViewerOpenRequest, matchViewerContext } from "./contextProtocol";
 import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./notesProtocol";
-import type { ExecutionAttachment, OrchestrationSnapshot, Run, NotesRequest, NotesResponse, NotesOperation, NotesTodo, NotesDecision, NotesComment, NotesTargetInfo, ProjectConfiguration } from "../protocol/generated/v1";
+import type { ExecutionAttachment, OrchestrationSnapshot, Run, NotesRequest, NotesResponse, NotesOperation, NotesTodo, NotesDecision, NotesComment, NotesTargetInfo, ProjectConfiguration, SpaceServiceStatusRequest } from "../protocol/generated/v1";
 
 const snapshot: CockpitSessionSnapshot = {
   session_id: "session-1",
@@ -158,7 +159,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     sessions: vi.fn(async () => sessions),
     sessionSnapshot: vi.fn(async () => snapshot),
     spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
-    spaceServiceStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, services: [] })),
+    spaceServiceStatus: vi.fn(async (sessionId: string, _request: SpaceServiceStatusRequest, _signal?: AbortSignal) => ({ session_id: sessionId, services: [] })),
     spaceTags: vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: snapshot.server_instance, catalog: [], spaces: [] })),
     changeSpaceTag: vi.fn(async () => { throw new Error("Unexpected Space tag change in terminal fixture"); }),
     spaceGitAction: vi.fn(async () => { throw new Error("Unexpected Git action in terminal fixture"); }),
@@ -337,8 +338,23 @@ describe("Space Git contracts", () => {
   }
 });
 describe("Space service status contracts", () => {
-  const service = { key: "/repo:dev", space_id: "space-1", pane_id: "pane-1", tab_id: null, title: "dev server", status: "healthy", port: 5173 } as const;
+  const service = { key: "/repo:dev", pane_id: "pane-1", tab_id: null, title: "dev server", status: "healthy", port: 5173 } as const;
   const response = { session_id: "session-1", services: [service] };
+  const request = { server_instance: "server-1", pane_ids: ["pane-1", "pane-2"] };
+
+  it("bounds pane-set requests and rejects unknown fields and invalid server/resource IDs", () => {
+    expect(parseSpaceServiceStatusRequest(request)).toEqual(request);
+    expect(parseSpaceServiceStatusRequest({ ...request, pane_ids: [] }).pane_ids).toEqual([]);
+    expect(parseSpaceServiceStatusRequest({ server_instance: "é".repeat(128), pane_ids: Array.from({ length: 4096 }, () => "p".repeat(128)) }).pane_ids).toHaveLength(4096);
+    for (const invalid of [
+      { ...request, extra: true }, { ...request, server_instance: "" },
+      { ...request, server_instance: "é".repeat(129) }, { ...request, server_instance: "bad\nserver" },
+      { ...request, server_instance: "bad\u0085server" },
+      { ...request, pane_ids: Array.from({ length: 4097 }, () => "pane") },
+      { ...request, pane_ids: [""] }, { ...request, pane_ids: ["p".repeat(129)] },
+      { ...request, pane_ids: ["bad/pane"] }, { ...request, pane_ids: [1] },
+    ]) expect(() => parseSpaceServiceStatusRequest(invalid)).toThrow(CockpitClientError);
+  });
 
   it("accepts status transitions and rejects malformed service targets", () => {
     for (const status of ["starting", "healthy", "unhealthy"]) {
@@ -354,15 +370,58 @@ describe("Space service status contracts", () => {
       const client = transport === "browser"
         ? createBrowserClient(vi.fn(async () => jsonResponse({ ...response, session_id: "other" })))
         : createNativeClient(vi.fn(async () => ({ ...response, session_id: "other" })));
-      await expect(client.spaceServiceStatus("session-1")).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(client.spaceServiceStatus("session-1", request)).rejects.toMatchObject({ code: "malformed_response" });
     });
     it(`${transport} preserves focus targets and health status`, async () => {
       const client = transport === "browser"
         ? createBrowserClient(vi.fn(async () => jsonResponse(response)))
         : createNativeClient(vi.fn(async () => response));
-      await expect(client.spaceServiceStatus("session-1")).resolves.toEqual(response);
+      await expect(client.spaceServiceStatus("session-1", request)).resolves.toEqual(response);
+    });
+    it(`${transport} sends the pane-set body as a cancellable read`, async () => {
+      const controller = new AbortController();
+      const fetch = vi.fn(async (_path: string, _init?: RequestInit) => jsonResponse(response));
+      const invoke = vi.fn(async (_command: string, _args?: Record<string, unknown>) => response);
+      const client = transport === "browser" ? createBrowserClient(fetch) : createNativeClient(invoke);
+      await expect(client.spaceServiceStatus("session-1", request, controller.signal)).resolves.toEqual(response);
+      if (transport === "browser") {
+        expect(fetch.mock.calls[0][0]).toBe("/api/v1/sessions/session-1/space-services");
+        expect(fetch.mock.calls[0][1]).toMatchObject({ method: "POST", signal: controller.signal, body: JSON.stringify(request) });
+      } else expect(invoke).toHaveBeenCalledWith("cockpit_space_service_status", { sessionId: "session-1", request });
+      controller.abort();
+      const dispatched = transport === "browser" ? fetch : invoke;
+      dispatched.mockClear();
+      await expect(client.spaceServiceStatus("session-1", request, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+      expect(dispatched).not.toHaveBeenCalled();
+      await expect(client.spaceServiceStatus("session-1", { ...request, pane_ids: ["bad/pane"] })).rejects.toMatchObject({ code: "malformed_response" });
+      expect(dispatched).not.toHaveBeenCalled();
+    });
+
+    it(`${transport} rejects a response that arrives after cancellation`, async () => {
+      let resolve!: (value: unknown) => void;
+      const pending = new Promise<unknown>(next => { resolve = next; });
+      const client = transport === "browser"
+        ? createBrowserClient(vi.fn(async () => jsonResponse(await pending)))
+        : createNativeClient(vi.fn(async () => pending));
+      const controller = new AbortController();
+      const result = client.spaceServiceStatus("session-1", request, controller.signal);
+      controller.abort();
+      resolve(response);
+      await expect(result).rejects.toMatchObject({ name: "AbortError" });
     });
   }
+
+  it("settles native service-read cancellation before the host responds", async () => {
+    let reject!: (reason: unknown) => void;
+    const hostResponse = new Promise<unknown>((_resolve, next) => { reject = next; });
+    const client = createNativeClient(async () => hostResponse);
+    const controller = new AbortController();
+    const result = client.spaceServiceStatus("session-1", request, controller.signal);
+    controller.abort();
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+    reject(new Error("late host failure"));
+    await Promise.resolve();
+  });
 });
 
 describe("Space tags contracts", () => {

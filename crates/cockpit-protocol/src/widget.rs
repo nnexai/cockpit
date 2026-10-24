@@ -322,7 +322,7 @@ pub enum WidgetEvent {
     Upserted {
         #[ts(type = "number")]
         sequence: u64,
-        widget: WidgetSummary,
+        widget: Box<WidgetSummary>,
     },
     Removed {
         #[ts(type = "number")]

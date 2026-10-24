@@ -1241,7 +1241,7 @@ async fn isolated_git_placement_without_open_primary_skips_only_registration_wit
         assert_eq!(after.tabs, before.tabs, "{source}");
         assert_eq!(after.panes, before.panes, "{source}");
         assert_eq!(fixture.adapter.inventory_calls.load(Ordering::SeqCst), 1, "{source}");
-        assert_eq!(&*fixture.adapter.inventory_requests.lock(), &[repository.checkout_path.clone()], "{source}");
+        assert_eq!(&*fixture.adapter.inventory_requests.lock(), std::slice::from_ref(&repository.checkout_path), "{source}");
         let registration_count = usize::from(source == "linked-with-open-primary");
         assert_eq!(fixture.adapter.worktree_requests.lock().unwrap().len(), registration_count, "{source}");
         if registration_count == 0 {

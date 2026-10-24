@@ -1028,22 +1028,20 @@ impl SourceService {
     /// private directory at `dest_path`. The result must name the requested
     /// attachment and one path component; the caller verifies the file.
     /// `budget` covers the requested attachment's bytes and one output file.
-    /// `canonical_id` is a Confluence page id for `"page"` and a Jira key for
+    /// `source.canonical_id` is a Confluence page id for `"page"` and a Jira key for
     /// `"issue"`; any other resource type is refused.
     pub async fn download_attachment(
         &self,
-        provider_id: &str,
-        resource_type: &str,
-        canonical_id: &str,
+        source: &SourceRef,
         attachment: &AttachmentRef,
         siblings: &[AttachmentRef],
         dest: &cap_std::fs::Dir,
         dest_path: &std::path::Path,
         budget: crate::process::StagingBudget,
     ) -> Result<DownloadedAttachment, InspectionError> {
-        let valid = match resource_type {
-            "page" => confluence_page_id(canonical_id),
-            "issue" => is_jira_key(canonical_id),
+        let valid = match source.resource_type.as_str() {
+            "page" => confluence_page_id(&source.canonical_id),
+            "issue" => is_jira_key(&source.canonical_id),
             _ => false,
         };
         if !valid {
@@ -1052,11 +1050,11 @@ impl SourceService {
                 "attachment download requires a valid page id or issue key",
             ));
         }
-        let provider = self.selected_provider(provider_id)?;
+        let provider = self.selected_provider(&source.provider_id)?;
         let downloaded = timeout(
             self.deadline(),
             provider.download_attachment(
-                canonical_id,
+                &source.canonical_id,
                 attachment,
                 siblings,
                 dest,
@@ -1613,14 +1611,11 @@ mod tests {
         assert_eq!(recent_before.len(), 1);
         let fetched = service.fetch_assets(request()).await.unwrap();
         assert_eq!(fetched.assets[0].body, "body");
-        let recent_after = service.recent.lock().unwrap();
-        assert_eq!(recent_after.fetches.len(), recent_before.len());
-        assert_eq!(recent_after.fetches[0].0, recent_before[0].0);
-        assert_eq!(recent_after.fetches[0].1, recent_before[0].1);
-        assert_eq!(
-            recent_after.fetches[0].2[0].body,
-            recent_before[0].2[0].body
-        );
+        let recent_after = service.recent.lock().unwrap().fetches.clone();
+        assert_eq!(recent_after.len(), recent_before.len());
+        assert_eq!(recent_after[0].0, recent_before[0].0);
+        assert_eq!(recent_after[0].1, recent_before[0].1);
+        assert_eq!(recent_after[0].2[0].body, recent_before[0].2[0].body);
         shared.lock().unwrap().source.provider_instance = "https://other.test".into();
         assert_eq!(
             service

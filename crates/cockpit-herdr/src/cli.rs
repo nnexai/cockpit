@@ -649,7 +649,13 @@ fn validate_event_snapshot_identity(
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum EventConnectionEnd {
     StreamEnded,
-    TopologyChanged(SessionSnapshotResponse),
+    TopologyChanged(Box<SessionSnapshotResponse>),
+}
+
+#[derive(Clone, Copy)]
+struct EventIdentityCheck<'a> {
+    expected: &'a EventIdentity,
+    checked: bool,
 }
 
 impl HerdrCliAdapter {
@@ -819,12 +825,12 @@ impl HerdrCliAdapter {
             let pid = pid?;
             let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
             let close = stat.rfind(')')?;
-            return stat
+            stat
                 .get(close + 2..)?
                 .split_whitespace()
                 .nth(19)?
                 .parse()
-                .ok();
+                .ok()
         }
         #[cfg(target_os = "macos")]
         {
@@ -979,7 +985,7 @@ impl HerdrCliAdapter {
                     format!("Herdr request write stopped after {written} bytes"),
                 ));
             }
-            Ok((written, Err(error))) if written == 0 => {
+            Ok((0, Err(error))) => {
                 return Err(InspectionError::new(
                     "request_not_dispatched",
                     format!("Herdr request failed before dispatch: {error}"),
@@ -1406,8 +1412,10 @@ impl HerdrCliAdapter {
                     .event_connection(
                         &session_id,
                         &current_snapshot,
-                        &expected_identity,
-                        identity_checked_for_connection,
+                        EventIdentityCheck {
+                            expected: &expected_identity,
+                            checked: identity_checked_for_connection,
+                        },
                         relevance,
                         &sender,
                         initial_ready.clone(),
@@ -1418,7 +1426,7 @@ impl HerdrCliAdapter {
                 }
                 let (change, retry) = match result {
                     Ok(EventConnectionEnd::TopologyChanged(new_snapshot)) => {
-                        current_snapshot = new_snapshot;
+                        current_snapshot = *new_snapshot;
                         delay_ms = 100;
                         continue;
                     }
@@ -1572,8 +1580,7 @@ impl HerdrCliAdapter {
         &self,
         session_id: &str,
         snapshot: &SessionSnapshotResponse,
-        expected: &EventIdentity,
-        identity_checked: bool,
+        identity: EventIdentityCheck<'_>,
         relevance: EventRelevance,
         sender: &mpsc::Sender<SessionChange>,
         readiness: Option<mpsc::Sender<Result<(), InspectionError>>>,
@@ -1582,8 +1589,7 @@ impl HerdrCliAdapter {
             .event_connection_inner(
                 session_id,
                 snapshot,
-                expected,
-                identity_checked,
+                identity,
                 relevance,
                 sender,
                 readiness.clone(),
@@ -1607,14 +1613,13 @@ impl HerdrCliAdapter {
         &self,
         session_id: &str,
         snapshot: &SessionSnapshotResponse,
-        expected: &EventIdentity,
-        identity_checked: bool,
+        identity: EventIdentityCheck<'_>,
         relevance: EventRelevance,
         sender: &mpsc::Sender<SessionChange>,
         readiness: Option<mpsc::Sender<Result<(), InspectionError>>>,
     ) -> Result<EventConnectionEnd, InspectionError> {
-        if !identity_checked {
-            self.check_event_identity(session_id, expected).await?;
+        if !identity.checked {
+            self.check_event_identity(session_id, identity.expected).await?;
         }
         let path = self.socket_path(session_id)?;
         let mut stream =
@@ -1744,9 +1749,9 @@ impl HerdrCliAdapter {
         // If topology changed while the subscription was being established,
         // rebind with the new pane set rather than exposing a bootstrap gap.
         let latest = self.read_snapshot(session_id).await?;
-        validate_event_snapshot_identity(&latest, expected)?;
+        validate_event_snapshot_identity(&latest, identity.expected)?;
         if pane_set_changed(snapshot, &latest) {
-            return Ok(EventConnectionEnd::TopologyChanged(latest));
+            return Ok(EventConnectionEnd::TopologyChanged(Box::new(latest)));
         }
         // Initial callers publish a snapshot after readiness. Existing consumers
         // need another invalidation after each live-only reconnect, even when
@@ -1821,12 +1826,12 @@ impl HerdrCliAdapter {
             }
             if topology {
                 let latest = self.read_snapshot(session_id).await?;
-                validate_event_snapshot_identity(&latest, expected)?;
+                validate_event_snapshot_identity(&latest, identity.expected)?;
                 if pane_set_changed(snapshot, &latest) {
                     if sender.send(SessionChange::Changed).await.is_err() {
                         return Ok(EventConnectionEnd::StreamEnded);
                     }
-                    return Ok(EventConnectionEnd::TopologyChanged(latest));
+                    return Ok(EventConnectionEnd::TopologyChanged(Box::new(latest)));
                 }
             }
             if sender.send(SessionChange::Changed).await.is_err() {
@@ -2785,7 +2790,15 @@ mod tests {
         drop(initial_caller);
         adapter
             .event_connection(
-                "default", &snapshot, &expected, true, EventRelevance::Session, &sender, Some(ready),
+                "default",
+                &snapshot,
+                EventIdentityCheck {
+                    expected: &expected,
+                    checked: true,
+                },
+                EventRelevance::Session,
+                &sender,
+                Some(ready),
             )
             .await
             .unwrap();

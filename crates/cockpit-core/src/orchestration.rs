@@ -52,10 +52,13 @@ use uuid::Uuid;
 
 pub(crate) const DEFAULT_START_TIMEOUT_MS: u64 = 60_000;
 
+/// Run bindings keyed by run id: (attachment id, attachment epoch).
+pub type RecordedRunBindings = std::collections::BTreeMap<String, (String, u64)>;
+
 #[derive(Debug, Clone)]
 pub enum Actor {
     Operator(OperatorOrigin),
-    Agent(AgentCaller),
+    Agent(Box<AgentCaller>),
 }
 #[derive(Debug, Clone)]
 pub struct AgentCaller {
@@ -158,7 +161,7 @@ pub struct OrchestrationService {
 #[derive(Debug, Clone)]
 pub(crate) enum DispatchUpdate {
     SetupPlanned {
-        setup: SetupSummary,
+        setup: Box<SetupSummary>,
     },
     PlanFailed {
         error: ErrorResponse,
@@ -172,13 +175,13 @@ pub(crate) enum DispatchUpdate {
         launch_attempt: u32,
         endpoint_identity: String,
         scope_unit: Option<String>,
-        latch: Option<AgentLaunchReceipt>,
+        latch: Option<Box<AgentLaunchReceipt>>,
         staging_workspace_id: Option<String>,
     },
     TabReceipt {
-        location: RunLocation,
-        launch_shell_identity: Option<NativeShellIdentity>,
-        process_scope: Option<OwnedProcessScope>,
+        location: Box<RunLocation>,
+        launch_shell_identity: Option<Box<NativeShellIdentity>>,
+        process_scope: Option<Box<OwnedProcessScope>>,
     },
 }
 
@@ -349,7 +352,7 @@ impl OrchestrationService {
         Ok((state.revision, state.runs.into_iter().filter(|r| r.session_id == session_id).collect()))
     }
 
-    pub fn recorded_runs_with_bindings(&self, session_id: &str) -> Result<(u64, Vec<Run>, std::collections::BTreeMap<String, (String, u64)>), InspectionError> {
+    pub fn recorded_runs_with_bindings(&self, session_id: &str) -> Result<(u64, Vec<Run>, RecordedRunBindings), InspectionError> {
         validate_identity(session_id)?;
         let state = self.store.lock()?.read()?;
         let bindings = state.runs.iter().filter(|r| r.session_id == session_id && has_current_binding(&state, r))
@@ -522,7 +525,7 @@ impl OrchestrationService {
                 .map_err(|_| error("job_unauthorized", "Conversation metadata is invalid"))?;
             Uuid::new_v5(&namespace, &identity).to_string()
         } else { caller.auth.credential_id.clone() };
-        self.mutate(&Actor::Agent(caller.clone()), OrchestrationMutationRequest {
+        self.mutate(&Actor::Agent(Box::new(caller.clone())), OrchestrationMutationRequest {
             session_id: caller.session_id.clone(), expected_revision: None,
             action: OrchestrationAction::RunRegister { operation_id },
         })?;
@@ -592,8 +595,7 @@ impl OrchestrationService {
         };
         if let OrchestrationAction::SendBack { run_id, .. }
         | OrchestrationAction::CancelRun { run_id } = &request.action
-        {
-            if state
+            && state
                 .task_intents
                 .iter()
                 .any(|intent| &intent.run_id == run_id)
@@ -603,7 +605,6 @@ impl OrchestrationService {
                     "Resolve the durable acceptance intent before changing this run",
                 ));
             }
-        }
         let Admission { caller, stale, location_changed } = admit(&mut state, actor, &request)?;
         let semantic_operation = if matches!(request.action,
             OrchestrationAction::Report { .. } | OrchestrationAction::MessageSend { .. }) {
@@ -664,12 +665,11 @@ impl OrchestrationService {
             Applied::Published(response) => return Ok(response),
         };
         machine_changed |= location_changed;
-        if machine_changed {
-            if let Some(run_id) = lifecycle_run {
+        if machine_changed
+            && let Some(run_id) = lifecycle_run {
                 let index = run_index(&state, &run_id)?;
                 state.runs[index].updated_at = now();
             }
-        }
         if machine_changed {
             let revision = locked.save(&mut state)?;
             self.revision.send_replace(revision);
@@ -882,9 +882,8 @@ pub fn is_project_root_candidate(run: &Run, session_id: &str, project_key: &str)
 /// Stable project-root preference shared with the host's read-only lookup.
 pub fn preferred_project_root(runs: &[Run], session_id: &str, project_key: &str, selected: Option<&str>) -> Option<usize> {
     let eligible = |run: &Run| is_project_root_candidate(run, session_id, project_key);
-    if let Some(selected) = selected {
-        if let Some(index) = runs.iter().position(|r| r.run_id == selected && eligible(r)) { return Some(index); }
-    }
+    if let Some(selected) = selected
+        && let Some(index) = runs.iter().position(|r| r.run_id == selected && eligible(r)) { return Some(index); }
     runs.iter().enumerate().filter(|(_, r)| eligible(r)).max_by(|(_, left), (_, right)|
         left.updated_at.cmp(&right.updated_at).then_with(|| right.run_id.cmp(&left.run_id)))
         .map(|(index, _)| index)
@@ -1095,11 +1094,10 @@ fn validate_original_source(
     if job.role == JobRole::Root {
         return Err(error("source_provenance_conflict", "Root messages have no worker task or checkout claim"));
     }
-    if let Some(expected) = claim_id {
-        if run.checkout_claim_id.as_ref() != Some(expected) {
+    if let Some(expected) = claim_id
+        && run.checkout_claim_id.as_ref() != Some(expected) {
             return Err(error("checkout_claim_conflict", "Queued message belongs to a different original checkout claim"));
         }
-    }
     if let Some(expected) = task_revision {
         let task_id = run.task_id.as_deref().ok_or_else(|| error("task_not_found", "Semantic source task is missing"))?;
         let document = locked.tasks(&run.root_id)?;
@@ -1308,14 +1306,20 @@ fn dispatch(step: DispatchStep) -> DispatchState {
         agent_started: false,
     }
 }
+/// Parent and task links for a run; roots have neither.
+#[derive(Debug, Clone, Default)]
+pub struct RunLineage {
+    pub parent_run_id: Option<String>,
+    pub task_id: Option<String>,
+}
+
 fn new_run(
     id: &str,
     session: &str,
     kind: RunKind,
     label: String,
     root: &str,
-    parent_run_id: Option<String>,
-    task_id: Option<String>,
+    lineage: RunLineage,
     attempt: u32,
 ) -> Run {
     let now = now();
@@ -1326,8 +1330,8 @@ fn new_run(
         kind,
         label,
         root_id: root.into(),
-        parent_run_id,
-        task_id,
+        parent_run_id: lineage.parent_run_id,
+        task_id: lineage.task_id,
         attempt,
         assignment_generation: None,
         launch_config: Default::default(),
@@ -1380,7 +1384,7 @@ fn brief(
             "launch".into()
         }
     );
-    messages::append(state, messages::AppendMessage { from: ActorRef::Dispatcher, to_run_id: to, message_id: &message_id, kind: kind, text: text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
+    messages::append(state, messages::AppendMessage { from: ActorRef::Dispatcher, to_run_id: to, message_id: &message_id, kind, text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     Ok(())
 }
 #[cfg(test)]

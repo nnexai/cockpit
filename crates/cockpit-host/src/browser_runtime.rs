@@ -711,12 +711,11 @@ impl BrowserRuntime {
         if let Some(stop) = stop {
             let _ = stop.send(());
         }
-        if let Some(mut task) = task.take() {
-            if timeout(Duration::from_secs(2), &mut task).await.is_err() {
+        if let Some(mut task) = task.take()
+            && timeout(Duration::from_secs(2), &mut task).await.is_err() {
                 task.abort();
                 let _ = task.await;
             }
-        }
         if let Ok(metadata) = fs::symlink_metadata(&socket)
             && metadata.file_type().is_socket()
             && metadata.dev() == socket_device
@@ -926,13 +925,13 @@ async fn owner_view_command(
             view_id: request.view_id,
             stream_epoch: request.stream_epoch,
             request_id: request.request_id,
-            outcome: BrowserViewCommandOutcome::None,
+            outcome: Box::new(BrowserViewCommandOutcome::None),
         });
     }
     if let BrowserViewCommand::Draft { context, draft_id, expected_revision, command } = &request.command {
         let view = helper.events(&request.view_id).await?;
         let snapshot = view.snapshot;
-        let historical = matches!(command, BrowserViewDraftCommand::List | BrowserViewDraftCommand::SaveCapture { .. }
+        let historical = matches!(command.as_ref(), BrowserViewDraftCommand::List | BrowserViewDraftCommand::SaveCapture { .. }
             | BrowserViewDraftCommand::RetryPending | BrowserViewDraftCommand::DiscardPending);
         if snapshot.identity.stream_epoch != request.stream_epoch
             || (!historical && snapshot.document.as_ref().is_none_or(|document|
@@ -951,12 +950,12 @@ async fn owner_view_command(
         let (target, attachment) = helper.attachment_context(&request.view_id).await?;
         verify_view_endpoint(service, helper, &request.view_id).await?;
         let result = service.browser_annotation_command(
-            &target, &attachment, context.clone(), draft_id.as_deref(), *expected_revision, command.clone(),
+            &target, &attachment, context.clone(), draft_id.as_deref(), *expected_revision, command.as_ref().clone(),
         ).await;
         return Ok(match result {
             Ok(outcome) => BrowserViewCommandResponse::Accepted {
                 view_id: request.view_id, stream_epoch: request.stream_epoch,
-                request_id: request.request_id, outcome,
+                request_id: request.request_id, outcome: Box::new(outcome),
             },
             Err(error) => BrowserViewCommandResponse::Rejected {
                 view_id: request.view_id, stream_epoch: request.stream_epoch,
@@ -966,16 +965,17 @@ async fn owner_view_command(
     }
     let response = helper.command(request.clone()).await?;
     if let (BrowserViewCommand::Capture { command }, BrowserViewCommandResponse::Accepted {
-        outcome: BrowserViewCommandOutcome::CapturePrepared { capture_id, descriptor }, ..
-    }) = (&request.command, &response) {
+        outcome, ..
+    }) = (&request.command, &response)
+        && let BrowserViewCommandOutcome::CapturePrepared { capture_id, descriptor } = outcome.as_ref()
+    {
         let (target, attachment) = helper.attachment_context(&request.view_id).await?;
         let snapshot = helper.events(&request.view_id).await?.snapshot;
         let document = snapshot.document.filter(|document|
             document.target_id == descriptor.target_id && document.document_generation == descriptor.document_generation
         ).ok_or_else(|| InspectionError::new("browser_capture_stale", "The document changed during capture preparation"))?;
         verify_view_endpoint(service, helper, &request.view_id).await?;
-        service.browser_prepare_capture(&target, &attachment, command, capture_id, descriptor,
-            document.frame_id, document.frame_generation).await?;
+        service.browser_prepare_capture(&target, &attachment, command, capture_id, descriptor, document).await?;
     }
     Ok(response)
 }
@@ -1044,7 +1044,7 @@ async fn serve_peer(
         };
         let attached = cockpit_protocol::browser_view::BrowserViewEvent::Attached {
             metadata,
-            snapshot: view.snapshot,
+            snapshot: Box::new(view.snapshot),
         };
         if write_wire(&mut writer, &WireResponse::BrowserViewEvent(attached))
             .await
@@ -1268,7 +1268,7 @@ async fn forward_view_events(
         }
     });
     Ok(BrowserViewEvents {
-        snapshot,
+        snapshot: *snapshot,
         events: receiver,
     })
 }

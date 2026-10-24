@@ -195,8 +195,7 @@ impl LibraryService {
             let _lease = lease;
             if operations::cancelled(&worker_store, &id)? { return Ok(()); }
             let old = service.entry(&worker_store, &item_id)?;
-            if old.is_some() && !request.refresh_existing {
-                let old = old.as_ref().unwrap();
+            if let (Some(old), false) = (&old, request.refresh_existing) {
                 operations::row(&worker_store, &id, Some(&old.summary), LibraryReportOutcome::Unchanged, Some("Already saved in Library".into()))?;
             } else {
                 service.save_folder(&worker_store, &id, &path.to_string_lossy(), request.label.as_deref(), old, None).await?;
@@ -274,9 +273,8 @@ impl LibraryService {
             store.seal(&stage, &mut entry, files)?;
             if operations::cancelled(store, operation)? { return Ok(()); }
             if let Err(e) = store.publish(stage, entry.clone(), old.as_ref().map(|e| e.summary.revision.as_str()), confirmed) {
-                if e.code == "library_conflict" {
-                    if let Some(old) = old { return self.record_conflict(store, operation, old, e.message); }
-                }
+                if e.code == "library_conflict"
+                    && let Some(old) = old { return self.record_conflict(store, operation, old, e.message); }
                 return Err(e);
             }
         }

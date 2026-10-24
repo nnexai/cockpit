@@ -51,7 +51,7 @@ use cockpit_protocol::v1::{
     SessionSnapshotResponse, SpaceGitStatusResponse, StatusResponse, TerminalCommand,
     TerminalOpenRequest, TerminalStreamMessage,
     SpaceGitActionRequest, SpaceGitActionResponse,
-    SpaceServiceStatusResponse,
+    SpaceServiceStatusRequest, SpaceServiceStatusResponse,
 };
 use tokio::sync::{RwLock, mpsc};
 
@@ -451,9 +451,11 @@ impl CockpitService {
     pub async fn space_service_status(
         &self,
         session_id: &str,
+        request: &SpaceServiceStatusRequest,
     ) -> Result<SpaceServiceStatusResponse, InspectionError> {
-        let snapshot = self.session_snapshot(session_id).await?;
-        Ok(self.space_services.read(&snapshot, self.adapter.session_socket_path(session_id)).await)
+        self.ensure_live()?;
+        validate_session_id(session_id)?;
+        Ok(self.space_services.read(session_id, request, self.adapter.session_socket_path(session_id)).await)
     }
 
     /// Pull fast-forward-only or push the exact configured upstream of this Space.

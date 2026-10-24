@@ -141,15 +141,14 @@ impl OrchestrationRuntime {
     }
     pub async fn shutdown(&self) {
         self.shutdown.cancel();
-        if let Some(mut task) = self.task.lock().await.take() {
-            if tokio::time::timeout(Duration::from_secs(5), &mut task)
+        if let Some(mut task) = self.task.lock().await.take()
+            && tokio::time::timeout(Duration::from_secs(5), &mut task)
                 .await
                 .is_err()
             {
                 task.abort();
                 let _ = task.await;
             }
-        }
     }
 }
 
@@ -505,7 +504,7 @@ async fn resolve_resume_input(
             {
                 let workspace = authoritative_workspace(&runtime, &location.workspace_id)?;
                 let saved_path = run.setup.as_ref().map(|setup| setup.checkout_path.as_str())
-                    .or_else(|| match run.target.as_ref() {
+                    .or(match run.target.as_ref() {
                         Some(DispatchTarget::Setup {
                             request: WorkspaceSetupRequest::Open { path, .. },
                         }) => Some(path.as_str()),

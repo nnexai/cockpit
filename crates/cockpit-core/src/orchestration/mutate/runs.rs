@@ -58,8 +58,8 @@ pub(in crate::orchestration) fn supervisor_start(
                 return Err(error("project_identity_unavailable", "An associated open root requires owner project reconciliation before reuse"));
             }
         }
-        if let Some(project) = &resolved_project {
-            if let Some(index) = preferred_project_root(&ctx.state.runs, ctx.session_id, &project.key, selected_root_id.as_deref()) {
+        if let Some(project) = &resolved_project
+            && let Some(index) = preferred_project_root(&ctx.state.runs, ctx.session_id, &project.key, selected_root_id.as_deref()) {
                 let run = &ctx.state.runs[index];
                 let root_id = run.run_id.clone();
                 let observed_connected = has_current_binding(ctx.state, run)
@@ -102,7 +102,6 @@ pub(in crate::orchestration) fn supervisor_start(
                     root_id, result.clone(), Vec::new())?;
                 return Ok(Applied::Machine(result));
             }
-        }
     }
     let run_id = id();
     let label = label.clone().unwrap_or_else(|| "Supervisor".into());
@@ -120,7 +119,7 @@ pub(in crate::orchestration) fn supervisor_start(
             }}
         }
     };
-    let mut run = new_run(&run_id, ctx.session_id, RunKind::Supervisor, label, &run_id, None, None, 1);
+    let mut run = new_run(&run_id, ctx.session_id, RunKind::Supervisor, label, &run_id, RunLineage::default(), 1);
     run.launch_config = ctx.service.launch_config.clone();
     run.target = Some(target);
     run.project = resolved_project;
@@ -155,7 +154,7 @@ pub(in crate::orchestration) fn adopt(
         return Err(error("attachment_conflict", "Selected adoption placement changed"));
     }
     let run_id = id();
-    let mut run = new_run(&run_id, ctx.session_id, RunKind::Adopted, label, &run_id, None, None, 1);
+    let mut run = new_run(&run_id, ctx.session_id, RunKind::Adopted, label, &run_id, RunLineage::default(), 1);
     run.launch_config = ctx.service.launch_config.clone();
     run.stage = RunStage::Starting;
     run.project = ctx.resolved.and_then(|r| r.project.clone());
@@ -251,7 +250,7 @@ pub(in crate::orchestration) fn create_attempt(
     let label = req.label.unwrap_or(&task.title);
     bounded(label, 256)?;
     let mut run = new_run(&run_id, ctx.session_id, RunKind::Worker, label.into(), req.root_id,
-        Some(req.root_id.into()), Some(req.task_id.into()), attempt);
+        RunLineage { parent_run_id: Some(req.root_id.into()), task_id: Some(req.task_id.into()) }, attempt);
     run.launch_config = ctx.service.launch_config.clone();
     run.assignment_generation = Some(req.generation);
     run.target = Some(unfocused(req.target));
@@ -285,11 +284,10 @@ pub(in crate::orchestration) fn next_attempt(state: &OrchestrationState, root_id
 
 fn root_authority(ctx: &MutationCtx<'_>, root_id: &str) -> Result<(), InspectionError> {
     task_root_authority(ctx.state, ctx.actor, ctx.caller, ctx.session_id, root_id)?;
-    if let Actor::Agent(agent) = ctx.actor {
-        if credentials::validate_caller(ctx.state, agent)?.role != JobRole::Root {
+    if let Actor::Agent(agent) = ctx.actor
+        && credentials::validate_caller(ctx.state, agent)?.role != JobRole::Root {
             return Err(error("actor_forbidden", "Only the owning liaison or explicit operator may authorize task execution"));
         }
-    }
     Ok(())
 }
 
@@ -536,7 +534,7 @@ pub(in crate::orchestration) fn cancel(
     state.runs[index].stage = RunStage::Closed;
     state.runs[index].close_reason = Some(CloseReason::Cancelled);
     let from = actor_ref(actor, caller, state);
-    messages::append(state, messages::AppendMessage { from: from, to_run_id: &run_id, message_id: &format!("cancel-{}", id()), kind: MessageKind::CancelRequest, text: "Tracking is closed for this run. Please stop and report outstanding effects. This advisory request does not guarantee process termination; resources and descendants are retained.", in_reply_to: None, report: None, stale: false, escalated_from: None })?;
+    messages::append(state, messages::AppendMessage { from, to_run_id: &run_id, message_id: &format!("cancel-{}", id()), kind: MessageKind::CancelRequest, text: "Tracking is closed for this run. Please stop and report outstanding effects. This advisory request does not guarantee process termination; resources and descendants are retained.", in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     let annotation = decision_annotation(
         actor_ref(actor, caller, state),
         &provenance,
@@ -644,13 +642,12 @@ impl OrchestrationService {
             .map_err(|_| error("orchestration_state_invalid", "Stored schedule operation UUID is invalid"))?;
         let operation_id = Uuid::new_v5(&namespace, format!("attempt-{}", candidate.next_attempt).as_bytes()).to_string();
         if let Some(record) = state.operations.iter().find(|record| record.operation_id == operation_id
-            && record.kind == DurableOperationKind::WorkerStart && record.principal_key == schedule.principal_key) {
-            if let Some(OrchestrationActionResult::WorkerStarted { start }) = &record.result {
+            && record.kind == DurableOperationKind::WorkerStart && record.principal_key == schedule.principal_key)
+            && let Some(OrchestrationActionResult::WorkerStarted { start }) = &record.result {
                 let mut start = start.clone();
                 start.duplicate = true;
                 return Ok(Some(start));
             }
-        }
         let document = locked.tasks(&candidate.root_id)?;
         let task = document.task(&candidate.task_id)?;
         let graph = dependencies::DependencyGraph::new(&document.tasks);

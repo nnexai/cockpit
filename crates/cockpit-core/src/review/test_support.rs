@@ -221,14 +221,14 @@ pub(super) fn fixture(label: &str) -> PathBuf {
 }
 
 pub(super) fn fixture_at(root: &Path) {
-    std::fs::create_dir_all(&root).expect("fixture directory");
+    std::fs::create_dir_all(root).expect("fixture directory");
     for args in [
         ["init"].as_slice(),
         ["config", "user.email", "fixture@example.test"].as_slice(),
         ["config", "user.name", "Fixture"].as_slice(),
     ] {
         let status = std::process::Command::new("git")
-            .current_dir(&root)
+            .current_dir(root)
             .args(args)
             .status()
             .expect("git starts");

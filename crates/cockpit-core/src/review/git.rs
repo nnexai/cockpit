@@ -169,11 +169,10 @@ impl ReviewService {
             )),
         };
         let cleanup = owned.kill_and_reap().await;
-        if let Some(cleanup) = cleanup {
-            if result.is_ok() {
+        if let Some(cleanup) = cleanup
+            && result.is_ok() {
                 return Err(InspectionError::new("review_task", cleanup));
             }
-        }
         result
     }
 

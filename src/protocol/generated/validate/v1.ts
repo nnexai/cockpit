@@ -139,12 +139,16 @@ export const wireServiceStatus: WireDescriptor<V1.ServiceStatus> = literal<V1.Se
 
 export const wireSpaceServiceStatus: WireDescriptor<V1.SpaceServiceStatus> = struct<V1.SpaceServiceStatus>("SpaceServiceStatus", {
   "key": req(str),
-  "space_id": req(str),
   "pane_id": req(str),
   "tab_id": req(nullable(str), { fill: null }),
   "title": req(str),
   "status": req(named(() => wireServiceStatus)),
   "port": req(nullable(u16), { fill: null }),
+});
+
+export const wireSpaceServiceStatusRequest: WireDescriptor<V1.SpaceServiceStatusRequest> = struct<V1.SpaceServiceStatusRequest>("SpaceServiceStatusRequest", {
+  "server_instance": req(str),
+  "pane_ids": req(list(str)),
 });
 
 export const wireSpaceServiceStatusResponse: WireDescriptor<V1.SpaceServiceStatusResponse> = struct<V1.SpaceServiceStatusResponse>("SpaceServiceStatusResponse", {

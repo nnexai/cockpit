@@ -23,7 +23,7 @@ pub(super) enum PayloadCheck {
         framed: String,
         payload_hash: String,
     },
-    Rejected(CommentPasteReceipt),
+    Rejected(Box<CommentPasteReceipt>),
 }
 
 impl CommentsService {
@@ -122,7 +122,7 @@ impl CommentsService {
                         .unwrap_or_else(|| "paste payload exceeds its bound".to_owned()),
                 ))
                 .await
-                .map(PayloadCheck::Rejected);
+                .map(|receipt| PayloadCheck::Rejected(Box::new(receipt)));
         }
         if payload_hash != request.expected_payload_hash {
             return self
@@ -132,7 +132,7 @@ impl CommentsService {
                     "the exact preview payload changed; prepare and review it again",
                 ))
                 .await
-                .map(PayloadCheck::Rejected);
+                .map(|receipt| PayloadCheck::Rejected(Box::new(receipt)));
         }
         if preview.payload.contains('\u{1b}') || preview.payload.contains("\u{1b}[201~") {
             return self
@@ -142,10 +142,10 @@ impl CommentsService {
                     "paste payload contains an unsafe bracketed-paste terminator",
                 ))
                 .await
-                .map(PayloadCheck::Rejected);
+                .map(|receipt| PayloadCheck::Rejected(Box::new(receipt)));
         }
         let framed = format!("\u{1b}[200~{}\u{1b}[201~", preview.payload);
-        if framed.as_bytes().len() != preview.framed_bytes as usize {
+        if framed.len() != preview.framed_bytes as usize {
             return Err(InspectionError::new(
                 "comments_paste_framing",
                 "paste framing byte accounting disagreed with preview",

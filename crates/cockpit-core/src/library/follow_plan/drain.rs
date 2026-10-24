@@ -1,7 +1,8 @@
 use super::*;
 
 /// Admission holds the item lease through fetch, publication and checkpoint.
-struct DrainAdmission {
+struct DrainAdmission<'a> {
+    id: &'a str,
     work: Candidate,
     snapshot: Index,
     owners: BTreeSet<String>,
@@ -39,28 +40,29 @@ impl LibraryService {
                 .publish_sync_candidate(store, state, &id, &operation, &admission, now)
                 .await;
             self.sync_blocked(state, &admission.work.source.provider_id, now);
-            self.checkpoint_sync_outcome(
+            let fetched = self.checkpoint_sync_outcome(
                 store,
                 state,
-                &id,
                 &operation,
                 &mut admission,
                 result,
                 now,
-                report,
             )?;
+            if fetched {
+                report.fetched += 1;
+            }
         }
         Ok(())
     }
 
-    fn admit_sync_candidate(
+    fn admit_sync_candidate<'a>(
         &self,
         store: &Store,
         state: &mut State,
-        id: &str,
+        id: &'a str,
         work: Candidate,
         now: i64,
-    ) -> Result<Option<DrainAdmission>, InspectionError> {
+    ) -> Result<Option<DrainAdmission<'a>>, InspectionError> {
         if self.sync_blocked(state, &work.source.provider_id, now) {
             return Ok(None);
         }
@@ -128,6 +130,7 @@ impl LibraryService {
             return Ok(None);
         }
         Ok(Some(DrainAdmission {
+            id,
             work,
             snapshot,
             owners,
@@ -143,7 +146,7 @@ impl LibraryService {
         state: &State,
         id: &str,
         operation: &str,
-        admission: &DrainAdmission,
+        admission: &DrainAdmission<'_>,
         now: i64,
     ) -> Result<(), InspectionError> {
         let DrainAdmission {
@@ -154,8 +157,8 @@ impl LibraryService {
             has_conflicts,
             ..
         } = admission;
-        if let Some(old) = old {
-            if *has_conflicts {
+        if let Some(old) = old
+            && *has_conflicts {
                 self.record_conflict(
                     store,
                     operation,
@@ -167,7 +170,6 @@ impl LibraryService {
                     "Local edits need manual resolution",
                 ));
             }
-        }
         let request = self.queued_fetch_request(work)?;
         let fetched = {
             let future = self.sources.fetch_assets(request);
@@ -281,7 +283,7 @@ impl LibraryService {
             ));
         }
         self.apply_queue_owners(store, work, owners)?;
-        self.grow_sync_related(store, state, id, operation, admission, seed, now)
+        self.grow_sync_related(store, state, operation, admission, seed, now)
             .await
     }
 
@@ -330,12 +332,12 @@ impl LibraryService {
         &self,
         store: &Arc<Store>,
         state: &State,
-        id: &str,
         operation: &str,
-        admission: &DrainAdmission,
+        admission: &DrainAdmission<'_>,
         seed: ReferenceSeed,
         now: i64,
     ) -> Result<(), InspectionError> {
+        let id = admission.id;
         // Hourly growth traverses only freshly fetched seeds and never drops.
         for follow in admission.snapshot.follows.iter().filter(|follow| {
             admission.owners.contains(&follow.follow_id)
@@ -388,16 +390,16 @@ impl LibraryService {
         &self,
         store: &Store,
         state: &mut State,
-        id: &str,
         operation: &str,
-        admission: &mut DrainAdmission,
+        admission: &mut DrainAdmission<'_>,
         result: Result<(), InspectionError>,
         now: i64,
-        report: &mut LibrarySyncTick,
-    ) -> Result<(), InspectionError> {
+    ) -> Result<bool, InspectionError> {
+        let id = admission.id;
+        let mut fetched = false;
         match result {
             Ok(()) => {
-                report.fetched += 1;
+                fetched = true;
                 state.queue.remove(id);
                 operations::finish(store, operation, Ok(()))?;
             }
@@ -419,7 +421,8 @@ impl LibraryService {
             }
         }
         state.active_operation = None;
-        save(store, state)
+        save(store, state)?;
+        Ok(fetched)
     }
 }
 

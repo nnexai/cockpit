@@ -50,12 +50,12 @@ impl Fixture {
         assert_ne!(identity.creation_tip, head);
         let root_id = id();
         let session = id();
-        let mut root = new_run(&root_id, &session, RunKind::Supervisor, "root".into(), &root_id, None, None, 1);
+        let mut root = new_run(&root_id, &session, RunKind::Supervisor, "root".into(), &root_id, RunLineage::default(), 1);
         root.stage = RunStage::Active;
         root.project = Some(root_project);
         root.checkout = Some(root_checkout);
         let mut run = new_run(&id(), &session, RunKind::Worker, "accepted worker".into(), &root_id,
-            Some(root_id.clone()), None, 1);
+            RunLineage { parent_run_id: Some(root_id.clone()), task_id: None }, 1);
         run.stage = RunStage::Closed;
         run.close_reason = Some(CloseReason::Accepted);
         run.cleanup_policy = Some(WorkerCleanupPolicy::OwnedWhenSafe);
@@ -278,7 +278,7 @@ async fn merged_proof_cannot_override_unreleased_claim_or_concurrent_writer() {
             if concurrent_writer {
                 let writer_id = id();
                 let mut writer = new_run(&writer_id, &fixture.run.session_id, RunKind::Worker, "concurrent writer".into(),
-                    &fixture.run.root_id, Some(fixture.run.root_id.clone()), None, 1);
+                    &fixture.run.root_id, RunLineage { parent_run_id: Some(fixture.run.root_id.clone()), task_id: None }, 1);
                 writer.stage = RunStage::Active;
                 writer.checkout = fixture.run.checkout.clone();
                 state.runs.push(writer);

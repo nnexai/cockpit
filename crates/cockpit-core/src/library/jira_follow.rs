@@ -55,6 +55,27 @@ pub(super) fn is_issue_of(entry: &LibraryIndexEntry, follow: &LibraryFollowSumma
         && entry.summary.resource_type.as_deref() == Some("issue")
 }
 
+/// Inputs to the related-items traversal that runs after the issue fetch.
+struct RelatedScope<'a> {
+    follow: &'a LibraryFollowSummary,
+    snapshot: &'a Snapshot,
+    members: &'a BTreeSet<String>,
+    listed: &'a BTreeMap<String, IssueRow>,
+    checked: &'a BTreeMap<String, IssueRow>,
+    attempted: &'a BTreeSet<String>,
+    live: bool,
+}
+
+/// The settled state of one Jira follow pass, as committed and reported.
+#[derive(Clone, Copy)]
+struct FollowRun<'a> {
+    follow: &'a LibraryFollowSummary,
+    pass: &'a RelatedPass,
+    listing: &'a IssueListing,
+    cancelled: bool,
+    unverified: bool,
+}
+
 impl LibraryService {
     fn jira_site(&self, provider_id: &str) -> Result<SourceAuthority, InspectionError> {
         let jira = self
@@ -90,11 +111,10 @@ impl LibraryService {
         if jira.is_empty() {
             return Ok(None);
         }
-        if let Some(selected) = selected {
-            if !jira.contains(&selected) {
+        if let Some(selected) = selected
+            && !jira.contains(&selected) {
                 return Ok(None);
             }
-        }
         let Some(query) = jira_query_input(input)? else {
             return Ok(None);
         };
@@ -340,13 +360,15 @@ impl LibraryService {
             self.issue_related(
                 store,
                 operation,
-                &follow,
-                &pipeline.snapshot,
-                &members,
-                &listed,
-                &checked,
-                &attempted,
-                live,
+                RelatedScope {
+                    follow: &follow,
+                    snapshot: &pipeline.snapshot,
+                    members: &members,
+                    listed: &listed,
+                    checked: &checked,
+                    attempted: &attempted,
+                    live,
+                },
             )
             .await?
         } else {
@@ -362,27 +384,22 @@ impl LibraryService {
             (listed.len() + checked.len()) as u64,
             &pass,
         );
+        let run = FollowRun {
+            follow: &follow,
+            pass: &pass,
+            listing: &pipeline.listing,
+            cancelled,
+            unverified,
+        };
         let (dropped, kept) = self.commit_jira_follow(
             store,
-            &follow,
             &listed,
             &checked,
-            &pass,
+            run,
             partial,
-            cancelled,
             live && pipeline.listing.complete && !cancelled && pass.complete,
         )?;
-        self.report_jira_follow(
-            store,
-            operation,
-            &follow,
-            &dropped,
-            kept,
-            cancelled,
-            &pass,
-            &pipeline.listing,
-            unverified,
-        )?;
+        self.report_jira_follow(store, operation, run, &dropped, kept)?;
         if create {
             let record = operations::get(store, operation)?;
             if record.target.is_some() {
@@ -577,14 +594,17 @@ impl LibraryService {
         &self,
         store: &Arc<Store>,
         operation: &str,
-        follow: &LibraryFollowSummary,
-        snapshot: &Snapshot,
-        members: &BTreeSet<String>,
-        listed: &BTreeMap<String, IssueRow>,
-        checked: &BTreeMap<String, IssueRow>,
-        attempted: &BTreeSet<String>,
-        live: bool,
+        scope: RelatedScope<'_>,
     ) -> Result<RelatedPass, InspectionError> {
+        let RelatedScope {
+            follow,
+            snapshot,
+            members,
+            listed,
+            checked,
+            attempted,
+            live,
+        } = scope;
         let keys = if live {
             listed.keys().cloned().collect::<BTreeSet<_>>()
         } else {
@@ -683,14 +703,18 @@ impl LibraryService {
     fn commit_jira_follow(
         &self,
         store: &Store,
-        follow: &LibraryFollowSummary,
         listed: &BTreeMap<String, IssueRow>,
         checked: &BTreeMap<String, IssueRow>,
-        pass: &RelatedPass,
+        run: FollowRun<'_>,
         partial: Option<LibraryPartial>,
-        cancelled: bool,
         drop_allowed: bool,
     ) -> Result<(Vec<LibraryItemSummary>, Option<u32>), InspectionError> {
+        let FollowRun {
+            follow,
+            pass,
+            cancelled,
+            ..
+        } = run;
         let listed_rows = listed
             .iter()
             .map(|(key, row)| (key.as_str(), row))
@@ -788,14 +812,17 @@ impl LibraryService {
         &self,
         store: &Store,
         operation: &str,
-        follow: &LibraryFollowSummary,
+        run: FollowRun<'_>,
         dropped: &[LibraryItemSummary],
         kept: Option<u32>,
-        cancelled: bool,
-        pass: &RelatedPass,
-        listing: &IssueListing,
-        unverified: bool,
     ) -> Result<(), InspectionError> {
+        let FollowRun {
+            follow,
+            pass,
+            listing,
+            cancelled,
+            unverified,
+        } = run;
         let listing_complete = listing.complete;
         for summary in dropped {
             operations::row(

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cockpit_protocol::v1::{
-    ServiceStatus, SessionSnapshotResponse, SpaceServiceStatus, SpaceServiceStatusResponse,
+    ServiceStatus, SpaceServiceStatus, SpaceServiceStatusRequest, SpaceServiceStatusResponse,
 };
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -143,13 +143,21 @@ struct CachedProbe {
 
 pub struct SpaceServices {
     probes: Mutex<HashMap<(String, String), CachedProbe>>,
+    /// Parsed registry, reused while the file's modification time and size are unchanged.
+    registry: Mutex<Option<CachedRegistry>>,
     client: Option<reqwest::Client>,
+}
+
+struct CachedRegistry {
+    stamp: (std::time::SystemTime, u64),
+    entries: Arc<Vec<PersistentPane>>,
 }
 
 impl Default for SpaceServices {
     fn default() -> Self {
         Self {
             probes: Mutex::new(HashMap::new()),
+            registry: Mutex::new(None),
             client: reqwest::Client::builder()
                 .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
@@ -165,36 +173,55 @@ impl Default for SpaceServices {
 impl SpaceServices {
     pub async fn read(
         &self,
-        snapshot: &SessionSnapshotResponse,
+        session_id: &str,
+        request: &SpaceServiceStatusRequest,
         socket_path: Option<PathBuf>,
     ) -> SpaceServiceStatusResponse {
         let entries = match socket_path {
             Some(socket) => {
-                entries_for_endpoint(load_entries(&state_path()).await, &snapshot.session_id, &socket).await
+                let registry = self.registry_entries(&state_path()).await;
+                entries_for_endpoint(registry.as_ref().clone(), session_id, &socket).await
             }
             None => Vec::new(),
         };
-        self.observe(snapshot, entries)
+        self.observe(session_id, request, entries)
+    }
+
+    async fn registry_entries(&self, path: &std::path::Path) -> Arc<Vec<PersistentPane>> {
+        let stamp = tokio::fs::metadata(path).await.ok()
+            .and_then(|meta| meta.modified().ok().map(|modified| (modified, meta.len())));
+        let Some(stamp) = stamp else {
+            *self.registry.lock() = None;
+            return Arc::new(Vec::new());
+        };
+        if let Some(cached) = self.registry.lock().as_ref().filter(|cached| cached.stamp == stamp) {
+            return cached.entries.clone();
+        }
+        let entries = Arc::new(load_entries(path).await);
+        *self.registry.lock() = Some(CachedRegistry { stamp, entries: entries.clone() });
+        entries
     }
 
     fn observe(
         &self,
-        snapshot: &SessionSnapshotResponse,
+        session_id: &str,
+        request: &SpaceServiceStatusRequest,
         entries: Vec<PersistentPane>,
     ) -> SpaceServiceStatusResponse {
         let mut services = Vec::new();
         let mut live_keys = HashSet::new();
         let mut seen_keys = HashSet::new();
+        let pane_ids: HashSet<&str> = request.pane_ids.iter().map(String::as_str).collect();
         let mut probes = self.probes.lock();
         for entry in entries {
-            let Some(mut row) = map_entry(snapshot, &entry) else { continue };
+            let Some(mut row) = map_entry(session_id, &pane_ids, &entry) else { continue };
             if !seen_keys.insert(entry.key.clone()) { continue; }
             if let Some(target) = ProbeTarget::from_health(&entry.health) {
                 row.port = Some(target.port());
-                let key = (snapshot.session_id.clone(), entry.key);
+                let key = (session_id.to_owned(), entry.key);
                 live_keys.insert(key.clone());
                 let identity = ProbeIdentity {
-                    server_instance: snapshot.server_instance.clone(),
+                    server_instance: request.server_instance.clone(),
                     pane_id: row.pane_id.clone(),
                     tab_id: row.tab_id.clone(),
                     started_at: entry.started_at,
@@ -232,26 +259,23 @@ impl SpaceServices {
         }
         // Detached probe tasks only own their old state; late results cannot
         // overwrite a removed service or a new launch reusing the same key.
-        probes.retain(|key, _| key.0 != snapshot.session_id || live_keys.contains(key));
-        SpaceServiceStatusResponse { session_id: snapshot.session_id.clone(), services }
+        probes.retain(|key, _| key.0 != session_id || live_keys.contains(key));
+        SpaceServiceStatusResponse { session_id: session_id.to_owned(), services }
     }
 }
 
-fn map_entry(snapshot: &SessionSnapshotResponse, entry: &PersistentPane) -> Option<SpaceServiceStatus> {
-    if entry.session != snapshot.session_id { return None; }
-    let pane = snapshot.panes.iter().find(|pane| pane.id == entry.pane_id)?;
-    let tab = snapshot.tabs.iter().find(|tab| tab.id == pane.tab_id)?;
-    if pane.space_id != tab.space_id
-        || !snapshot.spaces.iter().any(|space| space.id == tab.space_id)
-        || (entry.kind == PersistentKind::Tab && entry.tab_id.as_deref() != Some(tab.id.as_str()))
-    {
+fn map_entry(session_id: &str, pane_ids: &HashSet<&str>, entry: &PersistentPane) -> Option<SpaceServiceStatus> {
+    if entry.session != session_id || !pane_ids.contains(entry.pane_id.as_str()) {
         return None;
     }
+    let tab_id = match entry.kind {
+        PersistentKind::Tab => Some(entry.tab_id.clone().filter(|id| !id.is_empty())?),
+        PersistentKind::Pane => None,
+    };
     Some(SpaceServiceStatus {
         key: entry.key.clone(),
-        space_id: tab.space_id.clone(),
-        pane_id: pane.id.clone(),
-        tab_id: (entry.kind == PersistentKind::Tab).then(|| tab.id.clone()),
+        pane_id: entry.pane_id.clone(),
+        tab_id,
         title: entry.title.clone(),
         status: ServiceStatus::Healthy,
         port: None,
@@ -301,12 +325,22 @@ async fn entries_for_endpoint(
     socket: &std::path::Path,
 ) -> Vec<PersistentPane> {
     let Ok(selected) = tokio::fs::canonicalize(socket).await else { return Vec::new() };
+    // The registry accumulates entries of every Herdr endpoint; resolve each distinct socket once.
+    let mut same_endpoint: HashMap<String, bool> = HashMap::new();
     let mut matching = Vec::new();
     for entry in entries {
         if entry.session != session || !std::path::Path::new(&entry.socket_path).is_absolute() {
             continue;
         }
-        if tokio::fs::canonicalize(&entry.socket_path).await.is_ok_and(|path| path == selected) {
+        let accepted = match same_endpoint.get(&entry.socket_path) {
+            Some(accepted) => *accepted,
+            None => {
+                let accepted = tokio::fs::canonicalize(&entry.socket_path).await.is_ok_and(|path| path == selected);
+                same_endpoint.insert(entry.socket_path.clone(), accepted);
+                accepted
+            }
+        };
+        if accepted {
             matching.push(entry);
         }
     }
@@ -337,18 +371,8 @@ mod tests {
         }
     }
 
-    fn snapshot() -> SessionSnapshotResponse {
-        serde_json::from_value(json!({
-            "session_id":"session", "server_instance":"boot", "version":"1", "protocol":1,
-            "focused_space_id":null, "focused_tab_id":null, "focused_pane_id":null,
-            "spaces":[{"id":"space", "label":"same title", "number":1, "tab_count":1,
-                "pane_count":1, "focused":false, "agent_status":"idle", "git":null}],
-            "tabs":[{"id":"tab", "space_id":"space", "label":"same title", "number":1,
-                "pane_count":1, "focused":false, "focused_pane_id":null}],
-            "panes":[{"id":"pane", "terminal_id":"terminal", "space_id":"space", "tab_id":"tab",
-                "title":"same title", "focused":false, "agent":null, "agent_status":"idle", "revision":1}],
-            "agents":[]
-        })).unwrap()
+    fn request() -> SpaceServiceStatusRequest {
+        SpaceServiceStatusRequest { server_instance: "boot".into(), pane_ids: vec!["pane".into()] }
     }
 
     fn entry() -> PersistentPane {
@@ -388,7 +412,7 @@ mod tests {
         ).await;
         assert_eq!(accepted.len(), 1);
         assert!(entries_for_endpoint(accepted, "session", &root.join("missing.sock")).await.is_empty());
-        assert!(map_entry(&snapshot(), &{
+        assert!(map_entry("session", &HashSet::from(["pane"]), &{
             let mut entry = entry();
             entry.session = "another-session".into();
             entry
@@ -425,27 +449,22 @@ mod tests {
     }
 
     #[test]
-    fn live_ids_are_the_only_mapping_and_tab_entries_must_match() {
-        let mut snapshot = snapshot();
+    fn live_panes_filter_registry_entries_without_resolving_spaces() {
+        let panes = HashSet::from(["pane"]);
         let mut entry = entry();
-        let row = map_entry(&snapshot, &entry).unwrap();
-        assert_eq!(row.space_id, "space");
+        let row = map_entry("session", &panes, &entry).unwrap();
+        assert_eq!(row.pane_id, "pane");
         assert_eq!(row.tab_id.as_deref(), Some("tab"));
+        // The frontend checks this registry tab ID against its live pane.
         entry.tab_id = Some("other-tab".into());
-        assert!(map_entry(&snapshot, &entry).is_none());
+        assert_eq!(map_entry("session", &panes, &entry).unwrap().tab_id.as_deref(), Some("other-tab"));
+        entry.tab_id = None;
+        assert!(map_entry("session", &panes, &entry).is_none());
         entry.kind = PersistentKind::Pane;
-        assert!(map_entry(&snapshot, &entry).unwrap().tab_id.is_none());
+        assert!(map_entry("session", &panes, &entry).unwrap().tab_id.is_none());
         entry.pane_id = "dead-pane".into();
-        assert!(map_entry(&snapshot, &entry).is_none());
-        entry.pane_id = "pane".into();
-        snapshot.tabs.clear();
-        assert!(map_entry(&snapshot, &entry).is_none());
-        snapshot = self::snapshot();
-        snapshot.panes[0].space_id = "other-space".into();
-        assert!(map_entry(&snapshot, &entry).is_none());
-        snapshot = self::snapshot();
-        snapshot.spaces.clear();
-        assert!(map_entry(&snapshot, &entry).is_none());
+        assert!(map_entry("session", &panes, &entry).is_none());
+        assert!(map_entry("session", &HashSet::new(), &entry).is_none());
     }
 
     #[test]
@@ -472,7 +491,7 @@ mod tests {
         let service = SpaceServices::default();
         let mut entry = entry();
         entry.health = json!({"url":"https://remote.invalid"});
-        let rows = service.observe(&snapshot(), vec![entry]);
+        let rows = service.observe("session", &request(), vec![entry]);
         assert_eq!(rows.services[0].status, ServiceStatus::Healthy);
         assert_eq!(rows.services[0].port, None);
         assert!(service.probes.lock().is_empty());
@@ -481,21 +500,47 @@ mod tests {
     #[tokio::test]
     async fn new_launch_resets_history_and_dead_entries_drop_cache() {
         let service = SpaceServices::default();
-        let snapshot = snapshot();
+        let request = request();
         let mut entry = entry();
         entry.health = json!({"port":5173});
-        let rows = service.observe(&snapshot, vec![entry.clone()]);
+        let rows = service.observe("session", &request, vec![entry.clone()]);
         assert_eq!(rows.services[0].status, ServiceStatus::Starting);
-        let key = (snapshot.session_id.clone(), entry.key.clone());
+        let key = ("session".to_owned(), entry.key.clone());
         let old_state = service.probes.lock()[&key].state.clone();
         old_state.lock().finish(true);
-        assert_eq!(service.observe(&snapshot, vec![entry.clone()]).services[0].status, ServiceStatus::Healthy);
+        assert_eq!(service.observe("session", &request, vec![entry.clone()]).services[0].status, ServiceStatus::Healthy);
         entry.started_at = json!(456);
-        assert_eq!(service.observe(&snapshot, vec![entry]).services[0].status, ServiceStatus::Starting);
+        assert_eq!(service.observe("session", &request, vec![entry]).services[0].status, ServiceStatus::Starting);
         // A late result belongs to the old Arc, never the replacement launch.
         old_state.lock().finish(false);
         assert_eq!(service.probes.lock()[&key].state.lock().status, ServiceStatus::Starting);
-        service.observe(&snapshot, Vec::new());
+        service.observe("session", &request, Vec::new());
+        assert!(service.probes.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn dead_panes_are_never_probed_and_server_changes_reset_health() {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let service = SpaceServices::default();
+        let mut entry = entry();
+        entry.health = json!({"port":listener.local_addr().unwrap().port()});
+        let mut request = request();
+        request.pane_ids.clear();
+        assert!(service.observe("session", &request, vec![entry.clone()]).services.is_empty());
+        assert!(service.probes.lock().is_empty());
+        assert!(tokio::time::timeout(Duration::from_millis(25), listener.accept()).await.is_err());
+
+        request.pane_ids.push("pane".into());
+        service.observe("session", &request, vec![entry.clone()]);
+        let key = ("session".to_owned(), entry.key.clone());
+        let old_state = service.probes.lock()[&key].state.clone();
+        old_state.lock().finish(true);
+        request.server_instance = "new-boot".into();
+        assert_eq!(service.observe("session", &request, vec![entry.clone()]).services[0].status, ServiceStatus::Starting);
+        old_state.lock().finish(true);
+        assert_eq!(service.probes.lock()[&key].state.lock().status, ServiceStatus::Starting);
+        request.pane_ids.clear();
+        assert!(service.observe("session", &request, vec![entry]).services.is_empty());
         assert!(service.probes.lock().is_empty());
     }
 

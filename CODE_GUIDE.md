@@ -28,7 +28,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Sidebar presentation | `src/app/sidebar/`; `src/app/sidebar.css` |
 | Space tags/picker/grouping | `src/app/session/spaceTags.ts`; `src/app/sidebar/SpaceTagChip.tsx`; `src/app/sidebar/SpaceTagPopover.tsx`; `src/app/sidebar/spaceTagView.ts`; menu/Commands in `ResourceContextMenu.tsx`/`commands.ts` |
 | Git status/actions | `src/app/session/spaceGitStatus.ts`; `src/app/session/spaceGitActions.ts`; `src/app/sidebar/SpaceGitAction.tsx` |
-| Running services (read-only) | `src/app/session/spaceServiceStatus.ts`; `src/app/sidebar/Spaces.tsx`; plugin-owned rows focus their live Herdr pane/tab, with no lifecycle controls |
+| Running services (read-only) | `src/app/session/spaceServiceStatus.ts`; `src/app/sidebar/Spaces.tsx`; plugin-owned rows join the caller's live pane/tab/Space snapshot, with no lifecycle controls; discovery runs on show or pane-set changes and repeats every five seconds only while health targets are present |
 | Keyboard registry and runtime aliases | `src/app/input/shortcuts.ts`; `src/app/input/herdrBindings.ts`; `src/app/input/keymap.ts` |
 | Modal/file picker input | `src/app/input/modal.ts`; `src/app/input/fileIndexCache.ts`; `src/app/input/fileNavigation.ts` |
 | Terminal and server popup | `src/app/TerminalPane.tsx`; `src/app/ServerPopup.tsx`; `src/app/terminal/cockpitTerminal.ts` |
@@ -117,7 +117,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Browser delivery/drafts | `crates/cockpit-core/src/browser/delivery.rs`; `crates/cockpit-core/src/browser/drafts.rs`; `crates/cockpit-core/src/browser/drafts/service.rs` |
 | Ephemeral owner reset/feedback | `crates/cockpit-core/src/ephemeral.rs`; `crates/cockpit-core/src/browser_feedback.rs` |
 | Git status/actions | `crates/cockpit-core/src/space_git.rs`; `crates/cockpit-core/src/space_git_action.rs` |
-| Plugin service status | `crates/cockpit-core/src/space_services.rs`; reads `nnex.action-launcher`'s `persistent-panes.json` from Herdr's plugin state dir (`$XDG_STATE_HOME/herdr/plugins/…`, else `~/.local/state/herdr/plugins/…`, else the temporary directory's `herdr-state/plugins/…`; requires the same state-root environment as the Herdr server), drops dead Herdr IDs and probes loopback health targets only |
+| Plugin service status | `crates/cockpit-core/src/space_services.rs`; reads `nnex.action-launcher`'s `persistent-panes.json` from Herdr's plugin state dir (`$XDG_STATE_HOME/herdr/plugins/…`, else `~/.local/state/herdr/plugins/…`, else the temporary directory's `herdr-state/plugins/…`; requires the same state-root environment as the Herdr server), caches unchanged registries, drops panes absent from the caller's live set and probes loopback health targets only |
 | Quota cache/services and display | `crates/cockpit-core/src/quota.rs`; `crates/cockpit-core/src/quota/`; `src/app/limits/` |
 | OMP quota parsing | `crates/cockpit-core/src/quota/parse.rs` |
 | Notes durable service/filesystem | `crates/cockpit-core/src/notes.rs`; `crates/cockpit-core/src/notes/registry.rs`; `crates/cockpit-core/src/notes/fs.rs` |
@@ -273,6 +273,8 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 Rust DTOs → descriptor-derived domain renderers/validators → generated TypeScript → `src/client/operations.ts` argument/response mapping → browser HTTP or native invoke adapter → shared typed host handler → core service → identity-checked response. Host registry and stable typed errors are shared; adapters retain their transport origin, serialization, lifecycle and cancellation responsibilities.
 
 Four stream methods remain transport-local: `subscribeSession`, `openTerminal`, `subscribeWidgets` and `openBrowserView`. `src/client/browserViewDecoder.ts` shares browser event/frame identity and ordering decode only; release, cancellation and lifecycle stay in `src/client/browser.ts` and `src/client/native.ts`. Session reducer/pump, terminal streams and bounded Browser relay have separate host owners in the map above.
+
+`POST /api/v1/sessions/{session_id}/space-services` is an Origin-checked read with `{ server_instance, pane_ids }` (at most 4096 resource IDs, each bounded by the host's resource-ID guard). It reads the plugin registry without fetching a Herdr snapshot. Returned pane IDs and optional registry tab IDs are joined against the frontend's current snapshot to derive Spaces; the response does not carry a Space ID. Probe history is scoped to server incarnation, pane, tab and launch time. Newly added panes receive at most two settlement reads, about one and three seconds after the debounced discovery read, to cover the plugin publishing its registry after creating the pane. Hidden pages/sidebars cancel pending reads, and empty or unprobed results never start recurring idle polling.
 
 ### Supervisor tasks, execution and messages
 

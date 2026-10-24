@@ -6,6 +6,9 @@ use serde::Serialize;
 use super::error::OperationError;
 
 pub const MUTATION_BYTES: usize = 64 * 1024;
+// Up to 4096 resource ids of 128 ASCII bytes, plus JSON and server identity.
+pub const SPACE_SERVICE_STATUS_BYTES: usize = 1024 * 1024;
+pub const SPACE_SERVICE_STATUS_MAX_PANES: usize = 4096;
 pub const TERMINAL_COMMAND_BYTES: usize = 96 * 1024;
 // 512 confirmations with 4 KiB paths, JSON escaping, hashes, and request metadata.
 pub const LIBRARY_BYTES: usize = 13 * 1024 * 1024;

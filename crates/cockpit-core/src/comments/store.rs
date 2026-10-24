@@ -326,7 +326,7 @@ fn validate_owner(owner: &CommentOwner) -> Result<(), InspectionError> {
 
 fn validate_draft(draft: &CommentDraft) -> Result<(), InspectionError> {
     validate_uuid(&draft.draft_id, "draft")?;
-    if draft.comment_text.as_bytes().len() > MAX_COMMENT_TEXT_BYTES {
+    if draft.comment_text.len() > MAX_COMMENT_TEXT_BYTES {
         return Err(InspectionError::new(
             "comments_text_bounded",
             "comment text exceeds its byte limit",

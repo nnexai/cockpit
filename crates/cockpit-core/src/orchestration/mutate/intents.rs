@@ -247,40 +247,40 @@ impl OrchestrationService {
                 continue;
             }
             let mut dependency_conflict = None;
-            let outcome = match locked.tasks(&intent.root_id) {
-                Ok(document) => match document.task(&intent.task_id) {
-                    Ok(task) if task.checked => {
-                        task.task_revision == intent.expected_task_revision
-                            || document.checked_matches_revision(
-                                &intent.task_id,
-                                &intent.expected_task_revision,
-                            )?
-                    }
-                    Ok(task) if task.task_revision == intent.expected_task_revision => {
-                        match dependencies::DependencyGraph::new(&document.tasks).require(task) {
-                            Err(failure) => {
-                                dependency_conflict = Some(format!("{}: {}", failure.code, failure.message));
-                                false
-                            }
-                            Ok(()) => match document.check(&intent.task_id, &intent.expected_task_revision, true) {
-                                Ok(_) => true,
-                                Err(failure) if failure.code == "task_revision_conflict" => false,
-                                Err(failure) => return Err(failure),
-                            },
+            let outcome = {
+                let document = locked.tasks(&intent.root_id)?;
+                match document.task(&intent.task_id) {
+                Ok(task) if task.checked => {
+                    task.task_revision == intent.expected_task_revision
+                        || document.checked_matches_revision(
+                            &intent.task_id,
+                            &intent.expected_task_revision,
+                        )?
+                }
+                Ok(task) if task.task_revision == intent.expected_task_revision => {
+                    match dependencies::DependencyGraph::new(&document.tasks).require(task) {
+                        Err(failure) => {
+                            dependency_conflict = Some(format!("{}: {}", failure.code, failure.message));
+                            false
                         }
+                        Ok(()) => match document.check(&intent.task_id, &intent.expected_task_revision, true) {
+                            Ok(_) => true,
+                            Err(failure) if failure.code == "task_revision_conflict" => false,
+                            Err(failure) => return Err(failure),
+                        },
                     }
-                    Ok(_) => false,
-                    Err(failure)
-                        if matches!(
-                            failure.code.as_str(),
-                            "task_not_found" | "task_id_duplicate"
-                        ) =>
-                    {
-                        false
-                    }
-                    Err(failure) => return Err(failure),
-                },
+                }
+                Ok(_) => false,
+                Err(failure)
+                    if matches!(
+                        failure.code.as_str(),
+                        "task_not_found" | "task_id_duplicate"
+                    ) =>
+                {
+                    false
+                }
                 Err(failure) => return Err(failure),
+            }
             };
             if outcome {
                 let index = run_index(&state, &intent.run_id)?;

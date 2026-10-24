@@ -287,8 +287,7 @@ impl ReviewFixture {
             RunKind::Supervisor,
             "Review fixture".into(),
             &id,
-            None,
-            None,
+            crate::orchestration::RunLineage::default(),
             1,
         );
         run.stage = stage;
@@ -367,7 +366,7 @@ impl ReviewFixture {
         let task_id = uuid::Uuid::new_v4().to_string();
         let mut root = crate::orchestration::new_run(
             &root_id, "test-session", RunKind::Supervisor, "Task manager".into(),
-            &root_id, None, None, 1,
+            &root_id, crate::orchestration::RunLineage::default(), 1,
         );
         root.stage = RunStage::Active;
         let mut bytes = format!("- [ ] Consumer <!-- cockpit-task: {task_id} -->\n");
@@ -420,12 +419,12 @@ impl ReviewFixture {
         let worker_id = uuid::Uuid::new_v4().to_string();
         let mut root = crate::orchestration::new_run(
             &root_id, "test-session", RunKind::Supervisor, "Other root".into(),
-            &root_id, None, None, 1,
+            &root_id, crate::orchestration::RunLineage::default(), 1,
         );
         root.stage = RunStage::Active;
         let mut worker = crate::orchestration::new_run(
             &worker_id, "test-session", RunKind::Worker, "Other worker".into(),
-            &root_id, Some(root_id.clone()), Some(uuid::Uuid::new_v4().to_string()), 1,
+            &root_id, crate::orchestration::RunLineage { parent_run_id: Some(root_id.clone()), task_id: Some(uuid::Uuid::new_v4().to_string()) }, 1,
         );
         worker.stage = RunStage::Starting;
         worker.attachment = None;
@@ -817,7 +816,7 @@ async fn root_main_exit_proof_is_same_boot_and_independent_of_worker_consumers()
         if case == 5 {
             let id = uuid::Uuid::new_v4().to_string();
             let mut child = crate::orchestration::new_run(&id, "test-session", RunKind::Worker,
-                "Independently live worker".into(), &current.root_id, Some(current.run_id.clone()), Some(uuid::Uuid::new_v4().to_string()), 1);
+                "Independently live worker".into(), &current.root_id, crate::orchestration::RunLineage { parent_run_id: Some(current.run_id.clone()), task_id: Some(uuid::Uuid::new_v4().to_string()) }, 1);
             let attachment = test_attachment(&mut child);
             attachment.machine_id = Some(machine.clone());
             attachment.process = Some(NativeProcessIdentity { pid: std::process::id(),
@@ -1262,7 +1261,7 @@ async fn blocked_consumer_does_not_prevent_independent_worker_in_same_root_from_
     let independent_id = uuid::Uuid::new_v4().to_string();
     let mut independent = crate::orchestration::new_run(
         &independent_id, "test-session", RunKind::Worker, "Independent".into(),
-        &fixture.run.root_id, Some(fixture.run.root_id.clone()), Some(independent_task.clone()), 1,
+        &fixture.run.root_id, crate::orchestration::RunLineage { parent_run_id: Some(fixture.run.root_id.clone()), task_id: Some(independent_task.clone()) }, 1,
     );
     independent.stage = RunStage::Starting;
     independent.setup = fixture.run.setup.clone();
@@ -1271,7 +1270,7 @@ async fn blocked_consumer_does_not_prevent_independent_worker_in_same_root_from_
     {
         let locked = fixture.service.store.lock().unwrap();
         locked.tasks(&fixture.run.root_id).unwrap().create_authoring_with_id(
-            &independent_task, "Independent", "", &[], None, None, None,
+            &independent_task, "Independent", "", &[], None, (None, None),
         ).unwrap();
         independent.task_revision_at_start = Some(locked.tasks(&fixture.run.root_id).unwrap()
             .task(&independent_task).unwrap().task_revision.clone());
@@ -1825,14 +1824,14 @@ fn root_registration_pins_generic_conversation_without_physical_process_evidence
         test_attachment(run).state = cockpit_protocol::orchestration::AttachmentState::Disconnected;
     });
     let old = fixture.current().1;
-    let actor = Actor::Agent(AgentCaller {
+    let actor = Actor::Agent(Box::new(AgentCaller {
         auth: fixture.staged_auth(&old),
         conversation: Some(ConversationIdentity { harness: "omp".into(), session_id: "opaque/non-uuid chat".into() }),
         assignment_generation: None,
         endpoint_identity: String::new(), session_id: String::new(), workspace_id: String::new(),
         tab_id: String::new(), pane_id: String::new(), boot_id: None, terminal_id: None,
         native_session_id: None, actual_agent_kind: None, process: None,
-    });
+    }));
     let action = OrchestrationAction::RunRegister { operation_id: uuid::Uuid::new_v4().to_string() };
     fixture.service.mutate(&actor, OrchestrationMutationRequest {
         session_id: old.session_id.clone(), expected_revision: None, action: action.clone(),
@@ -1914,7 +1913,7 @@ fn bootstrap_is_usable_without_conversation_metadata_or_registration_skill_turn(
     for kind in [RunKind::Supervisor, RunKind::Adopted, RunKind::Worker] {
         let run = crate::orchestration::new_run(
             "bootstrap-run", "session", kind, "Bootstrap".into(),
-            "bootstrap-run", None, None, 1,
+            "bootstrap-run", crate::orchestration::RunLineage::default(), 1,
         );
         let prompt = render_run_bootstrap(&run);
         assert!(prompt.contains("run context --json"));
@@ -1936,7 +1935,7 @@ fn bootstrap_is_usable_without_conversation_metadata_or_registration_skill_turn(
 
 #[test]
 fn disabled_hook_bootstrap_uses_one_event_driven_wait_and_revalidates_replacement_progress() {
-    let mut run = crate::orchestration::new_run("run", "session", RunKind::Worker, "Task".into(), "root", None, None, 2);
+    let mut run = crate::orchestration::new_run("run", "session", RunKind::Worker, "Task".into(), "root", crate::orchestration::RunLineage::default(), 2);
     run.launch_config.hook_args = Some(Vec::new());
     let prompt = render_run_bootstrap(&run);
     assert!(prompt.contains("one event-driven"));
@@ -1951,7 +1950,7 @@ fn disabled_hook_bootstrap_uses_one_event_driven_wait_and_revalidates_replacemen
 fn initial_prompt_is_one_literal_argument_and_custom_placeholder_is_whole() {
     let mut run = crate::orchestration::new_run(
         "bootstrap-run", "session", RunKind::Worker, "Bootstrap".into(),
-        "bootstrap-run", None, None, 1,
+        "bootstrap-run", crate::orchestration::RunLineage::default(), 1,
     );
     let prompt = "quotes \" ; $(no-shell)\nwork brief";
     assert_eq!(prompt_args(&run, prompt.into()).unwrap(), [prompt]);
@@ -1969,7 +1968,7 @@ fn initial_prompt_is_one_literal_argument_and_custom_placeholder_is_whole() {
 fn only_pending_effects_have_wake_deadlines_and_unknown_launch_is_not_replayed() {
     let mut run = crate::orchestration::new_run(
         "deadline-run", "session", RunKind::Worker, "Deadline".into(),
-        "root", None, None, 1,
+        "root", crate::orchestration::RunLineage::default(), 1,
     );
     assert!(pending_operation_delay(&run, 5000).is_none());
     for step in [DispatchStep::Launched, DispatchStep::NeedsReview, DispatchStep::SetupUnknown] {
@@ -2128,14 +2127,14 @@ async fn uncertain_prompt_is_durable_and_not_repeated_after_restart_or_new_messa
     let credential_path = super::super::credentials::credential_path(
         fixture.service.base(), &after.credentials[0],
     ).unwrap();
-    let actor = super::super::Actor::Agent(super::super::AgentCaller {
+    let actor = super::super::Actor::Agent(Box::new(super::super::AgentCaller {
         auth: super::super::credentials::read_job_auth(&credential_path).unwrap(),
         conversation: fixture.run.attachment.as_ref().unwrap().conversation.clone(),
         assignment_generation: None,
         endpoint_identity: String::new(), session_id: "deliberately-foreign-physical-session".into(), workspace_id: String::new(),
         tab_id: String::new(), pane_id: String::new(), boot_id: None, terminal_id: None,
         native_session_id: None, actual_agent_kind: None, process: None,
-    });
+    }));
     let wrong_route = fixture.service.mutate(&actor, cockpit_protocol::orchestration::OrchestrationMutationRequest {
         session_id: "different-stored-route".into(), expected_revision: None,
         action: cockpit_protocol::orchestration::OrchestrationAction::InboxPull { after_seq: 0, limit: 100 },

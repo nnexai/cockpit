@@ -520,7 +520,6 @@ impl ProjectService {
             .prepare_context(
                 session,
                 id,
-                operation.step,
                 &plan,
                 &result,
                 library,
@@ -728,13 +727,13 @@ impl ProjectService {
         &self,
         session: &str,
         id: &str,
-        step: WorkspaceOperationStep,
         plan: &WorkspaceSetupPlan,
         result: &ProjectWorktreeResult,
         library: &LibraryService,
         fetched: Vec<FetchedAssets>,
     ) -> Result<Option<ErrorResponse>, InspectionError> {
         let mut context_error = None;
+        let step = self.store.load(id)?.step;
         if !step_at_least(step, WorkspaceOperationStep::ContextReady) {
             self.store.update(id, None, |operation| {
                 operation.step = WorkspaceOperationStep::ContextPreparing;
@@ -1326,12 +1325,13 @@ mod tests {
                 && !resource.created_by_operation
         }));
         assert_eq!(adapter.inventory_calls.load(Ordering::Relaxed), 0);
-        let worktree_requests = adapter.worktree_requests.lock().expect("worktree requests");
-        assert_eq!(worktree_requests.len(), 1);
-        assert_eq!(worktree_requests[0].mode, WorkspaceSetupMode::Open);
-        assert_eq!(worktree_requests[0].source_cwd, nested_path);
-        assert_eq!(worktree_requests[0].checkout_path, nested_path);
-        drop(worktree_requests);
+        {
+            let worktree_requests = adapter.worktree_requests.lock().expect("worktree requests");
+            assert_eq!(worktree_requests.len(), 1);
+            assert_eq!(worktree_requests[0].mode, WorkspaceSetupMode::Open);
+            assert_eq!(worktree_requests[0].source_cwd, nested_path);
+            assert_eq!(worktree_requests[0].checkout_path, nested_path);
+        }
         assert_eq!(operation.tab_id.as_deref(), Some("workspace:root"));
         assert_eq!(operation.pane_id.as_deref(), Some("workspace:root-pane"));
 

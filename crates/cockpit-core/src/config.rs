@@ -723,14 +723,13 @@ fn validate_provider(provider: &ProjectProvider) -> Result<(), InspectionError> 
             "Confluence Cloud base_url must have exactly the /wiki path",
         ));
     }
-    if let Some(login) = &provider.login {
-        if login.is_empty() || login.len() > 256 || login.chars().any(char::is_control) {
+    if let Some(login) = &provider.login
+        && (login.is_empty() || login.len() > 256 || login.chars().any(char::is_control)) {
             return Err(InspectionError::new(
                 "invalid_provider_login",
                 "provider login must be a non-empty control-free value of at most 256 bytes",
             ));
         }
-    }
     Ok(())
 }
 

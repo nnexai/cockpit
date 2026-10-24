@@ -579,7 +579,20 @@
 .space-connector.is-last::after { display: none; }
 
 /* Read-only services share the Space tree's trunk, without another selection mark. */
-.space-service-list { margin: 0 0 var(--sb-row-gap); }
+.space-service-list { position: relative; margin: 0 0 var(--sb-row-gap); }
+
+/* A worktree's services are plain indented rows with no guide of their own; the connector's trunk keeps running past them unless this is the last child. */
+.space-service-list.is-child .space-service-row { padding-left: calc(var(--sb-svc-pad) + var(--sb-conn)); }
+.space-service-list.is-child .space-service-row::before { display: none; }
+.space-service-list.is-child:not(.is-last)::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--sb-trunk-x);
+  border-left: 1px solid var(--border-strong);
+  content: "";
+  pointer-events: none;
+}
 
 .space-service-row {
   position: relative;

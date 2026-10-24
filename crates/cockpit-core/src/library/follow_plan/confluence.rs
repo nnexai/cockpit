@@ -258,12 +258,11 @@ pub(in crate::library) fn apply_pages(
             PageOrder::Rank => Some(*rank),
             PageOrder::Position => page.position.and_then(|p| u32::try_from(p).ok()),
         };
-        if let Some(position) = position {
-            if entry.summary.order != Some(position) {
+        if let Some(position) = position
+            && entry.summary.order != Some(position) {
                 entry.summary.order = Some(position);
                 changed = true;
             }
-        }
     }
     if changed || matches!(order, PageOrder::Rank) {
         recount(index, &follow.follow_id);

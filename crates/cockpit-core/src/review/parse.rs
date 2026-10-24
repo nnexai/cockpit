@@ -443,13 +443,15 @@ impl ReviewService {
             change,
             base,
             revisions,
-            hunks,
-            binary,
-            truncated,
-            status,
-            old_source,
-            new_source,
-            diagnostics,
+            DiffParts {
+                hunks,
+                binary,
+                truncated,
+                status,
+                old_source,
+                new_source,
+                diagnostics,
+            },
         ))
     }
 
@@ -585,11 +587,8 @@ fn diff_revisions(
     (old_revision, new_revision)
 }
 
-fn assemble_diff(
-    file_id: &str,
-    change: &Change,
-    base: Option<&str>,
-    revisions: &RevisionTokens,
+/// Parsed hunks and sources for one file, gathered before assembly.
+struct DiffParts {
     hunks: Vec<ReviewHunk>,
     binary: bool,
     truncated: bool,
@@ -597,7 +596,24 @@ fn assemble_diff(
     old_source: FrozenSource,
     new_source: FrozenSource,
     diagnostics: Vec<ProjectDiagnostic>,
+}
+
+fn assemble_diff(
+    file_id: &str,
+    change: &Change,
+    base: Option<&str>,
+    revisions: &RevisionTokens,
+    parts: DiffParts,
 ) -> (ReviewFileDiff, bool) {
+    let DiffParts {
+        hunks,
+        binary,
+        truncated,
+        status,
+        old_source,
+        new_source,
+        diagnostics,
+    } = parts;
     let (old_revision, new_revision) = diff_revisions(change, base, revisions);
     let source_truncated = old_source.truncated || new_source.truncated;
     let (additions, deletions) =

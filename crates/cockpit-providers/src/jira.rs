@@ -181,11 +181,10 @@ impl JiraSourceProvider {
                     if !last && count == 0 && (next.is_some() || value.get("isLast").is_some()) {
                         return Err(list_contract("Jira search returned an empty non-last page").into());
                     }
-                    if !last && let Some(next) = &next {
-                        if !tokens.insert(next.clone()) {
+                    if !last && let Some(next) = &next
+                        && !tokens.insert(next.clone()) {
                             return Err(list_contract("Jira search repeated a continuation token").into());
                         }
-                    }
                     token = next;
                     last || token.is_none()
                 }
@@ -714,25 +713,26 @@ fn issue_markdown(issue: &Value, source_url: &str) -> Result<(String, bool), Ins
 
 fn issue_fields(issue: &Value) -> Vec<FrontmatterField> {
     let mut fields = Vec::new();
-    let mut push_text = |key: &str, value: Option<String>| {
-        if let Some(value) = value {
-            fields.push(FrontmatterField {
-                key: key.into(),
-                value: FrontmatterValue::String(value),
-            });
-        }
-    };
-    push_text("issue_id", issue.get("id").and_then(Value::as_str)
-        .filter(|id| (1..=20).contains(&id.len()) && id.bytes().all(|byte| byte.is_ascii_digit()))
-        .map(str::to_owned));
-    push_text("item_type", field_name(issue, "issuetype", "name").map(str::to_owned));
-    push_text("status", field_name(issue, "status", "name").map(str::to_owned));
-    push_text("priority", field_name(issue, "priority", "name").map(str::to_owned));
-    push_text("assignee", field_name(issue, "assignee", "displayName").map(str::to_owned));
-    push_text("author", field_name(issue, "reporter", "displayName").map(str::to_owned));
-    push_text("created", field_str(issue, "created").map(normalize_timestamp));
-    push_text("updated", field_str(issue, "updated").map(normalize_timestamp));
-    drop(push_text);
+    {
+        let mut push_text = |key: &str, value: Option<String>| {
+            if let Some(value) = value {
+                fields.push(FrontmatterField {
+                    key: key.into(),
+                    value: FrontmatterValue::String(value),
+                });
+            }
+        };
+        push_text("issue_id", issue.get("id").and_then(Value::as_str)
+            .filter(|id| (1..=20).contains(&id.len()) && id.bytes().all(|byte| byte.is_ascii_digit()))
+            .map(str::to_owned));
+        push_text("item_type", field_name(issue, "issuetype", "name").map(str::to_owned));
+        push_text("status", field_name(issue, "status", "name").map(str::to_owned));
+        push_text("priority", field_name(issue, "priority", "name").map(str::to_owned));
+        push_text("assignee", field_name(issue, "assignee", "displayName").map(str::to_owned));
+        push_text("author", field_name(issue, "reporter", "displayName").map(str::to_owned));
+        push_text("created", field_str(issue, "created").map(normalize_timestamp));
+        push_text("updated", field_str(issue, "updated").map(normalize_timestamp));
+    }
     if issue.pointer("/fields/assignee").is_some() && field_name(issue, "assignee", "displayName").is_none() {
         fields.push(FrontmatterField {
             key: "assignee".into(),

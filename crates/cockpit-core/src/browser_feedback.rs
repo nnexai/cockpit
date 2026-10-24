@@ -225,9 +225,7 @@ impl BrowserFeedbackStore {
         }
 
         let image_name = stored.image_name.clone();
-        if let Err(error) = atomic_write_bytes(&self.artifacts_dir()?, &image_name, &png) {
-            return Err(error);
-        }
+        atomic_write_bytes(&self.artifacts_dir()?, &image_name, &png)?;
         if let Err(error) = atomic_write_json(&feedback, &record_name, &stored) {
             let _ = self.artifacts_dir()?.remove_file(&image_name);
             return Err(InspectionError::new(
@@ -879,7 +877,7 @@ impl BrowserFeedbackStore {
                     continue;
                 };
                 let current = &selected[capture_index];
-                let is_newer = current.as_ref().map_or(true, |(current_priority, updated_at, op, _)| {
+                let is_newer = current.as_ref().is_none_or(|(current_priority, updated_at, op, _)| {
                     priority > *current_priority
                         || (priority == *current_priority
                             && (receipt.updated_at > *updated_at
@@ -1367,14 +1365,13 @@ fn validate_optional_text(
     field: &str,
     max_bytes: usize,
 ) -> Result<(), InspectionError> {
-    if let Some(value) = value {
-        if value.len() > max_bytes || value.chars().any(char::is_control) {
+    if let Some(value) = value
+        && (value.len() > max_bytes || value.chars().any(char::is_control)) {
             return Err(InspectionError::new(
                 "browser_feedback_text",
                 format!("{field} is oversized or contains control characters"),
             ));
         }
-    }
     Ok(())
 }
 fn validate_operation_id(value: &str) -> Result<(), InspectionError> {

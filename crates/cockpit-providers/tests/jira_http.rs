@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 fn row(n: usize) -> Value {
     json!({"key": format!("OPS-{n}"), "fields": {
         "updated": "2026-03-01T02:30:10.000+0100", "status": {"name": "To Do"},
-        "issuetype": {"name": "Task"}, "assignee": if n % 2 == 0 { json!({"displayName":"Ann Lee"}) } else { Value::Null }
+        "issuetype": {"name": "Task"}, "assignee": if n.is_multiple_of(2) { json!({"displayName":"Ann Lee"}) } else { Value::Null }
     }})
 }
 

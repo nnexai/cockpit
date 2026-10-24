@@ -544,9 +544,8 @@ fn supervisor_recovery_preserves_machine_cas_and_automatic_launch_ownership() {
     }).unwrap();
     let revision = fixture.state().revision;
     fixture.operator(OrchestrationAction::Annotate { run_id: root.clone(), text: "Unrelated newer history".into() });
-    for action in [
-        OrchestrationAction::ReconcileRun { run_id: worker.clone(), recovery: None },
-    ] {
+    {
+        let action = OrchestrationAction::ReconcileRun { run_id: worker.clone(), recovery: None };
         let request = OrchestrationMutationRequest { session_id: SESSION.into(), expected_revision: Some(revision), action };
         let bytes = fixture.state_bytes();
         let result = fixture.service.mutate(&supervisor, request);

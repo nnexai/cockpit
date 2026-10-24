@@ -206,7 +206,7 @@ mod tests {
             let identity = OwnedAttemptDirectoryIdentity { creation_operation_id: operation.clone(),
                 root: directory.to_str().unwrap().into(), device: metadata.dev().to_string(), inode: metadata.ino().to_string() };
             let mut run = new_run(&run_id, "attempt-cleanup-tests", RunKind::Worker, "worker".into(),
-                &id(), None, None, 1);
+                &id(), RunLineage::default(), 1);
             run.project = Some(project);
             run.cleanup_policy = Some(WorkerCleanupPolicy::OwnedWhenSafe);
             run.stage = RunStage::Closed;
@@ -241,7 +241,7 @@ mod tests {
             let mut state = locked.read().unwrap();
             state.runs.push(run);
             let attachment = state.runs[0].attachment.as_ref().unwrap();
-            let holder = AttachmentReference { run_id: run_id, attachment_id: attachment.attachment_id.clone(), attachment_epoch: attachment.epoch };
+            let holder = AttachmentReference { run_id, attachment_id: attachment.attachment_id.clone(), attachment_epoch: attachment.epoch };
             claims::reserve_claim(&mut state, &checkout, &holder, &id()).unwrap();
             // Physical scope/reboot proof is tested in the release observer suite.
             // This fixture starts at its trusted persisted Released boundary.

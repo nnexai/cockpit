@@ -33,7 +33,7 @@ impl Fixture {
         };
         let service = Arc::new(OrchestrationService::open(&config).unwrap());
         let id = uuid::Uuid::new_v4().to_string();
-        let mut run = new_run(&id, "fixture", RunKind::Worker, "Worker".into(), &id, None, None, 1);
+        let mut run = new_run(&id, "fixture", RunKind::Worker, "Worker".into(), &id, RunLineage::default(), 1);
         run.stage = RunStage::Closed;
         run.close_reason = Some(CloseReason::Accepted);
         run.cleanup_policy = Some(WorkerCleanupPolicy::OwnedWhenSafe);
@@ -112,10 +112,10 @@ impl Fixture {
             previous_generation: 1, replacement_run_id: successor_id.clone(),
         }, &now());
         let old_id = run.run_id.clone();
-        let mut root = new_run(&root_id, "fixture", RunKind::Supervisor, "root".into(), &root_id, None, None, 1);
+        let mut root = new_run(&root_id, "fixture", RunKind::Supervisor, "root".into(), &root_id, RunLineage::default(), 1);
         root.stage = RunStage::Active;
         let mut successor = new_run(&successor_id, "fixture", RunKind::Worker, "successor".into(),
-            &root_id, Some(root_id.clone()), Some(task_id.clone()), 2);
+            &root_id, RunLineage { parent_run_id: Some(root_id.clone()), task_id: Some(task_id.clone()) }, 2);
         successor.assignment_generation = Some(2);
         state.runs.push(root);
         state.runs.push(successor);
@@ -446,7 +446,7 @@ async fn unavailable_observation_is_concrete_and_retries_on_next_event_without_e
 async fn open_descendant_runs_block_close_after_read_only_observation() {
     let f = Fixture::new(RetirementState::Waiting { blockers: vec![] });
     let mut child = new_run("child", "fixture", RunKind::Worker, "Child".into(), &f.run.run_id,
-        Some(f.run.run_id.clone()), None, 1);
+        RunLineage { parent_run_id: Some(f.run.run_id.clone()), task_id: None }, 1);
     child.stage = RunStage::Working;
     let locked = f.service.store.lock().unwrap();
     let mut state = locked.read().unwrap(); state.runs.push(child); locked.save(&mut state).unwrap(); drop(locked);
@@ -526,7 +526,7 @@ async fn newly_running_descendant_during_close_preflight_cannot_be_closed() {
         let locked = svc.store.lock().unwrap();
         let mut state = locked.read().unwrap();
         let mut child = new_run("late-child", "fixture", RunKind::Worker, "Child".into(),
-            &id, Some(id.clone()), None, 1);
+            &id, RunLineage { parent_run_id: Some(id.clone()), task_id: None }, 1);
         child.stage = RunStage::Working; state.runs.push(child);
         locked.save(&mut state).unwrap();
     })));
@@ -573,9 +573,8 @@ async fn real_same_pid_exec_sleep_and_exec_bash_are_not_the_original_launch_shel
             child.stdin.take().unwrap().write_all(b"go\n").await.unwrap();
             let fresh = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 loop {
-                    if let Ok(fresh) = crate::process_identity::executable_identity(pid as i32, start) {
-                        if fresh != baseline { break fresh; }
-                    }
+                    if let Ok(fresh) = crate::process_identity::executable_identity(pid as i32, start)
+                        && fresh != baseline { break fresh; }
                     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                 }
             }).await.unwrap();
@@ -1005,7 +1004,7 @@ async fn descendant_created_at_final_preflight_defers_without_submitting_close()
         let locked = svc.store.lock().unwrap();
         let mut state = locked.read().unwrap();
         let mut child = new_run("late-child", "fixture", RunKind::Worker, "Child".into(),
-            &run_id, Some(run_id.clone()), None, 1);
+            &run_id, RunLineage { parent_run_id: Some(run_id.clone()), task_id: None }, 1);
         child.stage = RunStage::Working;
         state.runs.push(child);
         locked.save(&mut state).unwrap();

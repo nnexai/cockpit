@@ -72,7 +72,7 @@ impl BrowserService {
         }
 
         let framed = self.render_feedback_paste(association, target, &ids)?;
-        if framed.as_bytes().len() > MAX_PASTE_BYTES {
+        if framed.len() > MAX_PASTE_BYTES {
             return self.record_delivery_response(
                 &request.operation_id,
                 association,

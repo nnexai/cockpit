@@ -22,7 +22,18 @@ pub(super) fn apply(
             text,
             in_reply_to,
             ..
-        } => send(state, actor, caller, message_id, to_run_id, *kind, text, in_reply_to)?,
+        } => send(
+            state,
+            actor,
+            caller,
+            Outgoing {
+                message_id,
+                to_run_id,
+                kind: *kind,
+                text,
+                in_reply_to,
+            },
+        )?,
         OrchestrationAction::Annotate { run_id, text } => {
             text_bound(text)?;
             let target = run_index(state, run_id)?;
@@ -198,16 +209,27 @@ fn recipient(
     }
 }
 
+struct Outgoing<'a> {
+    message_id: &'a str,
+    to_run_id: &'a str,
+    kind: MessageKind,
+    text: &'a str,
+    in_reply_to: &'a Option<String>,
+}
+
 fn send(
     state: &mut OrchestrationState,
     actor: &Actor,
     caller: Option<&AuthorizedJob>,
-    message_id: &str,
-    to_run_id: &str,
-    kind: MessageKind,
-    text: &str,
-    in_reply_to: &Option<String>,
+    outgoing: Outgoing<'_>,
 ) -> Result<OrchestrationActionResult, InspectionError> {
+    let Outgoing {
+        message_id,
+        to_run_id,
+        kind,
+        text,
+        in_reply_to,
+    } = outgoing;
     let target = run_index(state, to_run_id)?;
     let (recipient, escalated) = recipient(state, actor, caller, target, to_run_id, kind)?;
     let from = actor_ref(actor, caller.map(|job| job.run_index), state);
