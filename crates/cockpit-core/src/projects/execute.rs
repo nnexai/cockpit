@@ -514,8 +514,7 @@ impl ProjectService {
         let result = self
             .ensure_worktree(session, id, &mut operation, &plan, borrowed)
             .await?;
-        operation = self
-            .verify_workspace(session, id, &plan, before.as_ref(), &result)
+        self.verify_workspace(session, id, &plan, before.as_ref(), &result)
             .await?;
         let context_error = self
             .prepare_context(

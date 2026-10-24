@@ -2,6 +2,12 @@
 
 These are historical observations, not proof of the current checkout. Each named original source occurrence is reproduced verbatim, including mixed current-rule/result paragraphs, obsolete wording, dates and limitations. Current architecture, rules and source owners live in the root documents. Undated cohorts retain source context rather than an invented run date.
 
+## Workspace compile repair (2026-10-24)
+
+`cargo check --workspace --all-targets`, `cargo build --workspace --all-targets` and `bun run build` completed successfully in the shared checkout. The workspace setup worker no longer assigns the unused return value of `verify_workspace`; the awaited verification and error propagation remain unchanged. The compiled CLI returned help and `cockpit 0.1.0` for its version smoke.
+
+Build diagnostics still include ts-rs warnings for unsupported serde attributes and Vite's large-chunk advisory. Serde validation attributes remain intact; these diagnostics were not hidden or treated as compile failures. This entry does not claim a clean warning-free build, a full test-suite pass or a native GUI runtime run.
+
 ## Orchestration terminal-title wake amplification (2026-10-17)
 
 On base `250a1232a076e16413382d3f2ac11deb08b40f44`, a fresh 181-second, build-free installed-runtime baseline and a 5,382-sample profile identified repeated orchestration JSON decoding. A separate unchanged-state sample read about 223.8 MB/s through `rchar` (cached reads/socket traffic, not physical disk throughput). The live Herdr stream delivered 758 `pane_updated` events in 30 seconds; successive payloads predominantly changed only OSC terminal titles, revision and scroll state. The historical unchanged-revision watch feedback bug was already corrected and was not reapplied.
