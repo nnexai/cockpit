@@ -608,7 +608,7 @@ impl OrchestrationService {
     /// Read the durable execution queue once; no model turn or physical effect.
     pub fn schedule_candidates(&self, max_parallel: u32) -> Result<Vec<ScheduleCandidate>, InspectionError> {
         let locked = self.store.lock()?;
-        let state = locked.read()?;
+        let state = locked.read_shared()?;
         let mut candidates = Vec::new();
         for root in state.runs.iter().filter(|run| run.run_id == run.root_id && run.stage == RunStage::Active) {
             let document = locked.tasks(&root.run_id)?;
@@ -769,14 +769,14 @@ fn freeze_input_base(target: &mut DispatchTarget, commit: &str) {
 impl OrchestrationService {
     pub fn schedule_input_requirements(&self, candidate: &ScheduleCandidate) -> Result<ScheduleInputSnapshot, InspectionError> {
         let locked = self.store.lock()?;
-        let state = locked.read()?;
+        let state = locked.read_shared()?;
         input_snapshot(&state, &locked, &candidate.session_id, &candidate.root_id, &candidate.task_id)
     }
 
     pub(crate) fn launch_input_requirements(&self, run: &Run) -> Result<Option<ScheduleInputSnapshot>, InspectionError> {
         let Some(task_id) = &run.task_id else { return Ok(None); };
         let locked = self.store.lock()?;
-        let state = locked.read()?;
+        let state = locked.read_shared()?;
         let current = &state.runs[scoped_index(&state, &run.session_id, &run.run_id)?];
         if current.assignment_generation != run.assignment_generation || current.stage == RunStage::Closed {
             return Err(error("assignment_generation_conflict", "Attempt changed before dependency input observation"));
@@ -788,7 +788,7 @@ impl OrchestrationService {
         facts: Option<&ScheduleInputFacts>) -> Result<Option<String>, InspectionError> {
         let Some(task_id) = &expected.task_id else { return Ok(None); };
         let locked = self.store.lock()?;
-        let state = locked.read()?;
+        let state = locked.read_shared()?;
         let current = &state.runs[scoped_index(&state, &expected.session_id, &expected.run_id)?];
         if current.assignment_generation != expected.assignment_generation || current.stage == RunStage::Closed {
             return Err(error("assignment_generation_conflict", "Attempt changed before dependency input verification"));

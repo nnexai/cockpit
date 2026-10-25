@@ -2,6 +2,41 @@
 
 These are historical observations, not proof of the current checkout. Each named original source occurrence is reproduced verbatim, including mixed current-rule/result paragraphs, obsolete wording, dates and limitations. Current architecture, rules and source owners live in the root documents. Undated cohorts retain source context rather than an invented run date.
 
+## CPU/API/allocation performance audit (2026-10-25)
+
+Base source was `d5d1304f36eb28d1f52ce90b10f1ee0bea4a2883`. Herdr was not modified. Cockpit changes coalesce only already-queued session invalidations before an immediate snapshot, reuse orchestration decodes only after a fresh bounded exact-byte read under the existing lock, retain owned cold-mutator decoding without an extra deep clone, avoid publishing unchanged Git/tag poll results, and clone only the selected Library entry. Cadences, save/identity fences and stream barriers remain intact.
+
+The final release-host comparison used frozen baseline/candidate binaries in balanced A1/B1/B2/A2 order. Each fresh disposable fixture contained 2,334 acknowledged inert historical messages (1,700,645 bytes), no runs/claims/resources, and one revision-only atomic rewrite per second under the original store lock. Each cohort had a 10-second warm-up and 181.000–181.001 measured seconds with 181 writes; every window passed compiler, suspend and process-incarnation admission without exclusions. Both candidate cohorts were below both baseline cohorts; paired means in the table represent a **76.77% reduction** in host CPU for this workload. Waited-child CPU was zero in all cohorts.
+
+This was an uninstrumented headless orchestration-owner workload, not total installed/native application CPU: browser/WebKit/compositor were absent, and the driver/sampler were not charged to Cockpit. The driver itself stayed around 0.91–0.94% of a core and Herdr around 0.09–0.10%. The synthetic store was validated through the real CLI before each run; no persistent state was copied. The earlier clone-on-miss comparison was cancelled before its first cohort completed and contributes no accepted measurement.
+
+The actual ordered-pump regression failed on the frozen original implementation with 16 snapshot fetches for 16 queued changes, then passed with one fetch and preserved final membership/focus. Real disposable Herdr/browser and packaged-native paths were also exercised:
+
+| Measured scenario | Baseline | Candidate |
+| --- | ---: | ---: |
+| Release orchestration-owner CPU, paired mean (% of one logical core) | 9.2293 | 2.1436 |
+| Browser full session snapshots for 80 concurrent workspace renames | 80 | 5 |
+| Native completed snapshot callbacks for 80 renames plus a final marker rename | 81 | 5 |
+| Production React commits in a settled 61-second browser window | 10 | 2 |
+| Git/tag requests in each of those windows | 4 / 4 | 4 / 4 |
+| Warm 20,000-item Library lookup, last-item median | 10.0469 ms | 0.0706 ms |
+| Requested allocation bytes per last-item lookup | 29,331,188 | 511 |
+| Allocation calls per last-item lookup | 320,002 | 16 |
+
+The same poll windows each completed two orchestration waits and one quota request. Changed responses, error recovery, session/checkout/boot changes and tag-write sequencing retain their existing behavior. Browser screenshots used the existing DOM fallback because the headless default WebGL canvas was blank; this is not native rendering evidence.
+
+Library figures are a release-mode actual-private-path benchmark with a validated on-disk 21,351,259-byte synthetic index, seven alternating-order samples of 100 lookups per variant. The original method was preserved only in an external overlay. First, middle, last and missing lookups returned identical complete entries; missing lookups allocated zero requested bytes after the change. These are requested allocator bytes, not peak RSS, network/provider latency or a universal application speedup.
+
+The first orchestration-cache candidate was rejected before CPU acceptance: cold owned reads decoded and then deep-cloned the whole state. The final version returns a directly decoded owned value on a miss and memoizes only shared reads. An actual-store release allocation probe compared original, rejected and final methods at empty, 1,132,702-byte and 4,530,359-byte states (five alternating-order samples, 50 operations each). Final cold reads and read/save cycles exactly matched the original allocation counts and requested bytes. Median read/save time was 1.713 versus 1.756 ms at the smaller size and 7.706 versus 7.901 ms at the larger size; timing noise does not establish a strict universal speedup.
+
+Packaged native smoke used `tauri://localhost`, actual IPC/channels, the default WebKit/xterm renderer, a private compositor and exact disposable pane/process identities. Trusted terminal input produced an octal-source-encoded echo token; both channel bytes and screenshots showed the decoded output. The final cold-write-safe native artifact also passed. Quick-switch open/close remained in the low tens of milliseconds in these samples; final authoritative workspace labels converged without an added debounce. This is focused responsiveness evidence, not a frame-rate or native-total-CPU comparison.
+
+Affected checks passed: 546 core orchestration tests (one ignored), 26 host session-pump/reducer tests, 14 Library tests, 22 sidebar tests, TypeScript checking and the production frontend build. Release host and packaged debug-native builds passed separately. One independent concurrency/authority review found no high-severity defect. Existing ts-rs attribute warnings and Vite's large-chunk advisory remain; they were not suppressed.
+
+Raw manifests, measurements, screenshots and throwaway drivers are under `/tmp/cockpit-perf-oh7o76to/`; no benchmark scaffold was added to product source. Native driver prerequisite/guard mismatches (missing optional OCR, a directory-only helper applied to a socket, relative parent Wayland resolution and cursor-positioned ANSI spaces) were corrected only in the throwaway harness; unsuccessful attempts are retained. Recorded fixture-process stops used the lifecycle's exact-identity receipts. Exhaustive cleanup remained Unknown because of protected `/proc` visibility/unproven consumers, so fixture evidence was retained without force cleanup. No persistent session, installation, global settings or external provider configuration was changed.
+
+Final CPU evidence is `release-abba-verified/report.json` plus per-cohort raw samples/identity manifests. Release host SHA-256: baseline `2b86e10e356640036b1d33b6ec96aaecebc09ebf9c4dded7e37418dc659c2fb0`, final candidate `c732236742c1ace360010f77c5e540478619e7dd4195b36f3db2482627b5a393`. Final native smoke is `native-candidate-verified/` with binary SHA-256 `68417a168d07e8c887af7faa4d49ec8950df1cbc98e9f3f59267ec169aade06d`; its inspected default-renderer echo and native IPC run passed, with quick-switch open at 9.35–10.58 ms and close at 5.83–11.36 ms. These focused samples found no responsiveness regression; they do not establish every-workload latency or post-install acceptance.
+
 ## Workspace compile repair (2026-10-24)
 
 `cargo check --workspace --all-targets`, `cargo build --workspace --all-targets` and `bun run build` completed successfully in the shared checkout. The workspace setup worker no longer assigns the unused return value of `verify_workspace`; the awaited verification and error propagation remain unchanged. The compiled CLI returned help and `cockpit 0.1.0` for its version smoke.

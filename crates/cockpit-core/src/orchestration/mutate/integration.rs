@@ -255,7 +255,7 @@ impl OrchestrationService {
             && self.operation_replay(actor, request)?.is_some() { return Ok(None); }
         let (state, run, source, target_spec) = {
             let locked = self.store.lock()?;
-            let state = locked.read()?;
+            let state = locked.read_shared()?;
             let (index, source, target) = match &request.action {
                 OrchestrationAction::Report { kind: ReportKind::Result, source_output: Some(source @ SourceOutput::Code { .. }), .. } => {
                     let Actor::Agent(agent) = actor else { return Err(error("actor_forbidden", "Only the current worker reports code output")); };
@@ -490,7 +490,7 @@ impl OrchestrationService {
     /// Owner-only event reconciliation. No checks are executed or invented, and
     /// absent target attestations leave integration pending for the liaison.
     pub(in crate::orchestration) async fn reconcile_accepted_integrations(&self) -> Result<(), InspectionError> {
-        let saved = self.store.lock()?.read()?;
+        let saved = self.store.lock()?.read_shared()?;
         for run in saved.runs.iter().filter(|run| run.kind == RunKind::Worker
             && run.stage == RunStage::Closed && run.close_reason == Some(CloseReason::Accepted)
             && run.integration == Integration::Pending

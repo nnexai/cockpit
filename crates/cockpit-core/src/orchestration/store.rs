@@ -2,6 +2,7 @@ use std::{
     cell::Cell,
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use cap_fs_ext::DirExt;
@@ -139,6 +140,14 @@ pub(crate) struct OrchestrationStore {
     identity: String,
     store: ProjectStore,
     tasks: Dir,
+    decoded: Mutex<Option<DecodedState>>,
+}
+
+/// Only exact bytes from a successful, fully validated read are reusable.
+#[derive(Debug)]
+struct DecodedState {
+    bytes: Vec<u8>,
+    state: Arc<OrchestrationState>,
 }
 
 impl OrchestrationStore {
@@ -167,7 +176,7 @@ impl OrchestrationStore {
             .state_dir()
             .open_dir_nofollow("tasks")
             .map_err(|error| io_error("unsafe_path", error))?;
-        Ok(Self { base, identity, store, tasks })
+        Ok(Self { base, identity, store, tasks, decoded: Mutex::new(None) })
     }
 
     pub(crate) fn base(&self) -> &Path {
@@ -296,16 +305,39 @@ pub(crate) fn encode_state(state: &OrchestrationState) -> Result<Vec<u8>, Inspec
     Ok(encoded.bytes)
 }
 
+fn decode_state(bytes: &[u8]) -> Result<OrchestrationState, InspectionError> {
+    let header: StateHeader = serde_json::from_slice(bytes)
+        .map_err(|_| InspectionError::new("state_corrupt", "invalid orchestration state header"))?;
+    if header.schema != SCHEMA {
+        return Err(InspectionError::new("orchestration_state_incompatible", "Orchestration state uses an incompatible schema; select a fresh state root. No migration or reset was performed"));
+    }
+    let state: OrchestrationState = serde_json::from_slice(bytes)
+        .map_err(|error| InspectionError::new("state_corrupt", error.to_string()))?;
+    validate_counters(&state)?;
+    Ok(state)
+}
+
 impl LockedStore<'_> {
     pub(crate) fn state_dir(&self) -> &Dir { self.store.store.state_dir() }
     pub(crate) fn exact_bytes(&self) -> Result<Vec<u8>, InspectionError> {
         crate::project_store::read_bytes_bounded(self.state_dir(), "state.json", MAX_STATE_BYTES as u64)
     }
+    fn cached(&self, bytes: &[u8]) -> Option<Arc<OrchestrationState>> {
+        self.store.decoded.lock().unwrap_or_else(|error| error.into_inner())
+            .as_ref().filter(|cached| cached.bytes == bytes)
+            .map(|cached| Arc::clone(&cached.state))
+    }
+    fn header(&self, bytes: &[u8]) -> Result<StateHeader, InspectionError> {
+        if let Some(state) = self.cached(bytes) {
+            return Ok(StateHeader { schema: state.schema, revision: state.revision });
+        }
+        serde_json::from_slice(bytes)
+            .map_err(|_| InspectionError::new("state_corrupt", "invalid orchestration state header"))
+    }
     /// A wait cursor never deserializes messages, reports or task payloads.
     pub(crate) fn wait_revision(&self) -> Result<u64, InspectionError> {
         let header = match self.state_dir().symlink_metadata("state.json") {
-            Ok(_) => serde_json::from_slice::<StateHeader>(&self.exact_bytes()?)
-                .map_err(|error| InspectionError::new("state_corrupt", error.to_string()))?,
+            Ok(_) => self.header(&self.exact_bytes()?)?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => StateHeader { schema: SCHEMA, revision: 0 },
             Err(error) => return Err(io_error("orchestration_state_read", error)),
         };
@@ -315,46 +347,62 @@ impl LockedStore<'_> {
         super::safe_counter(header.revision)?;
         Ok(header.revision)
     }
-    pub(crate) fn inbox_cursor(&self) -> Result<(u64, Vec<super::messages::InboxMessage>), InspectionError> {
+    pub(crate) fn inbox_counts(&self, run_id: &str, after: u64) -> Result<super::messages::InboxCounts, InspectionError> {
         #[derive(Deserialize)]
         struct InboxState {
             schema: u32,
             revision: u64,
             messages: Vec<super::messages::InboxMessage>,
         }
-        let state: InboxState = serde_json::from_slice(&self.exact_bytes()?)
+        let bytes = self.exact_bytes()?;
+        if let Some(state) = self.cached(&bytes) {
+            return Ok(super::messages::inbox_counts(&state.messages, run_id, after));
+        }
+        let state: InboxState = serde_json::from_slice(&bytes)
             .map_err(|error| InspectionError::new("state_corrupt", error.to_string()))?;
         if state.schema != SCHEMA {
             return Err(InspectionError::new("orchestration_state_incompatible", "Orchestration state uses an incompatible schema"));
         }
         super::safe_counter(state.revision)?;
-        Ok((state.revision, state.messages))
+        Ok(super::messages::saved_inbox_counts(&state.messages, run_id, after))
     }
     pub(crate) fn read(&self) -> Result<OrchestrationState, InspectionError> {
-        let mut source_schema = SCHEMA;
         let state = match self.state_dir().symlink_metadata("state.json") {
             Ok(_) => {
                 let bytes = self.exact_bytes()?;
-                let header: StateHeader = serde_json::from_slice(&bytes)
-                    .map_err(|_| InspectionError::new("state_corrupt", "invalid orchestration state header"))?;
-                source_schema = header.schema;
-                match header.schema {
-                    SCHEMA => serde_json::from_slice::<OrchestrationState>(&bytes)
-                        .map_err(|e| InspectionError::new("state_corrupt", e.to_string()))?,
-                    _ => return Err(InspectionError::new("orchestration_state_incompatible", "Orchestration state uses an incompatible schema; select a fresh state root. No migration or reset was performed")),
+                match self.cached(&bytes) {
+                    Some(state) => (*state).clone(),
+                    // Cold mutators need only the owned decode. Memoizing it
+                    // here would require an otherwise unnecessary deep clone.
+                    None => decode_state(&bytes)?,
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => OrchestrationState::default(),
             Err(error) => return Err(io_error("orchestration_state_read", error)),
         };
-        if state.schema != SCHEMA {
-            return Err(InspectionError::new(
-                "state_corrupt",
-                "unsupported orchestration state schema",
-            ));
-        }
-        validate_counters(&state)?;
-        self.revision.set(Some((source_schema, state.revision)));
+        self.revision.set(Some((state.schema, state.revision)));
+        Ok(state)
+    }
+
+    /// Every read still opens and bounds the current file under the state lock.
+    /// Metadata and revisions alone never authorize reuse of decoded records.
+    pub(crate) fn read_shared(&self) -> Result<Arc<OrchestrationState>, InspectionError> {
+        let state = match self.state_dir().symlink_metadata("state.json") {
+            Ok(_) => {
+                let bytes = self.exact_bytes()?;
+                if let Some(state) = self.cached(&bytes) {
+                    state
+                } else {
+                    let state = Arc::new(decode_state(&bytes)?);
+                    *self.store.decoded.lock().unwrap_or_else(|error| error.into_inner()) =
+                        Some(DecodedState { bytes, state: Arc::clone(&state) });
+                    state
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Arc::new(OrchestrationState::default()),
+            Err(error) => return Err(io_error("orchestration_state_read", error)),
+        };
+        self.revision.set(Some((state.schema, state.revision)));
         Ok(state)
     }
 
@@ -368,8 +416,7 @@ impl LockedStore<'_> {
         };
         // Recheck the exact schema/revision read under this lock before ordinary publication.
         if self.state_dir().symlink_metadata("state.json").is_ok() {
-            let header: StateHeader = serde_json::from_slice(&self.exact_bytes()?)
-                .map_err(|_| InspectionError::new("state_corrupt", "invalid orchestration state header"))?;
+            let header = self.header(&self.exact_bytes()?)?;
             if header.schema != source_schema {
                 return Err(InspectionError::new("orchestration_revision_conflict", "on-disk state schema changed"));
             }
@@ -689,5 +736,176 @@ mod tests {
         std::fs::remove_dir(store.base().join("tasks")).unwrap();
         symlink(&fixture.0, store.base().join("tasks")).unwrap();
         assert!(OrchestrationStore::open(&fixture.0).is_err());
+    }
+
+    #[test]
+    fn shared_reads_observe_same_size_edits_with_restored_metadata() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut state = lock.read().unwrap();
+        state.messages.push(message("before".into()));
+        lock.save(&mut state).unwrap();
+        let before = lock.read_shared().unwrap();
+        drop(lock);
+        let path = store.base().join("state.json");
+        let metadata = std::fs::metadata(&path).unwrap();
+        let mut changed = (*before).clone();
+        changed.messages[0].text = "edited".into();
+        let bytes = encode_state(&changed).unwrap();
+        assert_eq!(bytes.len() as u64, metadata.len());
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all(&bytes).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(metadata.modified().unwrap())).unwrap();
+        let after_metadata = file.metadata().unwrap();
+        assert_eq!(metadata.len(), after_metadata.len());
+        assert_eq!(metadata.modified().unwrap(), after_metadata.modified().unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(metadata.ino(), after_metadata.ino());
+        }
+        let current = store.lock().unwrap().read_shared().unwrap();
+        assert_eq!(current.revision, before.revision);
+        assert_eq!(current.messages[0].text, "edited");
+        assert_eq!(before.messages[0].text, "before");
+    }
+
+    #[test]
+    fn shared_reads_follow_other_store_commits_and_keep_prior_views_immutable() {
+        let fixture = Fixture::new();
+        let first = fixture.open();
+        let second = fixture.open();
+        let lock = first.lock().unwrap();
+        let mut state = lock.read().unwrap();
+        state.messages.push(message("first generation".into()));
+        lock.save(&mut state).unwrap();
+        let before = lock.read_shared().unwrap();
+        drop(lock);
+        let lock = second.lock().unwrap();
+        let mut changed = lock.read().unwrap();
+        changed.messages[0].text = "second generation".into();
+        lock.save(&mut changed).unwrap();
+        drop(lock);
+        let lock = first.lock().unwrap();
+        let current = lock.read_shared().unwrap();
+        assert_eq!(current.revision, before.revision + 1);
+        assert_eq!(current.messages[0].text, "second generation");
+        assert_eq!(before.messages[0].text, "first generation");
+        let mut stale = (*before).clone();
+        assert_eq!(lock.save(&mut stale).unwrap_err().code, "orchestration_revision_conflict");
+        assert_eq!(lock.read_shared().unwrap().messages[0].text, "second generation");
+    }
+
+    #[test]
+    fn shared_cache_never_masks_schema_corruption_or_unsafe_counters() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut state = lock.read().unwrap();
+        lock.save(&mut state).unwrap();
+        let valid = lock.exact_bytes().unwrap();
+        let mut unknown_field = serde_json::to_value(&state).unwrap();
+        unknown_field["unrecognized_record"] = serde_json::json!([]);
+        let mut incompatible = serde_json::to_value(&state).unwrap();
+        incompatible["schema"] = serde_json::json!(SCHEMA + 1);
+        let mut unsafe_counter = serde_json::to_value(&state).unwrap();
+        unsafe_counter["resource_sequence"] = serde_json::json!(super::super::MAX_SAFE_COUNTER + 1);
+        for (invalid, code) in [
+            (b"{broken".to_vec(), "state_corrupt"),
+            (serde_json::to_vec(&unknown_field).unwrap(), "state_corrupt"),
+            (serde_json::to_vec(&incompatible).unwrap(), "orchestration_state_incompatible"),
+            (serde_json::to_vec(&unsafe_counter).unwrap(), "state_corrupt"),
+        ] {
+            lock.read_shared().unwrap();
+            lock.read_shared().unwrap();
+            lock.state_dir().write("state.json", &invalid).unwrap();
+            assert_eq!(lock.read_shared().unwrap_err().code, code);
+            assert_eq!(lock.read_shared().unwrap_err().code, code);
+            assert_eq!(lock.exact_bytes().unwrap(), invalid);
+            lock.state_dir().write("state.json", &valid).unwrap();
+            assert_eq!(lock.read_shared().unwrap().revision, state.revision);
+        }
+    }
+
+    #[test]
+    fn shared_cache_does_not_bypass_save_header_fences() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut state = lock.read().unwrap();
+        lock.save(&mut state).unwrap();
+        let valid = lock.exact_bytes().unwrap();
+        let mut revised = state.clone();
+        revised.revision += 1;
+        let mut incompatible = state.clone();
+        incompatible.schema += 1;
+        for (invalid, code) in [
+            (encode_state(&revised).unwrap(), "orchestration_revision_conflict"),
+            (encode_state(&incompatible).unwrap(), "orchestration_revision_conflict"),
+            (b"{broken".to_vec(), "state_corrupt"),
+        ] {
+            lock.read_shared().unwrap();
+            lock.read_shared().unwrap();
+            lock.state_dir().write("state.json", &invalid).unwrap();
+            assert_eq!(lock.save(&mut state).unwrap_err().code, code);
+            assert_eq!(state.revision, 1);
+            assert_eq!(lock.exact_bytes().unwrap(), invalid);
+            lock.state_dir().write("state.json", &valid).unwrap();
+        }
+        assert_eq!(lock.save(&mut state).unwrap(), 2);
+        assert_eq!(lock.read_shared().unwrap().revision, 2);
+    }
+
+    #[test]
+    fn shared_cache_still_bounds_and_checks_the_current_file() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut state = lock.read().unwrap();
+        lock.save(&mut state).unwrap();
+        lock.read_shared().unwrap();
+        lock.state_dir().write("state.json", vec![b' '; MAX_STATE_BYTES + 1]).unwrap();
+        assert_eq!(lock.read_shared().unwrap_err().code, "unsafe_path");
+        #[cfg(unix)]
+        {
+            let path = store.base().join("state.json");
+            std::fs::remove_file(&path).unwrap();
+            let outside = fixture.0.join("outside");
+            std::fs::write(&outside, encode_state(&state).unwrap()).unwrap();
+            std::os::unix::fs::symlink(&outside, &path).unwrap();
+            assert_eq!(lock.read_shared().unwrap_err().code, "unsafe_path");
+        }
+    }
+
+    #[test]
+    fn cached_wait_cursors_match_cold_reads_and_observe_changed_bytes() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut state = lock.read().unwrap();
+        let mut pending = message("unread payload".into());
+        pending.stage = DeliveryStage::Stored;
+        pending.acked_at = None;
+        let recipient = pending.to_run_id.clone();
+        state.messages.push(pending);
+        lock.save(&mut state).unwrap();
+        let cold_revision = lock.wait_revision().unwrap();
+        let cold = lock.inbox_counts(&recipient, 0).unwrap();
+        assert!(cold.pending);
+        assert_eq!(cold.through_seq, 1);
+        lock.read_shared().unwrap();
+        assert_eq!(lock.wait_revision().unwrap(), cold_revision);
+        assert_eq!(serde_json::to_value(lock.inbox_counts(&recipient, 0).unwrap()).unwrap(),
+            serde_json::to_value(cold).unwrap());
+        state.revision += 1;
+        state.messages[0].stage = DeliveryStage::Acked;
+        lock.state_dir().write("state.json", encode_state(&state).unwrap()).unwrap();
+        assert_eq!(lock.wait_revision().unwrap(), cold_revision + 1);
+        assert!(!lock.inbox_counts(&recipient, 0).unwrap().pending);
+        state.schema += 1;
+        lock.state_dir().write("state.json", encode_state(&state).unwrap()).unwrap();
+        assert_eq!(lock.wait_revision().unwrap_err().code, "orchestration_state_incompatible");
+        assert_eq!(lock.inbox_counts(&recipient, 0).err().unwrap().code, "orchestration_state_incompatible");
     }
 }

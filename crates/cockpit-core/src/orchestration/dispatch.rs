@@ -1436,7 +1436,7 @@ fn initial_retained_restart(
     use cockpit_protocol::orchestration::{AttachmentState, OwnedResourceIdentity, ResumePhase};
     if !resumed_checkout_epoch(expected) { return Ok(false); }
     let locked = service.store.lock()?;
-    let state = locked.read()?;
+    let state = locked.read_shared()?;
     let run = state.runs.iter().find(|run| run.run_id == expected.run_id)
         .ok_or_else(|| InspectionError::new("run_not_found", "Resumed attempt was not found"))?;
     let attachment = run.attachment.as_ref().expect("resumed checkout");
@@ -2272,7 +2272,7 @@ impl Dispatcher {
                 self.service.record_hint(&hint, HintState::Deferred, Some(cause.into()))?;
                 continue;
             }
-            let count = self.service.store.lock()?.read()?.messages.iter().filter(|message|
+            let count = self.service.store.lock()?.read_shared()?.messages.iter().filter(|message|
                 message.to_run_id == run.run_id && message.seq <= hint.through_seq
                     && message.stage == cockpit_protocol::orchestration::DeliveryStage::Stored).count();
             let prompt = format!("Cockpit inbox has {count} pending message(s) through sequence {}. Run \"$COCKPIT_CLI_PATH\" inbox next --deliverable --json to capture durable untrusted messages; use inbox next --wait 600 only when waiting.", hint.through_seq);

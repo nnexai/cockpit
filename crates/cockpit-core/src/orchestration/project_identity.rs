@@ -370,7 +370,7 @@ impl OrchestrationService {
     async fn observe_root_main(&self, herdr: &dyn super::herdr::OrchestrationHerdr, expected: &Run) -> Result<(Option<ExecutionAttachment>, Option<RootMainRecoveryProof>), InspectionError> {
         {
             let locked = self.store.lock()?;
-            let state = locked.read()?;
+            let state = locked.read_shared()?;
             let run = state.runs.iter().find(|run| run.run_id == expected.run_id).ok_or_else(root_unproven)?;
             root_recovery_target(&state, run)?;
             if !same_root_attachment(run.attachment.as_ref().ok_or_else(root_unproven)?, expected.attachment.as_ref().ok_or_else(root_unproven)?)
@@ -455,7 +455,7 @@ impl OrchestrationService {
         let proof = RootMainRecoveryProof { run_id: expected.run_id.clone(), session_id: expected.session_id.clone(),
             attachment: attachment.clone(), dispatch: expected.dispatch.clone(), retained_checkout, idle_shell };
         let locked = self.store.lock()?;
-        let state = locked.read()?;
+        let state = locked.read_shared()?;
         let current = state.runs.iter().find(|run| run.run_id == expected.run_id).ok_or_else(root_unproven)?;
         revalidate_root_recovery(&state, current, &proof)?;
         Ok((None, Some(proof)))
@@ -470,7 +470,7 @@ impl OrchestrationService {
         scope: Option<&crate::process_scope::ScopeObservation>, herdr_cwd_clear: bool) -> Result<WriterExitProof, InspectionError> {
         if expected.kind != RunKind::Worker { return Err(exit_unproven()); }
         let locked = self.store.lock()?;
-        let state = locked.read()?;
+        let state = locked.read_shared()?;
         revalidate_checkout(checkout)?;
         let run = state.runs.iter().find(|r| r.run_id == expected.run_id).ok_or_else(exit_unproven)?;
         let old = run.attachment.as_ref().ok_or_else(exit_unproven)?;

@@ -347,12 +347,14 @@ pub async fn pump<S: SessionSink>(
     sink: &mut S,
 ) {
     let mut command = first;
+    let mut pending_change = None;
     loop {
         let event = match command {
             Command::Emit(message) => Event::Delivered(sink.send(message).await),
             Command::FetchSnapshot { race_client: true } => {
                 // Keep the old feed through the backoff; drop it only when restarting.
                 subscription = None;
+                pending_change = None;
                 tokio::select! {
                     result = service.session_snapshot(&stream.session_id) => {
                         Event::Snapshot(result.map(Box::new))
@@ -386,15 +388,36 @@ pub async fn pump<S: SessionSink>(
                 let Some(subscription) = subscription.as_mut() else {
                     return;
                 };
-                match stream.policy {
+                let change = async {
+                    match pending_change.take() {
+                        Some(change) => Some(change),
+                        None => subscription.messages.recv().await,
+                    }
+                };
+                let event = match stream.policy {
                     SessionStreamPolicy::Gateway => tokio::select! {
-                        change = subscription.messages.recv() => Event::Change(change),
+                        change = change => Event::Change(change),
                         incoming = sink.incoming() => Event::Client(incoming),
                     },
-                    SessionStreamPolicy::Native => {
-                        Event::Change(subscription.messages.recv().await)
+                    SessionStreamPolicy::Native => Event::Change(change.await),
+                };
+                if matches!(event, Event::Change(Some(SessionChange::Changed))) {
+                    // Only queued invalidations are covered by the imminent snapshot.
+                    // Cap each batch, and retain the first barrier for the reducer.
+                    // Never drain after fetching: changes during a fetch need another.
+                    let queued = subscription.messages.len().min(31);
+                    for _ in 0..queued {
+                        match subscription.messages.try_recv() {
+                            Ok(SessionChange::Changed) => {}
+                            Ok(barrier) => {
+                                pending_change = Some(barrier);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
                     }
                 }
+                event
             }
             Command::Backoff(delay) => tokio::select! {
                 _ = tokio::time::sleep(delay) => Event::BackoffElapsed,
@@ -409,6 +432,388 @@ pub async fn pump<S: SessionSink>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use cockpit_core::{HerdrAdapter, TerminalSession};
+    use cockpit_protocol::{
+        CockpitMode, FocusRequest, FocusResponse, HerdrCompatibility, HerdrIdentity, PaneSummary,
+        ResourceMutationRequest, ResourceMutationResponse, SessionListResponse, SpaceSummary,
+        TabSummary, TerminalOpenRequest,
+    };
+
+    struct PumpAdapter {
+        snapshots: AtomicUsize,
+        snapshot: SessionSnapshotResponse,
+        during_snapshot: std::sync::Mutex<Option<tokio::sync::mpsc::Sender<SessionChange>>>,
+        subscription: std::sync::Mutex<Option<SessionSubscription>>,
+    }
+
+    #[async_trait::async_trait]
+    impl HerdrAdapter for PumpAdapter {
+        async fn inspect(&self) -> Result<HerdrCompatibility, InspectionError> {
+            Ok(HerdrCompatibility::Compatible {
+                identity: HerdrIdentity {
+                    version: "0.8.2".to_owned(),
+                    protocol: 20,
+                    schema_version: 1,
+                },
+            })
+        }
+
+        async fn inspect_session(&self, _: &str) -> Result<HerdrCompatibility, InspectionError> {
+            self.inspect().await
+        }
+
+        async fn sessions(&self) -> Result<SessionListResponse, InspectionError> {
+            panic!("pump must not list sessions")
+        }
+
+        async fn session_snapshot(&self, _: &str) -> Result<SessionSnapshotResponse, InspectionError> {
+            self.snapshots.fetch_add(1, Ordering::Relaxed);
+            if let Some(sender) = self.during_snapshot.lock().unwrap().take() {
+                sender
+                    .try_send(SessionChange::Changed)
+                    .expect("change during fetch");
+            }
+            Ok(self.snapshot.clone())
+        }
+
+        async fn focus(&self, _: &str, _: &FocusRequest) -> Result<FocusResponse, InspectionError> {
+            panic!("pump must not change focus")
+        }
+
+        async fn mutate(
+            &self,
+            _: &str,
+            _: &ResourceMutationRequest,
+        ) -> Result<ResourceMutationResponse, InspectionError> {
+            panic!("pump must not mutate membership")
+        }
+
+        async fn subscribe_session(
+            &self,
+            _: &str,
+            _: &SessionSnapshotResponse,
+        ) -> Result<SessionSubscription, InspectionError> {
+            Ok(self
+                .subscription
+                .lock()
+                .unwrap()
+                .take()
+                .expect("expected subscription"))
+        }
+
+        async fn open_terminal(
+            &self,
+            _: &TerminalOpenRequest,
+        ) -> Result<TerminalSession, InspectionError> {
+            panic!("pump must not open terminals")
+        }
+    }
+
+    #[derive(Default)]
+    struct PumpSink {
+        messages: Vec<SessionStreamMessage>,
+        stop_after: Option<usize>,
+    }
+
+    impl SessionSink for PumpSink {
+        async fn send(&mut self, message: SessionStreamMessage) -> bool {
+            self.messages.push(message);
+            self.stop_after != Some(self.messages.len())
+        }
+
+        async fn incoming(&mut self) -> Incoming {
+            std::future::pending().await
+        }
+
+        fn cancelled(&self) -> bool {
+            false
+        }
+    }
+
+    fn membership_snapshot() -> SessionSnapshotResponse {
+        let mut snapshot = snapshot();
+        snapshot.focused_space_id = Some("space-final".to_owned());
+        snapshot.focused_tab_id = Some("tab-final".to_owned());
+        snapshot.focused_pane_id = Some("pane-final".to_owned());
+        snapshot.spaces.push(SpaceSummary {
+            id: "space-final".to_owned(),
+            label: "Final space".to_owned(),
+            number: 2,
+            tab_count: 1,
+            pane_count: 1,
+            focused: true,
+            agent_status: "idle".to_owned(),
+            git: None,
+        });
+        snapshot.tabs.push(TabSummary {
+            id: "tab-final".to_owned(),
+            space_id: "space-final".to_owned(),
+            label: "Final tab".to_owned(),
+            number: 2,
+            pane_count: 1,
+            focused: true,
+            focused_pane_id: Some("pane-final".to_owned()),
+        });
+        snapshot.panes.push(PaneSummary {
+            id: "pane-final".to_owned(),
+            terminal_id: "terminal-final".to_owned(),
+            space_id: "space-final".to_owned(),
+            tab_id: "tab-final".to_owned(),
+            title: Some("Final pane".to_owned()),
+            focused: true,
+            agent: None,
+            agent_status: "idle".to_owned(),
+            revision: 7,
+            cwd: None,
+        });
+        snapshot
+    }
+
+    async fn pump_changes(changes: Vec<SessionChange>) -> (usize, Vec<SessionStreamMessage>) {
+        let adapter = Arc::new(PumpAdapter {
+            snapshots: AtomicUsize::new(0),
+            snapshot: membership_snapshot(),
+            during_snapshot: std::sync::Mutex::new(None),
+            subscription: std::sync::Mutex::new(None),
+        });
+        let service = CockpitService::new(CockpitMode::Normal, adapter.clone());
+        let (sender, messages) = tokio::sync::mpsc::channel(changes.len().max(1));
+        for change in changes {
+            sender.try_send(change).expect("prequeued change");
+        }
+        drop(sender);
+        let mut sink = PumpSink::default();
+        pump(
+            service,
+            native_live(),
+            Command::AwaitChange,
+            Some(SessionSubscription { messages }),
+            &mut sink,
+        )
+        .await;
+        (adapter.snapshots.load(Ordering::Relaxed), sink.messages)
+    }
+
+    #[tokio::test]
+    async fn pump_coalesces_queued_burst_preserving_final_membership_and_focus() {
+        let burst = 16;
+        let (fetches, messages) = pump_changes(vec![SessionChange::Changed; burst]).await;
+        eprintln!("queued_changes={burst} snapshot_fetches={fetches}");
+        assert_eq!(fetches, 1, "one authoritative fetch covers the queued burst");
+        assert_eq!(
+            messages,
+            vec![
+                SessionStreamMessage::Snapshot {
+                    session_id: "session".to_owned(),
+                    generation: 1,
+                    sequence: 3,
+                    snapshot: Box::new(membership_snapshot()),
+                },
+                SessionStreamMessage::Disconnected {
+                    session_id: "session".to_owned(),
+                    generation: 1,
+                    sequence: 4,
+                    code: "subscription_closed".to_owned(),
+                    message: "The session stream disconnected".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn pump_keeps_lagged_and_disconnected_barriers_between_bursts() {
+        let (fetches, messages) = pump_changes(vec![
+            SessionChange::Changed,
+            SessionChange::Changed,
+            SessionChange::Stale {
+                code: "lagged".to_owned(),
+                message: "event gap".to_owned(),
+            },
+            SessionChange::Changed,
+            SessionChange::Changed,
+            SessionChange::Disconnected {
+                code: "reconnecting".to_owned(),
+                message: "connection lost".to_owned(),
+            },
+            SessionChange::Changed,
+        ])
+        .await;
+        assert_eq!(fetches, 3);
+        assert_eq!(
+            messages,
+            vec![
+                SessionStreamMessage::Snapshot {
+                    session_id: "session".to_owned(),
+                    generation: 1,
+                    sequence: 3,
+                    snapshot: Box::new(membership_snapshot()),
+                },
+                SessionStreamMessage::Stale {
+                    session_id: "session".to_owned(),
+                    generation: 1,
+                    sequence: 4,
+                    code: "lagged".to_owned(),
+                    message: "event gap".to_owned(),
+                },
+                SessionStreamMessage::Snapshot {
+                    session_id: "session".to_owned(),
+                    generation: 2,
+                    sequence: 1,
+                    snapshot: Box::new(membership_snapshot()),
+                },
+                SessionStreamMessage::Disconnected {
+                    session_id: "session".to_owned(),
+                    generation: 2,
+                    sequence: 2,
+                    code: "reconnecting".to_owned(),
+                    message: "connection lost".to_owned(),
+                },
+                SessionStreamMessage::Snapshot {
+                    session_id: "session".to_owned(),
+                    generation: 3,
+                    sequence: 1,
+                    snapshot: Box::new(membership_snapshot()),
+                },
+                SessionStreamMessage::Disconnected {
+                    session_id: "session".to_owned(),
+                    generation: 3,
+                    sequence: 2,
+                    code: "subscription_closed".to_owned(),
+                    message: "The session stream disconnected".to_owned(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn pump_limits_each_queued_batch() {
+        let (fetches, messages) = pump_changes(vec![SessionChange::Changed; 65]).await;
+        assert_eq!(fetches, 3, "at most 32 invalidations per immediate fetch");
+        assert_eq!(messages.len(), 4, "three snapshots followed by feed closure");
+    }
+
+    #[tokio::test]
+    async fn pump_keeps_changes_arriving_during_snapshot_fetch() {
+        let (sender, messages) = tokio::sync::mpsc::channel(2);
+        sender.try_send(SessionChange::Changed).unwrap();
+        let adapter = Arc::new(PumpAdapter {
+            snapshots: AtomicUsize::new(0),
+            snapshot: membership_snapshot(),
+            during_snapshot: std::sync::Mutex::new(Some(sender)),
+            subscription: std::sync::Mutex::new(None),
+        });
+        let mut sink = PumpSink::default();
+        pump(
+            CockpitService::new(CockpitMode::Normal, adapter.clone()),
+            native_live(),
+            Command::AwaitChange,
+            Some(SessionSubscription { messages }),
+            &mut sink,
+        )
+        .await;
+        assert_eq!(adapter.snapshots.load(Ordering::Relaxed), 2);
+        assert_eq!(sink.messages.len(), 3);
+        assert!(matches!(
+            &sink.messages[1],
+            SessionStreamMessage::Snapshot { sequence: 4, snapshot, .. }
+                if **snapshot == membership_snapshot()
+        ));
+    }
+
+    #[tokio::test]
+    async fn pump_preserves_native_initial_and_subscription_boundary_snapshots() {
+        let (sender, messages) = tokio::sync::mpsc::channel(16);
+        for _ in 0..16 {
+            sender.try_send(SessionChange::Changed).unwrap();
+        }
+        drop(sender);
+        let adapter = Arc::new(PumpAdapter {
+            snapshots: AtomicUsize::new(0),
+            snapshot: membership_snapshot(),
+            during_snapshot: std::sync::Mutex::new(None),
+            subscription: std::sync::Mutex::new(None),
+        });
+        let (stream, first) = SessionStream::native("session".to_owned(), snapshot());
+        let mut sink = PumpSink::default();
+        pump(
+            CockpitService::new(CockpitMode::Normal, adapter.clone()),
+            stream,
+            first,
+            Some(SessionSubscription { messages }),
+            &mut sink,
+        )
+        .await;
+        assert_eq!(adapter.snapshots.load(Ordering::Relaxed), 2);
+        assert_eq!(sink.messages.len(), 4);
+        assert!(matches!(
+            &sink.messages[0],
+            SessionStreamMessage::Snapshot { generation: 1, sequence: 1, snapshot: initial, .. }
+                if **initial == snapshot()
+        ));
+        for (index, sequence) in [(1, 2), (2, 3)] {
+            assert!(matches!(
+                &sink.messages[index],
+                SessionStreamMessage::Snapshot { generation: 1, sequence: actual, snapshot, .. }
+                    if *actual == sequence && **snapshot == membership_snapshot()
+            ));
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pump_gateway_lagged_barrier_reconnects_before_consuming_old_feed() {
+        let (sender, messages) = tokio::sync::mpsc::channel(4);
+        for change in [
+            SessionChange::Changed,
+            SessionChange::Changed,
+            SessionChange::Stale {
+                code: "lagged".to_owned(),
+                message: "event gap".to_owned(),
+            },
+            SessionChange::Changed,
+        ] {
+            sender.try_send(change).unwrap();
+        }
+        drop(sender);
+        let (sender, reopened) = tokio::sync::mpsc::channel(1);
+        drop(sender);
+        let adapter = Arc::new(PumpAdapter {
+            snapshots: AtomicUsize::new(0),
+            snapshot: membership_snapshot(),
+            during_snapshot: std::sync::Mutex::new(None),
+            subscription: std::sync::Mutex::new(Some(SessionSubscription { messages: reopened })),
+        });
+        let (mut stream, _) = SessionStream::gateway("session".to_owned());
+        gateway_live(&mut stream);
+        let mut sink = PumpSink {
+            messages: Vec::new(),
+            stop_after: Some(4),
+        };
+        pump(
+            CockpitService::new(CockpitMode::Normal, adapter.clone()),
+            stream,
+            Command::AwaitChange,
+            Some(SessionSubscription { messages }),
+            &mut sink,
+        )
+        .await;
+        assert_eq!(adapter.snapshots.load(Ordering::Relaxed), 3);
+        assert!(matches!(
+            &sink.messages[1],
+            SessionStreamMessage::Stale { generation: 1, sequence: 4, code, .. } if code == "lagged"
+        ));
+        for (index, sequence) in [(2, 1), (3, 2)] {
+            assert!(matches!(
+                &sink.messages[index],
+                SessionStreamMessage::Snapshot { generation: 2, sequence: actual, snapshot, .. }
+                    if *actual == sequence && **snapshot == membership_snapshot()
+            ));
+        }
+    }
 
     fn snapshot() -> SessionSnapshotResponse {
         SessionSnapshotResponse {

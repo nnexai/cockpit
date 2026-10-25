@@ -188,7 +188,7 @@ pub(crate) enum DispatchUpdate {
 impl OrchestrationService {
     pub fn open(configuration: &ProjectConfiguration) -> Result<Self, InspectionError> {
         let store = OrchestrationStore::open(Path::new(&configuration.state_root))?;
-        let initial = store.lock()?.read()?.revision;
+        let initial = store.lock()?.read_shared()?.revision;
         let (revision, _) = watch::channel(initial);
         Ok(Self { store, revision, notifications: std::sync::Mutex::new(None), launch_config: configuration.orchestration.clone() })
     }
@@ -230,11 +230,11 @@ impl OrchestrationService {
     pub fn store_identity(&self) -> &str { self.store.identity() }
     fn snapshot_records(
         &self, request: &OrchestrationSnapshotRequest,
-    ) -> Result<(OrchestrationState, Vec<TaskBoard>, String), InspectionError> {
+    ) -> Result<(std::sync::Arc<OrchestrationState>, Vec<TaskBoard>, String), InspectionError> {
         validate_identity(&request.session_id)?;
         let (state, boards) = {
             let locked = self.store.lock()?;
-            let state = locked.read()?;
+            let state = locked.read_shared()?;
             let mut boards = Vec::new();
             for root in state
                 .runs
@@ -348,18 +348,18 @@ impl OrchestrationService {
 
     pub fn recorded_runs(&self, session_id: &str) -> Result<(u64, Vec<Run>), InspectionError> {
         validate_identity(session_id)?;
-        let state = self.store.lock()?.read()?;
-        Ok((state.revision, state.runs.into_iter().filter(|r| r.session_id == session_id).collect()))
+        let state = self.store.lock()?.read_shared()?;
+        Ok((state.revision, state.runs.iter().filter(|r| r.session_id == session_id).cloned().collect()))
     }
 
     pub fn recorded_runs_with_bindings(&self, session_id: &str) -> Result<(u64, Vec<Run>, RecordedRunBindings), InspectionError> {
         validate_identity(session_id)?;
-        let state = self.store.lock()?.read()?;
+        let state = self.store.lock()?.read_shared()?;
         let bindings = state.runs.iter().filter(|r| r.session_id == session_id && has_current_binding(&state, r))
             .filter_map(|run| run.attachment.as_ref().map(|attachment|
                 (run.run_id.clone(), (attachment.attachment_id.clone(), attachment.epoch))))
             .collect();
-        Ok((state.revision, state.runs.into_iter().filter(|r| r.session_id == session_id).collect(), bindings))
+        Ok((state.revision, state.runs.iter().filter(|r| r.session_id == session_id).cloned().collect(), bindings))
     }
     pub async fn wait(
         &self,
@@ -386,7 +386,7 @@ impl OrchestrationService {
         // Root admission is performed once, before the quiet wait. Subsequent
         // notifications need only the durable header, not body-bearing records.
         if let Some(root_id) = root_id {
-            let state = self.store.lock()?.read()?;
+            let state = self.store.lock()?.read_shared()?;
             let root = &state.runs[run_index(&state, root_id)?];
             if root.parent_run_id.is_some() || root.root_id != root.run_id {
                 return Err(error("root_not_found", "Wait scope must name the authenticated root"));
@@ -433,8 +433,7 @@ impl OrchestrationService {
             filesystem.borrow_and_update();
             subscription.borrow_and_update();
             if let Some(error) = self.notification_error() { return Err(error); }
-            let (_, messages) = self.store.lock()?.inbox_cursor()?;
-            let counts = messages::saved_inbox_counts(&messages, &own.run_id, after);
+            let counts = self.store.lock()?.inbox_counts(&own.run_id, after)?;
             if counts.pending || tokio::time::Instant::now() >= deadline {
                 self.job_role(caller)?;
                 return Ok(counts);
@@ -457,7 +456,7 @@ impl OrchestrationService {
     }
 
     pub fn run_for_review(&self, session_id: &str, run_id: &str) -> Result<Run, InspectionError> {
-        let state = self.store.lock()?.read()?;
+        let state = self.store.lock()?.read_shared()?;
         Ok(state.runs[scoped_index(&state, session_id, run_id)?].clone())
     }
 
@@ -533,7 +532,7 @@ impl OrchestrationService {
     }
 
     pub fn job_registration_run(&self, caller: &AgentCaller) -> Result<Run, InspectionError> {
-        let state = self.store.lock()?.read()?;
+        let state = self.store.lock()?.read_shared()?;
         let authorized = credentials::validate_registration(&state, caller)?;
         Ok(state.runs[authorized.run_index].clone())
     }
@@ -543,13 +542,13 @@ impl OrchestrationService {
     }
 
     pub fn job_role(&self, caller: &AgentCaller) -> Result<(Run, JobRole), InspectionError> {
-        let state = self.store.lock()?.read()?;
+        let state = self.store.lock()?.read_shared()?;
         let authorized = credentials::validate_caller(&state, caller)?;
         Ok((state.runs[authorized.run_index].clone(), authorized.role))
     }
 
     pub fn committed_report_job_run(&self, caller: &AgentCaller, message_id: &str) -> Result<Run, InspectionError> {
-        let state = self.store.lock()?.read()?;
+        let state = self.store.lock()?.read_shared()?;
         let job = credentials::validate_committed_result_auth(&state, &caller.auth, message_id)?;
         credentials::validate_current_assignment(&state, caller, &job)?;
         Ok(state.runs[job.run_index].clone())
@@ -701,20 +700,22 @@ impl OrchestrationService {
         Ok(self
             .store
             .lock()?
-            .read()?
+            .read_shared()?
             .runs
-            .into_iter()
+            .iter()
             .filter(|r| r.stage != RunStage::Closed && r.dispatch.is_some())
+            .cloned()
             .collect())
     }
     pub(crate) fn observation_runs(&self) -> Result<Vec<Run>, InspectionError> {
         Ok(self
             .store
             .lock()?
-            .read()?
+            .read_shared()?
             .runs
-            .into_iter()
+            .iter()
             .filter(|r| r.stage != RunStage::Closed)
+            .cloned()
             .collect())
     }
     pub(crate) fn record_observation(

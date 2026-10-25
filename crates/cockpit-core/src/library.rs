@@ -601,10 +601,11 @@ impl LibraryService {
     fn entry(&self, store: &Store, id: &str) -> Result<Option<LibraryIndexEntry>, InspectionError> {
         let _lock = store.shared()?;
         Ok(store
-            .index()?
+            .index_shared()?
             .items
-            .into_iter()
-            .find(|e| e.summary.item_id == id))
+            .iter()
+            .find(|e| e.summary.item_id == id)
+            .cloned())
     }
     /// Items refreshed one by one, and follows refreshed by D20 enumeration.
     /// `All` refreshes each follow once and every item outside a follow.

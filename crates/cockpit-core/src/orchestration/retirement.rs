@@ -179,22 +179,22 @@ pub(super) fn receipt_identity_matches(left: &RetirementIdentity, right: &Retire
 
 impl OrchestrationService {
     pub(crate) fn retirement_queue(&self) -> Result<Vec<Run>, InspectionError> {
-        Ok(self.store.lock()?.read()?.runs.into_iter().filter(|run| run.retirement.as_ref().is_some_and(|r|
+        Ok(self.store.lock()?.read_shared()?.runs.iter().filter(|run| run.retirement.as_ref().is_some_and(|r|
             (!terminal(&r.state) || matches!(r.state, RetirementState::Unknown { .. }
                 | RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable | RetainReason::ObservationUnavailable | RetainReason::ForegroundProcess, .. }))
                 && run.kind == RunKind::Worker && run.stage == RunStage::Closed
                 && (run.close_reason == Some(CloseReason::Accepted)
-                    || (run.close_reason == Some(CloseReason::Superseded) && r.trigger == RetirementTrigger::Replacement)))).collect())
+                    || (run.close_reason == Some(CloseReason::Superseded) && r.trigger == RetirementTrigger::Replacement)))).cloned().collect())
     }
 
     pub(crate) fn retirement_blockers(&self, run_id: &str) -> Result<Vec<RetirementBlocker>, InspectionError> {
-        let state = self.store.lock()?.read()?;
+        let state = self.store.lock()?.read_shared()?;
         Ok(blockers(&state, &state.runs[run_index(&state, run_id)?]))
     }
 
 
     pub(crate) fn retirement_authorized(&self, run_id: &str, expected: &RunRetirement) -> Result<bool, InspectionError> {
-        let state = self.store.lock()?.read()?;
+        let state = self.store.lock()?.read_shared()?;
         let run = &state.runs[run_index(&state, run_id)?];
         Ok(run.retirement.as_ref() == Some(expected) && authority_matches(&state, run, expected))
     }

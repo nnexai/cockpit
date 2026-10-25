@@ -411,14 +411,14 @@ fn attempt_directory_released(state: &OrchestrationState, run: &Run) -> bool {
 impl OrchestrationService {
     fn owned_consumer_proof<'a>(&'a self, resource: &'a OwnedResourceRecord, run: &'a Run, merged: Option<&'a merged::MergedProof>) -> Result<Option<OwnedConsumerProof<'a>>, InspectionError> {
         let locked = self.store.lock()?;
-        let state = locked.read()?;
+        let state = locked.read_shared()?;
         Ok(released_consumer_revision(&state, resource, run).filter(|_| merged.is_none_or(|proof| proof.matches_state(&state, run)))
             .map(|claim_revision| OwnedConsumerProof { service: self, resource, run, claim_revision, merged }))
     }
 
     fn validate_consumer_release(&self, resource: &OwnedResourceRecord, run: &Run, claim_revision: u64, merged: Option<&merged::MergedProof>) -> Result<(), InspectionError> {
         let locked = self.store.lock()?;
-        let state = locked.read()?;
+        let state = locked.read_shared()?;
         if released_consumer_revision(&state, resource, run) != Some(claim_revision)
             || merged.is_some_and(|proof| !proof.matches_state(&state, run)) {
             return Err(error("consumer_proof_missing", "Exact released claim revision, holder epoch, creation identity or owned scope journal is no longer current"));
@@ -429,13 +429,13 @@ impl OrchestrationService {
     /// The scheduler evaluates this queue on acceptance, closure, pane/owner and
     /// relevant Git-ref events. No lease or elapsed time grants cleanup authority.
     pub fn cleanup_queue(&self) -> Result<Vec<OwnedResourceRecord>, InspectionError> {
-        Ok(cleanup_candidates(&self.store.lock()?.read()?))
+        Ok(cleanup_candidates(self.store.lock()?.read_shared()?.as_ref()))
     }
 
     /// Git common directories to register before reading/evaluating the queue.
     /// Removed resources are omitted so the shared notification owner can unwatch.
     pub fn cleanup_ref_watch_paths(&self) -> Result<Vec<std::path::PathBuf>, InspectionError> {
-        let state = self.store.lock()?.read()?;
+        let state = self.store.lock()?.read_shared()?;
         let mut paths = std::collections::BTreeSet::new();
         for resource in state.owned_resources.iter().filter(|resource|
             resource.cleanup.state != CleanupState::Removed
@@ -472,7 +472,7 @@ impl OrchestrationService {
     }
 
     pub fn cleanup_job_run(&self, caller: &AgentCaller, request: &CleanupFinish) -> Result<Run, InspectionError> {
-        let state = self.store.lock()?.read()?;
+        let state = self.store.lock()?.read_shared()?;
         let job = credentials::validate_cleanup_job_auth(&state, &caller.auth)?;
         credentials::validate_current_assignment(&state, caller, &job)?;
         let run = &state.runs[job.run_index];
@@ -492,7 +492,7 @@ impl OrchestrationService {
             return Err(error("invalid_action", "Expected ResourceRegister"));
         };
         let run = {
-            let state = self.store.lock()?.read()?;
+            let state = self.store.lock()?.read_shared()?;
             let target = scoped_index(&state, session_id, &request.run_id)?;
             match actor {
                 Actor::Operator(_) => {}
@@ -587,7 +587,7 @@ impl OrchestrationService {
     /// a path merely because it currently exists. The same proof is one record.
     pub async fn capture_owned_resources(&self, projects: &ProjectService,
         herdr: &dyn super::herdr::OrchestrationHerdr) -> Result<(), InspectionError> {
-        let saved = self.store.lock()?.read()?;
+        let saved = self.store.lock()?.read_shared()?;
         for run in saved.runs.iter().filter(|run| run.kind == RunKind::Worker) {
             let setup_operation = run.setup.as_ref().and_then(|s| s.operation_id.as_deref());
             let move_operation = run.dispatch.as_ref().and_then(|dispatch| dispatch.move_operation_id.as_ref());
@@ -735,7 +735,7 @@ impl OrchestrationService {
                     self.record_constituent_receipts(&queued, receipts)?;
                 }
             let (resource, run, blocked, drained, directory_released, state) = {
-                let state = self.store.lock()?.read()?;
+                let state = self.store.lock()?.read_shared()?;
                 let Some(resource) = state.owned_resources.iter().find(|r| r.resource_id == queued.resource_id) else { continue };
                 let run = &state.runs[run_index(&state, &resource.run_id)?];
                 let blocked = retirement::blockers(&state, run);

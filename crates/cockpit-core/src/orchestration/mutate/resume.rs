@@ -499,7 +499,7 @@ impl OrchestrationService {
     /// Operator-only bootstrap transport, scoped to the exact borrowed placement.
     pub fn job_adoption_credential_file(&self, actor: &Actor, session_id: &str, run_id: &str, location: &RunLocation) -> Result<std::path::PathBuf, InspectionError> {
         operator(actor)?;
-        let state = self.store.lock()?.read()?;
+        let state = self.store.lock()?.read_shared()?;
         let run = &state.runs[scoped_index(&state, session_id, run_id)?];
         let attachment = run.attachment.as_ref().ok_or_else(|| error("attachment_conflict", "Adopted attachment missing"))?;
         if run.kind != RunKind::Adopted || run.stage == RunStage::Closed
@@ -566,7 +566,7 @@ impl OrchestrationService {
 
     pub(crate) fn resume_startup_pending(&self, expected: &Run) -> Result<bool, InspectionError> {
         let locked = self.store.lock()?;
-        let state = locked.read()?;
+        let state = locked.read_shared()?;
         let current = &state.runs[scoped_index(&state, &expected.session_id, &expected.run_id)?];
         Ok(current.assignment_generation == expected.assignment_generation
             && current.attachment.as_ref().zip(expected.attachment.as_ref()).is_some_and(|(current, expected)|

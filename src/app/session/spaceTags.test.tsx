@@ -43,10 +43,11 @@ function fixture() {
   const write = vi.fn((_session: string, _request: SpaceTagChangeRequest): Promise<SpaceTagsResponse> => Promise.resolve(response()));
   const props = { client: { spaceTags: read, changeSpaceTag: write } as unknown as CockpitClient, sessionId: "session" as string | null, snapshot: snapshot() as SessionSnapshotResponse | null, live: true };
   let state!: SpaceTagsState;
-  function Probe() { state = useSpaceTags(props.client, props.sessionId, props.snapshot, props.live); return null; }
+  let renders = 0;
+  function Probe() { state = useSpaceTags(props.client, props.sessionId, props.snapshot, props.live); ++renders; return null; }
   const root = createRoot(document.createElement("div"));
   roots.push(root);
-  return { props, read, write, get state() { return state; }, async render() { await act(async () => root.render(createElement(Probe))); } };
+  return { props, read, write, get state() { return state; }, get renders() { return renders; }, async render() { await act(async () => root.render(createElement(Probe))); } };
 }
 
 it("polls visible live instances every fifteen seconds without overlapping reads and refreshes on focus", async () => {
@@ -270,4 +271,84 @@ it("clears pending on offline transition and rejects acknowledgements from a pre
   expect(await outcome).toBe(false);
   expect(f.state.pending.size).toBe(0);
   expect(f.state.bySpace.size).toBe(0);
+});
+
+it("reuses unchanged tag results without rendering while retaining timer and focus refreshes", async () => {
+  const f = fixture();
+  f.read.mockImplementation(async () => response([{ space_id: "s1", tags: ["My check"] }, { space_id: "s2", tags: [] }]));
+  await f.render();
+  const state = f.state;
+  const renders = f.renders;
+  for (let poll = 0; poll < 3; ++poll) await act(async () => vi.advanceTimersByTime(SPACE_TAGS_POLL_MS));
+  expect(f.read).toHaveBeenCalledTimes(4);
+  expect(f.renders).toBe(renders);
+  expect(f.state).toBe(state);
+  expect(f.state.catalog).toBe(state.catalog);
+  expect(f.state.bySpace).toBe(state.bySpace);
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(f.read).toHaveBeenCalledTimes(5);
+  expect(f.renders).toBe(renders);
+  expect(f.state).toBe(state);
+});
+
+it("publishes catalog spelling/order, per-Space tags, membership and Space order changes", async () => {
+  const f = fixture();
+  const initial = response([{ space_id: "s1", tags: ["My check"] }, { space_id: "s2", tags: [] }]);
+  f.read.mockResolvedValue(initial);
+  await f.render();
+  const changes = [
+    response(initial.spaces, ["my check", "Needs testing"]),
+    response(initial.spaces, ["Needs testing", "My check"]),
+    response(initial.spaces, ["Needs testing", "My check", "New tag"]),
+    response([{ space_id: "s1", tags: ["Needs testing"] }, { space_id: "s2", tags: [] }]),
+    response([{ space_id: "s1", tags: ["Needs testing", "My check"] }, { space_id: "s2", tags: [] }]),
+    response([{ space_id: "s1", tags: ["My check", "Needs testing"] }, { space_id: "s2", tags: [] }]),
+    response([{ space_id: "s2", tags: [] }, { space_id: "s1", tags: ["My check", "Needs testing"] }]),
+    response([{ space_id: "s2", tags: [] }]),
+    response([{ space_id: "s1", tags: [] }]),
+    response(),
+  ];
+  for (const next of changes) {
+    const renders = f.renders;
+    f.read.mockImplementation(async () => structuredClone(next));
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(f.renders).toBe(renders + 1);
+    expect(f.state.catalog).toEqual(next.catalog);
+    expect([...f.state.bySpace]).toEqual(next.spaces.map(space => [space.space_id, space.tags]));
+    const state = f.state;
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    expect(f.renders).toBe(renders + 1);
+    expect(f.state).toBe(state);
+  }
+});
+
+it("suppresses repeated initial failures but publishes recovery even when tag data stays empty", async () => {
+  const f = fixture();
+  f.read.mockRejectedValue(new Error("offline"));
+  await f.render();
+  const failedRenders = f.renders;
+  const failedState = f.state;
+  expect(f.state.failed).toBe(true);
+  await act(async () => vi.advanceTimersByTime(SPACE_TAGS_POLL_MS));
+  expect(f.renders).toBe(failedRenders);
+  expect(f.state).toBe(failedState);
+  f.read.mockResolvedValue({ ...response([], []), session_id: "other" });
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(f.renders).toBe(failedRenders);
+  expect(f.state).toBe(failedState);
+  f.read.mockResolvedValue(response([], []));
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(f.renders).toBe(failedRenders + 1);
+  expect(f.state.ready).toBe(true);
+  expect(f.state.failed).toBe(false);
+  expect(f.state.editBlocked).toBeNull();
+  const recovered = f.state;
+  f.read.mockRejectedValue(new Error("offline"));
+  await act(async () => vi.advanceTimersByTime(SPACE_TAGS_POLL_MS));
+  expect(f.renders).toBe(failedRenders + 1);
+  expect(f.state).toBe(recovered);
+  f.read.mockResolvedValue(response([], []));
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(f.renders).toBe(failedRenders + 1);
+  expect(f.state).toBe(recovered);
 });

@@ -136,7 +136,7 @@ impl OrchestrationService {
     /// Owner event path: seal the exact holder, optionally stop its owned accepted
     /// scope, then obtain fresh kernel+pane evidence before releasing its claim.
     pub(crate) async fn cleanup_worker_scopes(&self, herdr: &dyn super::super::herdr::OrchestrationHerdr) -> Result<(), InspectionError> {
-        let saved = self.store.lock()?.read()?;
+        let saved = self.store.lock()?.read_shared()?;
         for queued in saved.runs.iter().filter(|run| run.kind == RunKind::Worker && run.stage == RunStage::Closed
             && saved.checkout_claims.iter().any(|claim| Some(claim.claim_id.as_str()) == run.checkout_claim_id.as_deref()
                 && matches!(claim.state, claims::ClaimState::Reserved | claims::ClaimState::Held | claims::ClaimState::Quiescing))) {
@@ -161,7 +161,7 @@ impl OrchestrationService {
             }
             let (can_stop, admissions, canonical_problem) = {
                 let locked = self.store.lock()?;
-                let state = locked.read()?;
+                let state = locked.read_shared()?;
                 let current = &state.runs[run_index(&state, &run.run_id)?];
                 if !scope_run_matches(current, &run) { continue; }
                 let admissions = resource_admissions(&state, current);
@@ -222,7 +222,7 @@ impl OrchestrationService {
                 // own adjacent InvocationID/cgroup preflight. No user/root scope.
                 let eligible = {
                     let locked = self.store.lock()?;
-                    let state = locked.read()?;
+                    let state = locked.read_shared()?;
                     let current = &state.runs[run_index(&state, &sealed.run_id)?];
                     if scope_run_matches(current, &sealed) { canonical_stop_eligible(&locked, &state, current) }
                     else { Ok(false) }
@@ -259,7 +259,7 @@ impl OrchestrationService {
                 Err(_) => { self.scope_unknown(&sealed, "Fresh pane working-directory inventory is unavailable")?; continue; }
             };
             let known_clear = {
-                let state = self.store.lock()?.read()?;
+                let state = self.store.lock()?.read_shared()?;
                 other_checkout_consumers_clear(&state, &sealed)
             };
             if !clear || !known_clear {

@@ -113,3 +113,101 @@ it("discards stale status when the same session's Space moves to another checkou
     expect(spaces.get("w1")?.checkout).toEqual({ state: "detached", root: "/new" });
   } finally { await act(async () => root.unmount()); }
 });
+
+it("reuses unchanged poll results without rendering, but publishes failures and recovery", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.useFakeTimers();
+  const value: SpaceGitStatus = { space_id: "w1", source: "herdr_checkout", checkout: { state: "detached", root: "/repo" } };
+  const spaceGitStatus = vi.fn(async () => ({ session_id: "session", spaces: [structuredClone(value)] }));
+  const client = { spaceGitStatus } as unknown as CockpitClient;
+  let current!: { spaces: ReadonlyMap<string, SpaceGitStatus>; error?: string; refresh(): void };
+  let renders = 0;
+  function Probe() { current = useSpaceGitStatus(client, "session", "w1", 1000); ++renders; return null; }
+  const root = createRoot(document.createElement("div"));
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  try {
+    await act(async () => root.render(createElement(Probe)));
+    const spaces = current.spaces;
+    const loadedRenders = renders;
+    for (let poll = 0; poll < 3; ++poll) await act(async () => vi.advanceTimersByTime(1000));
+    expect(spaceGitStatus).toHaveBeenCalledTimes(4);
+    expect(renders).toBe(loadedRenders);
+    expect(current.spaces).toBe(spaces);
+    await act(async () => current.refresh());
+    expect(spaceGitStatus).toHaveBeenCalledTimes(5);
+    expect(renders).toBe(loadedRenders);
+    spaceGitStatus.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => current.refresh());
+    expect(renders).toBe(loadedRenders + 1);
+    expect(current.error).toBe("offline");
+    expect(current.spaces).toBe(spaces);
+    spaceGitStatus.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => current.refresh());
+    expect(renders).toBe(loadedRenders + 1);
+    spaceGitStatus.mockRejectedValueOnce(new Error("denied"));
+    await act(async () => current.refresh());
+    expect(renders).toBe(loadedRenders + 2);
+    expect(current.error).toBe("denied");
+    await act(async () => current.refresh());
+    expect(renders).toBe(loadedRenders + 3);
+    expect(current.error).toBeUndefined();
+    expect(current.spaces).toBe(spaces);
+    await act(async () => current.refresh());
+    expect(renders).toBe(loadedRenders + 3);
+  } finally { await act(async () => root.unmount()); visibility.mockRestore(); }
+});
+
+it("publishes every Git status field, union transition and Space order change", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const branch = { state: "branch" as const, root: "/repo", branch: "main", upstream: { state: "tracked" as const, name: "origin/main", ahead: 0, behind: 0 } };
+  const base: SpaceGitStatus = { space_id: "w1", source: "herdr_checkout", checkout: branch };
+  const checkouts: SpaceGitStatus["checkout"][] = [
+    { ...branch, upstream: { ...branch.upstream, ahead: 1 } },
+    { ...branch, upstream: { ...branch.upstream, behind: 1 } },
+    { ...branch, upstream: { ...branch.upstream, name: "origin/other" } },
+    { ...branch, branch: "other" },
+    { ...branch, root: "/other" },
+    { state: "detached", root: "/repo" },
+    { state: "detached", root: "/other" },
+    { state: "unavailable", root: "/repo", code: "missing", message: "Missing" },
+    { state: "unavailable", root: "/repo", code: "denied", message: "Missing" },
+    { state: "unavailable", root: "/repo", code: "denied", message: "Denied" },
+    { state: "unavailable", root: null, code: "denied", message: "Denied" },
+    { ...branch, upstream: { state: "none" } },
+    { ...branch, upstream: { state: "gone", name: "origin/main" } },
+    { ...branch, upstream: { state: "gone", name: "origin/other" } },
+    { ...branch, upstream: { state: "local", name: "origin/other" } },
+    { ...branch, upstream: { state: "local", name: "main" } },
+    { ...branch, upstream: { state: "unavailable", name: "main", code: "missing", message: "Missing" } },
+    { ...branch, upstream: { state: "unavailable", name: "other", code: "missing", message: "Missing" } },
+    { ...branch, upstream: { state: "unavailable", name: "other", code: "denied", message: "Missing" } },
+    { ...branch, upstream: { state: "unavailable", name: "other", code: "denied", message: "Denied" } },
+  ];
+  const next: SpaceGitStatus = { ...base, space_id: "w2" };
+  const changes: SpaceGitStatus[][] = [
+    ...checkouts.map(checkout => [{ ...base, checkout }]),
+    [{ ...base, source: "pane_folder" }],
+    [next], [base, next], [next, base], [base], [],
+  ];
+  let response = [base];
+  const spaceGitStatus = vi.fn(async () => ({ session_id: "session", spaces: structuredClone(response) }));
+  const client = { spaceGitStatus } as unknown as CockpitClient;
+  let current!: { spaces: ReadonlyMap<string, SpaceGitStatus>; error?: string; refresh(): void };
+  let renders = 0;
+  function Probe() { current = useSpaceGitStatus(client, "session", "w1"); ++renders; return null; }
+  const root = createRoot(document.createElement("div"));
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  try {
+    await act(async () => root.render(createElement(Probe)));
+    for (response of changes) {
+      const before = renders;
+      await act(async () => current.refresh());
+      expect([...current.spaces.values()]).toEqual(response);
+      expect(renders).toBe(before + 1);
+      const spaces = current.spaces;
+      await act(async () => current.refresh());
+      expect(renders).toBe(before + 1);
+      expect(current.spaces).toBe(spaces);
+    }
+  } finally { await act(async () => root.unmount()); visibility.mockRestore(); }
+});

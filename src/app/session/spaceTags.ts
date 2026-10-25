@@ -45,17 +45,21 @@ export function useSpaceTags(client: CockpitClient, sessionId: string | null, sn
       void client.spaceTags(sessionId, request.signal).then(response => {
         if (disposed || request.signal.aborted || sequence <= binding.lastApplied) return;
         if (response.session_id !== sessionId || response.server_instance !== serverInstance) {
-          if (!binding.ready) { binding.failed = true; render(value => value + 1); }
+          if (!binding.ready && !binding.failed) { binding.failed = true; render(value => value + 1); }
           return;
         }
         binding.lastApplied = sequence;
+        const sameCatalog = binding.catalog.length === response.catalog.length
+          && response.catalog.every((tag, index) => binding.catalog[index] === tag);
+        const sameSpaces = sameTagSpaces(binding.bySpace, response.spaces);
+        const changed = !binding.ready || binding.failed || !sameCatalog || !sameSpaces;
         binding.ready = true;
         binding.failed = false;
-        binding.catalog = response.catalog;
-        binding.bySpace = new Map(response.spaces.map(space => [space.space_id, space.tags]));
-        render(value => value + 1);
+        if (!sameCatalog) binding.catalog = response.catalog;
+        if (!sameSpaces) binding.bySpace = new Map(response.spaces.map(space => [space.space_id, space.tags]));
+        if (changed) render(value => value + 1);
       }, () => {
-        if (!disposed && !request.signal.aborted && sequence > binding.lastApplied && !binding.ready) {
+        if (!disposed && !request.signal.aborted && sequence > binding.lastApplied && !binding.ready && !binding.failed) {
           binding.failed = true;
           render(value => value + 1);
         }
@@ -135,4 +139,14 @@ export function useSpaceTags(client: CockpitClient, sessionId: string | null, sn
   };
 
   return { ready: binding.ready, failed: binding.failed, editBlocked, catalog: binding.catalog, bySpace, pending: live ? new Set(binding.pending) : new Set(), change };
+}
+
+function sameTagSpaces(previous: ReadonlyMap<string, readonly string[]>, spaces: SpaceTagsResponse["spaces"]): boolean {
+  if (previous.size !== spaces.length) return false;
+  const entries = previous.entries();
+  return spaces.every(space => {
+    const before = entries.next().value;
+    return before !== undefined && before[0] === space.space_id && before[1].length === space.tags.length
+      && space.tags.every((tag, index) => before[1][index] === tag);
+  });
 }

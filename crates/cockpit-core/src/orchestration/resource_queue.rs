@@ -151,7 +151,7 @@ impl OrchestrationService {
         let OrchestrationAction::ResourceRequest { request: resource } = &request.action else { return Ok(None) };
         validate_source(&resource.source_identity)?;
         let (checkout, current) = {
-            let state = self.store.lock()?.read()?;
+            let state = self.store.lock()?.read_shared()?;
             let job = job(&state, actor)?;
             if state.runs[job.run_index].session_id != request.session_id {
                 return Err(error("session_mismatch", "Resource caller belongs to another session"));
@@ -169,7 +169,7 @@ impl OrchestrationService {
     /// Called by the existing owner revision/periodic observation loop. Unknown
     /// evidence and an empty registration gap preserve the original holder.
     pub async fn reconcile_resource_queue(&self) -> Result<bool, InspectionError> {
-        let snapshot = self.store.lock()?.read()?;
+        let snapshot = self.store.lock()?.read_shared()?;
         let mut observed = std::collections::BTreeMap::new();
         for record in snapshot.resource_requests.iter().filter(|r|
             matches!(r.state, ResourceRequestState::Queued | ResourceRequestState::Blocked)

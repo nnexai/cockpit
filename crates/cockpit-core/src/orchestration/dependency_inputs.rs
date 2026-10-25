@@ -13,7 +13,7 @@ impl OrchestrationService {
     ) -> Result<Vec<String>, InspectionError> {
         validate_identity(session)?;
         let locked = self.store.lock()?;
-        let state = locked.read()?;
+        let state = locked.read_shared()?;
         let root_run = &state.runs[scoped_index(&state, session, root)?];
         if root_run.parent_run_id.is_some()
             || root_run.root_id != root_run.run_id

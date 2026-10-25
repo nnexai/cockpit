@@ -38,7 +38,7 @@ impl OrchestrationService {
     /// filesystem lock before the dispatcher performs any adapter await.
     pub(crate) fn dispatch_task_eligible(&self, expected: &Run) -> Result<bool, InspectionError> {
         let locked = self.store.lock()?;
-        let state = locked.read()?;
+        let state = locked.read_shared()?;
         let Some(current) = state.runs.iter().find(|run| run.run_id == expected.run_id) else {
             return Ok(false);
         };
