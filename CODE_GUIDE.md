@@ -349,6 +349,8 @@ Use `cockpit-cli notes <area> --help` for payload/revision sources and `cockpit-
 
 `bun run browser` builds and serves the browser app at `http://127.0.0.1:4173`; append flags such as `--herdr-session my-session`. `bun run tauri:dev` starts native development. Native installation is a separate action documented in [native-install](docs/native-install.md).
 
+Tauri's Rust dependencies require Rust 1.90 or newer. On Linux the native app uses the system WebKitGTK 4.1 runtime; updating the Rust or Bun lockfiles does not update that system package. Bun overrides keep CodeMirror and Vite dependency versions consistent across the frontend graph.
+
 For focused frontend changes use `bun run typecheck` and `bun run test -- <affected-test-file>`; for Rust use the affected package/test filter. At an integration boundary:
 
 ```sh
