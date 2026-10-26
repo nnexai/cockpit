@@ -60,6 +60,7 @@ export interface CommandInput {
   run: {
     herdr(command: HerdrCommand): void;
     prefix(command: PrefixCommand): void;
+    askAgent(): void;
     supervisor(): void;
     overview(): void;
     git(spaceId: string, action: SpaceGitAction): void;
@@ -101,10 +102,13 @@ export function buildCommands(input: CommandInput): CommandAction[] {
         : entry.needs === "pane" && !selectedLeaf ? "Select a pane first"
         : command === "rename-pane" && !selectedPane ? "Terminals only"
         : command === "setup-space" && !live ? "Herdr is not live"
+        : command === "ask-agent" && !live ? "Herdr is not live"
+        : command === "ask-agent" && herdr.popupOpen ? "The popup owns keyboard input"
+        : command === "ask-agent" && busy ? "Another Herdr action is pending"
         : command === "toggle-browser" ? browser.open ? undefined : browser.reason ?? undefined : undefined;
       return [{
         id: `prefix:${command}`, label: command === "toggle-library" && libraryOpen ? "Close Library" : entry.label, primary: entry.primary, shortcut: formatShortcut(command), group: entry.group,
-        disabled: reason !== undefined, reason, run: () => run.prefix(command),
+        disabled: reason !== undefined, reason, run: command === "ask-agent" ? run.askAgent : () => run.prefix(command),
       }];
     }),
     ...(["pull-space", "push-space"] as const).map((id): CommandAction => {

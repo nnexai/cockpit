@@ -36,6 +36,12 @@ describe("shortcut registry", () => {
     }
   });
 
+  it("binds quick ask to the unshifted prefix t", () => {
+    expect(prefixCommandForKey("t", false)).toBe("ask-agent");
+    expect(prefixCommandForKey("T", true)).toBe("rename-tab");
+    expect(formatShortcut("ask-agent", "other")).toBe("Ctrl+B t");
+  });
+
   it("formats keys for each platform and only lists a sequence's prefix as Ctrl+B", () => {
     expect(formatShortcut("new-space", "other")).toBe("Ctrl+B Shift+N");
     expect(formatShortcut("previous-pane", "mac")).toBe("Ctrl+B Shift+Tab");

@@ -209,6 +209,10 @@ class AppFixture {
   readonly client: CockpitClient = {
     status: vi.fn(async () => status),
     quotaStatus: vi.fn(async () => { throw new CockpitClientError("http_error", "Subscription quota is not configured in this fixture", { status: 503, operationCode: "quota_unavailable" }); }),
+    quickAskAvailability: vi.fn(async () => { throw new Error("Unexpected quick ask availability in fixture"); }),
+    quickAskStart: vi.fn(async () => { throw new Error("Unexpected quick ask start in fixture"); }),
+    quickAskStatus: vi.fn(async () => { throw new Error("Unexpected quick ask status in fixture"); }),
+    quickAskAction: vi.fn(async () => { throw new Error("Unexpected quick ask action in fixture"); }),
     subscribeWidgets: vi.fn(async onEvent => {
       this.widgetEvent = onEvent;
       this.liveWidgetSubscriptions.add(onEvent);

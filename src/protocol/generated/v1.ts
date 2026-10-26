@@ -912,6 +912,28 @@ agents_working: boolean, };
 
 export type QuotaStatusResponse = { generated_at_ms: number, collecting: boolean, providers: Array<QuotaProviderStatus>, };
 
+export type QuickAskHarness = "omp" | "pi" | "claude" | "copilot" | "codex" | "opencode";
+
+export type QuickAskStartRequest = { request_id: string, server_instance: string, space_id: string, cwd: string, harness: QuickAskHarness, prompt: string, };
+
+export type QuickAskAction = "cancel" | "send";
+
+export type QuickAskActionRequest = { request_id: string, action: QuickAskAction, };
+
+export type QuickAskPhase = "creating_tab" | "checking_environment" | "starting_agent" | "waiting_for_agent" | "ready_to_send" | "sending" | "submitted" | "initial_question_supplied" | "cancelled" | "failed" | "outcome_unknown";
+
+export type QuickAskDelivery = "not_sent" | "submitted" | "initial_question_supplied" | "unknown";
+
+export type QuickAskLocation = { space_id: string, tab_id: string, pane_id: string, terminal_id: string, tab_label: string, agent_name: string, };
+
+export type QuickAskFailure = { code: string, message: string, };
+
+export type QuickAskStatus = { request_id: string, session_id: string, server_instance: string, harness: QuickAskHarness, phase: QuickAskPhase, delivery: QuickAskDelivery, cancellable: boolean, location: QuickAskLocation | null, error: QuickAskFailure | null, updated_at_ms: number, };
+
+export type QuickAskAgentAvailability = { harness: QuickAskHarness, executable: string, found: boolean, };
+
+export type QuickAskAvailability = { agents: Array<QuickAskAgentAvailability>, };
+
 export type WidgetLocator = { "type": "current_pane" } | { "type": "pane", pane_id: string, } | { "type": "tab", tab_id: string, } | { "type": "space", space_id: string, };
 
 export type WidgetAddress = { session_id: string, endpoint_path: string | null, source_pane_id: string | null, locator: WidgetLocator, space_check: string | null, };

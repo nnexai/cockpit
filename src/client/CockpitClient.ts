@@ -1,6 +1,8 @@
 import * as Wire from "../protocol/generated/validate";
 import { parseWire, tryParseWire } from "./wire";
 import { CLIENT } from "./clientPolicy";
+import type { QuickAskActionRequest, QuickAskAvailability, QuickAskStartRequest, QuickAskStatus } from "../protocol/generated/v1";
+export type { QuickAskActionRequest, QuickAskAvailability, QuickAskStartRequest, QuickAskStatus } from "../protocol/generated/v1";
 import type { SpaceServiceStatusRequest, SpaceServiceStatusResponse, SpaceTagsResponse, SpaceTagChangeRequest } from "../protocol/generated/v1";
 export type { ServiceStatus, SpaceServiceStatus, SpaceServiceStatusRequest, SpaceServiceStatusResponse, SpaceTags, SpaceTagsResponse, SpaceTagChangeRequest } from "../protocol/generated/v1";
 import type { AgentAttentionResponse, AgentAttentionChangeRequest } from "../protocol/generated/v1";
@@ -342,6 +344,10 @@ export interface CockpitClient {
   orchestrationWait(request: OrchestrationWaitRequest): Promise<OrchestrationWaitResponse>;
   /** Cached subscription limits; provider CLIs own authentication and collection. */
   quotaStatus(request: QuotaStatusRequest, signal?: AbortSignal): Promise<QuotaStatusResponse>;
+  quickAskAvailability(): Promise<QuickAskAvailability>;
+  quickAskStart(sessionId: string, request: QuickAskStartRequest): Promise<QuickAskStatus>;
+  quickAskStatus(sessionId: string, requestId: string): Promise<QuickAskStatus>;
+  quickAskAction(sessionId: string, request: QuickAskActionRequest): Promise<QuickAskStatus>;
   browserAction(request: BrowserRequest): Promise<BrowserResponse>;
   browserCleanupStatus(): Promise<BrowserCleanupStatus>;
   browserCleanupRetry(request: BrowserCleanupRetryRequest): Promise<BrowserCleanupStatus>;

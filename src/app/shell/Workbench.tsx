@@ -11,6 +11,7 @@ import { useWorkbenchState } from "./useWorkbenchState";
 import { useWorkbenchActions } from "./useWorkbenchActions";
 import { useWorkbenchInput } from "./useWorkbenchInput";
 import { WorkbenchContent } from "./WorkbenchContent";
+import { useQuickAsk } from "../quickAsk/useQuickAsk";
 
 export interface WorkbenchProps {
   client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; terminalMouseInput: boolean; mutations: MutationCoordinatorState;
@@ -25,6 +26,17 @@ export function Workbench(props: WorkbenchProps) {
   const runtime = useWorkbenchState(props);
   const actions = useWorkbenchActions(props, runtime);
   const input = useWorkbenchInput(props, runtime, actions);
+  const initialCwd = runtime.selectedSpace?.git?.checkout_path ?? runtime.selectedPane?.cwd ?? "";
+  const ask = useQuickAsk({
+    client: props.client, sessionId: props.state.sessionId, serverInstance: runtime.snapshot?.server_instance ?? null,
+    spaceId: runtime.confirmedSpaceId, initialCwd, open: runtime.askOpen, setOpen: runtime.setAskOpen,
+    live: props.state.sync === "live", mutationBusy: runtime.mutationBusy,
+    spaceIds: runtime.spaces.map(space => space.id),
+    onOpenTab: location => {
+      runtime.leave("focus");
+      props.onFocus({ kind: "pane", target_id: location.pane_id }, { spaceId: location.space_id, tabId: location.tab_id, paneId: location.pane_id });
+    },
+  });
   useEffect(() => {
     const target = runtime.switchTarget;
     if (!target || runtime.switcherOpen) return;
@@ -66,6 +78,7 @@ export function Workbench(props: WorkbenchProps) {
     run: {
       herdr: input.runHerdrCommand, prefix: input.runCommand, supervisor: () => { void liaison.activate(); }, overview: () => { if (!overviewOpen) openOverview(); else { closeOverview(); if (props.selection.paneId !== liaison.paneId && liaison.startAvailable) void liaison.start(); } }, git: runGitAction,
       recovery: () => setRecoveryOpen(true), toggleNotes: notesOpen ? closeNotes : openNotes, openBrowser: actions.openBrowser,
+      askAgent: () => runtime.setAskOpen(true),
       editSpaceTags: () => { if (runtime.selectedSpace) runtime.requestTagEditor(runtime.selectedSpace.id); },
       closeBrowser: () => { if (selectedTab) actions.perform(closeBrowserLeaf(ctx, selectedTab.id)); },
       retryBrowserCleanup: () => actions.perform(retryBrowserCleanup(ctx)), showWidgets,
@@ -76,5 +89,5 @@ export function Workbench(props: WorkbenchProps) {
   const commandFailures = Object.values(mutations.errors).filter(failure => failure.operation.request.type === "command_invoke");
   const commandFailureMessage = commandFailures.map(failure => `${failure.code === "request_outcome_unknown" ? "Herdr did not confirm this command. Check the session before running it again." : "Could not run Herdr command:"} ${failure.message}`).join(" ");
   const commandStatus = commandNotice || commandFailureMessage || lifecycleError ? <p role="alert">{commandNotice || commandFailureMessage || lifecycleError}</p> : null;
-  return <WorkbenchContent {...props} {...runtime} {...actions} commandActions={commandActions} commandFailureMessage={commandFailureMessage} commandStatus={commandStatus} />;
+  return <WorkbenchContent {...props} {...runtime} {...actions} ask={ask} askCwdSource={runtime.selectedSpace?.git?.checkout_path ? `Checkout of Space "${runtime.selectedSpace.label}"` : runtime.selectedPane?.cwd ? "Folder of the selected terminal" : "Enter an absolute path"} commandActions={commandActions} commandFailureMessage={commandFailureMessage} commandStatus={commandStatus} />;
 }

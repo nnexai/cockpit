@@ -47,6 +47,7 @@ mod project_defaults;
 mod project_teardown;
 mod projects;
 mod quota;
+mod quick_ask;
 mod review;
 mod sources;
 mod v1;
@@ -81,6 +82,7 @@ pub(crate) const SECTIONS: &[&Section] = &[
     &context_search::SEARCH,
     &credentials::CREDENTIALS,
     &quota::QUOTA,
+    &quick_ask::QUICK_ASK,
     &widget::WIDGET,
     &orchestration::ORCHESTRATION,
 ];

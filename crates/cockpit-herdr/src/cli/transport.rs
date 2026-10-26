@@ -13,6 +13,7 @@ pub(crate) const FINITE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(2);
 pub(crate) const PROCESS_MUTATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Git worktree mutations scale with checkout size: 120k files took 3.7 s.
 pub(crate) const GIT_MUTATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const AGENT_WAIT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// Deadline for Herdr's reply to one socket request.
 ///
@@ -23,8 +24,10 @@ pub(crate) const GIT_MUTATION_RESPONSE_TIMEOUT: Duration = Duration::from_secs(3
 pub(crate) fn response_deadline(method: &str) -> Duration {
     match method {
         "worktree.create" | "worktree.open" | "worktree.remove" => GIT_MUTATION_RESPONSE_TIMEOUT,
+        "agent.wait" => AGENT_WAIT_RESPONSE_TIMEOUT,
+        "agent.prompt" => PROCESS_MUTATION_RESPONSE_TIMEOUT,
         "workspace.create" | "workspace.close" | "tab.create" | "tab.close" | "pane.split"
-        | "pane.close" => PROCESS_MUTATION_RESPONSE_TIMEOUT,
+        | "pane.close" | "layout.apply" => PROCESS_MUTATION_RESPONSE_TIMEOUT,
         _ => FINITE_RESPONSE_TIMEOUT,
     }
 }

@@ -14,8 +14,9 @@ export interface WorkbenchInput {
 }
 export function useWorkbenchInput(props: WorkbenchProps, runtime: WorkbenchState, actions: WorkbenchActions): WorkbenchInput {
   const { state, selection, tabLayout, onMutate, onSplit } = props;
-  const { spaces, tabs, panes, snapshot, localLeaves, selectedLeaf, modalOpen, mutationBusy, libraryOpen, openLibrary, closeLibrary, openSessionChooser, canvasRef, view, exitForPaneCommand, setPrefixHint, setSetupOpen, setCommandsOpen, setSwitcherOpen, runGitAction, narrowViewport, drawerOpen, sidebarCollapsed, openDrawer, toggleSidebarCollapsed, toggleSidebar, shell, popup, popupPending, setPopupPending, setCommandNotice, prefixActive, armedPrefix, customPrefixes, customBindings, setArmedPrefix, setPrefixActive } = runtime;
+  const { spaces, tabs, panes, snapshot, localLeaves, selectedLeaf, modalOpen, mutationBusy, libraryOpen, openLibrary, closeLibrary, openSessionChooser, setAskOpen, canvasRef, view, exitForPaneCommand, setPrefixHint, setSetupOpen, setCommandsOpen, setSwitcherOpen, runGitAction, narrowViewport, drawerOpen, sidebarCollapsed, openDrawer, toggleSidebarCollapsed, toggleSidebar, shell, popup, popupPending, setPopupPending, setCommandNotice, prefixActive, armedPrefix, customPrefixes, customBindings, setArmedPrefix, setPrefixActive } = runtime;
   const { beginRename, closeSpace, closeTab, closeLeaf, zoom, focusTab, selectLeaf, neighbour, swap, toggleBrowser } = actions;
+  const openAskAgent = () => setAskOpen(true);
   const runCommand = (command: PrefixCommand) => {
     setPrefixHint(null);
     const space = byId(spaces, selection.spaceId);
@@ -24,6 +25,7 @@ export function useWorkbenchInput(props: WorkbenchProps, runtime: WorkbenchState
     const execute = () => {
       if (command === "new-space") onMutate("space:new", { type: "space_create", label: null, cwd: null }, true);
       if (command === "setup-space" && state.sync === "live") setSetupOpen(true);
+      if (command === "ask-agent" && space && state.sync === "live" && !popup && !popupPending) openAskAgent();
       if (command === "rename-space" && space) beginRename({ kind: "space", id: space.id });
       if (command === "close-space") closeSpace(space);
       if (command === "pull-space" || command === "push-space") {

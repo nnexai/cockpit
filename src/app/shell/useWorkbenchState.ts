@@ -47,9 +47,9 @@ export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
   const liaison = useLiaison(props, workarea.closeOverview, navigation.supervisorTerminal, workarea.view.kind === "terminal");
   const sidebar = useSidebarState(props);
   const { sidebarCollapsed, narrowViewport, drawerOpen } = sidebar;
-  const { popupPending, dialog, commandsOpen, switcherOpen, sessionChooserOpen, setupOpen, recoveryOpen, teardownSpaceId, libraryAddOpen } = ui;
+  const { popupPending, dialog, commandsOpen, switcherOpen, sessionChooserOpen, setupOpen, recoveryOpen, teardownSpaceId, libraryAddOpen, askOpen } = ui;
   const mutationBusy = mutations.pending !== null;
-  const modalOpen = Boolean(popup || popupPending) || dialog !== null || commandsOpen || switcherOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen || liaison.recovery !== null;
+  const modalOpen = Boolean(popup || popupPending) || dialog !== null || commandsOpen || switcherOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen || askOpen || liaison.recovery !== null;
   const gitPoll = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
   const spaceGit = gitPoll.spaces;
   const spaceServices = useSpaceServiceStatus(client, state.sync === "live" ? state.sessionId : null, snapshot, narrowViewport ? drawerOpen : !sidebarCollapsed);

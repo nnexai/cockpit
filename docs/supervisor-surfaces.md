@@ -8,6 +8,8 @@ The liaison's real terminal is the primary conversation. A compact read-only rai
 
 Batch completion leaves the liaison Active for later work on the same project root; worker `run done` and source cleanup do not retire the liaison. Root completion is conversational, not another operational button.
 
+**Ask an agent…** in Commands is a separate quick-question surface, not supervisor startup or task delegation. It opens a dedicated agent tab in the selected Space and creates no orchestration registration; delivery differs between startup-argument agents and explicit-send agents.
+
 ### Current UI contract and source map
 
 - **Conversation and startup:** [`useLiaison.ts`](../src/app/supervisor/useLiaison.ts) finds the selected Space's project root, reuses/resumes it and navigates to its exact real pane. Start does not attach a second terminal or invent a synthetic Herdr resource. The ordinary terminal control/focus rules remain authoritative.

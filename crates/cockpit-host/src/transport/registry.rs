@@ -109,6 +109,46 @@ macro_rules! cockpit_operations {
                   limit = $crate::transport::limits::MUTATION_BYTES; origin = method;
                   guard = none; status = service
             }
+            { id: quick_ask_availability, ctx: service, out: ::cockpit_protocol::quick_ask::QuickAskAvailability,
+              call: $crate::transport::operations::quick_ask::availability,
+              native: cockpit_quick_ask_availability()
+                  => $crate::transport::native_input::none(),
+              http: get "/api/v1/quick-ask/availability"
+                  ()
+                  => $crate::transport::http_input::none();
+                  limit = none; origin = none;
+                  guard = none; status = service
+            }
+            { id: quick_ask_start, ctx: service, out: ::cockpit_protocol::quick_ask::QuickAskStatus,
+              call: $crate::transport::operations::quick_ask::start,
+              native: cockpit_quick_ask_start(session_id: ::std::string::String, request: ::cockpit_protocol::quick_ask::QuickAskStartRequest)
+                  => $crate::transport::native_input::typed2(),
+              http: post "/api/v1/sessions/{session_id}/quick-ask"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::quick_ask::QuickAskStartRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::session_sized_body($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"), $crate::transport::http_input::Reject("invalid_quick_ask_request", "Expected a bounded quick ask request"));
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = method;
+                  guard = none; status = service
+            }
+            { id: quick_ask_status, ctx: service, out: ::cockpit_protocol::quick_ask::QuickAskStatus,
+              call: $crate::transport::operations::quick_ask::status,
+              native: cockpit_quick_ask_status(session_id: ::std::string::String, request_id: ::std::string::String)
+                  => $crate::transport::native_input::typed2(),
+              http: get "/api/v1/sessions/{session_id}/quick-ask/{request_id}"
+                  (path: ::axum::extract::Path<(::std::string::String, ::std::string::String)>)
+                  => $crate::transport::http_input::session_pair_path($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"));
+                  limit = none; origin = none;
+                  guard = none; status = service
+            }
+            { id: quick_ask_action, ctx: service, out: ::cockpit_protocol::quick_ask::QuickAskStatus,
+              call: $crate::transport::operations::quick_ask::action,
+              native: cockpit_quick_ask_action(session_id: ::std::string::String, request: ::cockpit_protocol::quick_ask::QuickAskActionRequest)
+                  => $crate::transport::native_input::typed2(),
+              http: post "/api/v1/sessions/{session_id}/quick-ask/actions"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::quick_ask::QuickAskActionRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::session_sized_body($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"), $crate::transport::http_input::Reject("invalid_quick_ask_request", "Expected a bounded quick ask action"));
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = method;
+                  guard = none; status = service
+            }
             { id: space_git_action, ctx: service, out: ::cockpit_protocol::v1::SpaceGitActionResponse,
               call: $crate::transport::operations::session::space_git_action,
               native: cockpit_space_git_action(session_id: ::std::string::String, request: ::cockpit_protocol::v1::SpaceGitActionRequest)

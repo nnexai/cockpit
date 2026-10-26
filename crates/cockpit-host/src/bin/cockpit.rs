@@ -359,7 +359,8 @@ fn make_service(
     let config = HerdrCliConfig::from_options(herdr.herdr, herdr.herdr_session, herdr.herdr_socket)
         .map_err(|error| error.to_string())?;
     let adapter = Arc::new(HerdrCliAdapter::new(config));
-    let service = CockpitService::new(mode, adapter.clone());
+    let service = CockpitService::new(mode, adapter.clone())
+        .with_quick_ask(cockpit_core::quick_ask::QuickAskService::new(adapter.quick_ask_adapter()));
     match projects {
         Some(config) => {
             let notes = cockpit_core::notes::NotesService::new(PathBuf::from(&config.notes_root))

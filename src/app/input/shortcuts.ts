@@ -34,7 +34,7 @@ export type PrefixCommand =
   | "previous-pane" | "next-pane" | "focus-left" | "focus-right" | "focus-up" | "focus-down"
   | "swap-left" | "swap-right" | "swap-up" | "swap-down"
   | "toggle-sidebar" | "focus-spaces" | "focus-agents" | "switch-session"
-  | "toggle-library" | "toggle-browser" | "open-file-picker"
+  | "toggle-library" | "toggle-browser" | "open-file-picker" | "ask-agent"
   | `select-tab-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 
 /** Actions with no prefix key, including Commands-only navigation. */
@@ -108,6 +108,7 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
   { id: "pull-space", label: "Pull Space (fast-forward only)", group: "Space", scope: "global", needs: "space", palette: "custom", primary: true, note: "Commands or a Space row menu; targets the selected checkout's upstream. No assigned shortcut." },
   { id: "push-space", label: "Push Space to upstream", group: "Space", scope: "global", needs: "space", palette: "custom", primary: true, note: "Commands or a Space row menu; normal push to the tracked upstream, never forced. No assigned shortcut." },
   { id: "setup-space", label: "Set up a Space", group: "Navigate", scope: "global", prefix: k("s", true), primary: true, note: "Opens the task Space setup dialog, like the Spaces + button." },
+  { id: "ask-agent", label: "Ask an agent…", group: "Navigate", scope: "global", prefix: k("t"), needs: "space", primary: true },
   { id: "rename-pane", label: "Rename terminal", group: "Pane", scope: "global", prefix: k("p", true), needs: "pane", paneScoped: true, note: "Real terminals only; viewers have fixed titles." },
   { id: "split-right", label: "New terminal beside pane", group: "Pane", scope: "global", prefix: k("v"), palette: false, needs: "pane", paneScoped: true, note: "Creates a terminal beside the selected terminal or viewer." },
   { id: "split-down", label: "New terminal below pane", group: "Pane", scope: "global", prefix: k("-"), palette: false, needs: "pane", paneScoped: true, note: "Creates a terminal below the selected terminal or viewer." },

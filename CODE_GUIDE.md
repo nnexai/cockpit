@@ -16,6 +16,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Viewer/widget/liaison shell coordination | `src/app/shell/useViewerSources.ts`; `src/app/shell/useWidgetWindowState.ts`; `src/app/shell/useLiaisonNavigation.ts` |
 | Commands and tab strip | `src/app/shell/commands.ts`; `src/app/shell/CommandOverlay.tsx`; `src/app/shell/TabStrip.tsx` |
 | Space/agent quick switcher | `src/app/shell/quickSwitch.ts`; `src/app/shell/QuickSwitcher.tsx`; shared `rankFuzzyMatches` in `src/app/input/fileNavigation.ts`; `Workbench.tsx` re-resolves current-session IDs and dispatches sidebar focus callbacks after modal close |
+| Quick ask composer and operation state | `src/app/quickAsk/QuickAskDialog.tsx`; `src/app/quickAsk/useQuickAsk.ts`; `src/app/quickAsk/quickAsk.ts`; workbench commands, input and tab strip |
 | Shell menus | `src/app/shell/ContextMenu.tsx`; `src/app/shell/ResourceContextMenu.tsx` |
 | Shell dialogs/recovery | `src/app/shell/PaneDialogOverlay.tsx`; `src/app/shell/SessionDialogOverlay.tsx`; `src/app/shell/RecoveryPanel.tsx` |
 | Compatibility notice | `src/app/shell/CompatibilityNotice.tsx` |
@@ -99,6 +100,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Change | Current owner |
 | --- | --- |
 | Configuration roots/limits | `crates/cockpit-core/src/config.rs`; `crates/cockpit-core/src/config/roots.rs`; `crates/cockpit-core/src/config/limits.rs` |
+| Quick ask validation, lifecycle and authority preflight | `crates/cockpit-core/src/quick_ask.rs`; `crates/cockpit-core/src/quick_ask/herdr.rs` |
 | Project facade/defaults/plan / unique automatic orchestration branches | `crates/cockpit-core/src/projects/mod.rs`; `crates/cockpit-core/src/projects/defaults.rs`; `crates/cockpit-core/src/projects/plan.rs` (`plan_orchestration`, shared private `plan_impl`; ordinary `plan` unchanged) |
 | Project execute/reconcile/teardown | `crates/cockpit-core/src/projects/execute.rs`; `crates/cockpit-core/src/projects/reconcile.rs`; `crates/cockpit-core/src/projects/teardown.rs` |
 | Accepted Git integration identity bridge | `crates/cockpit-core/src/project_teardown.rs` (`integrated_owned_head`); canonical source/target project keys bridge through recorded Git common-dir to exact owned raw repository/common-dir keys |
@@ -210,6 +212,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Client project/teardown decoders | `src/client/projectProtocol.ts`; `src/client/projectTeardownProtocol.ts` |
 | Shared operation declaration/registry | `crates/cockpit-host/src/transport/operations.rs`; `crates/cockpit-host/src/transport/registry.rs` |
 | Shared typed session/project/viewer handlers | `crates/cockpit-host/src/transport/operations/session.rs`; `crates/cockpit-host/src/transport/operations/projects.rs`; `crates/cockpit-host/src/transport/operations/viewer.rs` |
+| Quick ask protocol, routes and client | `crates/cockpit-protocol/src/quick_ask.rs`; `crates/cockpit-host/src/transport/operations/quick_ask.rs`; `crates/cockpit-host/src/transport/registry.rs`; `src/client/quickAskProtocol.ts`; `src/client/operations.ts` |
 | Space tags storage/contract/transport | `crates/cockpit-core/src/space_tags.rs`; `crates/cockpit-protocol/src/v1.rs`; session operations/registry above; `src/client/CockpitClient.ts` and `src/client/operations.ts` decode and fence responses |
 | Agent attention storage/contract/transport | `crates/cockpit-core/src/agent_attention.rs`; `crates/cockpit-protocol/src/v1.rs`; session operations/registry above; `src/client/CockpitClient.ts` and `src/client/operations.ts` |
 | Shared typed library/credentials/Notes handlers | `crates/cockpit-host/src/transport/operations/library.rs`; `crates/cockpit-host/src/transport/operations/credentials.rs`; `crates/cockpit-host/src/transport/operations/notes.rs` |
@@ -228,6 +231,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Chromium capture and page UA policy | `browser-runtime/browser-helper.mjs`; `browser-runtime/browser-user-agent.cjs` |
 | Herdr adapters and terminal/shell wire | `crates/cockpit-herdr/src/cli/`; `crates/cockpit-herdr/src/terminal_wire.rs`; `crates/cockpit-herdr/src/shell_wire.rs` |
 | Herdr command implementation | `crates/cockpit-herdr/src/cli/shell.rs`; `crates/cockpit-herdr/src/cli/operations.rs` |
+| Quick ask Herdr adapter | `crates/cockpit-herdr/src/cli/quick_ask.rs` |
 
 ### Protocol domain declarations and renderers
 
@@ -279,6 +283,12 @@ Four stream methods remain transport-local: `subscribeSession`, `openTerminal`, 
 The shared session pump coalesces at most 32 already-queued `Changed` invalidations before an immediate authoritative snapshot read. It preserves the first stale/disconnected barrier and leaves events arriving during the read queued for the next snapshot; there is no debounce or new latency timer. Sidebar Git/tag polls retain their cadence and refresh/error behavior, but unchanged results do not publish new React state.
 
 `POST /api/v1/sessions/{session_id}/space-services` is an Origin-checked read with `{ server_instance, pane_ids }` (at most 4096 resource IDs, each bounded by the host's resource-ID guard). It reads the plugin registry without fetching a Herdr snapshot. Returned pane IDs and optional registry tab IDs are joined against the frontend's current snapshot to derive Spaces; the response does not carry a Space ID. Probe history is scoped to server incarnation, pane, tab and launch time. Newly added panes receive at most two settlement reads, about one and three seconds after the debounced discovery read, to cover the plugin publishing its registry after creating the pane. Hidden pages/sidebars cancel pending reads, and empty or unprobed results never start recurring idle polling.
+
+### Quick ask
+
+Commands or `Ctrl+B t` opens a run-local composer for one of OMP, Pi, Claude Code, Copilot CLI, Codex CLI or OpenCode. Availability checks the Cockpit host PATH; the selected Space and an existing absolute working directory bind placement. Herdr `layout.apply` starts an agent in a dedicated tab with a sanitized environment. Copilot CLI and OpenCode use startup question arguments (`-i` and `--prompt`); the other four use a positional question only if it contains an ASCII space or line feed and its first character is neither `@` nor `-`. Startup arguments expose the question in process arguments and Herdr layout metadata; `initial_question_supplied` acknowledges launch, not consumption. Otherwise, single-line questions require the user to inspect the pane, separately confirm the normal question prompt is visible and empty, and choose **Send question**; multiline fallback requires copying for manual paste. Exact target identity and current agent state are checked before at most one `agent.prompt`. Herdr idle does not prove an input is ready; the receipt acknowledges dispatch, not consumption. The question remains available until **New question**. Uncertain launch or prompt outcomes and observed identity changes require manual inspection rather than replay. This protects existing panes and drafts but does not atomically exclude arbitrary external mutations. The request registry and composer draft are in memory, not an orchestration store.
+
+For changes to this path, select scenarios covering literal single-line input and validation, all agent availability states, authority preflight including unsupported platforms, explicit send and cancellation races, blocked readiness, target or draft changes, unknown submission without retry, tab retention and absence of orchestration registration. These are scenario-selection guidance, not verification results.
 
 ### Supervisor tasks, execution and messages
 

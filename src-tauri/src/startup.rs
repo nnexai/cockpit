@@ -144,6 +144,7 @@ fn compose_runtimes(core: CoreServices) -> RuntimeServices {
     );
     let service = CockpitService::new(CockpitMode::Normal, inspector.clone())
         .with_projects(project_service)
+        .with_quick_ask(cockpit_core::quick_ask::QuickAskService::new(inspector.quick_ask_adapter()))
         .with_credentials(credentials)
         .with_quota(quota);
     let warm_projects = service

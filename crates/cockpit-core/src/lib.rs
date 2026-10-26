@@ -26,6 +26,7 @@ mod repository_cache;
 pub mod projects;
 pub mod orchestration;
 pub mod quota;
+pub mod quick_ask;
 pub mod repositories;
 pub mod review;
 pub mod sources;
@@ -160,6 +161,7 @@ pub struct CockpitService {
     notes: Option<Arc<notes::NotesService>>,
     space_tags: Option<Arc<space_tags::SpaceTagService>>,
     agent_attention: Option<Arc<agent_attention::AgentAttentionService>>,
+    quick_ask: Option<Arc<quick_ask::QuickAskService>>,
     credentials: Option<Arc<credentials::ProviderCredentials>>,
     quota: Option<Arc<quota::QuotaService>>,
     git_actions: Arc<space_git_action::SpaceGitActions>,
@@ -232,6 +234,7 @@ impl CockpitService {
             notes: None,
             space_tags: None,
             agent_attention: None,
+            quick_ask: None,
             credentials: None,
             quota: None,
             git_actions: Arc::new(space_git_action::SpaceGitActions::default()),
@@ -333,6 +336,17 @@ impl CockpitService {
     pub fn agent_attention(&self) -> Result<&Arc<agent_attention::AgentAttentionService>, InspectionError> {
         self.agent_attention.as_ref().ok_or_else(|| InspectionError::new(
             "agent_attention_unavailable", "Agent attention is not configured in this host",
+        ))
+    }
+
+    pub fn with_quick_ask(mut self, service: quick_ask::QuickAskService) -> Self {
+        self.quick_ask = Some(Arc::new(service));
+        self
+    }
+
+    pub fn quick_ask(&self) -> Result<&Arc<quick_ask::QuickAskService>, InspectionError> {
+        self.quick_ask.as_ref().ok_or_else(|| InspectionError::new(
+            "quick_ask_unavailable", "Quick ask is not configured in this host",
         ))
     }
 

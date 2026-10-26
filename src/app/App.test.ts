@@ -295,7 +295,7 @@ function commandInput(): CommandInput {
     viewerSources: { status: "ready", options: viewerOptions() },
     local: {},
     run: {
-      herdr: vi.fn(), prefix: vi.fn(), supervisor: vi.fn(), overview: vi.fn(), git: vi.fn(), editSpaceTags: vi.fn(), recovery: vi.fn(), toggleNotes: vi.fn(),
+      herdr: vi.fn(), prefix: vi.fn(), askAgent: vi.fn(), supervisor: vi.fn(), overview: vi.fn(), git: vi.fn(), editSpaceTags: vi.fn(), recovery: vi.fn(), toggleNotes: vi.fn(),
       openBrowser: vi.fn(), closeBrowser: vi.fn(), retryBrowserCleanup: vi.fn(), showWidgets: vi.fn(),
       cycleWidget: vi.fn(), removeWidget: vi.fn(), goToWidget: vi.fn(), libraryAdd: vi.fn(), library: vi.fn(), openViewer: vi.fn(),
     },
@@ -303,6 +303,19 @@ function commandInput(): CommandInput {
 }
 
 describe("command consumers", () => {
+  it("runs the quick ask command and gates it on a live selected Space", () => {
+    const input = commandInput();
+    const row = buildCommands(input).find(candidate => candidate.id === "prefix:ask-agent")!;
+    expect(row.disabled).toBe(false);
+    row.run();
+    expect(input.run.askAgent).toHaveBeenCalledOnce();
+    input.view.live = false;
+    expect(buildCommands(input).find(candidate => candidate.id === "prefix:ask-agent")).toMatchObject({ disabled: true });
+    input.view.live = true;
+    input.view.selectedSpace = undefined;
+    expect(buildCommands(input).find(candidate => candidate.id === "prefix:ask-agent")).toMatchObject({ disabled: true });
+  });
+
   it("offers keyless Space tag editing for the exact selected Space and reports unavailable reads", () => {
     const input = commandInput();
     const row = buildCommands(input).find(candidate => candidate.id === "space-tags:edit")!;
