@@ -1,4 +1,5 @@
 pub mod browser;
+pub mod agent_attention;
 mod file_index_cache;
 pub mod browser_feedback;
 pub mod ephemeral;
@@ -158,6 +159,7 @@ pub struct CockpitService {
     library: Option<Arc<library::LibraryService>>,
     notes: Option<Arc<notes::NotesService>>,
     space_tags: Option<Arc<space_tags::SpaceTagService>>,
+    agent_attention: Option<Arc<agent_attention::AgentAttentionService>>,
     credentials: Option<Arc<credentials::ProviderCredentials>>,
     quota: Option<Arc<quota::QuotaService>>,
     git_actions: Arc<space_git_action::SpaceGitActions>,
@@ -229,6 +231,7 @@ impl CockpitService {
             library: None,
             notes: None,
             space_tags: None,
+            agent_attention: None,
             credentials: None,
             quota: None,
             git_actions: Arc::new(space_git_action::SpaceGitActions::default()),
@@ -319,6 +322,17 @@ impl CockpitService {
     pub fn space_tags(&self) -> Result<&Arc<space_tags::SpaceTagService>, InspectionError> {
         self.space_tags.as_ref().ok_or_else(|| InspectionError::new(
             "space_tags_unavailable", "Space tags are not configured in this host",
+        ))
+    }
+
+    pub fn with_agent_attention(mut self, attention: agent_attention::AgentAttentionService) -> Self {
+        self.agent_attention = Some(Arc::new(attention));
+        self
+    }
+
+    pub fn agent_attention(&self) -> Result<&Arc<agent_attention::AgentAttentionService>, InspectionError> {
+        self.agent_attention.as_ref().ok_or_else(|| InspectionError::new(
+            "agent_attention_unavailable", "Agent attention is not configured in this host",
         ))
     }
 

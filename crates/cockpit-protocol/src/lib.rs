@@ -43,6 +43,9 @@ pub use v1::{
     SpaceGitActionResponse, SpaceGitActionOutcome, SpaceGitRefusal,
     ServiceStatus, SpaceServiceStatus, SpaceServiceStatusRequest, SpaceServiceStatusResponse,
     SpaceTags, SpaceTagsResponse, SpaceTagChangeRequest,
+    AgentAttentionMark, AgentAttentionLast, AgentAttentionCompletion, AgentAttentionStamp,
+    AgentAttentionRecord, AgentAttentionRefusal, AgentAttentionResponse, AgentAttentionObservation,
+    AgentAttentionChange, AgentAttentionChangeRequest,
     TerminalCommand, TerminalMode, TerminalOpenRequest, TerminalOwnershipState, TerminalTargetKind,
     TerminalScrollDirection, TerminalScrollSource, TerminalStreamMessage,
 };

@@ -292,6 +292,39 @@
   cursor: pointer;
 }
 
+.agent-row-group { position: relative; }
+.agent-row-action {
+  position: absolute;
+  top: 3px;
+  right: 8px;
+  visibility: hidden;
+  border: 0;
+  background: var(--sidebar-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-2xs);
+}
+.agent-row-group:hover .agent-row-action,
+.agent-row-group:focus-within .agent-row-action { visibility: visible; }
+.agent-row-action[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.agent-row-note, .agent-notice, .agent-hidden-footer, .agent-hidden-heading {
+  margin: 0;
+  padding: 3px var(--sb-edge);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+.agent-view-switch { display: flex; margin-left: auto; }
+.agent-view-switch button, .agent-hidden-footer button, .agent-hidden-heading button, .agent-notice button {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-2xs);
+}
+.agent-view-switch button[aria-pressed="true"] { color: var(--text-primary); text-decoration: underline; }
+.agent-historical { padding: 4px var(--sb-edge); color: var(--text-secondary); font-size: var(--font-size-xs); }
+.agent-historical button { margin-left: 8px; color: var(--text-primary); }
+
 .space-tree-row:hover,
 .agent-row:hover { background: var(--surface-hover); }
 

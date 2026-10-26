@@ -88,6 +88,8 @@
     "allow-cockpit-space-service-status",
     "allow-cockpit-space-tags",
     "allow-cockpit-space-tag-change",
+    "allow-cockpit-agent-attention",
+    "allow-cockpit-agent-attention-change",
     "allow-cockpit-space-git-action",
     "allow-cockpit-browser-action",
     "allow-cockpit-browser-feedback",

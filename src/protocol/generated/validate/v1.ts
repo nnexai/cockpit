@@ -175,6 +175,93 @@ export const wireSpaceTagChangeRequest: WireDescriptor<V1.SpaceTagChangeRequest>
   "assigned": req(bool),
 });
 
+export const wireAgentAttentionMark: WireDescriptor<V1.AgentAttentionMark> = struct<V1.AgentAttentionMark>("AgentAttentionMark", {
+  "epoch": req(u53),
+  "seq": req(u53),
+});
+
+export const wireAgentAttentionLast: WireDescriptor<V1.AgentAttentionLast> = struct<V1.AgentAttentionLast>("AgentAttentionLast", {
+  "epoch": req(u53),
+  "seq": req(u53),
+  "status": req(str),
+  "observed_at": req(str),
+});
+
+export const wireAgentAttentionCompletion: WireDescriptor<V1.AgentAttentionCompletion> = struct<V1.AgentAttentionCompletion>("AgentAttentionCompletion", {
+  "epoch": req(u53),
+  "seq": req(u53),
+  "at": req(str),
+  "inferred": req(bool),
+});
+
+export const wireAgentAttentionStamp: WireDescriptor<V1.AgentAttentionStamp> = struct<V1.AgentAttentionStamp>("AgentAttentionStamp", {
+  "epoch": req(u53),
+  "seq": req(u53),
+  "at": req(str),
+});
+
+export const wireAgentAttentionRecord: WireDescriptor<V1.AgentAttentionRecord> = struct<V1.AgentAttentionRecord>("AgentAttentionRecord", {
+  "pane_id": req(str),
+  "terminal_id": req(str),
+  "agent": req(str),
+  "historical_id": req(nullable(str), { fill: null }),
+  "last": req(named(() => wireAgentAttentionLast)),
+  "completion": req(nullable(named(() => wireAgentAttentionCompletion)), { fill: null }),
+  "acked": req(nullable(named(() => wireAgentAttentionStamp)), { fill: null }),
+  "dismissed": req(nullable(named(() => wireAgentAttentionStamp)), { fill: null }),
+});
+
+export const wireAgentAttentionRefusal: WireDescriptor<V1.AgentAttentionRefusal> = struct<V1.AgentAttentionRefusal>("AgentAttentionRefusal", {
+  "code": req(str),
+  "message": req(str),
+});
+
+export const wireAgentAttentionResponse: WireDescriptor<V1.AgentAttentionResponse> = struct<V1.AgentAttentionResponse>("AgentAttentionResponse", {
+  "session_id": req(str),
+  "server_instance": req(str),
+  "epoch": req(u53),
+  "records": req(list(named(() => wireAgentAttentionRecord))),
+  "refused": req(nullable(named(() => wireAgentAttentionRefusal)), { fill: null }),
+});
+
+export const wireAgentAttentionObservation: WireDescriptor<V1.AgentAttentionObservation> = struct<V1.AgentAttentionObservation>("AgentAttentionObservation", {
+  "pane_id": req(str),
+  "terminal_id": req(str),
+  "agent": req(str),
+  "status": req(str),
+  "seq": req(u53),
+});
+
+export const wireAgentAttentionChange: WireDescriptor<V1.AgentAttentionChange> = tagged<V1.AgentAttentionChange, "kind">("AgentAttentionChange", "kind", {
+  "seen": {
+    "pane_id": req(str),
+    "terminal_id": req(str),
+    "agent": req(str),
+    "transition": req(named(() => wireAgentAttentionMark)),
+  },
+  "seen_historical": {
+    "historical_id": req(str),
+  },
+  "dismiss": {
+    "pane_id": req(str),
+    "terminal_id": req(str),
+    "agent": req(str),
+    "transition": req(named(() => wireAgentAttentionMark)),
+  },
+  "restore": {
+    "pane_id": req(str),
+    "agent": req(str),
+  },
+  "restore_all": {
+  },
+});
+
+export const wireAgentAttentionChangeRequest: WireDescriptor<V1.AgentAttentionChangeRequest> = struct<V1.AgentAttentionChangeRequest>("AgentAttentionChangeRequest", {
+  "server_instance": req(str),
+  "observations": req(list(named(() => wireAgentAttentionObservation))),
+  "change": req(nullable(named(() => wireAgentAttentionChange)), { fill: null }),
+});
+
 export const wireSpaceSummary: WireDescriptor<V1.SpaceSummary> = struct<V1.SpaceSummary>("SpaceSummary", {
   "id": req(str),
   "label": req(str),

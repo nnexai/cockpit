@@ -370,6 +370,11 @@ fn make_service(
                     std::path::Path::new(&config.state_root), adapter.clone(),
                 ).map_err(|error| error.to_string())?,
             );
+            let service = service.with_agent_attention(
+                cockpit_core::agent_attention::AgentAttentionService::new(
+                    std::path::Path::new(&config.state_root), adapter.clone(),
+                ).map_err(|error| error.to_string())?,
+            );
             let credentials = Arc::new(cockpit_core::credentials::ProviderCredentials::new(
                 &config,
                 cockpit_secrets::os_vault(),

@@ -85,6 +85,8 @@ fn main() {
             "cockpit_space_service_status",
             "cockpit_space_tags",
             "cockpit_space_tag_change",
+            "cockpit_agent_attention",
+            "cockpit_agent_attention_change",
             "cockpit_space_git_action",
             "cockpit_focus",
             "cockpit_mutate",

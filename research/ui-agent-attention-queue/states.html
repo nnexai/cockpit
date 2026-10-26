@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cockpit Agents attention queue: states</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Static gallery for research/ui-agent-attention-queue.md section 4.
+  Self-contained. Tokens are copied from src/app/styles/tokens.css; row geometry and glyph shapes from
+  src/app/sidebar.css (.agent-row, .agent-line, .agent-flag, .sidebar-section-heading, .spaces-view-switch)
+  and src/app/sidebar/StateGlyph.tsx. Anything not in those files is marked "new" in the captions.
+  A small inline script renders every frame from the data in FRAMES so rows stay identical across frames.
+-->
+<style>
+:root {
+  color-scheme: dark;
+  --app-bg:#0b0e12; --sidebar-bg:#11161e; --chrome-bg:#121923; --surface:#161d27; --surface-raised:#1b2431;
+  --surface-hover:#222e3d; --surface-selected:#23354c; --select-fill:var(--surface-selected); --select-edge:#89b4fa; --select-edge-size:2px;
+  --border:#2b3543; --border-strong:#3b4758;
+  --text-primary:#cdd6f4; --text-secondary:#bac2de; --text-muted:#a6adc8;
+  --accent:#89b4fa; --focus-strong:#89b4fa; --blocked:#f38ba8; --working:#f9e2af; --warning:#f9e2af; --done:#94e2d5; --idle:#a6e3a1;
+  --terminal-bg:#0c1016; --scrim:rgb(7 9 13 / 72%);
+  --font-sans:"IBM Plex Sans","Noto Sans",sans-serif;
+  --font-mono:"IosevkaTerm Nerd Font Mono","IBM Plex Mono","Noto Sans Mono",monospace;
+  --font-size-2xs:.6875rem; --font-size-control:.75rem; --font-size-xs:.8125rem;
+  --radius-small:3px; --radius-control:4px;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:24px; background:#080a0d; color:var(--text-primary); font:13px/1.45 var(--font-sans); }
+h1 { margin:0 0 4px; font-size:18px; }
+p.lead { margin:0 0 20px; max-width:900px; color:var(--text-muted); font-size:12px; }
+.grid { display:flex; flex-wrap:wrap; gap:28px; align-items:flex-start; }
+figure { margin:0; width:var(--w,264px); }
+figcaption { margin:0 0 6px; font-size:11px; color:var(--text-muted); max-width:var(--w,264px); }
+figcaption b { color:var(--text-primary); }
+code { font-family:var(--font-mono); font-size:11px; color:var(--text-primary); }
+.sb { position:relative; width:100%; background:var(--sidebar-bg); border:1px solid var(--border); padding-bottom:6px; }
+.sb .above { padding:6px 14px; color:var(--text-muted); font-size:var(--font-size-2xs); border-bottom:1px solid var(--border); background:var(--chrome-bg); }
+
+/* --- section heading (sidebar.css .sidebar-section-heading, .spaces-view-switch pattern) --- */
+.sec { border-top:1px solid var(--border); padding-top:4px; }
+.heading { display:flex; height:28px; align-items:center; gap:5px; padding:0 8px 0 10px; }
+.heading h2 { margin:0; color:var(--text-secondary); font-size:var(--font-size-xs); font-weight:500; line-height:16px; text-transform:lowercase; }
+.count { color:var(--text-muted); font-size:var(--font-size-2xs); font-variant-numeric:tabular-nums; line-height:16px; }
+.switch { display:flex; gap:2px; margin-left:auto; }
+.switch button { min-height:24px; padding:2px 6px; border:0; border-radius:3px; background:transparent; color:var(--text-muted); font:inherit; font-size:var(--font-size-2xs); cursor:pointer; }
+.switch button[aria-pressed="true"] { background:var(--surface-selected); color:var(--text-primary); }
+.switch button.focus { outline:2px solid var(--focus-strong); outline-offset:-2px; }
+.menu-btn { width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; border:0; background:transparent; color:var(--text-secondary); border-radius:var(--radius-control); }
+.new-tag { margin-left:4px; padding:0 4px; border:1px solid var(--border-strong); border-radius:3px; color:var(--text-muted); font:600 10px/14px var(--font-mono); }
+
+/* --- rows (sidebar.css .agent-row ...) --- */
+.agent-row { position:relative; display:flex; width:100%; min-height:26px; align-items:flex-start; gap:8px; margin:0; padding:4px 8px 4px 14px; border:0; background:transparent; color:var(--text-secondary); font:inherit; font-size:var(--font-size-xs); text-align:left; }
+.agent-row.hover { background:var(--surface-hover); }
+.agent-row.is-selected { background:var(--select-fill); }
+.agent-row.is-selected::before, .agent-row.is-pending::before { content:""; position:absolute; top:0; bottom:0; left:0; width:var(--select-edge-size); background:var(--select-edge); }
+.agent-row.is-pending { background:var(--surface-hover); cursor:progress; }
+.agent-row.is-pending::before { background:var(--text-muted); }
+.agent-row.focus { outline:2px solid var(--focus-strong); outline-offset:-2px; }
+.agent-details { display:flex; min-width:0; flex:1; flex-direction:column; }
+.agent-line { display:flex; min-width:0; height:18px; align-items:center; gap:6px; }
+.agent-location { display:flex; min-width:0; flex:1; overflow:hidden; color:var(--text-muted); font-size:var(--font-size-xs); line-height:18px; white-space:nowrap; }
+.agent-space { min-width:0; overflow:hidden; text-overflow:ellipsis; color:var(--text-primary); font-weight:600; }
+.agent-tab { flex:none; white-space:pre; }
+.agent-flag { flex:none; font:600 var(--font-size-2xs)/14px var(--font-mono); text-transform:lowercase; }
+.agent-sub { color:var(--text-muted); font-size:var(--font-size-2xs); line-height:14px; }
+.state-blocked .agent-flag, .state-blocked .agent-word { color:var(--blocked); font-weight:600; }
+.state-done .agent-flag, .state-done .agent-word { color:var(--done); font-weight:600; }
+.agent-row.is-hidden .agent-space { color:var(--text-muted); font-weight:500; }
+.agent-row.is-hidden .agent-flag { color:var(--text-muted); font-weight:500; }
+.agent-flag.unseen { color:var(--done); }
+/* new: a text button, not a close glyph (design direction bans close-style affordances). Absolutely positioned like .space-tag-add so it never changes row size or name width. */
+.rw { position:relative; }
+.dismiss { position:absolute; top:2px; right:6px; z-index:2; display:none; align-items:center; height:22px; padding:0 6px; border:1px solid var(--border-strong); border-radius:var(--radius-control); background:var(--surface-hover); color:var(--text-primary); font:600 var(--font-size-2xs)/14px var(--font-mono); text-transform:lowercase; cursor:pointer; }
+.rw.is-selected .dismiss { background:var(--select-fill); }
+.rw.hover .dismiss, .rw.focus .dismiss, .rw.show-dismiss .dismiss { display:inline-flex; }
+.dismiss:hover { border-color:var(--accent); }
+
+.sb-glyph { flex:none; width:18px; height:18px; color:var(--idle); }
+.sb-glyph.is-blocked { color:var(--blocked); } .sb-glyph.is-working { color:var(--working); } .sb-glyph.is-done { color:var(--done); }
+.sb-glyph.is-idle { color:var(--idle); } .sb-glyph.is-unknown { color:var(--text-muted); }
+
+/* --- notes under rows / list notices (new, same inline-note pattern as Space row notes) --- */
+.note { margin:2px 8px 4px 14px; padding:5px 8px; border:1px solid var(--border-strong); border-radius:var(--radius-control); background:var(--surface); color:var(--text-secondary); font-size:var(--font-size-2xs); line-height:15px; display:flex; gap:8px; align-items:flex-start; }
+.note.warn { border-color:var(--warning); }
+.note button { margin-left:auto; flex:none; padding:1px 6px; border:1px solid var(--border-strong); border-radius:var(--radius-control); background:transparent; color:var(--text-primary); font:inherit; cursor:pointer; }
+.row-note { margin:0 8px 4px 40px; padding:3px 6px; border-left:2px solid var(--warning); color:var(--text-secondary); font-size:var(--font-size-2xs); line-height:15px; }
+.footer-row { display:flex; align-items:center; gap:6px; width:100%; min-height:26px; padding:4px 8px 4px 14px; border:0; border-top:1px solid var(--border); background:transparent; color:var(--text-secondary); font:inherit; font-size:var(--font-size-2xs); text-align:left; }
+.footer-row.focus { outline:2px solid var(--focus-strong); outline-offset:-2px; }
+.group { position:sticky; top:0; display:flex; align-items:center; height:22px; gap:8px; padding:0 8px 0 14px; border-top:1px solid var(--border); background:var(--sidebar-bg); color:var(--text-muted); font-size:var(--font-size-2xs); }
+.group button { margin-left:auto; padding:1px 6px; border:0; border-radius:3px; background:transparent; color:var(--accent); font:inherit; }
+.empty-row { margin:6px 14px; color:var(--text-muted); font-size:var(--font-size-xs); }
+.skeleton { height:12px; margin:7px 14px; background:var(--surface-raised); border-radius:2px; }
+
+/* --- context menu (shell/ContextMenu.tsx: role=menu, first enabled item focused) --- */
+.menu { position:absolute; z-index:5; left:70px; width:210px; padding:4px; border:1px solid var(--border-strong); border-radius:5px; background:var(--surface-raised); box-shadow:0 8px 20px rgb(0 0 0 / 65%); }
+.menu div { display:flex; justify-content:space-between; gap:12px; min-height:29px; align-items:center; padding:0 8px; border-radius:3px; font-size:var(--font-size-xs); color:var(--text-primary); }
+.menu div.focus { background:var(--surface-selected); outline:2px solid var(--focus-strong); outline-offset:-2px; }
+.menu kbd { font:var(--font-size-2xs)/1 var(--font-mono); color:var(--text-muted); }
+
+/* --- narrow drawer and top bar --- */
+.drawer-wrap { position:relative; height:330px; background:var(--terminal-bg); border:1px solid var(--border); overflow:hidden; }
+.drawer-wrap .scrim { position:absolute; inset:0; background:var(--scrim); }
+.drawer-wrap .sb { position:absolute; left:0; top:0; bottom:0; width:min(300px,calc(100% - 48px)); box-shadow:12px 0 32px rgb(0 0 0 / 38%); border-right-color:var(--border-strong); }
+.topbar { display:flex; align-items:center; gap:8px; height:41px; padding:0 8px; background:var(--chrome-bg); border:1px solid var(--border); }
+.tbtn { position:relative; width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center; border-radius:var(--radius-control); color:var(--text-secondary); }
+.tbtn svg { width:16px; height:16px; }
+.dot { position:absolute; top:4px; right:4px; width:7px; height:7px; border-radius:50%; background:var(--done); box-shadow:0 0 0 2px var(--chrome-bg); }
+.dot.blocked { background:var(--blocked); }
+.tab { padding:0 10px; color:var(--text-secondary); }
+.sr { color:var(--text-muted); font-size:11px; font-family:var(--font-mono); }
+</style>
+</head>
+<body>
+<h1>Agents attention queue: states</h1>
+<p class="lead">Each frame is a sidebar Agents section at 1x. Captions say what is existing, what is new, and which spec section defines it. Rows are 26 px, the glyph is 18 px; hover, focus and pending never change row size. The dismiss control (new) occupies the flag slot.</p>
+<div class="grid" id="grid"></div>
+
+<script>
+const GLYPH = {
+  blocked: '<circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><path d="M9 5v4.75" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/><circle cx="9" cy="12.6" r="1.05" fill="currentColor"/>',
+  done: '<circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><path d="M5.5 9.5l2.6 2.6 4.6-5.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
+  working: '<circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><circle cx="9" cy="9" r="3.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 5.25a3.75 3.75 0 0 0 0 7.5z" fill="currentColor"/>',
+  idle: '<circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".10"/><circle cx="9" cy="9" r="3.25" fill="none" stroke="currentColor" stroke-width="1.5"/>',
+  unknown: '<circle cx="9" cy="9" r="8.25" fill="none" stroke="currentColor" stroke-width="1.5"/>'
+};
+const WORD = { blocked:'Blocked', done:'Done', working:'Working', idle:'Idle', unknown:'Unknown' };
+const X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="m6 6 12 12M6 18 18 6"/></svg>';
+const MORE = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>';
+const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+function row(r) {
+  const cls = ['agent-row', 'state-' + r.state];
+  const wrap = ['rw'];
+  for (const k of ['selected:is-selected','pending:is-pending','hover:hover','focus:focus','hidden:is-hidden'])
+    { const [a,b] = k.split(':'); if (r[a]) { cls.push(b); if (['hover','focus'].includes(b)) wrap.push(b); } }
+  if (r.dismiss) wrap.push('show-dismiss');
+  if (r.selected) wrap.push('is-selected');
+  const flag = r.flag ? `<span class="agent-flag ${r.flag === 'unseen' ? 'unseen' : ''}">${r.flag}</span>` : '';
+  // The dismiss control is a sibling of the row button (no nested interactive content).
+  const dismiss = r.canDismiss ? `<button class="dismiss" tabindex="-1" aria-label="${r.hidden ? 'Restore' : 'Dismiss'} ${esc(r.space)} · ${esc(r.tab)}">${r.hidden ? 'restore' : 'dismiss'}</button>` : '';
+  const sub = r.selected ? `<span class="agent-sub"><span class="agent-word">${WORD[r.state]}</span> · ${esc(r.agent)}${r.age ? ' · ' + r.age : ''}</span>` : '';
+  return `<div class="${wrap.join(' ')}"><button class="${cls.join(' ')}" title="${esc(r.title || '')}" aria-label="${esc(r.label || '')}">
+    <svg class="sb-glyph is-${r.glyph || r.state}" viewBox="0 0 18 18" aria-hidden="true">${GLYPH[r.glyph || r.state]}</svg>
+    <span class="agent-details"><span class="agent-line"><span class="agent-location"><span class="agent-space">${esc(r.space)}</span><span class="agent-tab"> · ${esc(r.tab)}</span></span>${flag}</span>${sub}</span>
+  </button>${dismiss}</div>${r.note ? `<div class="row-note" role="status">${esc(r.note)}</div>` : ''}`;
+}
+function frame(f) {
+  const view = f.view || 'queue';
+  const sw = f.noSwitch ? '' : `<div class="switch" role="group" aria-label="Agents view"><button aria-pressed="${view==='queue'}" class="${f.focusSwitch==='queue'?'focus':''}">Queue</button><button aria-pressed="${view==='all'}" class="${f.focusSwitch==='all'?'focus':''}">All</button></div><span class="menu-btn" aria-label="Agents actions">${MORE}</span>`;
+  const count = f.count === undefined ? '' : `<span class="count" title="${esc(f.countTitle || '')}">${f.count}</span>`;
+  const notice = f.notice ? `<div class="note ${f.notice.warn?'warn':''}" role="status"><span>${esc(f.notice.text)}</span>${f.notice.button ? `<button>${f.notice.button}</button>` : ''}</div>` : '';
+  const list = (f.skeleton ? '<div class="skeleton"></div><div class="skeleton" style="width:60%"></div>' : '') +
+    (f.empty ? `<p class="empty-row">${esc(f.empty)}</p>` : '') + (f.rows || []).map(row).join('') +
+    (f.hiddenGroup ? `<div class="group"><span>Hidden · ${f.hiddenGroup.rows.length}</span><button>Restore all</button></div>` + f.hiddenGroup.rows.map(row).join('') : '') +
+    (f.footer ? `<button class="footer-row ${f.footer.focus?'focus':''}">${esc(f.footer.text)}</button>` : '');
+  const menu = f.menu ? `<div class="menu" role="menu" aria-label="agent actions" style="top:${f.menu.top}px">${f.menu.items.map(i => `<div role="menuitem" class="${i.focus?'focus':''}"><span>${i[0]}</span>${i[1] ? `<kbd>${i[1]}</kbd>` : ''}</div>`).join('')}</div>` : '';
+  return `<figure style="--w:${f.width || 264}px"><figcaption><b>${esc(f.title)}</b> ${f.caption}</figcaption>
+    <div class="sb"><div class="above">${f.above || 'SPACES region above (unchanged)'}</div>
+    <div class="sec"><div class="heading"><h2>agents</h2>${count}${sw}</div>${notice}${list}</div>${menu}</div></figure>`;
+}
+
+const api = (over) => Object.assign({ space:'api-review', tab:'pane 1', agent:'omp', state:'blocked', flag:'blocked', label:'api-review · pane 1, omp, Blocked' }, over);
+const FRAMES = [
+  { title:'1 Default queue.', caption:'Tiers: Blocked, Done / unseen, Working, Idle, Unknown (spec 3.4). Only Idle and Done rows get the hover dismiss. The "unseen" flag is new (working agent with an earlier completion not yet seen).',
+    count:6, countTitle:'6 visible', rows:[
+    api({}),
+    api({ space:'side-project', tab:'tests', agent:'omp', state:'done', flag:'done', canDismiss:true, label:'side-project · tests, omp, Done, not seen', title:'Finished 12 min ago. Not marked seen.' }),
+    api({ space:'api-review', tab:'pane 2', agent:'omp', state:'working', flag:'unseen', canDismiss:false, label:'api-review · pane 2, omp, Working, earlier result not seen', title:'Finished 31 min ago. Not marked seen. Now working.' }),
+    api({ space:'docs', tab:'agent', agent:'omp', state:'working', flag:'', label:'docs · agent, omp, Working' }),
+    api({ space:'scratch', tab:'shell', agent:'omp', state:'idle', flag:'', canDismiss:true, label:'scratch · shell, omp, Idle' }),
+    api({ space:'infra', tab:'term', agent:'helper', state:'unknown', flag:'', label:'infra · term, helper, Unknown' }) ] },
+
+  { title:'2 Retained Done.', caption:'A Done the user saw complete elsewhere: Herdr now reports idle (the row title says so) but Cockpit keeps Done until Activate or Mark seen. The Herdr-confirmed selected row reveals <code>State · agent · age</code> (age is new, from the store); the second row shows the hover <code>dismiss</code> word button.',
+    count:2, rows:[
+    api({ space:'side-project', tab:'tests', agent:'omp', state:'done', flag:'done', selected:true, age:'12 min', canDismiss:true, label:'side-project · tests, omp, Done, not seen', title:'Finished 12 min ago. Not marked seen. Herdr now reports idle.' }),
+    api({ space:'scratch', tab:'shell', agent:'omp', state:'idle', flag:'', hover:true, canDismiss:true, label:'scratch · shell, omp, Idle' }) ] },
+
+  { title:'3 After Dismiss.', caption:'Dismissing an idle row: the row is gone, count drops, an inline notice offers Undo (slice 2), and the footer keeps the hidden agents one click away.',
+    count:3, notice:{ text:'Dismissed scratch · shell.', button:'Undo' }, rows:[
+    api({}),
+    api({ space:'docs', tab:'agent', state:'working', flag:'', label:'docs · agent, omp, Working' }),
+    api({ space:'side-project', tab:'tests', agent:'omp', state:'idle', flag:'', canDismiss:true, label:'side-project · tests, omp, Idle' }) ],
+    footer:{ text:'2 hidden · Show all' } },
+
+  { title:'4 All view.', caption:'All appends a Hidden group below the unchanged queue rows, so visible rows never move when switching. Hidden rows are muted, still activatable. Restore all is one button.',
+    view:'all', count:3, countTitle:'3 visible, 2 hidden', rows:[
+    api({}),
+    api({ space:'docs', tab:'agent', state:'working', flag:'', label:'docs · agent, omp, Working' }),
+    api({ space:'side-project', tab:'tests', agent:'omp', state:'idle', flag:'', canDismiss:true, label:'side-project · tests, omp, Idle' }) ],
+    hiddenGroup:{ rows:[
+      api({ space:'scratch', tab:'shell', agent:'omp', state:'idle', flag:'hidden', hidden:true, canDismiss:true, hover:true, label:'scratch · shell, omp, Idle, hidden' }),
+      api({ space:'old-experiment', tab:'shell', agent:'omp', state:'idle', flag:'hidden', hidden:true, canDismiss:true, label:'old-experiment · shell, omp, Idle, hidden' }) ] } },
+
+  { title:'5 Everything hidden.', caption:'No celebratory empty state (design direction). Footer is the recovery route and the last roving row.',
+    count:0, empty:'No visible agents', footer:{ text:'4 hidden · Show all', focus:true } },
+
+  { title:'6 Store unavailable.', caption:'Fail visible: every agent is shown with Herdr state only; no hidden rows and no retained Done. Retry re-reads the store.',
+    count:4, notice:{ warn:true, text:'Seen and dismissed state is unavailable. Showing every agent.', button:'Retry' }, noSwitch:false, rows:[
+    api({}),
+    api({ space:'side-project', tab:'tests', state:'done', flag:'done', canDismiss:true, label:'side-project · tests, omp, Done' }),
+    api({ space:'docs', tab:'agent', state:'working', flag:'', label:'docs · agent, omp, Working' }),
+    api({ space:'scratch', tab:'shell', state:'idle', flag:'', canDismiss:true, label:'scratch · shell, omp, Idle' }) ] },
+
+  { title:'7 Loading.', caption:'Existing 2-row skeleton stays until the first records response (or failure), so hidden rows never flash at startup.', count:undefined, skeleton:true, rows:[] },
+
+  { title:'8 Keyboard focus and row menu.', caption:'Roving focus ring is the existing 2 px inset ring. Shift+F10 / ContextMenu opens the row menu (slice 2) with the first enabled item focused. Arrow keys only move DOM focus.',
+    count:3, rows:[
+    api({ space:'side-project', tab:'tests', agent:'omp', state:'done', flag:'done', focus:true, selected:false, canDismiss:true, label:'side-project · tests, omp, Done, not seen' }),
+    api({ space:'docs', tab:'agent', state:'working', flag:'', label:'docs · agent, omp, Working' }),
+    api({ space:'scratch', tab:'shell', state:'idle', flag:'', canDismiss:true, label:'scratch · shell, omp, Idle' }) ],
+    menu:{ top:72, items:[['Open','Enter',true],['Mark seen','Shift+Enter'],['Dismiss','Delete']].map(([a,b,c]) => Object.assign([a,b], { focus:!!c })) } },
+
+  { title:'9 Refusal and failure notes.', caption:'Row-local notes sit directly under the row (same placement as Space row errors). Refusal: the agent changed before the dismiss landed. Failure: not saved, row stays.',
+    count:3, rows:[
+    api({ space:'api-review', tab:'pane 2', agent:'omp', state:'working', flag:'', note:'omp in api-review started working, so it stays in the queue.', label:'api-review · pane 2, omp, Working' }),
+    api({ space:'docs', tab:'agent', state:'idle', flag:'', canDismiss:true, show:true, note:'Not saved. docs · agent is still in the queue. Retry', label:'docs · agent, omp, Idle' }),
+    api({ space:'scratch', tab:'shell', state:'idle', flag:'', canDismiss:true, label:'scratch · shell, omp, Idle' }) ] },
+
+  { title:'10 Pending acknowledgment.', caption:'Activate sends the Herdr focus request first; the row shows the existing neutral pending marker and <code>aria-busy</code>. Selection and the Seen write follow Herdr acknowledgment.',
+    count:2, rows:[
+    api({ space:'side-project', tab:'tests', agent:'omp', state:'done', flag:'done', pending:true, label:'side-project · tests, omp, Done, not seen' }),
+    api({ space:'scratch', tab:'shell', state:'idle', flag:'', canDismiss:true, label:'scratch · shell, omp, Idle' }) ] },
+
+  { title:'11 Coarse pointer / narrow drawer.', caption:'Below 800 px the sidebar is the drawer. The <code>dismiss</code> button is always visible (same rule as <code>.space-tag-add</code> under <code>pointer: coarse</code>).', width:330, drawer:true,
+    count:3, rows:[
+    api({ space:'api-review', tab:'pane 1', state:'blocked', flag:'blocked' }),
+    api({ space:'side-project', tab:'tests', agent:'omp', state:'done', flag:'done', canDismiss:true, dismiss:true, label:'side-project · tests, omp, Done, not seen' }),
+    api({ space:'scratch', tab:'shell', state:'idle', flag:'', canDismiss:true, dismiss:true, label:'scratch · shell, omp, Idle' }) ] },
+];
+
+const grid = document.getElementById('grid');
+for (const f of FRAMES) {
+  if (f.drawer) {
+    const inner = frame(f);
+    grid.insertAdjacentHTML('beforeend', `<figure style="--w:330px"><div class="drawer-wrap"><div class="scrim"></div>${inner.replace(/^<figure[^>]*>/, '<div style="position:absolute;left:0;top:0;bottom:0;width:300px">').replace('</figure>', '</div>')}</div></figure>`);
+  } else grid.insertAdjacentHTML('beforeend', frame(f));
+}
+grid.insertAdjacentHTML('beforeend', `<figure style="--w:440px"><figcaption><b>12 Sidebar hidden.</b> The existing dot on the sidebar toggle (<code>.tab-attention-dot</code>) is extended: blocked colors it <code>--blocked</code>, an unseen Done colors it <code>--done</code>. The accessible name carries the meaning, never the color: <code>Show sidebar (an agent finished)</code> or <code>(3 agents need attention)</code> (slice 2).</figcaption>
+  <div class="topbar"><span class="tbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16M3 4h18v16H3Z"/></svg><span class="dot"></span></span><span class="tab">1 api-review</span><span class="tab">2 tests</span><span class="sr">aria-label="Show sidebar (an agent finished)"</span></div>
+  <div style="height:8px"></div>
+  <div class="topbar"><span class="tbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v16M3 4h18v16H3Z"/></svg><span class="dot blocked"></span></span><span class="tab">1 api-review</span><span class="tab">2 tests</span><span class="sr">aria-label="Show sidebar (an agent is blocked)"</span></div></figure>`);
+</script>
+</body>
+</html>

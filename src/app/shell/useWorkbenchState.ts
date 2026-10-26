@@ -3,6 +3,7 @@ import type { SpaceGitAction, SpaceGitStatus, SpaceServiceStatus } from "../../p
 import { spaceCheckoutKey, useSpaceGitStatus } from "../session/spaceGitStatus";
 import { useSpaceServiceStatus } from "../session/spaceServiceStatus";
 import { useSpaceTags, type SpaceTagsState } from "../session/spaceTags";
+import { useAgentAttention, type AgentAttentionState } from "../session/agentAttention";
 import { gitActionReason, gitActionRequest, useSpaceGitActions, type SpaceGitActions } from "../session/spaceGitActions";
 import type { SessionSummary } from "../../protocol/generated/v1";
 import type { LibraryCommand } from "../context/ContextViewer";
@@ -26,6 +27,7 @@ export interface WorkbenchState extends WorkbenchView, WorkareaController, Sideb
   spaceGit: ReadonlyMap<string, SpaceGitStatus>; gitBlocked: string | undefined; gitActions: SpaceGitActions;
   spaceServices: ReadonlyMap<string, readonly SpaceServiceStatus[]>;
   spaceTags: SpaceTagsState;
+  attention: AgentAttentionState;
   tagEditorRequest: { spaceId: string; token: number } | null;
   requestTagEditor(spaceId: string): void;
   gitNotice: { sessionId: string | null; text: string } | null;
@@ -52,6 +54,7 @@ export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
   const spaceGit = gitPoll.spaces;
   const spaceServices = useSpaceServiceStatus(client, state.sync === "live" ? state.sessionId : null, snapshot, narrowViewport ? drawerOpen : !sidebarCollapsed);
   const spaceTags = useSpaceTags(client, state.sessionId, snapshot, state.sync === "live");
+  const attention = useAgentAttention(client, state, state.sync === "live");
   const [tagEditor, setTagEditor] = useState<{ spaceId: string; token: number; sessionId: string | null; serverInstance: string | undefined } | null>(null);
   const tagEditorRequest = tagEditor?.sessionId === state.sessionId && tagEditor?.serverInstance === snapshot?.server_instance ? tagEditor : null;
   const requestTagEditor = (spaceId: string) => {
@@ -90,5 +93,5 @@ export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
   return { ...view, ...workarea, ...ui, ...widget, ...navigation, ...sidebar, libraryOpen, notesOpen, overviewOpen, liaison,
     libraryCommand: workarea.view.kind === "library" ? workarea.view.command : null,
     mutationBusy, modalOpen, viewerSources, browserOpen, browserInputActive, browserReason,
-    sidebarSession: props.sessions.find(session => session.id === state.sessionId), gitPoll, spaceGit, spaceServices, spaceTags, tagEditorRequest, requestTagEditor, gitBlocked, gitActions, gitNotice, runGitAction };
+    sidebarSession: props.sessions.find(session => session.id === state.sessionId), gitPoll, spaceGit, spaceServices, spaceTags, attention, tagEditorRequest, requestTagEditor, gitBlocked, gitActions, gitNotice, runGitAction };
 }

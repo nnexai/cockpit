@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cockpit Agents attention queue: transition-identity simulator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Interactive model of research/ui-agent-attention-queue.md sections 3.2-3.6.
+  Self-contained, no network. The JavaScript functions storeObserve(), storeMutate() and derive() are a line-for-line
+  implementation of the pseudo-code in 3.3, the mutation table in 3.5 and the display table in 3.4. Tokens and row
+  geometry come from src/app/styles/tokens.css and src/app/sidebar.css (26 px rows, 18 px glyph).
+  "Herdr" is simulated: a server-wide state_change_seq counter, a server_instance, and a seen-flip (done -> idle when
+  focused). The two open Herdr questions of the spec are switches here: "seen-flip bumps seq" and Restart.
+-->
+<style>
+:root {
+  color-scheme: dark;
+  --app-bg:#0b0e12; --sidebar-bg:#11161e; --chrome-bg:#121923; --surface:#161d27; --surface-raised:#1b2431;
+  --surface-hover:#222e3d; --surface-selected:#23354c; --select-edge:#89b4fa; --border:#2b3543; --border-strong:#3b4758;
+  --text-primary:#cdd6f4; --text-secondary:#bac2de; --text-muted:#a6adc8;
+  --accent:#89b4fa; --focus-strong:#89b4fa; --blocked:#f38ba8; --working:#f9e2af; --warning:#f9e2af; --done:#94e2d5; --idle:#a6e3a1;
+  --font-sans:"IBM Plex Sans","Noto Sans",sans-serif; --font-mono:"IosevkaTerm Nerd Font Mono","IBM Plex Mono","Noto Sans Mono",monospace;
+  --font-size-2xs:.6875rem; --font-size-xs:.8125rem; --radius-control:4px;
+}
+* { box-sizing:border-box; }
+body { margin:0; padding:16px; background:#080a0d; color:var(--text-primary); font:13px/1.45 var(--font-sans); }
+h1 { margin:0 0 2px; font-size:17px; } p.lead { margin:0 0 12px; max-width:980px; color:var(--text-muted); font-size:12px; }
+.cols { display:grid; grid-template-columns:300px 280px minmax(320px,1fr); gap:16px; align-items:start; }
+.card { border:1px solid var(--border); background:var(--surface); padding:10px; }
+.card h2 { margin:0 0 8px; font-size:12px; color:var(--text-secondary); text-transform:uppercase; letter-spacing:.04em; font-weight:600; }
+button.b, label.b { font:inherit; font-size:11px; color:var(--text-primary); background:var(--surface-raised); border:1px solid var(--border-strong); border-radius:var(--radius-control); padding:2px 7px; cursor:pointer; }
+button.b:hover { background:var(--surface-hover); } button.b:disabled { opacity:.45; cursor:default; }
+.hag { display:grid; grid-template-columns:74px 1fr; gap:4px 6px; align-items:center; margin-bottom:8px; padding-bottom:8px; border-bottom:1px solid var(--border); }
+.hag .nm { font-family:var(--font-mono); font-size:11px; color:var(--text-secondary); }
+.hag .st { grid-column:1 / -1; font-family:var(--font-mono); font-size:11px; color:var(--text-muted); }
+.btns { display:flex; flex-wrap:wrap; gap:4px; }
+.opt { display:block; margin:4px 0; font-size:12px; color:var(--text-secondary); }
+.help { margin:6px 0 0; color:var(--text-muted); font-size:11px; }
+
+/* sidebar replica */
+.sb { width:264px; background:var(--sidebar-bg); border:1px solid var(--border); padding-bottom:6px; }
+.sb .above { padding:6px 14px; color:var(--text-muted); font-size:var(--font-size-2xs); border-bottom:1px solid var(--border); background:var(--chrome-bg); }
+.heading { display:flex; height:28px; align-items:center; gap:5px; padding:0 8px 0 10px; border-top:1px solid var(--border); }
+.heading h2 { margin:0; color:var(--text-secondary); font-size:var(--font-size-xs); font-weight:500; text-transform:lowercase; letter-spacing:0; }
+.count { color:var(--text-muted); font-size:var(--font-size-2xs); } .switch { display:flex; gap:2px; margin-left:auto; }
+.switch button { min-height:24px; padding:2px 6px; border:0; border-radius:3px; background:transparent; color:var(--text-muted); font:inherit; font-size:var(--font-size-2xs); cursor:pointer; }
+.switch button[aria-pressed="true"] { background:var(--surface-selected); color:var(--text-primary); }
+button:focus-visible { outline:2px solid var(--focus-strong); outline-offset:-2px; }
+.rw { position:relative; }
+.agent-row { position:relative; display:flex; width:100%; min-height:26px; align-items:flex-start; gap:8px; margin:0; padding:4px 8px 4px 14px; border:0; background:transparent; color:var(--text-secondary); font:inherit; font-size:var(--font-size-xs); text-align:left; cursor:pointer; }
+.agent-row:hover { background:var(--surface-hover); } .agent-row.is-selected { background:var(--surface-selected); }
+.agent-row.is-selected::before { content:""; position:absolute; top:0; bottom:0; left:0; width:2px; background:var(--select-edge); }
+.agent-details { display:flex; min-width:0; flex:1; flex-direction:column; } .agent-line { display:flex; min-width:0; height:18px; align-items:center; gap:6px; }
+.agent-location { display:flex; min-width:0; flex:1; overflow:hidden; color:var(--text-muted); line-height:18px; white-space:nowrap; }
+.agent-space { min-width:0; overflow:hidden; text-overflow:ellipsis; color:var(--text-primary); font-weight:600; } .agent-tab { flex:none; white-space:pre; }
+.agent-flag { flex:none; font:600 var(--font-size-2xs)/14px var(--font-mono); text-transform:lowercase; }
+.agent-sub { color:var(--text-muted); font-size:var(--font-size-2xs); line-height:14px; }
+.state-blocked .agent-flag { color:var(--blocked); } .state-done .agent-flag { color:var(--done); } .agent-flag.unseen { color:var(--done); }
+.agent-row.is-hidden .agent-space { color:var(--text-muted); font-weight:500; } .agent-row.is-hidden .agent-flag { color:var(--text-muted); }
+.dismiss { position:absolute; top:2px; right:6px; z-index:2; display:none; height:22px; padding:0 6px; align-items:center; border:1px solid var(--border-strong); border-radius:var(--radius-control); background:var(--surface-hover); color:var(--text-primary); font:600 var(--font-size-2xs)/14px var(--font-mono); cursor:pointer; }
+.rw:hover .dismiss, .rw:focus-within .dismiss { display:inline-flex; }
+.sb-glyph { flex:none; width:18px; height:18px; } .g-blocked { color:var(--blocked); } .g-working { color:var(--working); } .g-done { color:var(--done); } .g-idle { color:var(--idle); } .g-unknown { color:var(--text-muted); }
+.note { margin:2px 8px 4px 14px; padding:5px 8px; border:1px solid var(--border-strong); border-radius:var(--radius-control); background:var(--surface); color:var(--text-secondary); font-size:var(--font-size-2xs); display:flex; gap:8px; }
+.note.warn { border-color:var(--warning); } .note button { margin-left:auto; }
+.row-note { margin:0 8px 4px 40px; padding:3px 6px; border-left:2px solid var(--warning); color:var(--text-secondary); font-size:var(--font-size-2xs); }
+.footer-row, .group { display:flex; align-items:center; gap:8px; width:100%; min-height:24px; padding:3px 8px 3px 14px; border:0; border-top:1px solid var(--border); background:transparent; color:var(--text-secondary); font:inherit; font-size:var(--font-size-2xs); text-align:left; }
+.group { color:var(--text-muted); } .group button { margin-left:auto; border:0; background:transparent; color:var(--accent); font:inherit; cursor:pointer; }
+.empty-row { margin:6px 14px; color:var(--text-muted); }
+.sbtools { display:flex; gap:4px; flex-wrap:wrap; margin-top:8px; }
+
+/* store + log */
+pre { margin:0; max-height:300px; overflow:auto; padding:8px; background:var(--app-bg); border:1px solid var(--border); font:11px/1.4 var(--font-mono); color:var(--text-secondary); white-space:pre-wrap; }
+#log { max-height:260px; } #log .ok { color:var(--idle); } #log .warn { color:var(--warning); } #log .bad { color:var(--blocked); } #log .info { color:var(--text-muted); } #log .rule { color:var(--done); }
+.sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+#live { font-size:11px; color:var(--text-muted); margin-top:6px; min-height:16px; }
+</style>
+</head>
+<body>
+<h1>Transition-identity simulator</h1>
+<p class="lead">Left: a simulated Herdr (status, server-wide <code>state_change_seq</code>, <code>server_instance</code>). Middle: the Cockpit Agents section driven by the spec's rules. Right: the persisted store and a rule log. Try: finish an agent while Cockpit is offline; focus a Done pane externally; restart Herdr; deliver a stale snapshot; dismiss an idle agent and make it work again; change the agent from a second client and then dismiss in the stale window. Keyboard on a row: arrows, Enter (activate), Shift+Enter (mark seen), Delete (dismiss or restore).</p>
+<div class="cols">
+  <div class="card" id="herdr"><h2>Herdr (simulated)</h2><div id="hagents"></div>
+    <div class="btns"><button class="b" id="restart">Restart Herdr</button><button class="b" id="swap">Replace agent in pane p3</button></div>
+    <label class="opt"><input type="checkbox" id="bump"> Seen-flip bumps state_change_seq (open question 1)</label>
+    <p class="help" id="hinfo"></p></div>
+  <div class="card"><h2>Cockpit window</h2>
+    <label class="opt"><input type="checkbox" id="connected" checked> Cockpit connected</label>
+    <label class="opt"><input type="checkbox" id="auto" checked> Observe automatically (off = coalesced snapshots)</label>
+    <label class="opt"><input type="checkbox" id="unavail"> Store unavailable</label>
+    <div class="sbtools"><button class="b" id="observe">Observe now</button><button class="b" id="stale">Deliver stale snapshot</button><button class="b" id="second">Second client observes</button><button class="b" id="reload">Reload window</button></div>
+    <div style="height:10px"></div>
+    <div class="sb"><div class="above">SPACES region above (unchanged)</div><div id="queue"></div></div>
+    <div id="live" aria-live="polite"></div>
+    <div class="sbtools"><button class="b" id="forget">Forget all state</button></div></div>
+  <div class="card"><h2>Store (agent-attention.json)</h2><pre id="store"></pre><h2 style="margin-top:10px">Rule log</h2><pre id="log"></pre></div>
+</div>
+
+<script>
+/* ---------- identities ---------- */
+const cmp = (a, b) => a.e - b.e || a.s - b.s;            // (epoch, seq), lexicographic
+const idStr = i => i ? `(${i.e},${i.s})` : 'null';
+const max = (a, b) => !a ? b : !b ? a : cmp(a, b) >= 0 ? a : b;
+
+/* ---------- simulated Herdr ---------- */
+const herdr = { instance: 'srv-1', counter: 0, focused: null, agents: [] };
+let termN = 0;
+function addAgent(pane, space, tab, name, status) { herdr.agents.push({ pane, term: 't' + (++termN), space, tab, name, status, seq: ++herdr.counter }); }
+addAgent('p1', 'api-review', 'pane 1', 'omp', 'working');
+addAgent('p2', 'side-project', 'tests', 'omp', 'idle');
+addAgent('p3', 'docs', 'agent', 'omp', 'idle');
+addAgent('p4', 'scratch', 'shell', 'omp', 'idle');
+const ha = pane => herdr.agents.find(a => a.pane === pane);
+const snap = () => ({ instance: herdr.instance, agents: herdr.agents.map(a => ({ ...a })) });
+
+/* ---------- the store: spec 3.3 and 3.5 ---------- */
+let store = { schema: 1, epochs: [], agents: {} };
+let clock = 0, storeDown = false;
+const logLines = [];
+const log = (cls, text) => { logLines.push(`<div class="${cls}">${text}</div>`); if (logLines.length > 80) logLines.shift(); };
+const epochFor = inst => { let i = store.epochs.findIndex(x => x.server_instance === inst); if (i < 0) { store.epochs.push({ ordinal: store.epochs.length + 1, server_instance: inst }); i = store.epochs.length - 1; log('rule', `new epoch ${i + 1} registered for ${inst}`); } return i + 1; };
+const epochNow = inst => store.epochs.findIndex(x => x.server_instance === inst) + 1;
+const unseenOf = r => !!r && !!r.completion && !(r.acked && cmp(r.acked, r.completion) >= 0);
+
+function storeObserve(inst, obs, who) {
+  if (storeDown) { log('bad', `${who}: store unavailable, observation not recorded`); return; }
+  const e = epochFor(inst);
+  for (const a of obs) {
+    let r = store.agents[a.pane];
+    if (r && (r.agent !== a.name || (r.last.id.e === e && r.terminal_id !== a.term))) { log('rule', `${a.pane}: new incarnation (agent or terminal changed), record replaced`); r = null; }
+    const rec = r || { pane_id: a.pane, terminal_id: a.term, agent: a.name, last: null, completion: null, acked: null, dismissed: null };
+    const id = { e, s: a.seq };
+    const L = rec.last;
+    if (L && cmp(id, L.id) < 0) { log('warn', `${a.pane}: stale observation ${idStr(id)} < last ${idStr(L.id)} ignored`); continue; }
+    let found = null;
+    if (!L) { if (a.status === 'done') found = { ...id, inferred: false }; }
+    else if (L.id.e < e) {
+      if (a.status === 'done') found = { ...id, inferred: false };
+      if (rec.dismissed && cmp(rec.dismissed, L.id) === 0 && !unseenOf(rec) && (a.status === 'idle' || a.status === 'unknown')) { rec.dismissed = { e: id.e, s: id.s }; log('rule', `${a.pane}: restart is not activity, dismissal carried to ${idStr(id)}`); }
+    } else if (cmp(id, L.id) > 0) {
+      if (L.status === 'done' && a.status === 'idle') {
+        for (const k of ['acked', 'dismissed', 'completion']) if (rec[k] && cmp(rec[k], L.id) === 0) { rec[k] = { ...rec[k], e: id.e, s: id.s }; log('rule', `${a.pane}: seen-flip, ${k} carried ${idStr(L.id)} -> ${idStr(id)}`); }
+      }
+      else if (a.status === 'done') found = { ...id, inferred: false };
+      else if ((L.status === 'working' || L.status === 'blocked') && a.status === 'idle') found = { ...id, inferred: true };
+      else if (L.status === 'idle' && a.status === 'idle') found = { ...id, inferred: true };
+    }
+    if (found && !(rec.acked && cmp(rec.acked, found) >= 0)) {
+      rec.completion = { e: found.e, s: found.s, at: ++clock, inferred: found.inferred };
+      log(found.inferred ? 'rule' : 'ok', `${a.pane}: completion ${idStr(found)}${found.inferred ? ' INFERRED (missed or seen elsewhere)' : ''}`);
+    }
+    rec.last = { id, status: a.status, at: ++clock }; rec.terminal_id = a.term; store.agents[a.pane] = rec;
+  }
+  for (const pane of Object.keys(store.agents)) if (!obs.some(a => a.pane === pane)) { delete store.agents[pane]; log('info', `${pane}: pane absent, record pruned`); }
+}
+
+function storeMutate(kind, pane, target, who = 'client') {
+  if (storeDown) { log('bad', `${kind} ${pane}: store unavailable, nothing saved`); return { ok: false, code: 'store_unavailable' }; }
+  const r = store.agents[pane];
+  if (!r) return { ok: false, code: 'agent_attention_target_changed' };
+  if (kind === 'dismiss') {
+    if (cmp(target, r.last.id) !== 0) { log('warn', `dismiss ${pane}: target ${idStr(target)} != last ${idStr(r.last.id)} refused`); return { ok: false, code: 'agent_attention_target_changed' }; }
+    if (unseenOf(r)) r.acked = { e: r.completion.e, s: r.completion.s };
+    r.dismissed = { e: target.e, s: target.s }; log('ok', `dismiss ${pane} at ${idStr(target)}`);
+  } else if (kind === 'restore') { r.dismissed = null; log('ok', `restore ${pane}`); }
+  else if (kind === 'seen') {
+    r.acked = max(r.acked, { e: target.e, s: target.s }); log('ok', `seen ${pane} through ${idStr(target)}`);
+    if (unseenOf(r)) return { ok: true, newer: true };
+  } else if (kind === 'unseen') { if (!r.completion) return { ok: false, code: 'no_completion' }; r.acked = null; log('ok', `unseen ${pane}`); }
+  return { ok: true };
+}
+
+/* ---------- Cockpit client: join (3.6) and derivation (3.4) ---------- */
+let view = { snapshot: null, ready: false };
+let hist = [], showAll = false, selected = null, notes = {}, undo = null, prevAlert = null, focusKey = null;
+const connected = () => document.getElementById('connected').checked;
+
+function deliver(s, who) {
+  const prev = view.snapshot;
+  if (prev) {
+    const ep = epochNow(s.instance), pp = epochNow(prev.instance);
+    if (ep && pp && ep < pp) { log('warn', `client: snapshot from older instance ${s.instance} ignored`); storeObserve(s.instance, s.agents, who); return; }
+    if (ep === pp) {                                   // spec 3.6 rule 6: per-agent monotonic merge
+      s = { instance: s.instance, agents: s.agents.map(a => { const o = prev.agents.find(x => x.pane === a.pane); return o && o.name === a.name && o.seq > a.seq ? (log('warn', `client: kept newer ${a.pane} seq ${o.seq} over incoming ${a.seq}`), o) : a; }) };
+    }
+  }
+  hist.push(JSON.parse(JSON.stringify(s))); if (hist.length > 6) hist.shift();
+  view.snapshot = s;
+  storeObserve(s.instance, s.agents, who);
+  view.ready = true; render();
+}
+const live = () => { if (connected()) deliver(snap(), 'observe'); else render(); };
+const afterHerdr = () => { if (document.getElementById('auto').checked) live(); else { log('info', 'Herdr changed; not observed yet (coalescing)'); render(); } };
+
+function derive(a) {
+  const r = storeDown ? null : store.agents[a.pane];
+  const match = r && r.agent === a.name;
+  const e = epochNow(view.snapshot.instance);
+  const id = { e, s: a.seq };
+  let unseen = !storeDown && match ? unseenOf(r) : false;
+  let comp = match && r.completion ? r.completion : null;
+  if (!storeDown && !comp && a.status === 'done' && !(match && r.acked && cmp(r.acked, id) >= 0)) { unseen = true; comp = { ...id, provisional: true }; }
+  const eff = a.status === 'done' && !unseen ? 'idle' : a.status;
+  let disp = a.status === 'blocked' ? 'blocked' : a.status === 'working' ? 'working' : unseen ? 'done' : eff;
+  const flag = disp === 'blocked' ? 'blocked' : disp === 'done' && unseen ? 'done' : a.status === 'working' && unseen ? 'unseen' : '';
+  const hidden = !storeDown && match && !!r.dismissed && cmp(r.dismissed, id) === 0 && eff === 'idle' && !unseen;
+  const tier = disp === 'blocked' ? 1 : unseen ? 2 : disp === 'working' ? 3 : disp === 'idle' ? 4 : 5;
+  return { a, id, unseen, comp, disp, flag, hidden, tier };
+}
+const GL = {
+  blocked: '<circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><path d="M9 5v4.75" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/><circle cx="9" cy="12.6" r="1.05" fill="currentColor"/>',
+  done: '<circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><path d="M5.5 9.5l2.6 2.6 4.6-5.7" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
+  working: '<circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".16"/><circle cx="9" cy="9" r="3.75" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M9 5.25a3.75 3.75 0 0 0 0 7.5z" fill="currentColor"/>',
+  idle: '<circle cx="9" cy="9" r="9" fill="currentColor" fill-opacity=".10"/><circle cx="9" cy="9" r="3.25" fill="none" stroke="currentColor" stroke-width="1.5"/>',
+  unknown: '<circle cx="9" cy="9" r="8.25" fill="none" stroke="currentColor" stroke-width="1.5"/>' };
+const WORD = { blocked: 'Blocked', done: 'Done', working: 'Working', idle: 'Idle', unknown: 'Unknown' };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function rowHtml(d) {
+  const a = d.a, cls = `agent-row state-${d.disp}${selected === a.pane ? ' is-selected' : ''}${d.hidden ? ' is-hidden' : ''}`;
+  const name = `${a.space} · ${a.tab}, ${a.name}, ${WORD[d.disp]}${d.unseen ? (a.status === 'working' ? ', earlier result not seen' : ', not seen') : ''}${d.hidden ? ', hidden' : ''}`;
+  const title = d.unseen ? (d.comp.inferred ? 'Finished while Cockpit was not watching. Not marked seen.' : `Finished ${d.comp.at ? '(recorded)' : ''}. Not marked seen.`) + (a.status === 'idle' ? ' Herdr now reports idle.' : '') : '';
+  const canDismiss = d.hidden || (d.disp === 'idle' || d.disp === 'done') ;
+  const flagText = d.hidden ? 'hidden' : d.flag;
+  const sub = selected === a.pane ? `<span class="agent-sub">${WORD[d.disp]} · ${a.name}</span>` : '';
+  return `<div class="rw"><button class="${cls}" data-row-id="${a.pane}" data-act="activate" aria-label="${esc(name)}" title="${esc(title)}" ${selected === a.pane ? 'aria-current="true"' : ''}>
+    <svg class="sb-glyph g-${d.disp}" viewBox="0 0 18 18" aria-hidden="true">${GL[d.disp]}</svg>
+    <span class="agent-details"><span class="agent-line"><span class="agent-location"><span class="agent-space">${esc(a.space)}</span><span class="agent-tab"> · ${esc(a.tab)}</span></span>${flagText ? `<span class="agent-flag ${flagText === 'unseen' ? 'unseen' : ''}">${flagText}</span>` : ''}</span>${sub}</span></button>
+    ${canDismiss ? `<button class="dismiss" tabindex="-1" data-act="${d.hidden ? 'restore' : 'dismiss'}" data-pane="${a.pane}" aria-label="${d.hidden ? 'Restore' : 'Dismiss'} ${esc(a.space)} · ${esc(a.tab)}">${d.hidden ? 'restore' : 'dismiss'}</button>` : ''}</div>${notes[a.pane] ? `<div class="row-note" role="status">${esc(notes[a.pane])}</div>` : ''}`;
+}
+function render() {
+  // Herdr panel
+  document.getElementById('hagents').innerHTML = herdr.agents.map(a => `<div class="hag"><span class="nm">${a.pane} ${a.space}</span><span class="btns">${['working', 'blocked', 'done', 'idle'].map(s => `<button class="b" data-h="${a.pane}:${s}">${s}</button>`).join('')}<button class="b" data-h="${a.pane}:focus">external focus</button></span><span class="st">${a.name} term ${a.term} · now ${a.status} · seq ${a.seq}</span></div>`).join('');
+  document.getElementById('hinfo').textContent = `server_instance ${herdr.instance} · counter ${herdr.counter} · Herdr-focused pane ${herdr.focused || 'none'}`;
+  // Cockpit panel
+  const q = document.getElementById('queue'); const sd = document.getElementById('store'); const lg = document.getElementById('log');
+  if (!view.snapshot || !view.ready) { q.innerHTML = `<div class="heading"><h2>agents</h2></div><div class="empty-row">${connected() ? 'Loading…' : 'Cockpit closed'}</div>`; }
+  else {
+    const ds = view.snapshot.agents.map(derive);
+    const order = (x, y) => x.tier - y.tier || cmp(y.id, x.id) || (x.a.pane < y.a.pane ? -1 : 1);
+    const vis = ds.filter(d => !d.hidden).sort(order), hid = ds.filter(d => d.hidden).sort(order);
+    const stale = !connected() ? ' (stale)' : '';
+    q.innerHTML = `<div class="heading"><h2>agents</h2><span class="count" title="${vis.length} visible, ${hid.length} hidden">${vis.length}</span><div class="switch" role="group" aria-label="Agents view"><button aria-pressed="${!showAll}" data-act="queue">Queue</button><button aria-pressed="${showAll}" data-act="all">All</button></div></div>` +
+      (storeDown ? `<div class="note warn" role="status"><span>Seen and dismissed state is unavailable. Showing every agent.</span><button class="b" data-act="retry">Retry</button></div>` : '') +
+      (undo ? `<div class="note" role="status"><span>Dismissed ${esc(undo.label)}.</span><button class="b" data-act="undo">Undo</button></div>` : '') +
+      (vis.length ? vis.map(rowHtml).join('') : `<p class="empty-row">${ds.length ? 'No visible agents' : 'No agents detected'}</p>`) +
+      (!showAll && hid.length ? `<button class="footer-row" data-row-id="footer" data-act="all">${hid.length} hidden · Show all</button>` : '') +
+      (showAll && hid.length ? `<div class="group"><span>Hidden · ${hid.length}</span><button data-act="restoreAll">Restore all</button></div>` + hid.map(rowHtml).join('') : '') + (stale ? `<p class="empty-row">Last-known rows${stale}; actions blocked</p>` : '');
+    // live announcements (polite): only for rows that newly entered tier 1/2, never on first render
+    const now = new Set(vis.filter(d => d.tier <= 2).map(d => `${d.a.pane}:${d.tier}:${d.comp ? d.comp.e + '.' + d.comp.s : d.id.s}`));
+    if (prevAlert) { const fresh = [...now].filter(k => !prevAlert.has(k)); if (fresh.length) document.getElementById('live').textContent = fresh.length > 2 ? `${fresh.length} agents need attention.` : fresh.map(k => { const d = vis.find(x => `${x.a.pane}:${x.tier}:${x.comp ? x.comp.e + '.' + x.comp.s : x.id.s}` === k); return `${d.a.name} in ${d.a.space} ${d.tier === 1 ? 'is blocked' : 'finished'}.`; }).join(' '); }
+    prevAlert = now;
+    // keyboard focus handoff
+    if (focusKey) { const rows = [...q.querySelectorAll('[data-row-id]')]; const el = rows.find(x => x.dataset.rowId === focusKey.id) || rows[Math.min(focusKey.index, rows.length - 1)]; if (el) el.focus(); focusKey = null; }
+  }
+  sd.textContent = JSON.stringify(store, null, 1);
+  lg.innerHTML = logLines.join(''); lg.scrollTop = lg.scrollHeight;
+}
+
+/* ---------- Cockpit actions ---------- */
+function rowFor(pane) { return view.snapshot && view.snapshot.agents.map(derive).find(d => d.a.pane === pane); }
+function act(kind, pane) {
+  if (!connected()) { log('warn', 'Herdr is not live: action blocked'); return; }
+  const d = rowFor(pane); if (!d) return;
+  notes = {};
+  if (kind === 'activate') {
+    const target = d.unseen ? { e: d.comp.e, s: d.comp.s } : null;
+    log('info', `activate ${pane}: Herdr focus request`);
+    herdr.focused = pane; selected = pane; const a = ha(pane);
+    if (a.status === 'done') { a.status = 'idle'; if (document.getElementById('bump').checked) a.seq = ++herdr.counter; log('info', `Herdr seen-flip: ${pane} done -> idle (seq ${a.seq})`); }
+    deliver(snap(), 'observe');                 // focus ACK arrives in the next frame
+    if (target) { const res = storeMutate('seen', pane, target); if (res.newer) notes[pane] = 'A newer result arrived. It is still not seen.'; }
+  } else if (kind === 'seen') { if (d.unseen) { const res = storeMutate('seen', pane, { e: d.comp.e, s: d.comp.s }); if (res.newer) notes[pane] = 'A newer result arrived. It is still not seen.'; } }
+  else if (kind === 'dismiss') {
+    if (!(d.disp === 'idle' || d.disp === 'done')) { log('warn', 'Blocked, Working and Unknown rows cannot be dismissed'); return; }
+    const res = storeMutate('dismiss', pane, d.id);
+    if (!res.ok) notes[pane] = res.code === 'agent_attention_target_changed' ? `${d.a.name} in ${d.a.space} changed, so it stays in the queue.` : `Not saved. ${d.a.space} · ${d.a.tab} is still in the queue.`;
+    else undo = { pane, label: `${d.a.space} · ${d.a.tab}`, target: d.id };
+  } else if (kind === 'restore') storeMutate('restore', pane);
+  render();
+}
+
+/* ---------- wiring ---------- */
+const $ = id => document.getElementById(id);
+$('herdr').addEventListener('click', ev => {
+  const t = ev.target.closest('[data-h]'); if (!t) return; const [pane, what] = t.dataset.h.split(':'); const a = ha(pane);
+  if (what === 'focus') { herdr.focused = pane; if (a.status === 'done') { a.status = 'idle'; if ($('bump').checked) a.seq = ++herdr.counter; log('info', `external Herdr focus on ${pane}: seen-flip done -> idle (seq ${a.seq})`); } else log('info', `external Herdr focus on ${pane} (no state change)`); }
+  else if (a.status !== what) { a.status = what; a.seq = ++herdr.counter; log('info', `Herdr: ${pane} -> ${what} (seq ${a.seq})`); }
+  afterHerdr();
+});
+$('restart').onclick = () => { herdr.instance = 'srv-' + (parseInt(herdr.instance.split('-')[1]) + 1); herdr.counter = 0; for (const a of herdr.agents) { a.status = a.status === 'working' || a.status === 'blocked' ? 'idle' : a.status === 'done' ? 'done' : a.status; a.seq = ++herdr.counter; } herdr.focused = null; log('info', `Herdr restarted: ${herdr.instance}, seq counter reset; working/blocked agents are idle again, done stays done`); afterHerdr(); };
+$('swap').onclick = () => { const a = ha('p3'); a.name = a.name === 'omp' ? 'helper' : 'omp'; a.term = 't' + (++termN); a.status = 'idle'; a.seq = ++herdr.counter; log('info', `Herdr: pane p3 now hosts ${a.name} (terminal ${a.term})`); afterHerdr(); };
+$('observe').onclick = () => { if (connected()) deliver(snap(), 'observe'); };
+$('stale').onclick = () => { if (hist.length < 2) { log('warn', 'no older snapshot yet'); return; } log('info', 'delivering an older snapshot (e.g. a late mutation response)'); deliver(JSON.parse(JSON.stringify(hist[0])), 'late'); };
+$('second').onclick = () => { storeObserve(herdr.instance, snap().agents, 'second client'); log('info', 'second client posted the current Herdr state; this window has not refreshed'); render(); };
+$('reload').onclick = () => { view = { snapshot: null, ready: false }; hist = []; selected = null; notes = {}; undo = null; prevAlert = null; log('info', 'window reloaded: client memory dropped, store kept'); render(); if (connected()) setTimeout(() => deliver(snap(), 'observe'), 50); };
+$('connected').onchange = () => { if (connected()) { log('info', 'Cockpit reconnected: next live snapshot is diffed against stored last'); deliver(snap(), 'observe'); } else { log('info', 'Cockpit disconnected: nothing is observed or written'); render(); } };
+$('unavail').onchange = () => { storeDown = $('unavail').checked; log(storeDown ? 'bad' : 'ok', storeDown ? 'store unavailable: fail visible' : 'store restored'); render(); };
+$('forget').onclick = () => { if (!connected() || storeDown) return; if (confirm('Forget seen and dismissed state for this session?\nEvery agent reappears. Completions Herdr still reports as done will be not seen again.')) { store.agents = {}; log('ok', 'forget_all'); deliver(snap(), 'observe'); } };
+$('queue').addEventListener('click', ev => {
+  const t = ev.target.closest('[data-act]'); if (!t) return; const act0 = t.dataset.act;
+  if (act0 === 'queue' || act0 === 'all') { showAll = act0 === 'all'; render(); return; }
+  if (act0 === 'retry') { $('unavail').checked = false; storeDown = false; log('ok', 'retry succeeded'); deliver(snap(), 'observe'); return; }
+  if (act0 === 'undo') { if (undo) { storeMutate('restore', undo.pane); undo = null; render(); } return; }
+  if (act0 === 'restoreAll') { for (const d of view.snapshot.agents.map(derive).filter(x => x.hidden)) storeMutate('restore', d.a.pane); log('ok', 'restore_all'); render(); return; }
+  const pane = t.dataset.pane || t.dataset.rowId; focusKey = null; act(act0, pane);
+});
+$('queue').addEventListener('keydown', ev => {
+  const row = ev.target.closest('[data-row-id]'); if (!row || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const rows = [...$('queue').querySelectorAll('[data-row-id]')], i = rows.indexOf(row), pane = row.dataset.rowId;
+  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key)) { ev.preventDefault(); rows[ev.key === 'Home' ? 0 : ev.key === 'End' ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, i + (ev.key === 'ArrowDown' ? 1 : -1)))].focus(); }
+  else if (ev.key === 'Enter' && ev.shiftKey && pane !== 'footer') { ev.preventDefault(); focusKey = { id: pane, index: i }; act('seen', pane); }
+  else if ((ev.key === 'Delete' || ev.key === 'Backspace') && pane !== 'footer') { ev.preventDefault(); const d = rowFor(pane); focusKey = { id: pane, index: i }; act(d && d.hidden ? 'restore' : 'dismiss', pane); }
+});
+log('info', 'Cockpit opened: first observation');
+deliver(snap(), 'observe');
+</script>
+</body>
+</html>

@@ -3,6 +3,7 @@ import type { SessionSummary } from "../../protocol/generated/v1";
 import type { SessionState } from "../session/sessionStore";
 import { registerSidebarFocus } from "../input/shortcuts";
 import { Agents } from "./Agents";
+import { deriveAgentQueue } from "./agentAttentionModel";
 import { SidebarHeader } from "./SidebarHeader";
 import { Spaces } from "./Spaces";
 
@@ -28,7 +29,7 @@ export function Sidebar({ session, sync, narrow, onSession, onClose, closeRef, s
   const sectionsRef = useRef<HTMLDivElement>(null);
   const fittedRows = useFittedSectionRows(sectionsRef);
   const spaceCount = spaces.spaces.length;
-  const agentCount = agents.agents.length;
+  const agentCount = agents.snapshot ? deriveAgentQueue(agents.snapshot, agents.attention.response, agents.attention.availability).visible.length : 0;
   const total = spaceCount + agentCount;
   const sectionRows = fittedRows ?? (total === 0
     ? "minmax(0, 1fr) minmax(0, 1fr)"

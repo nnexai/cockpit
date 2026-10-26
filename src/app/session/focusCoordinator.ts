@@ -55,7 +55,7 @@ export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, de
   const [focusDelayed, setFocusDelayed] = useState(false);
 
   const supersedeSelection = useCallback(() => {
-    tokenRef.current += 1;
+    tokenRef.current = stateRef.current.focusToken + 1;
     intentRef.current = null;
     queuedIntentRef.current = null;
     prepareGateRef.current?.cancel();
@@ -97,6 +97,7 @@ export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, de
         dispatch({ type: "focus/error", epoch: intent.epoch, sessionId: intent.sessionId, token: intent.token, code: "focus_rejected", message: "Herdr did not accept this focus request" });
         return;
       }
+      dispatch({ type: "focus/accepted", epoch: intent.epoch, sessionId: intent.sessionId, token: intent.token });
       if (!stateRef.current.focusPending) return;
       fallbackCancelRef.current = scheduleFocusFallback(
         () => isCurrent(intent) && stateRef.current.focusPending !== null,
@@ -137,7 +138,7 @@ export function useFocusCoordinator({ client, stateRef, mountedRef, dispatch, de
       return;
     }
     const epoch = current.epoch;
-    const token = tokenRef.current + 1;
+    const token = current.focusToken + 1;
     tokenRef.current = token;
     fallbackCancelRef.current?.();
     fallbackCancelRef.current = null;

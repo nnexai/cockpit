@@ -89,6 +89,26 @@ macro_rules! cockpit_operations {
                   limit = $crate::transport::limits::MUTATION_BYTES; origin = method;
                   guard = none; status = service
             }
+            { id: agent_attention, ctx: service, out: ::cockpit_protocol::v1::AgentAttentionResponse,
+              call: $crate::transport::operations::session::agent_attention,
+              native: cockpit_agent_attention(session_id: ::std::string::String)
+                  => $crate::transport::native_input::typed(),
+              http: get "/api/v1/sessions/{session_id}/agent-attention"
+                  (path: ::axum::extract::Path<::std::string::String>)
+                  => $crate::transport::http_input::session($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"));
+                  limit = none; origin = none;
+                  guard = none; status = service
+            }
+            { id: agent_attention_change, ctx: service, out: ::cockpit_protocol::v1::AgentAttentionResponse,
+              call: $crate::transport::operations::session::agent_attention_change,
+              native: cockpit_agent_attention_change(session_id: ::std::string::String, request: ::cockpit_protocol::v1::AgentAttentionChangeRequest)
+                  => $crate::transport::native_input::typed2(),
+              http: post "/api/v1/sessions/{session_id}/agent-attention"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::v1::AgentAttentionChangeRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::session_sized_body($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"), $crate::transport::http_input::Reject("invalid_agent_attention_change", "Expected a bounded JSON agent attention change with valid fields"));
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = method;
+                  guard = none; status = service
+            }
             { id: space_git_action, ctx: service, out: ::cockpit_protocol::v1::SpaceGitActionResponse,
               call: $crate::transport::operations::session::space_git_action,
               native: cockpit_space_git_action(session_id: ::std::string::String, request: ::cockpit_protocol::v1::SpaceGitActionRequest)

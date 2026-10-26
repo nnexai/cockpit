@@ -43,6 +43,35 @@ function ready(sessionId: string) {
 }
 
 describe("sessionReducer", () => {
+  it("records focus acceptance only for the current token and session", () => {
+    let state = ready("one");
+    state = sessionReducer(state, { type: "focus/request", epoch: state.epoch, sessionId: "one", request: { kind: "agent", target_id: "pane-1" }, token: 4 });
+    const late = sessionReducer(state, { type: "focus/accepted", epoch: state.epoch, sessionId: "one", token: 3 });
+    expect(late.focusAcceptedToken).toBeNull();
+    state = sessionReducer(state, { type: "focus/accepted", epoch: state.epoch, sessionId: "one", token: 4 });
+    expect(state.focusAcceptedToken).toBe(4);
+    state = sessionReducer(state, { type: "focus/error", epoch: state.epoch, sessionId: "one", token: 4, code: "rejected", message: "Rejected" });
+    expect(state.focusAcceptedToken).toBeNull();
+    expect(sessionReducer(state, { type: "focus/accepted", epoch: state.epoch, sessionId: "one", token: 4 }).focusAcceptedToken).toBeNull();
+  });
+
+  it("keeps newer agent observations across unordered snapshots but not reused identities", () => {
+    const newer = snapshot("one");
+    newer.agents = [{ pane_id: "pane-1", space_id: "space-1", tab_id: "tab-1", name: "omp", status: "done", title: null, focused: false, state_change_seq: 8 }];
+    let state = ready("one");
+    state = sessionReducer(state, { type: "stream/message", epoch: state.epoch, sessionId: "one", message: stream("one", 1, 2, newer) });
+    const older = { ...newer, agents: [{ ...newer.agents[0], status: "working", state_change_seq: 7 }] };
+    state = sessionReducer(state, { type: "snapshot/authoritative", epoch: state.epoch, sessionId: "one", snapshot: older });
+    expect(state.snapshot?.agents[0].status).toBe("done");
+    const reused = { ...older, panes: older.panes.map((pane) => ({ ...pane, terminal_id: "new-terminal" })) };
+    state = sessionReducer(state, { type: "snapshot/authoritative", epoch: state.epoch, sessionId: "one", snapshot: reused });
+    expect(state.snapshot?.agents[0].status).toBe("working");
+    state = sessionReducer(state, { type: "snapshot/authoritative", epoch: state.epoch, sessionId: "one", snapshot: newer });
+    const restarted = { ...older, server_instance: "server-2" };
+    state = sessionReducer(state, { type: "stream/message", epoch: state.epoch, sessionId: "one", message: stream("one", 1, 3, restarted) });
+    expect(state.snapshot?.agents[0].status).toBe("working");
+  });
+
   it("switches transactionally and rejects a late prior epoch", () => {
     const first = ready("one");
     const second = sessionReducer(first, { type: "switch", sessionId: "two" });

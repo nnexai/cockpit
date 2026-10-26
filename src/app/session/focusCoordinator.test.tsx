@@ -36,6 +36,7 @@ function liveState(sessionId = "session-1", epoch = 1): SessionState {
     syncError: null,
     focusPending: null,
     focusToken: 0,
+    focusAcceptedToken: null,
     focusError: null,
     attachments: {},
   };

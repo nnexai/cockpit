@@ -2,6 +2,7 @@ use cockpit_core::CockpitService;
 use cockpit_protocol::{
     quota::{QuotaStatusRequest, QuotaStatusResponse},
     v1::{
+        AgentAttentionChangeRequest, AgentAttentionResponse,
         FocusRequest, FocusResponse, ResourceMutationRequest, ResourceMutationResponse,
         SessionListResponse, SessionSnapshotResponse, SpaceGitActionRequest,
         SpaceGitActionResponse, SpaceGitStatusResponse, StatusResponse,
@@ -108,6 +109,22 @@ pub async fn space_tag_change(
     (session_id, request): (String, SpaceTagChangeRequest),
 ) -> Result<SpaceTagsResponse, OperationError> {
     service.space_tags()?.change(&session_id, &request).await.map_err(Into::into)
+}
+
+pub async fn agent_attention(
+    service: &CockpitService,
+    _transport: Transport,
+    session_id: String,
+) -> Result<AgentAttentionResponse, OperationError> {
+    service.agent_attention()?.list(&session_id).await.map_err(Into::into)
+}
+
+pub async fn agent_attention_change(
+    service: &CockpitService,
+    _transport: Transport,
+    (session_id, request): (String, AgentAttentionChangeRequest),
+) -> Result<AgentAttentionResponse, OperationError> {
+    service.agent_attention()?.change(&session_id, &request).await.map_err(Into::into)
 }
 
 pub async fn space_git_action(
