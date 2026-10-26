@@ -35,6 +35,7 @@ mod extensions;
 mod operations;
 mod projects;
 mod orchestration;
+mod quick_ask;
 mod transport;
 mod shell;
 
@@ -693,6 +694,10 @@ impl HerdrCliAdapter {
 
     /// Construct the capability-gated acknowledged raw-paste adapter.
     pub fn paste_adapter(&self) -> Arc<dyn cockpit_core::CommentPasteAdapter> {
+        Arc::new(self.clone())
+    }
+
+    pub fn quick_ask_adapter(&self) -> Arc<dyn cockpit_core::quick_ask::herdr::QuickAskHerdr> {
         Arc::new(self.clone())
     }
 

@@ -70,6 +70,8 @@ The sidebar defaults to Repository hierarchy and can switch to flat Tags groups;
 
 Every painted active-tab terminal is a direct control attachment rendered by xterm.js. Rendering and input permission remain separate. Herdr owns screen state, scrollback and PTY lifetime; resynchronization supplies a fresh baseline. Keyboard routing combines Cockpit's static prefix registry with identity-checked server-advertised commands. The singleton server popup floats above, rather than reshaping, the split tree.
 
+**Ask an agent…** starts an agent in a dedicated tab in the selected Space without registering supervisor work; Copilot CLI and OpenCode receive the question in startup arguments, while the other agents require an explicit send after inspection. Uncertain outcomes require checking the tab rather than retrying blindly.
+
 Files and Review are tab-local viewers opened from a real same-tab source terminal. Their core-issued binding pins the requested root and source identity; subsequent source cwd or lifetime changes do not retarget it. Files renders bounded source, Markdown/Mermaid and safe raster media with original line mapping. Review is a read-only local Git model. Run-local comments retain real paths and side-aware anchors for explicit same-tab paste without submission.
 
 Browser is one independent managed Chromium association per Herdr tab, not a Space sidecar. Hidden views release capture resources. Fresh opening, explicit closure, retirement and owner shutdown manage its disposable profile and association work through identity-proven cleanup. Current-run failures remain visible and retryable; this is not retained navigation, credentials or saved-work recovery.

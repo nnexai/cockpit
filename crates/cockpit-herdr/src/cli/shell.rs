@@ -27,7 +27,7 @@ fn unavailable(error: &InspectionError, previous: Option<&HerdrShellState>) -> H
     state
 }
 
-fn server_instance(identity: &str) -> String {
+pub(super) fn server_instance(identity: &str) -> String {
     format!(
         "{:016x}",
         u64::from_be_bytes(

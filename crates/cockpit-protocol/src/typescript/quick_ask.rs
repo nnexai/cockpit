@@ -1,0 +1,17 @@
+section!(
+    QUICK_ASK,
+    quick_ask,
+    [
+        QuickAskHarness,
+        QuickAskStartRequest,
+        QuickAskAction,
+        QuickAskActionRequest,
+        QuickAskPhase,
+        QuickAskDelivery,
+        QuickAskLocation,
+        QuickAskFailure,
+        QuickAskStatus,
+        QuickAskAgentAvailability,
+        QuickAskAvailability,
+    ]
+);

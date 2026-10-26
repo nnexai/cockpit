@@ -37,6 +37,7 @@ export interface WorkbenchUI {
   recoveryOpen: boolean; setRecoveryOpen: Dispatch<SetStateAction<boolean>>;
   teardownSpaceId: string | null; setTeardownSpaceId: Dispatch<SetStateAction<string | null>>;
   libraryAddOpen: boolean; setLibraryAddOpen: Dispatch<SetStateAction<boolean>>;
+  askOpen: boolean; setAskOpen: Dispatch<SetStateAction<boolean>>;
   prefixActive: boolean; setPrefixActive: Dispatch<SetStateAction<boolean>>;
   armedPrefix: { origin: "cockpit" | "herdr"; label: string }; setArmedPrefix: Dispatch<SetStateAction<{ origin: "cockpit" | "herdr"; label: string }>>;
   prefixHint: string | null; setPrefixHint: Dispatch<SetStateAction<string | null>>;
@@ -88,6 +89,7 @@ export function useWorkbenchUI({ state, client, tabLayout, onOpenSession, mutati
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [teardownSpaceId, setTeardownSpaceId] = useState<string | null>(null);
   const [libraryAddOpen, setLibraryAddOpen] = useState(false);
+  const [askOpen, setAskOpen] = useState(false);
   const [prefixActive, setPrefixActive] = useState(false);
   const [armedPrefix, setArmedPrefix] = useState<{ origin: "cockpit" | "herdr"; label: string }>({ origin: "cockpit", label: "Ctrl+B" });
   const [prefixHint, setPrefixHint] = useState<string | null>(null);
@@ -111,5 +113,5 @@ export function useWorkbenchUI({ state, client, tabLayout, onOpenSession, mutati
     setSessionChooserOpen(true);
     onOpenSession();
   }, [onOpenSession]);
-  return { customBindings, customPrefixes, popupPending, setPopupPending, commandNotice, setCommandNotice, lifecycleError, setLifecycleError, paintedTab, setPaintedTab, switching, canvasTabs, attachedPaneIds, registerStream, menu, setMenu, editing, setEditing, dialog, setDialog, commandsOpen, setCommandsOpen, switcherOpen, setSwitcherOpen, switchTarget, setSwitchTarget, limitsOpen, setLimitsOpen, limits, commandsOpener, sessionChooserOpen, setSessionChooserOpen, setupOpen, setSetupOpen, recoveryOpen, setRecoveryOpen, teardownSpaceId, setTeardownSpaceId, libraryAddOpen, setLibraryAddOpen, prefixActive, setPrefixActive, armedPrefix, setArmedPrefix, prefixHint, setPrefixHint, openSessionChooser };
+  return { customBindings, customPrefixes, popupPending, setPopupPending, commandNotice, setCommandNotice, lifecycleError, setLifecycleError, paintedTab, setPaintedTab, switching, canvasTabs, attachedPaneIds, registerStream, menu, setMenu, editing, setEditing, dialog, setDialog, commandsOpen, setCommandsOpen, switcherOpen, setSwitcherOpen, switchTarget, setSwitchTarget, limitsOpen, setLimitsOpen, limits, commandsOpener, sessionChooserOpen, setSessionChooserOpen, setupOpen, setSetupOpen, recoveryOpen, setRecoveryOpen, teardownSpaceId, setTeardownSpaceId, libraryAddOpen, setLibraryAddOpen, askOpen, setAskOpen, prefixActive, setPrefixActive, armedPrefix, setArmedPrefix, prefixHint, setPrefixHint, openSessionChooser };
 }

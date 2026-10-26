@@ -6,6 +6,7 @@ pub mod library;
 pub mod notes;
 pub mod orchestration;
 pub mod projects;
+pub mod quick_ask;
 pub mod review;
 pub mod session;
 pub mod viewer;

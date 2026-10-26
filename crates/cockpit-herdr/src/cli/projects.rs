@@ -57,7 +57,7 @@ fn ensure_endpoint_identity(identity: &str) -> Result<(), InspectionError> {
 }
 
 impl HerdrCliAdapter {
-    async fn project_methods(&self, session_id: &str) -> Result<BTreeSet<String>, InspectionError> {
+    pub(super) async fn project_methods(&self, session_id: &str) -> Result<BTreeSet<String>, InspectionError> {
         ensure_compatible(self.inspect_session(session_id).await?)?;
         let schema = self
             .run_json_for(Some(session_id), &["api", "schema", "--json"])

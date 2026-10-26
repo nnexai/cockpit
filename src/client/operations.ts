@@ -48,6 +48,7 @@ import {
   parseProviderCredentialStatus, parseProviderCredentialStatusList,
 } from "./credentialProtocol";
 import { parseQuotaStatusResponse } from "./quotaProtocol";
+import { matchQuickAskStatus, parseQuickAskActionRequest, parseQuickAskAvailability, parseQuickAskStartRequest, parseQuickAskStatus } from "./quickAskProtocol";
 import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList, parseWorkspaceDefaults, 
   parseWorkspaceDefaultsRequest, parseWorkspaceOperation, parseWorkspaceOperationRequest, 
@@ -896,6 +897,55 @@ const operations: OperationTable = {
         tauri: { command: "cockpit_quota_status", args: () => ({ request: { agents_working: quotaRequest.agents_working } }) },
         parse: parseQuotaStatusResponse,
         matchIdentity: (response) => { signal?.throwIfAborted(); return response; },
+      };
+    },
+  },
+  quickAskAvailability: { direct: "both",
+    encode(_backend) {
+      return {
+        operation: "quick ask availability",
+        http: { method: "GET", route: () => "/api/v1/quick-ask/availability" },
+        tauri: { command: "cockpit_quick_ask_availability", args: () => undefined },
+        parse: parseQuickAskAvailability,
+      };
+    },
+  },
+  quickAskStart: { direct: "both",
+    encode(_backend, sessionId, request) {
+      validateSessionId(sessionId);
+      const body = parseQuickAskStartRequest(request);
+      return {
+        operation: "quick ask start",
+        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(sessionId)}/quick-ask`, json: () => body },
+        tauri: { command: "cockpit_quick_ask_start", args: () => ({ sessionId, request: body }) },
+        parse: parseQuickAskStatus,
+        matchIdentity: response => matchQuickAskStatus(response, sessionId, body.request_id),
+      };
+    },
+  },
+  quickAskStatus: { direct: "both",
+    encode(_backend, sessionId, requestId) {
+      validateSessionId(sessionId);
+      validateResourceId(requestId);
+      return {
+        operation: "quick ask status",
+        http: { method: "GET", route: () => `/api/v1/sessions/${encodeURIComponent(sessionId)}/quick-ask/${encodeURIComponent(requestId)}` },
+        tauri: { command: "cockpit_quick_ask_status", args: () => ({ sessionId, requestId }) },
+        parse: parseQuickAskStatus,
+        matchIdentity: response => matchQuickAskStatus(response, sessionId, requestId),
+      };
+    },
+  },
+  quickAskAction: { direct: "both",
+    encode(_backend, sessionId, request) {
+      validateSessionId(sessionId);
+      const body = parseQuickAskActionRequest(request);
+      return {
+        operation: "quick ask action",
+        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(sessionId)}/quick-ask/actions`, json: () => body },
+        tauri: { command: "cockpit_quick_ask_action", args: () => ({ sessionId, request: body }) },
+        parse: parseQuickAskStatus,
+        matchIdentity: response => matchQuickAskStatus(response, sessionId, body.request_id),
       };
     },
   },

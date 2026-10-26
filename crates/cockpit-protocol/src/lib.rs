@@ -16,6 +16,7 @@ pub mod project_teardown;
 pub mod projects;
 pub mod orchestration;
 pub mod quota;
+pub mod quick_ask;
 pub mod review;
 pub mod sources;
 pub mod typescript;
