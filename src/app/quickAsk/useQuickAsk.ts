@@ -35,7 +35,9 @@ export interface QuickAskState {
   switchToTab: boolean;
   setSwitchToTab: (value: boolean) => void;
   unknownAcknowledged: boolean;
-  inspected: boolean;
+  promptConfirmed: boolean;
+  promptConfirmationAvailable: boolean;
+  setPromptConfirmed: (value: boolean) => void;
   directLaunch: boolean;
   manualPaste: boolean;
   busy: boolean;
@@ -59,7 +61,8 @@ export function useQuickAsk(options: UseQuickAskOptions): QuickAskState {
   const [error, setError] = useState<string | null>(null);
   const [switchToTab, setSwitchToTab] = useState(true);
   const [unknownAcknowledged, setUnknownAcknowledged] = useState(false);
-  const [inspected, setInspected] = useState(false);
+  const [promptConfirmed, setPromptConfirmedState] = useState(false);
+  const promptConfirmedRef = useRef(false);
   const [busy, setBusy] = useState(false);
   const destination = useRef<Destination | null>(null);
   const operation = useRef<{ sessionId: string; requestId: string } | null>(null);
@@ -100,19 +103,32 @@ export function useQuickAsk(options: UseQuickAskOptions): QuickAskState {
     }
   }, [open, client]);
 
+  const setPromptConfirmed = useCallback((value: boolean) => {
+    const confirmed = value && open && live && statusRef.current?.phase === "ready_to_send" && !uncertain.current && !requestMultiline.current;
+    promptConfirmedRef.current = confirmed;
+    setPromptConfirmedState(confirmed);
+  }, [open, live]);
+
+  useEffect(() => {
+    if (!open || !live) setPromptConfirmed(false);
+  }, [open, live, setPromptConfirmed]);
+
   const applyStatus = useCallback((next: QuickAskStatus) => {
     const current = operation.current;
     if (!current || current.sessionId !== next.session_id || current.requestId !== next.request_id) return;
     if (uncertainSend.current && next.phase === "ready_to_send") return;
     if (statusRef.current && next.updated_at_ms < statusRef.current.updated_at_ms) return;
+    if (JSON.stringify(statusRef.current) !== JSON.stringify(next)) {
+      setPromptConfirmed(false);
+    }
     uncertain.current = false;
     statusRef.current = next;
     setStatus(next);
     setError(null);
-    if (next.phase === "submitted") setQuestion("");
-  }, []);
+  }, [setPromptConfirmed]);
 
   const markUnknown = useCallback((message: string) => {
+    setPromptConfirmed(false);
     uncertain.current = true;
     setError(message);
     const current = statusRef.current;
@@ -121,7 +137,7 @@ export function useQuickAsk(options: UseQuickAskOptions): QuickAskState {
       statusRef.current = unknown;
       setStatus(unknown);
     }
-  }, []);
+  }, [setPromptConfirmed]);
 
   useEffect(() => {
     const current = operation.current;
@@ -175,7 +191,7 @@ export function useQuickAsk(options: UseQuickAskOptions): QuickAskState {
     uncertain.current = false;
     switched.current = null;
     setStatus(pending);
-    setInspected(false);
+    setPromptConfirmed(false);
     setUnknownAcknowledged(false);
     setError(null);
     actionBusy.current = true;
@@ -183,12 +199,13 @@ export function useQuickAsk(options: UseQuickAskOptions): QuickAskState {
     void client.quickAskStart(target.sessionId, { request_id: requestId, server_instance: target.serverInstance, space_id: target.spaceId, cwd, harness, prompt: question })
       .then(applyStatus, () => markUnknown("Cannot confirm the request's outcome. Check the tab before asking again; it may have been sent."))
       .finally(() => { actionBusy.current = false; setBusy(false); });
-  }, [client, cwd, harness, question, validation, applyStatus, markUnknown]);
+  }, [client, cwd, harness, question, validation, applyStatus, markUnknown, setPromptConfirmed]);
 
   const action = useCallback((kind: "cancel" | "send") => {
     const current = operation.current;
     const previous = statusRef.current;
-    if (!current || !previous || actionBusy.current || uncertain.current || (kind === "send" ? previous.phase !== "ready_to_send" || !inspected || requestMultiline.current : !previous.cancellable)) return;
+    if (!current || !previous || actionBusy.current || uncertain.current || (kind === "send" ? !open || !live || previous.phase !== "ready_to_send" || !promptConfirmedRef.current || requestMultiline.current : !previous.cancellable)) return;
+    setPromptConfirmed(false);
     actionBusy.current = true;
     actionInFlight.current = true;
     setBusy(true);
@@ -198,16 +215,16 @@ export function useQuickAsk(options: UseQuickAskOptions): QuickAskState {
         markUnknown("Cannot confirm the request's outcome. Check the tab before asking again; it may have been sent.");
       })
       .finally(() => { actionInFlight.current = false; actionBusy.current = false; setBusy(false); });
-  }, [client, inspected, applyStatus, markUnknown]);
+  }, [client, open, live, applyStatus, markUnknown, setPromptConfirmed]);
 
   const openTab = useCallback(() => {
     if (statusRef.current?.location) {
       if (statusRef.current.phase === "outcome_unknown") setUnknownAcknowledged(true);
-      if (statusRef.current.phase === "waiting_for_agent" || statusRef.current.phase === "ready_to_send") setInspected(true);
+      setPromptConfirmed(false);
       setOpen(false);
       onOpenTab(statusRef.current.location);
     }
-  }, [onOpenTab, setOpen]);
+  }, [onOpenTab, setOpen, setPromptConfirmed]);
   const copyQuestion = useCallback(() => {
     void navigator.clipboard.writeText(question).then(() => {
       if (statusRef.current?.phase === "outcome_unknown") setUnknownAcknowledged(true);
@@ -234,11 +251,11 @@ export function useQuickAsk(options: UseQuickAskOptions): QuickAskState {
     setStatus(null);
     setQuestion("");
     setError(null);
-    setInspected(false);
+    setPromptConfirmed(false);
     setUnknownAcknowledged(false);
-  }, [sessionId, serverInstance, spaceId, initialCwd]);
+  }, [sessionId, serverInstance, spaceId, initialCwd, setPromptConfirmed]);
 
   const directLaunch = harness === "copilot" || harness === "opencode" || (/[ \n]/u.test(question) && question[0] !== "@" && question[0] !== "-");
   const manualPaste = status?.phase === "ready_to_send" && requestMultiline.current;
-  return { open, setOpen, harness, setHarness, question, setQuestion, cwd, setCwd, availability, status, error, validation, switchToTab, setSwitchToTab, unknownAcknowledged, inspected, directLaunch, manualPaste, busy, start, cancel: () => action("cancel"), send: () => action("send"), openTab, copyQuestion, dismissUnknown, newQuestion };
+  return { open, setOpen, harness, setHarness, question, setQuestion, cwd, setCwd, availability, status, error, validation, switchToTab, setSwitchToTab, unknownAcknowledged, promptConfirmed, promptConfirmationAvailable: open && live, setPromptConfirmed, directLaunch, manualPaste, busy, start, cancel: () => action("cancel"), send: () => action("send"), openTab, copyQuestion, dismissUnknown, newQuestion };
 }

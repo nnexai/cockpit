@@ -39,6 +39,8 @@ Source-grounded observations, not runtime claims:
 
 Root decision is the authority for the new delivery strategy. Per-harness startup capabilities and consumption are **not established by this source review**. Do not fill an agent capability table with guesses. `PLAN.md`’s old automatic-readiness-send phases/claims must not be used to contradict the root decision.
 
+**Focused recovery correction (2026-10-27):** the rules below supersede earlier clear-on-success and navigation-as-inspection assumptions. Inspected implementation snapshots: `src/app/quickAsk/QuickAskDialog.tsx:83,125-144` already provide retained read-only Question, local status, Open tab and New question, but Send still depends on `inspected`; `src/app/quickAsk/useQuickAsk.ts:105-123,199-222,238-251` introduces separate confirmation and explicit clearing. These are source observations during concurrent implementation, not claims that integration is complete.
+
 ## Flow
 
 ### 1. Compose
@@ -61,11 +63,25 @@ Ctrl/Cmd+Enter or **Start OMP** commits one request identity. Dedicated new pane
 
 ### 3. Inspect / explicit send
 
-Path B: Open agent is an explicit navigation action. User inspects and completes startup prompts, then reopens composer from chip. Text remains visible. Confirmation: **I checked that the agent is at its normal input prompt, with no draft text.** Primary **Send question**, enabled only after confirmation and fresh target validation.
+Path B, single-line only: **Open tab** is navigation, not confirmation. User inspects the real terminal, completes startup prompts, checks its normal question input is visible and empty, then reopens the composer. Exact question remains visible and read-only. Native checkbox: **I checked that the agent’s normal question input is visible and empty.** It starts unchecked for every request. Only checking it can authorize **Send question**; click Send explicitly, then run the fresh identity gate. Do not require an additional “inspection complete” dialog or treat an Open tab click as evidence of inspection.
 
 Main confirmed the explicit-send primitive: user verifies the prompt, then **one `agent.prompt` with the identity gate**. Copy question and Open agent remain the manual path. No atomic draft-check claim, raw-keystroke fallback or assertion that manual paste happened.
 
 After explicit send acknowledgment: **Question submitted to the terminal.** No model-processing or answer-consumption claim. Unknown send: stop permanently for this request, preserve prompt/pane, manual recovery only.
+
+#### Minimal recovery state contract
+
+| State/event | Required UI and effect |
+| --- | --- |
+| Single-line fallback awaiting user | Local status: “Your question has not been sent. Open the tab, finish any startup prompts, and check that the normal question input is visible and empty.” Keep Question read-only. Show Open tab, unchecked confirmation, Close/Don’t send as already supported, and disabled Send question. Helper: “Check the agent’s input, then confirm above to enable Send question.” |
+| User checks confirmation | Enable Send only for this request’s unchanged captured question, target and eligible phase, while no action is pending and connection/identity are valid. Checking alone does not send. Unchecking disables Send immediately. |
+| Open tab, close/hide composer, request replacement/New question, question/agent/folder/destination change, observed target or eligibility change, stale/disconnected observation, unknown outcome | Clear confirmation immediately; return to unchecked if recovery is still eligible. Reopening/reconnecting never restores consent. Keep the question. Open tab always clears consent before navigating, including when used a second time after confirming. |
+| Repeated unchanged status read | Never grants confirmation. Preserve an existing check only while the same request/target/eligible state is demonstrably unchanged; conservatively invalidating on a newer operation status is acceptable. Do not infer anything about unobservable terminal drafts from polling. |
+| User activates Send | Consume confirmation and synchronously disable repeat activation before dispatch; at most one effect. No delayed send after reconnect, no automatic recheck after refusal. Target refusal remains not-sent/manual recovery; unknown dispatch has no Send or retry. |
+| Multiline fallback | Copy-only: Open tab and Copy question; **omit confirmation and Send**, rather than showing an impossible disabled Send. Copy success is not paste/submission or inspection. Clipboard failure: local “Could not copy the question. Select and copy it from Question.” Preserve selectable text. |
+| Submitted / initial question supplied | Keep exact Question visible, read-only and selectable; show the truthful receipt plus “Your question is kept here. New question clears it.” Open tab, Close and New question. No confirmation or active Send/Ask. Closing, auto-switching tabs and reopening keep text and receipt. Only explicit New question clears it and focuses the now-empty Question; it never starts another agent. |
+
+There is no undo for terminal submission. Keeping the draft is not permission to replay it. New question intentionally clears this one in-memory draft; no confirmation modal or new undo system is needed for this focused correction. A full application restart remains outside draft-retention scope.
 
 ```mermaid
 flowchart TD
@@ -128,8 +144,8 @@ Unknown creation is not equivalent to “question not sent” on Path A. A match
 | More | Switch to new tab after initial stage, default on; “Runs with the agent’s normal permissions.” Delivery summary describes startup input or explicit confirmation; no generic “auto sends once ready”. |
 | Path A success | Status “Started with initial question supplied.” Detail “The process has the question. Cockpit has not confirmed that the agent processed it.” Open agent / Close. Do not call this Answered or Consumed. |
 | Path B started | Status “Started OMP. Your question has not been sent.” Open agent primary; Copy question; Close. No ready→auto-send transition. |
-| Explicit confirmation | Exact text visible; checkbox “I checked that the agent is at its normal input prompt, with no draft text.” Copy question, Don’t send, Send question. Changing target/text or losing identity invalidates confirmation; no auto-reconfirm on refresh. |
-| Explicit submit acknowledged | “Question submitted to the terminal.” Detail “Cockpit has not confirmed that the agent processed it.” Open agent / Close. |
+| Explicit confirmation | Single-line fallback only. Exact question visible; native checkbox “I checked that the agent’s normal question input is visible and empty.” Open tab never checks it. Helper explains disabled Send. Apply the recovery invalidation table above. |
+| Explicit submit acknowledged | “Question submitted to the terminal.” Detail “Cockpit has not confirmed that the agent processed it. Your question is kept here. New question clears it.” Read-only retained Question; Open tab / Close / New question. |
 | Unknown | “Cockpit couldn’t confirm the outcome. Open the agent before asking again; repeating this request could duplicate your question.” Open agent / Copy question / gated Dismiss. |
 | Tab/chip | `Ask · <Agent> · <tag>` without question excerpt. Hidden-operation chip: Starting…, Started — question supplied, Question not sent — open agent, Confirm before sending, Submission unconfirmed. Click reopens state; never reopens or steals focus by itself. |
 
@@ -156,7 +172,9 @@ Startup argv can expose the prompt in process metadata. If selected, disclose in
 
 Entry: Commands primary Navigate action **Ask an agent…** and registry-driven `Ctrl+B t`. Optional tab-strip launcher uses existing comment icon (`UiIcon.tsx:27`), but Commands/prefix first avoids extra chrome. One active composer per window; reopening resumes it rather than launching another.
 
-Initial focus Question. DOM order: Close → agent group → Question → Change → More → confirmation checkbox when applicable → secondary actions → primary. Tab/Shift+Tab trapped; radio arrows native. Enter/Shift+Enter in Question insert newline; Ctrl/Cmd+Enter starts only from Editing, and explicitly sends only when the confirmation has been checked. Repeated keydown/double-click guarded in state before network work. During IME composition Enter/Esc/submit cannot activate anything.
+Initial focus Question. DOM order: Close → agent group → Question/helper → confirmation checkbox when applicable → folder/More → secondary actions → primary. Tab/Shift+Tab trapped; radio arrows native. Enter/Shift+Enter in Question insert newline. Preserve the existing shortcut contract: Ctrl/Cmd+Enter starts only in Editing (`QuickAskDialog.tsx:98-101`), **not** recovery Send. Tab to the checkbox, Space toggles it, then Tab to Send and Enter/Space activates the native button. Repeated keydown/double-click is guarded synchronously before network work. During IME composition Enter/Esc/submit cannot activate anything.
+
+On recovery reopen focus the read-only Question (or dialog heading), never the checkbox or Send automatically; keep all controls in the existing modal trap. If Send loses eligibility while focused, move focus to the confirmation checkbox when available, otherwise the local status/container, without navigating to a terminal.
 
 Esc acts per phase cancellation table, never leaks to terminal. Workbench prefix/quick switcher inactive while modal owns focus. Scrim click never dismisses an active or nonempty composer. Closing restores eligible opener unless confirmed explicit navigation has superseded it.
 
@@ -172,11 +190,13 @@ Esc acts per phase cancellation table, never leaks to terminal. Workbench prefix
 - Native labelled radio group with unavailable reason in accessible name and visible text.
 - Explicit textarea label and described-by hint/error; aria-invalid on refusal. Counter not announced on every keystroke.
 - One replaced-text phase live region: polite progress/success, alert for action-required failure/unknown. Do not announce terminal output or repeat polling messages.
-- Confirmation checkbox is native, keyboard reachable and has no prechecked/default remembered state; Send disabled reason describes it.
+- Confirmation checkbox is native, keyboard reachable, full visible label clickable, and never prechecked/remembered. Associate its helper with the checkbox and Send using `aria-describedby`; disabled-button explanation remains visible and readable without focusing the disabled button. Announce invalidation once via the existing polite status slot: “Confirmation cleared. Check the agent’s input again before sending.” Unknown/failure retains existing alert treatment. Do not add a second live region, toast or shifting banner.
 - Selection uses check glyph/border/fill; status icon + words, never colour only. Real semantic tokens; actual contrast verified by implementation, not claimed from source inspection alone.
 - Existing 28px hit target minimum; agent choices at least 36px. Full pointer/keyboard parity for open/copy/cancel/explicit send.
 - 2px focus-visible ring; reduced-motion static progress indicator.
 - ≤480px stack labels, use two agent columns, status above footer buttons. Scroll body, wrap error paths; no page horizontal scroll at 320px/zoom.
+
+Recovery layout reuses existing dialog rows, typography, focus styles and footer. Place confirmation directly after the retained Question/helper, before secondary actions; its label wraps naturally on narrow viewports. At 320px/zoom, keep Question scrollable/selectable and wrap footer actions without clipping labels or introducing horizontal scroll. Disabled and checked state need native semantics plus text, not colour alone; implementation owns contrast verification.
 
 ## Options considered
 
@@ -191,7 +211,9 @@ Esc acts per phase cancellation table, never leaks to terminal. Workbench prefix
 | Cancellation | Kill/close, claim abort, stop-waiting | Never auto-kill/close; distinguish pre-effect cancellation and post-effect hide. Leaves resources for deliberate confirmed closure. |
 | Unknown recovery | Retry/check proof/manual inspect | Manual Open/Copy/Dismiss, no replay. Operator work is the cost of honest uncertainty. |
 | Agent selector | Radios/native select/six palette rows | Six radios expose capability/availability; select denser but hides choices, separate actions clutter Commands. |
-| Draft retention | None/memory/disk | Memory while window lives; no secret-bearing disk history. Preserve failures, clear active draft only after known supplied/submitted outcome, optionally retain in-memory copy for manual recovery. |
+| Draft retention | Clear on success; retain in memory until explicit New question; disk history | Retain exact text in window memory across every receipt and ordinary close/reopen. Only New question clears after success. No disk history or implicit resend; supersedes the previous clear-on-success recommendation. |
+| Confirmation | Open tab enables Send; checkbox alone; extra confirmation dialog | Separate native checkbox attesting actual visible empty normal input, then explicit Send. Navigation is not authorization; a second dialog adds no stronger evidence and increases keyboard cost. |
+| Consent lifetime | Persist until request finishes; invalidate on leaving/relevant change | Invalidate on leaving composer and any relevant request/target/eligibility/connection change. One extra check after navigation is preferable to stale consent; no new timer or terminal draft detector. |
 
 ## Open questions (options + recommended default)
 
@@ -204,6 +226,7 @@ Esc acts per phase cancellation table, never leaks to terminal. Workbench prefix
 7. **Close retained tab shortcut:** recommend normal existing confirmation if exact-location targeting is supported; otherwise guidance, no auto-close.
 8. **Unsupported host early gate:** recommend refuse before creating an empty tab where host capability absence is knowable, keeping fail-closed semantics everywhere.
 9. **Proof of model processing:** no inference from spawn, idle, output or ACK; recommend do not add consumption UI until a harness provides an authoritative receipt.
+10. **Draft discard undo:** retain an undo buffer versus explicit New question without undo. **Recommended default for this correction:** the visibly labelled New question is the sole clear operation; no extra modal or persistence. If product later requires discard undo, specify it separately rather than changing submission recovery.
 
 ## Acceptance scenarios (observable checks for Main)
 
@@ -215,8 +238,8 @@ Future requested checks, not verification exercised in this design pass:
 4. Startup success reads **Started with initial question supplied**, never “agent processed/consumed/answered”.
 5. OMP/Pi @file and leading-option edge cases choose no-question startup rather than expansion, rewriting or blanket input prohibition.
 6. No-question path retains prompt; startup blocked/unblocked, idle, reconnect and time passing never send automatically.
-7. User explicitly opens real pane, completes trust/login and checks empty normal prompt; Send requires fresh confirmation, exact identity validation and explicit click. Text/target change invalidates confirmation.
-8. Explicit send acknowledgment is terminal-submitted, not consumed. Unknown send preserves pane/prompt with Open/Copy and no retry/replay.
+7. Single-line fallback: Open tab, automatic navigation, Copy, idle, unchanged polling and reopening alone leave Send disabled. User can explicitly check “I checked that the agent’s normal question input is visible and empty.” then activate Send once. Checkbox alone sends nothing; keyboard and pointer reach the same result.
+8. Confirm, then Open tab/close/reopen/change request or target/disconnect/lose eligibility: check clears and Send disables; reconnect never restores it. Explicit send consumes the check before network work. A newer unchanged status may conservatively clear consent but never grant it.
 9. Startup with input timeout may have supplied it; UI never says definitely not sent or repeats launch. No-input startup timeout states only the proven fact that startup did not carry a question.
 10. Pre-effect cancel versus in-flight Stop waiting produces correct copy; no auto-close, kill, hidden compensation or late focus steal.
 11. Fail-closed environment/capability check applies on every host; no private fixture-token copy or bypass. No orchestration registration/credentials leak.
@@ -224,7 +247,10 @@ Future requested checks, not verification exercised in this design pass:
 13. Normal launch outcome with Switch on and visible composer activates pane only after initial stage; hidden operation shows local Open instead. Blocked/manual inspection opens only by user action.
 14. Real runtime preserves recoverable pane/output across composer close, Cockpit reconnect and agent exit; no automatic replay on restart.
 15. Keyboard/IME/screen-reader flow handles confirmation, copy/open/cancel; textarea is in Tab trap. Narrow/zoom and reduced motion remain usable.
+16. Submitted and initial-question-supplied receipts retain the exact text, including trailing LF, through Close/auto-switch/Open tab/reopen. No active Send/Ask appears. New question alone clears it, focuses empty Question, and makes no launch call.
+17. Multiline fallback exposes Open tab and Copy but no checkbox/Send. Clipboard failure stays local and preserves selectable text. Copy success never claims paste or submission.
+18. Screen reader announces checkbox label, helper and checked state; invalidation is announced once. Disabled Send reason is readable. Tab/Shift+Tab remain trapped, Space toggles checkbox, native Enter/Space activates Send; Ctrl/Cmd+Enter does not send from recovery. Narrow/zoom footer and wrapped confirmation remain readable.
 
 ## Examples
 
-- `planning/quick-agent-question-2026-10-26/mocks/ask-composer.html` — standalone gallery using real copied tokens. Includes capability summary, startup supplied-not-consumed, no-question startup, explicit user-confirmed send, unknown outcome, failure/cancellation and narrow states. Visual reference only; no backend actions or verification claims.
+- `planning/quick-agent-question-2026-10-26/mocks/ask-composer.html` — existing standalone gallery using real copied tokens; visual geometry reference only. Its older confirmation copy and multiline recovery illustration are superseded by the minimal recovery state contract above. No backend actions or verification claims.
