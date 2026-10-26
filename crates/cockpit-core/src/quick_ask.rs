@@ -23,6 +23,7 @@ struct Operation {
     status: QuickAskStatus,
     fingerprint: [u8; 32],
     cancelled: bool,
+    manual_only: bool,
 }
 struct Entry { state: Mutex<Operation>, notify: Notify }
 
@@ -65,10 +66,16 @@ fn validate(request: &QuickAskStartRequest) -> Result<(), InspectionError> {
     crate::validate_resource_id(&request.space_id, "space")?;
     if !Path::new(&request.cwd).is_absolute() || !Path::new(&request.cwd).is_dir() { return Err(error("quick_ask_invalid_cwd", "Working directory must be an existing absolute directory")); }
     let text = &request.prompt;
-    if text.is_empty() || text.len() > 16384 || text.trim().is_empty() || text.chars().any(|c| c.is_control()) {
-        return Err(error("quick_ask_invalid_prompt", "Question must be 1–16384 UTF-8 bytes without control characters or line breaks"));
+    if text.is_empty() || text.len() > 16384 || text.trim().is_empty() || text.chars().any(|c| c.is_control() && c != '\n') {
+        return Err(error("quick_ask_invalid_prompt", "Question must be 1–16384 UTF-8 bytes without control characters other than line feed"));
     }
     Ok(())
+}
+
+fn uses_initial_prompt(request: &QuickAskStartRequest) -> bool {
+    matches!(request.harness, QuickAskHarness::Copilot | QuickAskHarness::Opencode)
+        || (!matches!(request.prompt.as_bytes().first(), Some(b'@' | b'-'))
+            && request.prompt.bytes().any(|byte| matches!(byte, b' ' | b'\n')))
 }
 fn executable_found(name: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|dir| {
@@ -110,7 +117,7 @@ impl QuickAskService {
         drop(entries);
         let binding = self.adapter.bind(session_id, &request.server_instance, &request.space_id).await?;
         let status = QuickAskStatus { request_id: request.request_id.clone(), session_id: session_id.into(), server_instance: request.server_instance.clone(), harness: request.harness, phase: QuickAskPhase::CreatingTab, delivery: QuickAskDelivery::NotSent, cancellable: true, location: None, error: None, updated_at_ms: now() };
-        let entry = Arc::new(Entry { state: Mutex::new(Operation { status: status.clone(), fingerprint, cancelled: false }), notify: Notify::new() });
+        let entry = Arc::new(Entry { state: Mutex::new(Operation { status: status.clone(), fingerprint, cancelled: false, manual_only: !uses_initial_prompt(&request) && request.prompt.contains('\n') }), notify: Notify::new() });
         let mut entries = self.entries.lock().await;
         entries.insert(request.request_id.clone(), entry.clone());
         let adapter = self.adapter.clone();
@@ -132,6 +139,7 @@ impl QuickAskService {
         match request.action {
             QuickAskAction::Cancel if op.status.cancellable => { op.cancelled = true; op.status.cancellable = false; op.status.updated_at_ms = now(); }
             QuickAskAction::Cancel => return Err(error("quick_ask_cancel_too_late", "Quick ask can no longer be cancelled")),
+            QuickAskAction::Send if op.status.phase == QuickAskPhase::ReadyToSend && op.manual_only => return Err(error("quick_ask_manual_multiline", "Copy and enter this multiline question manually in the verified agent prompt")),
             QuickAskAction::Send if op.status.phase == QuickAskPhase::ReadyToSend && !op.cancelled => set_phase(&mut op, QuickAskPhase::Sending),
             QuickAskAction::Send => return Err(error("quick_ask_invalid_action", "Quick ask is not ready to send")),
         }
@@ -145,7 +153,7 @@ async fn run(adapter: Arc<dyn QuickAskHerdr>, entry: Arc<Entry>, binding: QuickA
     let tag = request.request_id.replace('-', "");
     let tab_label = format!("Ask · {label} · {}", &tag[..4]);
     let name = format!("ask-{kind}-{}", &tag[..8]);
-    let initial_prompt = matches!(request.harness, QuickAskHarness::Copilot | QuickAskHarness::Opencode);
+    let initial_prompt = uses_initial_prompt(&request);
     {
         let mut op = entry.state.lock().unwrap();
         if op.cancelled { set_phase(&mut op, QuickAskPhase::Cancelled); return; }

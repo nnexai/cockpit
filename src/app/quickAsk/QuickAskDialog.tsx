@@ -19,6 +19,8 @@ export interface QuickAskDialogProps {
   setSwitchToTab(value: boolean): void;
   unknownAcknowledged: boolean;
   inspected: boolean;
+  directLaunch: boolean;
+  manualPaste: boolean;
   onClose(): void;
   busy: boolean;
   start(): void;
@@ -47,7 +49,8 @@ export function QuickAskDialog(props: QuickAskDialogProps) {
   const agent = AGENTS.find(item => item.id === (status?.harness ?? harness));
   const selected = AGENTS.find(item => item.id === harness);
   const selectedAvailable = availability?.agents.find(item => item.harness === harness)?.found === true;
-  const launchPrompt = harness === "copilot" || harness === "opencode";
+  const launchPrompt = props.directLaunch;
+  const manualPaste = props.manualPaste;
   const canStart = editable && selectedAvailable && !validation && !props.busy && Boolean(cwd);
   const dismiss = () => {
     if (status?.cancellable) props.cancel();
@@ -77,7 +80,7 @@ export function QuickAskDialog(props: QuickAskDialogProps) {
       case "checking_environment": message = "Checking the new tab. Your question has not been sent."; break;
       case "starting_agent": message = launchPrompt ? `Starting ${agent?.label ?? "the agent"} with your question.` : `Starting ${agent?.label ?? "the agent"}. Your question has not been sent.`; break;
       case "waiting_for_agent": message = `${agent?.label ?? "The agent"} needs your input${status.location ? ` in tab “${status.location.tab_label}”` : ""} before it can take the question.`; break;
-      case "ready_to_send": message = `${agent?.label ?? "The agent"} detected. Open tab and verify the agent is at its question prompt before sending.`; break;
+      case "ready_to_send": message = manualPaste ? "Open the tab and verify the question prompt. Copy your question and paste it there yourself; Cockpit cannot safely send this multiline question." : `${agent?.label ?? "The agent"} detected. Open tab and verify the agent is at its question prompt before sending.`; break;
       case "sending": message = "Sending your question. This cannot be cancelled once sent."; break;
       case "submitted": message = `Herdr acknowledged sending your question${status.location ? ` in tab “${status.location.tab_label}”` : ""}. Check the tab for the agent's response.`; break;
       case "initial_question_supplied": message = `The initial question was supplied at launch${status.location ? ` in tab “${status.location.tab_label}”` : ""}. This does not confirm the agent received it; check the tab before asking again.`; break;
@@ -121,23 +124,24 @@ export function QuickAskDialog(props: QuickAskDialogProps) {
         </div></div>
         <div className="quick-ask-row"><label className="quick-ask-label" htmlFor={questionId}>Question</label><div>
           <textarea ref={questionRef} id={questionId} tabIndex={0} rows={4} value={question} readOnly={!editable} onChange={event => props.setQuestion(event.target.value)} placeholder="Ask anything. It is sent to the agent exactly as typed, once." aria-describedby={hintId} aria-invalid={Boolean(validation)} />
-          <div id={hintId} className="quick-ask-hint"><span>Ctrl/Cmd+Enter starts · Questions must be single-line</span>{bytes >= 13107 ? <span className={bytes > 16384 ? "is-error" : ""}>{bytes} / 16,384 bytes</span> : null}</div>
+          <div id={hintId} className="quick-ask-hint"><span>Ctrl/Cmd+Enter starts · Enter adds a line</span>{bytes >= 13107 ? <span className={bytes > 16384 ? "is-error" : ""}>{bytes} / 16,384 bytes</span> : null}</div>
           {launchPrompt && editable ? <p className="quick-ask-validation">Your question will be visible in launch process arguments and layout metadata, and may persist there. Do not include secrets.</p> : null}
           {validation ? <p className="quick-ask-validation" role="alert">{validation}</p> : null}
         </div></div>
         <div className="quick-ask-row"><label className="quick-ask-label" htmlFor={`${questionId}-cwd`}>Runs in</label><div className="quick-ask-folder">
           {editingCwd || !cwd ? <><input id={`${questionId}-cwd`} value={cwd} onChange={event => props.setCwd(event.target.value)} disabled={!editable} placeholder="Absolute folder path" />{!cwd ? <p className="quick-ask-hint">This Space has no checkout and the focused terminal reported no folder. Enter an absolute path.</p> : null}</> : <><span className="quick-ask-path">{cwd}</span><span className="quick-ask-hint">{props.cwdSource}</span>{editable ? <button type="button" className="quick-ask-link" onClick={() => setEditingCwd(true)}>Change…</button> : null}</>}
         </div></div>
-        <details className="quick-ask-more"><summary>More</summary><label><input type="checkbox" checked={props.switchToTab} disabled={!editable} onChange={event => props.setSwitchToTab(event.target.checked)} /> Switch to the new tab</label><p>{launchPrompt ? <>Starts <code>{selected?.executable}</code> with your question in its launch arguments. Launch acknowledgement does not confirm the agent received it.</> : <>Starts <code>{selected?.executable ?? "the selected agent"}</code> in a new tab. Check the agent's question input, then confirm Send question to submit it once.</>}</p></details>
+        <details className="quick-ask-more"><summary>More</summary><label><input type="checkbox" checked={props.switchToTab} disabled={!editable} onChange={event => props.setSwitchToTab(event.target.checked)} /> Switch to the new tab</label><p>{launchPrompt ? <>Starts <code>{selected?.executable}</code> with your question in its launch arguments. Launch acknowledgement does not confirm the agent received it.</> : manualPaste ? <>Starts <code>{selected?.executable}</code> in a new tab. Copy and paste your question manually after checking the agent's prompt.</> : <>Starts <code>{selected?.executable}</code> in a new tab. Check the agent's question input, then confirm Send question to submit it once.</>}</p></details>
       </div>
       <footer className="quick-ask-footer">
         <div id={statusId} className={`quick-ask-status${isError ? " is-error" : ""}`} role={message ? isError ? "alert" : "status" : undefined}>{message ? <><span aria-hidden="true">{isError ? "!" : "•"}</span> {message}</> : null}</div>
         <div className="quick-ask-actions">
           {status?.location && (phase === "waiting_for_agent" || phase === "ready_to_send" || phase === "submitted" || phase === "initial_question_supplied" || phase === "failed") ? <button type="button" onClick={props.openTab}>Open tab</button> : null}
+          {phase === "ready_to_send" && manualPaste ? <button type="button" onClick={props.copyQuestion}>Copy question</button> : null}
           {phase === "submitted" || phase === "initial_question_supplied" ? <button type="button" onClick={props.newQuestion}>New question</button> : null}
           {unknown ? <><button type="button" onClick={props.copyQuestion}>Copy question</button><button type="button" onClick={props.dismissUnknown} disabled={!props.unknownAcknowledged}>Dismiss</button></> : null}
           <button type="button" onClick={dismiss}>{status?.cancellable ? "Don't send" : phase === "sending" ? "Stop waiting" : editable ? "Cancel" : "Close"}</button>
-          {editable ? <button ref={primaryRef} type="button" className="quick-ask-primary" onClick={props.start} disabled={!canStart} aria-describedby={`${hintId} ${statusId}`}>Ask {selected?.label ?? "agent"}</button> : phase === "ready_to_send" ? <button ref={primaryRef} type="button" className="quick-ask-primary" onClick={props.send} disabled={props.busy || !props.inspected} aria-describedby={statusId}>Send question</button> : unknown ? <button ref={primaryRef} type="button" className="quick-ask-primary" onClick={props.openTab} disabled={!status?.location}>Open tab</button> : <button type="button" className="quick-ask-primary" disabled>{phase === "initial_question_supplied" ? "Started" : phase === "submitted" ? "Sent" : phase === "sending" ? "Sending…" : "Starting…"}</button>}
+          {editable ? <button ref={primaryRef} type="button" className="quick-ask-primary" onClick={props.start} disabled={!canStart} aria-describedby={`${hintId} ${statusId}`}>Ask {selected?.label ?? "agent"}</button> : phase === "ready_to_send" ? <button ref={primaryRef} type="button" className="quick-ask-primary" onClick={props.send} disabled={props.busy || !props.inspected || manualPaste} aria-describedby={statusId}>Send question</button> : unknown ? <button ref={primaryRef} type="button" className="quick-ask-primary" onClick={props.openTab} disabled={!status?.location}>Open tab</button> : <button type="button" className="quick-ask-primary" disabled>{phase === "initial_question_supplied" ? "Started" : phase === "submitted" ? "Sent" : phase === "sending" ? "Sending…" : "Starting…"}</button>}
         </div>
       </footer>
     </section>

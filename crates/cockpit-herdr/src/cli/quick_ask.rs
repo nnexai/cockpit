@@ -33,12 +33,14 @@ fn launch_not_pending(agent: &Value) -> bool {
 
 fn append_initial_prompt(command: &mut Vec<String>, kind: &str, prompt: Option<&str>) -> Result<(), InspectionError> {
     let Some(prompt) = prompt else { return Ok(()); };
-    let flag = match kind {
-        "copilot" => "--interactive=",
-        "opencode" => "--prompt=",
-        _ => return Err(error("quick_ask_invalid_agent", "Initial question arguments are unsupported for this agent")),
-    };
-    command.push(format!("{flag}{prompt}"));
+    match kind {
+        "copilot" => command.push(format!("--interactive={prompt}")),
+        "opencode" => command.push(format!("--prompt={prompt}")),
+        "omp" | "pi" | "claude" | "codex"
+            if !prompt.starts_with('@') && !prompt.starts_with('-') && prompt.bytes().any(|c| c == b' ' || c == b'\n') =>
+                command.push(prompt.to_owned()),
+        _ => return Err(error("quick_ask_invalid_agent", "Initial question arguments are unsupported for this input")),
+    }
     Ok(())
 }
 
@@ -290,6 +292,22 @@ mod tests {
         assert!(!launch_not_pending(&json!({"launch_pending": true})));
         assert!(!launch_not_pending(&json!({"launch_pending": null})));
         assert!(!launch_not_pending(&json!({"launch_pending": "false"})));
+    }
+
+    #[test]
+    fn positional_startup_prompt_requires_safe_shape_and_is_one_argument() {
+        for kind in ["omp", "pi", "claude", "codex"] {
+            for prompt in ["hello world", "line one\nline two", " ! command"] {
+                let mut argv = vec![kind.to_owned()];
+                append_initial_prompt(&mut argv, kind, Some(prompt)).unwrap();
+                assert_eq!(argv, vec![kind.to_owned(), prompt.to_owned()]);
+            }
+            for prompt in ["update", "logout", "@file name", "-flag value", "update\u{a0}now"] {
+                let mut argv = vec![kind.to_owned()];
+                assert!(append_initial_prompt(&mut argv, kind, Some(prompt)).is_err());
+                assert_eq!(argv, vec![kind.to_owned()]);
+            }
+        }
     }
 
 }

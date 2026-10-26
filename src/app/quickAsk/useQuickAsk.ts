@@ -36,6 +36,8 @@ export interface QuickAskState {
   setSwitchToTab: (value: boolean) => void;
   unknownAcknowledged: boolean;
   inspected: boolean;
+  directLaunch: boolean;
+  manualPaste: boolean;
   busy: boolean;
   start: () => void;
   cancel: () => void;
@@ -61,6 +63,7 @@ export function useQuickAsk(options: UseQuickAskOptions): QuickAskState {
   const [busy, setBusy] = useState(false);
   const destination = useRef<Destination | null>(null);
   const operation = useRef<{ sessionId: string; requestId: string } | null>(null);
+  const requestMultiline = useRef(false);
   const statusRef = useRef<QuickAskStatus | null>(null);
   const actionBusy = useRef(false);
   const actionInFlight = useRef(false);
@@ -162,6 +165,7 @@ export function useQuickAsk(options: UseQuickAskOptions): QuickAskState {
     if (actionBusy.current || validation || !destination.current) return;
     const previous = statusRef.current;
     if (operation.current && (!previous || !quickAskTerminal(previous.phase) || previous.phase === "outcome_unknown")) return;
+    requestMultiline.current = question.includes("\n");
     const target = destination.current;
     const requestId = crypto.randomUUID();
     operation.current = { sessionId: target.sessionId, requestId };
@@ -184,7 +188,7 @@ export function useQuickAsk(options: UseQuickAskOptions): QuickAskState {
   const action = useCallback((kind: "cancel" | "send") => {
     const current = operation.current;
     const previous = statusRef.current;
-    if (!current || !previous || actionBusy.current || uncertain.current || (kind === "send" ? previous.phase !== "ready_to_send" || !inspected : !previous.cancellable)) return;
+    if (!current || !previous || actionBusy.current || uncertain.current || (kind === "send" ? previous.phase !== "ready_to_send" || !inspected || requestMultiline.current : !previous.cancellable)) return;
     actionBusy.current = true;
     actionInFlight.current = true;
     setBusy(true);
@@ -234,5 +238,7 @@ export function useQuickAsk(options: UseQuickAskOptions): QuickAskState {
     setUnknownAcknowledged(false);
   }, [sessionId, serverInstance, spaceId, initialCwd]);
 
-  return { open, setOpen, harness, setHarness, question, setQuestion, cwd, setCwd, availability, status, error, validation, switchToTab, setSwitchToTab, unknownAcknowledged, inspected, busy, start, cancel: () => action("cancel"), send: () => action("send"), openTab, copyQuestion, dismissUnknown, newQuestion };
+  const directLaunch = harness === "copilot" || harness === "opencode" || (/[ \n]/u.test(question) && question[0] !== "@" && question[0] !== "-");
+  const manualPaste = status?.phase === "ready_to_send" && requestMultiline.current;
+  return { open, setOpen, harness, setHarness, question, setQuestion, cwd, setCwd, availability, status, error, validation, switchToTab, setSwitchToTab, unknownAcknowledged, inspected, directLaunch, manualPaste, busy, start, cancel: () => action("cancel"), send: () => action("send"), openTab, copyQuestion, dismissUnknown, newQuestion };
 }

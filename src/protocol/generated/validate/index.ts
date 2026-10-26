@@ -32,17 +32,19 @@ import * as D14 from "./project_teardown";
 export * from "./project_teardown";
 import * as D15 from "./projects";
 export * from "./projects";
-import * as D16 from "./quota";
+import * as D16 from "./quick_ask";
+export * from "./quick_ask";
+import * as D17 from "./quota";
 export * from "./quota";
-import * as D17 from "./review";
+import * as D18 from "./review";
 export * from "./review";
-import * as D18 from "./sources";
+import * as D19 from "./sources";
 export * from "./sources";
-import * as D19 from "./v1";
+import * as D20 from "./v1";
 export * from "./v1";
-import * as D20 from "./viewer";
+import * as D21 from "./viewer";
 export * from "./viewer";
-import * as D21 from "./widget";
+import * as D22 from "./widget";
 export * from "./widget";
 import type * as P0 from "./policy_browser";
 import type * as P1 from "./policy_browser_feedback";
@@ -61,23 +63,24 @@ import type * as P13 from "./policy_orchestration_2";
 import type * as P14 from "./policy_project_defaults";
 import type * as P15 from "./policy_project_teardown";
 import type * as P16 from "./policy_projects";
-import type * as P17 from "./policy_quota";
-import type * as P18 from "./policy_review";
-import type * as P19 from "./policy_sources";
-import type * as P20 from "./policy_v1";
-import type * as P21 from "./policy_viewer";
-import type * as P22 from "./policy_widget";
+import type * as P17 from "./policy_quick_ask";
+import type * as P18 from "./policy_quota";
+import type * as P19 from "./policy_review";
+import type * as P20 from "./policy_sources";
+import type * as P21 from "./policy_v1";
+import type * as P22 from "./policy_viewer";
+import type * as P23 from "./policy_widget";
 
-export interface WireTypes extends P0.WireTypes, P1.WireTypes, P2.WireTypes, P3.WireTypes, P4.WireTypes, P5.WireTypes, P6.WireTypes, P7.WireTypes, P8.WireTypes, P9.WireTypes, P10.WireTypes, P11.WireTypes, P12.WireTypes, P13.WireTypes, P14.WireTypes, P15.WireTypes, P16.WireTypes, P17.WireTypes, P18.WireTypes, P19.WireTypes, P20.WireTypes, P21.WireTypes, P22.WireTypes {}
-export interface WireOwners extends P0.WireOwners, P1.WireOwners, P2.WireOwners, P3.WireOwners, P4.WireOwners, P5.WireOwners, P6.WireOwners, P7.WireOwners, P8.WireOwners, P9.WireOwners, P10.WireOwners, P11.WireOwners, P12.WireOwners, P13.WireOwners, P14.WireOwners, P15.WireOwners, P16.WireOwners, P17.WireOwners, P18.WireOwners, P19.WireOwners, P20.WireOwners, P21.WireOwners, P22.WireOwners {}
-export interface WireFields extends P0.WireFields, P1.WireFields, P2.WireFields, P3.WireFields, P4.WireFields, P5.WireFields, P6.WireFields, P7.WireFields, P8.WireFields, P9.WireFields, P10.WireFields, P11.WireFields, P12.WireFields, P13.WireFields, P14.WireFields, P15.WireFields, P16.WireFields, P17.WireFields, P18.WireFields, P19.WireFields, P20.WireFields, P21.WireFields, P22.WireFields {}
-export interface WireFieldNames extends P0.WireFieldNames, P1.WireFieldNames, P2.WireFieldNames, P3.WireFieldNames, P4.WireFieldNames, P5.WireFieldNames, P6.WireFieldNames, P7.WireFieldNames, P8.WireFieldNames, P9.WireFieldNames, P10.WireFieldNames, P11.WireFieldNames, P12.WireFieldNames, P13.WireFieldNames, P14.WireFieldNames, P15.WireFieldNames, P16.WireFieldNames, P17.WireFieldNames, P18.WireFieldNames, P19.WireFieldNames, P20.WireFieldNames, P21.WireFieldNames, P22.WireFieldNames {}
-export interface WireChildNames extends P0.WireChildNames, P1.WireChildNames, P2.WireChildNames, P3.WireChildNames, P4.WireChildNames, P5.WireChildNames, P6.WireChildNames, P7.WireChildNames, P8.WireChildNames, P9.WireChildNames, P10.WireChildNames, P11.WireChildNames, P12.WireChildNames, P13.WireChildNames, P14.WireChildNames, P15.WireChildNames, P16.WireChildNames, P17.WireChildNames, P18.WireChildNames, P19.WireChildNames, P20.WireChildNames, P21.WireChildNames, P22.WireChildNames {}
-export interface WireTagNames extends P0.WireTagNames, P1.WireTagNames, P2.WireTagNames, P3.WireTagNames, P4.WireTagNames, P5.WireTagNames, P6.WireTagNames, P7.WireTagNames, P8.WireTagNames, P9.WireTagNames, P10.WireTagNames, P11.WireTagNames, P12.WireTagNames, P13.WireTagNames, P14.WireTagNames, P15.WireTagNames, P16.WireTagNames, P17.WireTagNames, P18.WireTagNames, P19.WireTagNames, P20.WireTagNames, P21.WireTagNames, P22.WireTagNames {}
-export interface WireCheckpointFieldNames extends P0.WireCheckpointFieldNames, P1.WireCheckpointFieldNames, P2.WireCheckpointFieldNames, P3.WireCheckpointFieldNames, P4.WireCheckpointFieldNames, P5.WireCheckpointFieldNames, P6.WireCheckpointFieldNames, P7.WireCheckpointFieldNames, P8.WireCheckpointFieldNames, P9.WireCheckpointFieldNames, P10.WireCheckpointFieldNames, P11.WireCheckpointFieldNames, P12.WireCheckpointFieldNames, P13.WireCheckpointFieldNames, P14.WireCheckpointFieldNames, P15.WireCheckpointFieldNames, P16.WireCheckpointFieldNames, P17.WireCheckpointFieldNames, P18.WireCheckpointFieldNames, P19.WireCheckpointFieldNames, P20.WireCheckpointFieldNames, P21.WireCheckpointFieldNames, P22.WireCheckpointFieldNames {}
-export type WireOmittableField = P0.WireOmittableField | P1.WireOmittableField | P2.WireOmittableField | P3.WireOmittableField | P4.WireOmittableField | P5.WireOmittableField | P6.WireOmittableField | P7.WireOmittableField | P8.WireOmittableField | P9.WireOmittableField | P10.WireOmittableField | P11.WireOmittableField | P12.WireOmittableField | P13.WireOmittableField | P14.WireOmittableField | P15.WireOmittableField | P16.WireOmittableField | P17.WireOmittableField | P18.WireOmittableField | P19.WireOmittableField | P20.WireOmittableField | P21.WireOmittableField | P22.WireOmittableField;
-export type WireOptionalField = P0.WireOptionalField | P1.WireOptionalField | P2.WireOptionalField | P3.WireOptionalField | P4.WireOptionalField | P5.WireOptionalField | P6.WireOptionalField | P7.WireOptionalField | P8.WireOptionalField | P9.WireOptionalField | P10.WireOptionalField | P11.WireOptionalField | P12.WireOptionalField | P13.WireOptionalField | P14.WireOptionalField | P15.WireOptionalField | P16.WireOptionalField | P17.WireOptionalField | P18.WireOptionalField | P19.WireOptionalField | P20.WireOptionalField | P21.WireOptionalField | P22.WireOptionalField;
-export type WireListField = P0.WireListField | P1.WireListField | P2.WireListField | P3.WireListField | P4.WireListField | P5.WireListField | P6.WireListField | P7.WireListField | P8.WireListField | P9.WireListField | P10.WireListField | P11.WireListField | P12.WireListField | P13.WireListField | P14.WireListField | P15.WireListField | P16.WireListField | P17.WireListField | P18.WireListField | P19.WireListField | P20.WireListField | P21.WireListField | P22.WireListField;
+export interface WireTypes extends P0.WireTypes, P1.WireTypes, P2.WireTypes, P3.WireTypes, P4.WireTypes, P5.WireTypes, P6.WireTypes, P7.WireTypes, P8.WireTypes, P9.WireTypes, P10.WireTypes, P11.WireTypes, P12.WireTypes, P13.WireTypes, P14.WireTypes, P15.WireTypes, P16.WireTypes, P17.WireTypes, P18.WireTypes, P19.WireTypes, P20.WireTypes, P21.WireTypes, P22.WireTypes, P23.WireTypes {}
+export interface WireOwners extends P0.WireOwners, P1.WireOwners, P2.WireOwners, P3.WireOwners, P4.WireOwners, P5.WireOwners, P6.WireOwners, P7.WireOwners, P8.WireOwners, P9.WireOwners, P10.WireOwners, P11.WireOwners, P12.WireOwners, P13.WireOwners, P14.WireOwners, P15.WireOwners, P16.WireOwners, P17.WireOwners, P18.WireOwners, P19.WireOwners, P20.WireOwners, P21.WireOwners, P22.WireOwners, P23.WireOwners {}
+export interface WireFields extends P0.WireFields, P1.WireFields, P2.WireFields, P3.WireFields, P4.WireFields, P5.WireFields, P6.WireFields, P7.WireFields, P8.WireFields, P9.WireFields, P10.WireFields, P11.WireFields, P12.WireFields, P13.WireFields, P14.WireFields, P15.WireFields, P16.WireFields, P17.WireFields, P18.WireFields, P19.WireFields, P20.WireFields, P21.WireFields, P22.WireFields, P23.WireFields {}
+export interface WireFieldNames extends P0.WireFieldNames, P1.WireFieldNames, P2.WireFieldNames, P3.WireFieldNames, P4.WireFieldNames, P5.WireFieldNames, P6.WireFieldNames, P7.WireFieldNames, P8.WireFieldNames, P9.WireFieldNames, P10.WireFieldNames, P11.WireFieldNames, P12.WireFieldNames, P13.WireFieldNames, P14.WireFieldNames, P15.WireFieldNames, P16.WireFieldNames, P17.WireFieldNames, P18.WireFieldNames, P19.WireFieldNames, P20.WireFieldNames, P21.WireFieldNames, P22.WireFieldNames, P23.WireFieldNames {}
+export interface WireChildNames extends P0.WireChildNames, P1.WireChildNames, P2.WireChildNames, P3.WireChildNames, P4.WireChildNames, P5.WireChildNames, P6.WireChildNames, P7.WireChildNames, P8.WireChildNames, P9.WireChildNames, P10.WireChildNames, P11.WireChildNames, P12.WireChildNames, P13.WireChildNames, P14.WireChildNames, P15.WireChildNames, P16.WireChildNames, P17.WireChildNames, P18.WireChildNames, P19.WireChildNames, P20.WireChildNames, P21.WireChildNames, P22.WireChildNames, P23.WireChildNames {}
+export interface WireTagNames extends P0.WireTagNames, P1.WireTagNames, P2.WireTagNames, P3.WireTagNames, P4.WireTagNames, P5.WireTagNames, P6.WireTagNames, P7.WireTagNames, P8.WireTagNames, P9.WireTagNames, P10.WireTagNames, P11.WireTagNames, P12.WireTagNames, P13.WireTagNames, P14.WireTagNames, P15.WireTagNames, P16.WireTagNames, P17.WireTagNames, P18.WireTagNames, P19.WireTagNames, P20.WireTagNames, P21.WireTagNames, P22.WireTagNames, P23.WireTagNames {}
+export interface WireCheckpointFieldNames extends P0.WireCheckpointFieldNames, P1.WireCheckpointFieldNames, P2.WireCheckpointFieldNames, P3.WireCheckpointFieldNames, P4.WireCheckpointFieldNames, P5.WireCheckpointFieldNames, P6.WireCheckpointFieldNames, P7.WireCheckpointFieldNames, P8.WireCheckpointFieldNames, P9.WireCheckpointFieldNames, P10.WireCheckpointFieldNames, P11.WireCheckpointFieldNames, P12.WireCheckpointFieldNames, P13.WireCheckpointFieldNames, P14.WireCheckpointFieldNames, P15.WireCheckpointFieldNames, P16.WireCheckpointFieldNames, P17.WireCheckpointFieldNames, P18.WireCheckpointFieldNames, P19.WireCheckpointFieldNames, P20.WireCheckpointFieldNames, P21.WireCheckpointFieldNames, P22.WireCheckpointFieldNames, P23.WireCheckpointFieldNames {}
+export type WireOmittableField = P0.WireOmittableField | P1.WireOmittableField | P2.WireOmittableField | P3.WireOmittableField | P4.WireOmittableField | P5.WireOmittableField | P6.WireOmittableField | P7.WireOmittableField | P8.WireOmittableField | P9.WireOmittableField | P10.WireOmittableField | P11.WireOmittableField | P12.WireOmittableField | P13.WireOmittableField | P14.WireOmittableField | P15.WireOmittableField | P16.WireOmittableField | P17.WireOmittableField | P18.WireOmittableField | P19.WireOmittableField | P20.WireOmittableField | P21.WireOmittableField | P22.WireOmittableField | P23.WireOmittableField;
+export type WireOptionalField = P0.WireOptionalField | P1.WireOptionalField | P2.WireOptionalField | P3.WireOptionalField | P4.WireOptionalField | P5.WireOptionalField | P6.WireOptionalField | P7.WireOptionalField | P8.WireOptionalField | P9.WireOptionalField | P10.WireOptionalField | P11.WireOptionalField | P12.WireOptionalField | P13.WireOptionalField | P14.WireOptionalField | P15.WireOptionalField | P16.WireOptionalField | P17.WireOptionalField | P18.WireOptionalField | P19.WireOptionalField | P20.WireOptionalField | P21.WireOptionalField | P22.WireOptionalField | P23.WireOptionalField;
+export type WireListField = P0.WireListField | P1.WireListField | P2.WireListField | P3.WireListField | P4.WireListField | P5.WireListField | P6.WireListField | P7.WireListField | P8.WireListField | P9.WireListField | P10.WireListField | P11.WireListField | P12.WireListField | P13.WireListField | P14.WireListField | P15.WireListField | P16.WireListField | P17.WireListField | P18.WireListField | P19.WireListField | P20.WireListField | P21.WireListField | P22.WireListField | P23.WireListField;
 
 /** Names come from the Rust model; cycle detection avoids unbounded recursive DTO paths. */
 type ChildOwner<O extends keyof WireCheckpointFieldNames, F extends string> =
@@ -108,12 +111,12 @@ export interface TypedWirePolicy {
 }
 
 export const wireRegistry = {
-  "CockpitMode": D19.wireCockpitMode,
-  "HerdrIdentity": D19.wireHerdrIdentity,
-  "HerdrCompatibility": D19.wireHerdrCompatibility,
-  "CockpitCapabilities": D19.wireCockpitCapabilities,
-  "StatusResponse": D19.wireStatusResponse,
-  "ErrorResponse": D19.wireErrorResponse,
+  "CockpitMode": D20.wireCockpitMode,
+  "HerdrIdentity": D20.wireHerdrIdentity,
+  "HerdrCompatibility": D20.wireHerdrCompatibility,
+  "CockpitCapabilities": D20.wireCockpitCapabilities,
+  "StatusResponse": D20.wireStatusResponse,
+  "ErrorResponse": D20.wireErrorResponse,
   "BrowserTarget": D0.wireBrowserTarget,
   "BrowserAction": D0.wireBrowserAction,
   "BrowserRequest": D0.wireBrowserRequest,
@@ -207,57 +210,57 @@ export const wireRegistry = {
   "BrowserViewCommandRequest": D2.wireBrowserViewCommandRequest,
   "BrowserViewCommandOutcome": D2.wireBrowserViewCommandOutcome,
   "BrowserViewCommandResponse": D2.wireBrowserViewCommandResponse,
-  "SpaceGitSummary": D19.wireSpaceGitSummary,
-  "SpaceGitStatus": D19.wireSpaceGitStatus,
-  "SpaceGitStatusResponse": D19.wireSpaceGitStatusResponse,
-  "SpaceGitSource": D19.wireSpaceGitSource,
-  "SpaceGitCheckout": D19.wireSpaceGitCheckout,
-  "SpaceGitUpstream": D19.wireSpaceGitUpstream,
-  "SpaceGitAction": D19.wireSpaceGitAction,
-  "SpaceGitActionRequest": D19.wireSpaceGitActionRequest,
-  "SpaceGitActionResponse": D19.wireSpaceGitActionResponse,
-  "SpaceGitActionOutcome": D19.wireSpaceGitActionOutcome,
-  "SpaceGitRefusal": D19.wireSpaceGitRefusal,
-  "ServiceStatus": D19.wireServiceStatus,
-  "SpaceServiceStatus": D19.wireSpaceServiceStatus,
-  "SpaceServiceStatusRequest": D19.wireSpaceServiceStatusRequest,
-  "SpaceServiceStatusResponse": D19.wireSpaceServiceStatusResponse,
-  "SpaceTags": D19.wireSpaceTags,
-  "SpaceTagsResponse": D19.wireSpaceTagsResponse,
-  "SpaceTagChangeRequest": D19.wireSpaceTagChangeRequest,
-  "SpaceSummary": D19.wireSpaceSummary,
-  "TabSummary": D19.wireTabSummary,
-  "PaneSummary": D19.wirePaneSummary,
-  "AgentSummary": D19.wireAgentSummary,
+  "SpaceGitSummary": D20.wireSpaceGitSummary,
+  "SpaceGitStatus": D20.wireSpaceGitStatus,
+  "SpaceGitStatusResponse": D20.wireSpaceGitStatusResponse,
+  "SpaceGitSource": D20.wireSpaceGitSource,
+  "SpaceGitCheckout": D20.wireSpaceGitCheckout,
+  "SpaceGitUpstream": D20.wireSpaceGitUpstream,
+  "SpaceGitAction": D20.wireSpaceGitAction,
+  "SpaceGitActionRequest": D20.wireSpaceGitActionRequest,
+  "SpaceGitActionResponse": D20.wireSpaceGitActionResponse,
+  "SpaceGitActionOutcome": D20.wireSpaceGitActionOutcome,
+  "SpaceGitRefusal": D20.wireSpaceGitRefusal,
+  "ServiceStatus": D20.wireServiceStatus,
+  "SpaceServiceStatus": D20.wireSpaceServiceStatus,
+  "SpaceServiceStatusRequest": D20.wireSpaceServiceStatusRequest,
+  "SpaceServiceStatusResponse": D20.wireSpaceServiceStatusResponse,
+  "SpaceTags": D20.wireSpaceTags,
+  "SpaceTagsResponse": D20.wireSpaceTagsResponse,
+  "SpaceTagChangeRequest": D20.wireSpaceTagChangeRequest,
+  "SpaceSummary": D20.wireSpaceSummary,
+  "TabSummary": D20.wireTabSummary,
+  "PaneSummary": D20.wirePaneSummary,
+  "AgentSummary": D20.wireAgentSummary,
   "HerdrShellStatus": D9.wireHerdrShellStatus,
   "HerdrCommandAction": D9.wireHerdrCommandAction,
   "HerdrCommand": D9.wireHerdrCommand,
   "HerdrPopupSize": D9.wireHerdrPopupSize,
   "HerdrPopup": D9.wireHerdrPopup,
   "HerdrShellState": D9.wireHerdrShellState,
-  "SessionSnapshotResponse": D19.wireSessionSnapshotResponse,
-  "PaneOutputResponse": D19.wirePaneOutputResponse,
-  "SessionSummary": D19.wireSessionSummary,
-  "SessionListResponse": D19.wireSessionListResponse,
-  "FocusKind": D19.wireFocusKind,
-  "FocusRequest": D19.wireFocusRequest,
-  "FocusResponse": D19.wireFocusResponse,
-  "PaneSplitDirection": D19.wirePaneSplitDirection,
-  "PaneMoveDestination": D19.wirePaneMoveDestination,
-  "ResourceMutationRequest": D19.wireResourceMutationRequest,
-  "CreatedPane": D19.wireCreatedPane,
-  "ResourceMutationResponse": D19.wireResourceMutationResponse,
-  "SessionStreamMessage": D19.wireSessionStreamMessage,
-  "TerminalMode": D19.wireTerminalMode,
-  "TerminalTargetKind": D19.wireTerminalTargetKind,
-  "TerminalOpenRequest": D19.wireTerminalOpenRequest,
-  "TerminalScrollDirection": D19.wireTerminalScrollDirection,
-  "TerminalScrollSource": D19.wireTerminalScrollSource,
-  "TerminalMouseButton": D19.wireTerminalMouseButton,
-  "TerminalMouseKind": D19.wireTerminalMouseKind,
-  "TerminalCommand": D19.wireTerminalCommand,
-  "TerminalOwnershipState": D19.wireTerminalOwnershipState,
-  "TerminalStreamMessage": D19.wireTerminalStreamMessage,
+  "SessionSnapshotResponse": D20.wireSessionSnapshotResponse,
+  "PaneOutputResponse": D20.wirePaneOutputResponse,
+  "SessionSummary": D20.wireSessionSummary,
+  "SessionListResponse": D20.wireSessionListResponse,
+  "FocusKind": D20.wireFocusKind,
+  "FocusRequest": D20.wireFocusRequest,
+  "FocusResponse": D20.wireFocusResponse,
+  "PaneSplitDirection": D20.wirePaneSplitDirection,
+  "PaneMoveDestination": D20.wirePaneMoveDestination,
+  "ResourceMutationRequest": D20.wireResourceMutationRequest,
+  "CreatedPane": D20.wireCreatedPane,
+  "ResourceMutationResponse": D20.wireResourceMutationResponse,
+  "SessionStreamMessage": D20.wireSessionStreamMessage,
+  "TerminalMode": D20.wireTerminalMode,
+  "TerminalTargetKind": D20.wireTerminalTargetKind,
+  "TerminalOpenRequest": D20.wireTerminalOpenRequest,
+  "TerminalScrollDirection": D20.wireTerminalScrollDirection,
+  "TerminalScrollSource": D20.wireTerminalScrollSource,
+  "TerminalMouseButton": D20.wireTerminalMouseButton,
+  "TerminalMouseKind": D20.wireTerminalMouseKind,
+  "TerminalCommand": D20.wireTerminalCommand,
+  "TerminalOwnershipState": D20.wireTerminalOwnershipState,
+  "TerminalStreamMessage": D20.wireTerminalStreamMessage,
   "ProjectLimits": D15.wireProjectLimits,
   "ProviderKind": D15.wireProviderKind,
   "ProviderDeployment": D15.wireProviderDeployment,
@@ -360,11 +363,11 @@ export const wireRegistry = {
   "WorkspaceOwnedResource": D15.wireWorkspaceOwnedResource,
   "WorkspaceOperation": D15.wireWorkspaceOperation,
   "ViewerSourceKind": D5.wireViewerSourceKind,
-  "ViewerKind": D20.wireViewerKind,
-  "ViewerSourceSelector": D20.wireViewerSourceSelector,
-  "ViewerSourceOptions": D20.wireViewerSourceOptions,
-  "ViewerOpenRequest": D20.wireViewerOpenRequest,
-  "ViewerContext": D20.wireViewerContext,
+  "ViewerKind": D21.wireViewerKind,
+  "ViewerSourceSelector": D21.wireViewerSourceSelector,
+  "ViewerSourceOptions": D21.wireViewerSourceOptions,
+  "ViewerOpenRequest": D21.wireViewerOpenRequest,
+  "ViewerContext": D21.wireViewerContext,
   "ContextRootKind": D5.wireContextRootKind,
   "ContextRoot": D5.wireContextRoot,
   "ContextDirectoryRequest": D5.wireContextDirectoryRequest,
@@ -419,18 +422,18 @@ export const wireRegistry = {
   "WorkspaceTeardownRecoveryState": D14.wireWorkspaceTeardownRecoveryState,
   "WorkspaceTeardownRecovery": D14.wireWorkspaceTeardownRecovery,
   "WorkspaceTeardownRecoveryList": D14.wireWorkspaceTeardownRecoveryList,
-  "SourceCapability": D18.wireSourceCapability,
-  "ReviewSide": D17.wireReviewSide,
-  "ReviewComparison": D17.wireReviewComparison,
-  "ReviewFileStatus": D17.wireReviewFileStatus,
-  "ReviewDiffLineKind": D17.wireReviewDiffLineKind,
-  "ReviewSnapshotRequest": D17.wireReviewSnapshotRequest,
-  "ReviewChangedFile": D17.wireReviewChangedFile,
-  "ReviewSnapshot": D17.wireReviewSnapshot,
-  "ReviewFileRequest": D17.wireReviewFileRequest,
-  "ReviewDiffLine": D17.wireReviewDiffLine,
-  "ReviewHunk": D17.wireReviewHunk,
-  "ReviewFileDiff": D17.wireReviewFileDiff,
+  "SourceCapability": D19.wireSourceCapability,
+  "ReviewSide": D18.wireReviewSide,
+  "ReviewComparison": D18.wireReviewComparison,
+  "ReviewFileStatus": D18.wireReviewFileStatus,
+  "ReviewDiffLineKind": D18.wireReviewDiffLineKind,
+  "ReviewSnapshotRequest": D18.wireReviewSnapshotRequest,
+  "ReviewChangedFile": D18.wireReviewChangedFile,
+  "ReviewSnapshot": D18.wireReviewSnapshot,
+  "ReviewFileRequest": D18.wireReviewFileRequest,
+  "ReviewDiffLine": D18.wireReviewDiffLine,
+  "ReviewHunk": D18.wireReviewHunk,
+  "ReviewFileDiff": D18.wireReviewFileDiff,
   "ContextSearchRequest": D7.wireContextSearchRequest,
   "ContextSearchResult": D7.wireContextSearchResult,
   "ContextSearchResponse": D7.wireContextSearchResponse,
@@ -445,62 +448,73 @@ export const wireRegistry = {
   "ProviderCredentialStatusList": D8.wireProviderCredentialStatusList,
   "ProviderCredentialSetRequest": D8.wireProviderCredentialSetRequest,
   "ProviderCredentialClearRequest": D8.wireProviderCredentialClearRequest,
-  "QuotaProvider": D16.wireQuotaProvider,
-  "QuotaProviderState": D16.wireQuotaProviderState,
-  "QuotaErrorCode": D16.wireQuotaErrorCode,
-  "QuotaUnit": D16.wireQuotaUnit,
-  "QuotaLevel": D16.wireQuotaLevel,
-  "QuotaLimit": D16.wireQuotaLimit,
-  "QuotaAccount": D16.wireQuotaAccount,
-  "QuotaProviderStatus": D16.wireQuotaProviderStatus,
-  "QuotaStatusRequest": D16.wireQuotaStatusRequest,
-  "QuotaStatusResponse": D16.wireQuotaStatusResponse,
-  "WidgetLocator": D21.wireWidgetLocator,
-  "WidgetAddress": D21.wireWidgetAddress,
-  "WidgetInputKind": D21.wireWidgetInputKind,
-  "WidgetContentInput": D21.wireWidgetContentInput,
-  "WidgetShowRequest": D21.wireWidgetShowRequest,
-  "WidgetShowResult": D21.wireWidgetShowResult,
-  "WidgetDisplayed": D21.wireWidgetDisplayed,
-  "WidgetPresentation": D21.wireWidgetPresentation,
-  "WidgetResolvedFrom": D21.wireWidgetResolvedFrom,
-  "WidgetContentFacts": D21.wireWidgetContentFacts,
-  "WidgetSourceFacts": D21.wireWidgetSourceFacts,
-  "WidgetTargetFacts": D21.wireWidgetTargetFacts,
-  "WidgetShowResponse": D21.wireWidgetShowResponse,
-  "WidgetCloseRequest": D21.wireWidgetCloseRequest,
-  "WidgetCloseResult": D21.wireWidgetCloseResult,
-  "WidgetCloseResponse": D21.wireWidgetCloseResponse,
-  "WidgetListRequest": D21.wireWidgetListRequest,
-  "WidgetListState": D21.wireWidgetListState,
-  "WidgetListEntry": D21.wireWidgetListEntry,
-  "WidgetListResponse": D21.wireWidgetListResponse,
-  "WidgetSelectionRequest": D21.wireWidgetSelectionRequest,
-  "WidgetSelectionStatus": D21.wireWidgetSelectionStatus,
-  "WidgetSelectionResponse": D21.wireWidgetSelectionResponse,
-  "WidgetKey": D21.wireWidgetKey,
-  "WidgetKind": D21.wireWidgetKind,
-  "WidgetArrival": D21.wireWidgetArrival,
-  "WidgetChange": D21.wireWidgetChange,
-  "WidgetSourceStatus": D21.wireWidgetSourceStatus,
-  "WidgetSourceSummary": D21.wireWidgetSourceSummary,
-  "WidgetSelectionFacts": D21.wireWidgetSelectionFacts,
-  "WidgetSummary": D21.wireWidgetSummary,
-  "WidgetRemovalReason": D21.wireWidgetRemovalReason,
-  "WidgetEvent": D21.wireWidgetEvent,
-  "WidgetBlocker": D21.wireWidgetBlocker,
-  "WidgetWindowReport": D21.wireWidgetWindowReport,
-  "WidgetContentRequest": D21.wireWidgetContentRequest,
-  "WidgetBody": D21.wireWidgetBody,
-  "WidgetContent": D21.wireWidgetContent,
-  "WidgetRemoveRequest": D21.wireWidgetRemoveRequest,
-  "WidgetRemoveResult": D21.wireWidgetRemoveResult,
-  "WidgetRemoveResponse": D21.wireWidgetRemoveResponse,
-  "WidgetSelectValue": D21.wireWidgetSelectValue,
-  "WidgetSelectRequest": D21.wireWidgetSelectRequest,
-  "WidgetSelectResponse": D21.wireWidgetSelectResponse,
-  "WidgetChoicesSpec": D21.wireWidgetChoicesSpec,
-  "WidgetChoice": D21.wireWidgetChoice,
+  "QuotaProvider": D17.wireQuotaProvider,
+  "QuotaProviderState": D17.wireQuotaProviderState,
+  "QuotaErrorCode": D17.wireQuotaErrorCode,
+  "QuotaUnit": D17.wireQuotaUnit,
+  "QuotaLevel": D17.wireQuotaLevel,
+  "QuotaLimit": D17.wireQuotaLimit,
+  "QuotaAccount": D17.wireQuotaAccount,
+  "QuotaProviderStatus": D17.wireQuotaProviderStatus,
+  "QuotaStatusRequest": D17.wireQuotaStatusRequest,
+  "QuotaStatusResponse": D17.wireQuotaStatusResponse,
+  "QuickAskHarness": D16.wireQuickAskHarness,
+  "QuickAskStartRequest": D16.wireQuickAskStartRequest,
+  "QuickAskAction": D16.wireQuickAskAction,
+  "QuickAskActionRequest": D16.wireQuickAskActionRequest,
+  "QuickAskPhase": D16.wireQuickAskPhase,
+  "QuickAskDelivery": D16.wireQuickAskDelivery,
+  "QuickAskLocation": D16.wireQuickAskLocation,
+  "QuickAskFailure": D16.wireQuickAskFailure,
+  "QuickAskStatus": D16.wireQuickAskStatus,
+  "QuickAskAgentAvailability": D16.wireQuickAskAgentAvailability,
+  "QuickAskAvailability": D16.wireQuickAskAvailability,
+  "WidgetLocator": D22.wireWidgetLocator,
+  "WidgetAddress": D22.wireWidgetAddress,
+  "WidgetInputKind": D22.wireWidgetInputKind,
+  "WidgetContentInput": D22.wireWidgetContentInput,
+  "WidgetShowRequest": D22.wireWidgetShowRequest,
+  "WidgetShowResult": D22.wireWidgetShowResult,
+  "WidgetDisplayed": D22.wireWidgetDisplayed,
+  "WidgetPresentation": D22.wireWidgetPresentation,
+  "WidgetResolvedFrom": D22.wireWidgetResolvedFrom,
+  "WidgetContentFacts": D22.wireWidgetContentFacts,
+  "WidgetSourceFacts": D22.wireWidgetSourceFacts,
+  "WidgetTargetFacts": D22.wireWidgetTargetFacts,
+  "WidgetShowResponse": D22.wireWidgetShowResponse,
+  "WidgetCloseRequest": D22.wireWidgetCloseRequest,
+  "WidgetCloseResult": D22.wireWidgetCloseResult,
+  "WidgetCloseResponse": D22.wireWidgetCloseResponse,
+  "WidgetListRequest": D22.wireWidgetListRequest,
+  "WidgetListState": D22.wireWidgetListState,
+  "WidgetListEntry": D22.wireWidgetListEntry,
+  "WidgetListResponse": D22.wireWidgetListResponse,
+  "WidgetSelectionRequest": D22.wireWidgetSelectionRequest,
+  "WidgetSelectionStatus": D22.wireWidgetSelectionStatus,
+  "WidgetSelectionResponse": D22.wireWidgetSelectionResponse,
+  "WidgetKey": D22.wireWidgetKey,
+  "WidgetKind": D22.wireWidgetKind,
+  "WidgetArrival": D22.wireWidgetArrival,
+  "WidgetChange": D22.wireWidgetChange,
+  "WidgetSourceStatus": D22.wireWidgetSourceStatus,
+  "WidgetSourceSummary": D22.wireWidgetSourceSummary,
+  "WidgetSelectionFacts": D22.wireWidgetSelectionFacts,
+  "WidgetSummary": D22.wireWidgetSummary,
+  "WidgetRemovalReason": D22.wireWidgetRemovalReason,
+  "WidgetEvent": D22.wireWidgetEvent,
+  "WidgetBlocker": D22.wireWidgetBlocker,
+  "WidgetWindowReport": D22.wireWidgetWindowReport,
+  "WidgetContentRequest": D22.wireWidgetContentRequest,
+  "WidgetBody": D22.wireWidgetBody,
+  "WidgetContent": D22.wireWidgetContent,
+  "WidgetRemoveRequest": D22.wireWidgetRemoveRequest,
+  "WidgetRemoveResult": D22.wireWidgetRemoveResult,
+  "WidgetRemoveResponse": D22.wireWidgetRemoveResponse,
+  "WidgetSelectValue": D22.wireWidgetSelectValue,
+  "WidgetSelectRequest": D22.wireWidgetSelectRequest,
+  "WidgetSelectResponse": D22.wireWidgetSelectResponse,
+  "WidgetChoicesSpec": D22.wireWidgetChoicesSpec,
+  "WidgetChoice": D22.wireWidgetChoice,
   "OrchestrationSnapshotRequest": D12.wireOrchestrationSnapshotRequest,
   "OrchestrationWaitRequest": D12.wireOrchestrationWaitRequest,
   "OrchestrationWaitResponse": D12.wireOrchestrationWaitResponse,
