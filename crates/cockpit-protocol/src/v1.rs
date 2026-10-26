@@ -190,6 +190,104 @@ pub struct SpaceTagChangeRequest {
     pub assigned: bool,
 }
 
+/// Store-assigned epoch and Herdr sequence, compared lexicographically.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct AgentAttentionMark {
+    #[ts(type = "number")]
+    pub epoch: u64,
+    #[ts(type = "number")]
+    pub seq: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct AgentAttentionLast {
+    #[ts(type = "number")]
+    pub epoch: u64,
+    #[ts(type = "number")]
+    pub seq: u64,
+    pub status: String,
+    pub observed_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct AgentAttentionCompletion {
+    #[ts(type = "number")]
+    pub epoch: u64,
+    #[ts(type = "number")]
+    pub seq: u64,
+    pub at: String,
+    pub inferred: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct AgentAttentionStamp {
+    #[ts(type = "number")]
+    pub epoch: u64,
+    #[ts(type = "number")]
+    pub seq: u64,
+    pub at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct AgentAttentionRecord {
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub agent: String,
+    /// Stable identifier for an unseen completion whose agent is no longer live.
+    #[serde(default)]
+    pub historical_id: Option<String>,
+    pub last: AgentAttentionLast,
+    pub completion: Option<AgentAttentionCompletion>,
+    pub acked: Option<AgentAttentionStamp>,
+    pub dismissed: Option<AgentAttentionStamp>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct AgentAttentionRefusal {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct AgentAttentionResponse {
+    pub session_id: String,
+    pub server_instance: String,
+    #[ts(type = "number")]
+    pub epoch: u64,
+    pub records: Vec<AgentAttentionRecord>,
+    pub refused: Option<AgentAttentionRefusal>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct AgentAttentionObservation {
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub agent: String,
+    pub status: String,
+    #[ts(type = "number")]
+    pub seq: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentAttentionChange {
+    Seen { pane_id: String, terminal_id: String, agent: String, transition: AgentAttentionMark },
+    SeenHistorical { historical_id: String },
+    Dismiss { pane_id: String, terminal_id: String, agent: String, transition: AgentAttentionMark },
+    Restore { pane_id: String, agent: String },
+    RestoreAll,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct AgentAttentionChangeRequest {
+    pub server_instance: String,
+    pub observations: Vec<AgentAttentionObservation>,
+    pub change: Option<AgentAttentionChange>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum SpaceGitAction {

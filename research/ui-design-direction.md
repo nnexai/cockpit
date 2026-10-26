@@ -34,7 +34,7 @@ Herdr calls its API resources workspaces; the UI calls them Spaces, as required 
 Herdr TUI parity is the starting constraint, not Cockpit’s product destination.
 
 - Copy semantics before appearance: resource hierarchy, authoritative focus, attention priority, terminal ownership, shortcuts, and mutation behavior should remain recognizable and correct.
-- Treat Herdr's TUI and server behavior as references. Agents are ordered as in the TUI's priority mode: blocked, done, working, idle, unknown; newest state change first.
+- Treat Herdr's TUI and server behavior as references. The Agents queue deliberately layers durable Cockpit attention on Herdr state; its ordering and acknowledgment rules are in `DECISIONS.md`.
 - Depart deliberately where a desktop surface can provide better supervision: persistent overview, direct manipulation, visible ownership, larger readable type, pointer targeting, and resource-local recovery.
 - Never trade correctness for graphical polish. A Cockpit interaction still resolves through Herdr and reconciles from authoritative state.
 - Do not preserve TUI density when it harms legibility. Typography and geometry are semantic design tokens; tune those tokens as a system instead of scattering component-local overrides.
@@ -110,9 +110,11 @@ The desired drag behavior distinguishes reorder from reparent, previews the dest
 Agents is an attention queue, not a directory and not a chat transcript.
 
 - Show agent status, identity, and useful Space/tab context in a glanceable row.
-- Order the queue blocked, done, working, idle, unknown; within a status, newest state change first.
+- Order the queue Blocked, unseen Done, Working, Idle, Unknown; a working agent with an earlier unseen result is in the Done tier, and acknowledged Herdr Done is in Idle. Within a tier use newest epoch and state change, then focused and pane ID.
 - State is never a color-only dot. A compact 26 px row shows `space · tab`, pinning the tab after an ellipsized Space name, with an 18 px SVG badge (a state-tinted disc and one distinct shape per state). Unselected Blocked/Done rows also print the urgent state word inline; only acknowledged selection adds `State · agent` below. Hover, DOM focus and pending intent do not grow rows. Use a spinner only for a pending operation, not as the permanent Working icon. See the sidebar presentation contract in `DECISIONS.md`.
 - Clicking a row requests focus of its owning pane and attachment. The highlight moves only when Herdr acknowledges focus.
+- Retain a completion until explicitly marked seen or the Agents row activation is confirmed by Herdr. Dismiss idle or Done rows with the word action without closing a terminal; All provides Restore and Restore all. New activity returns a dismissed agent to the queue.
+- Keep unseen results from disappeared or replaced agents as historical entries in All, with explicit mark-seen and no activation of a replacement.
 - Blocked and Done may receive stronger state emphasis; Working and Idle remain identifiable without relying on color.
 
 ### Main work area
@@ -285,10 +287,10 @@ This is a conceptual wireframe, not a prescribed measurement or current layout. 
 - No landing-page hero, welcome marketing panel, gradient glow, glass blur, oversized logo, usage chart, or KPI card.
 - No card per Space, agent, tab, or terminal. Rows and regions carry more information per pixel.
 - Keep the Agents queue persistent and glanceable rather than turning it into a chat panel or popup.
-- No separate inbox popup or Cockpit-managed acknowledgement state.
+- No separate inbox popup; keep Cockpit-managed acknowledgment in the persistent Agents queue.
 - No agent avatars or chat bubbles in the attention queue.
 - No status encoded by color alone and no unlabeled rainbow-dot matrix.
-- No optimistic reordering that temporarily disagrees with Herdr.
+- No optimistic dismissal or selection that implies an unconfirmed operation succeeded.
 - No browser-style close button that implies a disconnected terminal process was killed.
 - No custom terminal prompt, command blocks, output summaries, translucent terminal, or terminal text restyling.
 - Keep pane headers where needed for focus and resource context. Exact geometry follows current styles; drag targeting is not yet implemented.
@@ -330,7 +332,7 @@ This is a conceptual wireframe, not a prescribed measurement or current layout. 
 
 - [ ] Space rows support keyboard navigation, expansion, context actions, and inline rename where available.
 - [ ] Drag reparenting and destination drop zones are desired, not yet implemented.
-- [ ] Agents appear in status order: blocked, done, working, idle, unknown; newest state change first.
+- [ ] Agents follow the attention tiers and stable ordering in `DECISIONS.md`, retaining unseen completions even after Herdr reports idle.
 - [ ] Every agent state has an icon, state word, and freshness. Color is supplemental.
 - [ ] Clicking an agent requests focus of its owning pane and updates selection only after acknowledgement.
 

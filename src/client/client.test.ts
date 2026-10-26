@@ -162,6 +162,8 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     spaceServiceStatus: vi.fn(async (sessionId: string, _request: SpaceServiceStatusRequest, _signal?: AbortSignal) => ({ session_id: sessionId, services: [] })),
     spaceTags: vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: snapshot.server_instance, catalog: [], spaces: [] })),
     changeSpaceTag: vi.fn(async () => { throw new Error("Unexpected Space tag change in terminal fixture"); }),
+    agentAttention: vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: snapshot.server_instance, epoch: 1, records: [], refused: null })),
+    changeAgentAttention: vi.fn(async () => { throw new Error("Unexpected agent attention change"); }),
     spaceGitAction: vi.fn(async () => { throw new Error("Unexpected Git action in terminal fixture"); }),
     focus: vi.fn(async () => ({ session_id: snapshot.session_id, kind: "pane" as const, target_id: "pane-1", accepted: true })),
     mutate: vi.fn(async () => ({ session_id: snapshot.session_id, snapshot, created: null })),
@@ -495,6 +497,47 @@ describe("Space tags contracts", () => {
       controller.abort();
       resolve(response);
       await expect(result).rejects.toBeDefined();
+    });
+  }
+});
+
+describe("Agent attention contracts", () => {
+  const response = { session_id: "session-1", server_instance: "server-1", epoch: 1, records: [], refused: null };
+  const request = { server_instance: "server-1", observations: [{ pane_id: "p", terminal_id: "t", agent: "a", status: "done", seq: 4 }], change: null };
+  for (const transport of ["browser", "native"] as const) {
+    const clientFor = (value: unknown) => transport === "browser"
+      ? createBrowserClient(vi.fn(async () => jsonResponse(value)))
+      : createNativeClient(vi.fn(async () => value));
+    it(`${transport} decodes responses and fences both identities`, async () => {
+      await expect(clientFor(response).agentAttention("session-1")).resolves.toEqual(response);
+      await expect(clientFor(response).changeAgentAttention("session-1", request)).resolves.toEqual(response);
+      await expect(clientFor({ ...response, session_id: "other" }).agentAttention("session-1")).rejects.toMatchObject({ code: "malformed_response" });
+      for (const field of ["session_id", "server_instance"]) {
+        await expect(clientFor({ ...response, [field]: "other" }).changeAgentAttention("session-1", request)).rejects.toMatchObject({ code: "malformed_response" });
+      }
+      await expect(clientFor({ ...response, epoch: "bad" }).agentAttention("session-1")).rejects.toMatchObject({ code: "malformed_response" });
+    });
+    it(`${transport} transports distinct historical completion identities`, async () => {
+      const record = { historical_id: "history-id", pane_id: "p", terminal_id: "t", agent: "a", last: { epoch: 1, seq: 4, status: "idle", observed_at: "now" }, completion: { epoch: 1, seq: 3, at: "then", inferred: true }, acked: null, dismissed: null };
+      const history = { ...response, records: [record] };
+      const change = { server_instance: "server-1", observations: [], change: { kind: "seen_historical" as const, historical_id: "history-id" } };
+      await expect(clientFor(history).agentAttention("session-1")).resolves.toEqual(history);
+      await expect(clientFor(response).changeAgentAttention("session-1", change)).resolves.toEqual(response);
+    });
+    it(`${transport} snapshots nested observations at submission`, async () => {
+      let finish!: (value: unknown) => void;
+      const pending = new Promise<unknown>(resolve => { finish = resolve; });
+      const fetch = vi.fn(async () => jsonResponse(await pending));
+      const invoke = vi.fn(async () => pending);
+      const client = transport === "browser" ? createBrowserClient(fetch) : createNativeClient(invoke);
+      const submitted = structuredClone(request);
+      const result = client.changeAgentAttention("session-1", submitted);
+      submitted.observations[0].seq = 9;
+      submitted.server_instance = "other";
+      finish(response);
+      await expect(result).resolves.toEqual(response);
+      if (transport === "browser") expect(fetch).toHaveBeenCalledWith("/api/v1/sessions/session-1/agent-attention", expect.objectContaining({ body: JSON.stringify(request) }));
+      else expect(invoke).toHaveBeenCalledWith("cockpit_agent_attention_change", { sessionId: "session-1", request });
     });
   }
 });

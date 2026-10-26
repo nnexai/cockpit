@@ -54,6 +54,7 @@ Project setup is plan-driven: repository discovery, artifact validation, Herdr c
 | Global Context Library | Durable provider snapshots and explicit folder captures, independent of workspace lifetime. |
 | Space context selections | Relevant Library IDs and configured existing repository paths, not copied or pinned files. |
 | Space tags | Cockpit-owned arbitrary organization labels; durable across Herdr restart, removed from a Space after confirmed closure, with a reusable catalog. |
+| Agent attention | Cockpit-owned completion acknowledgements and idle dismissals, shared by browser and native clients and retained across reload and restart; distinct from Herdr agent state. |
 | Space Notes | Durable UUID-scoped Markdown, separate from Library and checkouts. |
 | Supervisor task Markdown | Canonical task title, description, relationships, checklist and checked state, outside checkouts; current task/document revisions fence scope changes. |
 | Orchestration machine document | Jobs, attachments, operation/effect journals, messages, source outcomes, integration and cleanup receipts, not live Herdr status or another task store. |
@@ -67,6 +68,12 @@ Notes presents Scratchpad, Todos, Kanban, Decisions and board-item comment threa
 ## Local surfaces
 
 The sidebar defaults to Repository hierarchy and can switch to flat Tags groups; the choice is remembered locally. Tags group references to the same live Spaces, not copies or new Herdr resources. Compact 26 px Space/agent rows keep meaningful last-fetch Git counters visible on the name line in both views. Tagged Spaces add a measured line of whole text chips plus `+N`; confirmed selection wraps all tags and reveals secondary detail, without growth on hover, DOM focus or pending intent. The small picker, Space menu and Commands edit assignments. Tags are distinct from Herdr display labels and agent state; Spaces without agents use a small gray dot, while agents retain distinct state shapes, pinned tab context and inline Blocked/Done words. Space-scoped Git status/actions describe last-fetch knowledge rather than remote freshness. The workarea contains the selected Space's tab strip, selected tab canvas, and Cockpit-owned Library, Notes or Supervisor views; these views are not synthetic Herdr panes.
+
+The Agents section is an attention queue: Blocked, Working and unseen completions remain visible, including completions Herdr has already reported as idle. Activating an agent row acknowledges its result only after Herdr confirms focus; marking seen is also explicit. Dismiss hides an idle or Done agent until new activity without closing its terminal; All shows hidden agents for individual restore or Restore all. If attention storage is unavailable, all agents remain visible with their Herdr state.
+
+Unseen results remain available as historical entries in All even if the agent disappears or is replaced. Mark a historical result seen explicitly; it does not focus a replacement agent.
+
+During an attention-store outage, the client bounds queued observations and prioritizes completion evidence. If that bound forces a discard, it warns that recovery may be incomplete until the warning is acknowledged; observations never received from Herdr cannot be reconstructed.
 
 Every painted active-tab terminal is a direct control attachment rendered by xterm.js. Rendering and input permission remain separate. Herdr owns screen state, scrollback and PTY lifetime; resynchronization supplies a fresh baseline. Keyboard routing combines Cockpit's static prefix registry with identity-checked server-advertised commands. The singleton server popup floats above, rather than reshaping, the split tree.
 

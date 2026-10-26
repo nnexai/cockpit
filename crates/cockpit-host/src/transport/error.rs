@@ -52,6 +52,7 @@ pub fn status(policy: StatusPolicy, error: &OperationError) -> StatusCode {
             | "stale_generation"
             | "space_git_target_changed"
             | "space_tags_target_changed"
+            | "agent_attention_target_changed"
             | "space_git_action_ineligible"
             | "space_git_action_in_progress" => StatusCode::CONFLICT,
             _ => StatusCode::SERVICE_UNAVAILABLE,

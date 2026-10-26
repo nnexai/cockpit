@@ -32,6 +32,8 @@ export type SessionState = {
   syncError: SyncError | null;
   focusPending: FocusRequest | null;
   focusToken: number;
+  /** Focus RPC accepted for this token; the stream must also confirm the target. */
+  focusAcceptedToken: number | null;
   focusError: SyncError | null;
   attachments: Record<string, PaneAttachment>;
 };
@@ -46,6 +48,7 @@ export const initialSessionState: SessionState = {
   syncError: null,
   focusPending: null,
   focusToken: 0,
+  focusAcceptedToken: null,
   focusError: null,
   attachments: {},
 };
@@ -58,6 +61,7 @@ export type SessionAction =
   | { type: "stream/message"; epoch: number; sessionId: string; message: SessionStreamMessage }
   | { type: "stream/error"; epoch: number; sessionId: string; code: string; message: string }
   | { type: "focus/request"; epoch: number; sessionId: string; request: FocusRequest; token?: number }
+  | { type: "focus/accepted"; epoch: number; sessionId: string; token: number }
   | { type: "focus/error"; epoch: number; sessionId: string; code: string; message: string; token?: number }
   | { type: "focus/clear"; epoch: number; sessionId: string; token: number }
   | { type: "attachment/opened"; epoch: number; sessionId: string; paneId: string; streamId: string; mode: "control" }
@@ -101,6 +105,27 @@ export function focusFulfilled(
   }
 }
 
+// Mutation responses and stream frames have independent ordering. Preserve a
+// newer lifecycle observation only when both snapshots describe the same
+// server and terminal incarnation; pane IDs alone can be reused.
+function mergeAgentObservations(previous: SessionSnapshotResponse | null, next: SessionSnapshotResponse): SessionSnapshotResponse {
+  if (!previous || previous.server_instance !== next.server_instance) return next;
+  const oldTerminals = new Map(previous.panes.map((pane) => [pane.id, pane.terminal_id]));
+  const newTerminals = new Map(next.panes.map((pane) => [pane.id, pane.terminal_id]));
+  const oldAgents = new Map(previous.agents.map((agent) => [agent.pane_id, agent]));
+  return {
+    ...next,
+    agents: next.agents.map((agent) => {
+      const old = oldAgents.get(agent.pane_id);
+      const terminal = newTerminals.get(agent.pane_id);
+      return old && terminal && oldTerminals.get(agent.pane_id) === terminal &&
+        old.name === agent.name && old.state_change_seq > agent.state_change_seq
+        ? { ...agent, status: old.status, state_change_seq: old.state_change_seq }
+        : agent;
+    }),
+  };
+}
+
 export function sessionReducer(state: SessionState, action: SessionAction): SessionState {
   switch (action.type) {
     case "switch":
@@ -116,7 +141,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         : state;
     case "snapshot/authoritative":
       if (!current(state, action.epoch, action.sessionId) || action.snapshot.session_id !== state.sessionId) return state;
-      return { ...state, snapshot: action.snapshot, syncError: null };
+      return { ...state, snapshot: mergeAgentObservations(state.snapshot, action.snapshot), syncError: null };
     case "snapshot/received":
       if (!current(state, action.epoch, action.sessionId)) return state;
       if (state.sync === "live") return state;
@@ -150,7 +175,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         const fulfilled = focusFulfilled(message.snapshot, pending);
         return {
           ...state,
-          snapshot: message.snapshot,
+          snapshot: mergeAgentObservations(state.snapshot, message.snapshot),
           generation: result.cursor.generation,
           sequence: result.cursor.sequence,
           sync: "live",
@@ -182,13 +207,16 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       };
     case "focus/request":
       if (!current(state, action.epoch, action.sessionId)) return state;
-      return { ...state, focusPending: action.request, focusToken: action.token ?? state.focusToken + 1, focusError: null };
+      return { ...state, focusPending: action.request, focusToken: action.token ?? state.focusToken + 1, focusAcceptedToken: null, focusError: null };
+    case "focus/accepted":
+      if (!current(state, action.epoch, action.sessionId) || action.token !== state.focusToken || state.focusError) return state;
+      return { ...state, focusAcceptedToken: action.token };
     case "focus/error":
       if (!current(state, action.epoch, action.sessionId) || (action.token !== undefined && action.token !== state.focusToken)) return state;
-      return { ...state, focusPending: null, focusError: errorOf(action.code, action.message) };
+      return { ...state, focusPending: null, focusAcceptedToken: null, focusError: errorOf(action.code, action.message) };
     case "focus/clear":
       if (!current(state, action.epoch, action.sessionId) || action.token < state.focusToken) return state;
-      return { ...state, focusPending: null, focusToken: action.token, focusError: null };
+      return { ...state, focusPending: null, focusToken: action.token, focusAcceptedToken: null, focusError: null };
     case "attachment/opened":
       if (!current(state, action.epoch, action.sessionId)) return state;
       return {

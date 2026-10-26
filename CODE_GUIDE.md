@@ -26,6 +26,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Virtual leaves | `src/app/layout/FilesLeaf.tsx`; `src/app/layout/ReviewLeaf.tsx`; `src/app/layout/BrowserLeaf.tsx` |
 | Terminal leaf and cleanup notices | `src/app/layout/TerminalLeaf.tsx`; `src/app/layout/BrowserCleanupNotices.tsx` |
 | Sidebar presentation | `src/app/sidebar/`; `src/app/sidebar.css` |
+| Agents attention queue and actions | `src/app/sidebar/Agents.tsx`; `src/app/sidebar/agentAttentionModel.ts`; `src/app/session/agentAttention.ts` |
 | Space tags/picker/grouping | `src/app/session/spaceTags.ts`; `src/app/sidebar/SpaceTagChip.tsx`; `src/app/sidebar/SpaceTagPopover.tsx`; `src/app/sidebar/spaceTagView.ts`; menu/Commands in `ResourceContextMenu.tsx`/`commands.ts` |
 | Git status/actions | `src/app/session/spaceGitStatus.ts`; `src/app/session/spaceGitActions.ts`; `src/app/sidebar/SpaceGitAction.tsx` |
 | Running services (read-only) | `src/app/session/spaceServiceStatus.ts`; `src/app/sidebar/Spaces.tsx`; plugin-owned rows join the caller's live pane/tab/Space snapshot, with no lifecycle controls; discovery runs on show or pane-set changes and repeats every five seconds only while health targets are present |
@@ -210,6 +211,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Shared operation declaration/registry | `crates/cockpit-host/src/transport/operations.rs`; `crates/cockpit-host/src/transport/registry.rs` |
 | Shared typed session/project/viewer handlers | `crates/cockpit-host/src/transport/operations/session.rs`; `crates/cockpit-host/src/transport/operations/projects.rs`; `crates/cockpit-host/src/transport/operations/viewer.rs` |
 | Space tags storage/contract/transport | `crates/cockpit-core/src/space_tags.rs`; `crates/cockpit-protocol/src/v1.rs`; session operations/registry above; `src/client/CockpitClient.ts` and `src/client/operations.ts` decode and fence responses |
+| Agent attention storage/contract/transport | `crates/cockpit-core/src/agent_attention.rs`; `crates/cockpit-protocol/src/v1.rs`; session operations/registry above; `src/client/CockpitClient.ts` and `src/client/operations.ts` |
 | Shared typed library/credentials/Notes handlers | `crates/cockpit-host/src/transport/operations/library.rs`; `crates/cockpit-host/src/transport/operations/credentials.rs`; `crates/cockpit-host/src/transport/operations/notes.rs` |
 | Shared typed orchestration/review/Context handlers | `crates/cockpit-host/src/transport/operations/orchestration.rs`; `crates/cockpit-host/src/transport/operations/review.rs`; `crates/cockpit-host/src/transport/operations/context.rs` |
 | Shared typed Browser/comment/widget handlers | `crates/cockpit-host/src/transport/operations/browser.rs`; `crates/cockpit-host/src/transport/operations/comments.rs`; `crates/cockpit-host/src/transport/operations/widgets.rs` |

@@ -66,10 +66,10 @@ import {
   parseBrowserFeedbackSendRequest, parseBrowserFeedbackSendResponse, parseBrowserRequest, parseBrowserResponse, 
   parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest, parseFocusRequest, parseFocusResponse, 
   parseResourceMutationRequest, parseResourceMutationResponse, parseSessionListResponse, 
-  parseSessionSnapshotResponse, parseSpaceGitStatusResponse, parseSpaceServiceStatusRequest, parseSpaceServiceStatusResponse, parseSpaceTagsResponse, matchSpaceGitActionResponse, parseStatusResponse,
+  parseSessionSnapshotResponse, parseSpaceGitStatusResponse, parseSpaceServiceStatusRequest, parseSpaceServiceStatusResponse, parseSpaceTagsResponse, parseAgentAttentionResponse, matchSpaceGitActionResponse, parseStatusResponse,
   validateSessionId, validateResourceId, type CockpitClient,
 } from "./CockpitClient";
-import type { FocusRequest, ResourceMutationRequest, SpaceGitActionRequest, SpaceTagChangeRequest } from "../protocol/generated/v1";
+import type { FocusRequest, ResourceMutationRequest, SpaceGitActionRequest, SpaceTagChangeRequest, AgentAttentionChangeRequest } from "../protocol/generated/v1";
 import { widgetAbortable } from "./widgetTransport";
 
 type Backend = "browser" | "native";
@@ -974,6 +974,35 @@ const operations: OperationTable = {
         parse: parseSpaceTagsResponse,
         matchIdentity: (response) => {
           if (response.session_id !== sessionId || response.server_instance !== submitted.server_instance) throw new CockpitClientError("malformed_response", "Space tag change belongs to another target");
+          return response;
+        },
+      };
+    },
+  },
+  agentAttention: { direct: "both", nativeAbort: "read",
+    encode(_backend, sessionId, signal) {
+      validateSessionId(sessionId); signal?.throwIfAborted();
+      return {
+        operation: "Agent attention",
+        http: { method: "GET", route: () => `/api/v1/sessions/${encodeURIComponent(sessionId)}/agent-attention`, signal: () => signal },
+        tauri: { command: "cockpit_agent_attention", args: () => ({ sessionId }) },
+        parse: parseAgentAttentionResponse,
+        matchIdentity: (response) => { signal?.throwIfAborted(); if (response.session_id !== sessionId) throw new CockpitClientError("malformed_response", "Agent attention belongs to another session"); return response; },
+      };
+    },
+  },
+  changeAgentAttention: { direct: "both",
+    encode(_backend, sessionId, request) {
+      validateSessionId(sessionId);
+      let submitted: AgentAttentionChangeRequest;
+      const submit = () => { submitted = structuredClone(request); return submitted; };
+      return {
+        operation: "Agent attention change",
+        http: { method: "POST", route: () => { submit(); return `/api/v1/sessions/${encodeURIComponent(sessionId)}/agent-attention`; }, json: () => submitted },
+        tauri: { command: "cockpit_agent_attention_change", args: () => ({ sessionId, request: submit() }) },
+        parse: parseAgentAttentionResponse,
+        matchIdentity: (response) => {
+          if (response.session_id !== sessionId || response.server_instance !== submitted.server_instance) throw new CockpitClientError("malformed_response", "Agent attention change belongs to another target");
           return response;
         },
       };

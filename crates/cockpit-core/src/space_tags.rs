@@ -79,14 +79,7 @@ impl SpaceTagService {
     }
 
     async fn session_namespace(&self, session_id: &str) -> Result<String, InspectionError> {
-        let socket = self.herdr.session_socket_path(session_id).ok_or_else(|| {
-            InspectionError::new("endpoint_identity_unavailable", "Herdr session socket namespace is unavailable")
-        })?;
-        tokio::task::spawn_blocking(move || {
-            let socket = std::fs::canonicalize(socket)
-                .map_err(|error| InspectionError::new("endpoint_identity_unavailable", error.to_string()))?;
-            Ok(format!("{:x}", Sha256::digest(socket.as_os_str().as_encoded_bytes())))
-        }).await.map_err(|error| InspectionError::new("endpoint_identity_unavailable", error.to_string()))?
+        session_namespace(&self.herdr, session_id).await
     }
 
     async fn prune_candidates(&self) -> Result<HashSet<String>, InspectionError> {
@@ -172,6 +165,17 @@ impl SpaceTagService {
             Ok(response(&stored, &proven))
         }).await.map_err(|error| InspectionError::new("space_tags_outcome_unknown", error.to_string()))?
     }
+}
+
+pub(crate) async fn session_namespace(herdr: &Arc<dyn ProjectHerdrAdapter>, session_id: &str) -> Result<String, InspectionError> {
+    let socket = herdr.session_socket_path(session_id).ok_or_else(|| {
+        InspectionError::new("endpoint_identity_unavailable", "Herdr session socket namespace is unavailable")
+    })?;
+    tokio::task::spawn_blocking(move || {
+        let socket = std::fs::canonicalize(socket)
+            .map_err(|error| InspectionError::new("endpoint_identity_unavailable", error.to_string()))?;
+        Ok(format!("{:x}", Sha256::digest(socket.as_os_str().as_encoded_bytes())))
+    }).await.map_err(|error| InspectionError::new("endpoint_identity_unavailable", error.to_string()))?
 }
 
 fn matches(space: &StoredSpace, proven: &ProvenSession, space_id: &str) -> bool {
