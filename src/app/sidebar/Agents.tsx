@@ -38,14 +38,19 @@ export function Agents({ agents, spaces, tabs, selectedPaneId, pendingPaneId, lo
           const status = spaceStatus(agent.status || "unknown");
           const pending = agent.pane_id === pendingPaneId;
           const selected = agent.pane_id === selectedPaneId && !pending;
+          const flagged = status.className === "blocked" || status.className === "done";
+          const sub = <><span className="agent-word">{status.word}</span><span className="agent-name">{agent.name ? ` · ${agent.name}` : ""}</span></>;
           const key = rowKey(agent);
           const description = [location, agent.name, agent.status || "unknown"].filter(Boolean);
           return <button type="button" key={key} data-row-id={key} tabIndex={roving.tabIndexFor(key)} className={`agent-row state-${status.className}${selected ? " is-selected" : ""}${pending ? " is-pending" : ""}`}
             onClick={() => onSelect(agent)} title={description.join(" · ")} aria-label={description.join(", ")} aria-current={selected ? "true" : undefined} aria-busy={pending || undefined}>
             <StateGlyph shape={status.shape} />
             <span className="agent-details">
-              {location ? <span className="agent-location">{spaceLabel ? <span className="agent-space">{spaceLabel}</span> : null}{tabLabel ? <span className="agent-tab">{spaceLabel ? " · " : ""}{tabLabel}</span> : null}</span> : null}
-              <span className="agent-sub"><span className="agent-word">{status.word}</span><span className="agent-name">{agent.name ? ` · ${agent.name}` : ""}</span></span>
+              <span className="agent-line">
+                {location ? <span className="agent-location">{spaceLabel ? <span className="agent-space">{spaceLabel}</span> : null}{tabLabel ? <span className="agent-tab">{spaceLabel ? " · " : ""}{tabLabel}</span> : null}</span> : <span className="agent-sub">{sub}</span>}
+                {location && !selected && flagged ? <span className="agent-flag">{status.word}</span> : null}
+              </span>
+              {location && selected ? <span className="agent-sub">{sub}</span> : null}
             </span>
           </button>;
         })}

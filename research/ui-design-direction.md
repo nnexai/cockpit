@@ -111,7 +111,7 @@ Agents is an attention queue, not a directory and not a chat transcript.
 
 - Show agent status, identity, and useful Space/tab context in a glanceable row.
 - Order the queue blocked, done, working, idle, unknown; within a status, newest state change first.
-- State is never a color-only dot. A row is two lines: `space · tab` over `State · agent`, with an 18 px SVG badge (a state-tinted disc and one distinct shape per state) and the state word printed on line two. Use a spinner only for a pending operation, not as the permanent Working icon. See `DECISIONS.md` E1.
+- State is never a color-only dot. A compact 26 px row shows `space · tab`, pinning the tab after an ellipsized Space name, with an 18 px SVG badge (a state-tinted disc and one distinct shape per state). Unselected Blocked/Done rows also print the urgent state word inline; only acknowledged selection adds `State · agent` below. Hover, DOM focus and pending intent do not grow rows. Use a spinner only for a pending operation, not as the permanent Working icon. See the sidebar presentation contract in `DECISIONS.md`.
 - Clicking a row requests focus of its owning pane and attachment. The highlight moves only when Herdr acknowledges focus.
 - Blocked and Done may receive stronger state emphasis; Working and Idle remain identifiable without relying on color.
 

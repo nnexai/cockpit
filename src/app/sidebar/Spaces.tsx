@@ -329,24 +329,28 @@ export function Spaces({ spaces, tags, tagEditorRequest, editorSuspended = false
           const tracked = checkout?.state === "branch" && checkout.upstream.state === "tracked" ? checkout.upstream : undefined;
           const position = aheadBehindLabel(git);
           const child = space.git?.is_linked_worktree || row.kind === "child";
-          const showBranch = !row.grouped && Boolean(!child && (branch || checkout || (gitStatusError && space.git)));
-          const secondary = row.grouped ? [space.git?.repository, space.git?.branch].filter(Boolean).join(" · ") : "";
           const spaceTags = tags.bySpace.get(space.id) ?? [];
           const entry = gitEntry(git);
           const problem = entry?.result?.kind === "problem" ? entry.result : undefined;
           const readMessage = !gitStatusError ? gitReadProblem(git) : undefined;
           const readOpen = gitReadProblemId === space.id && Boolean(readMessage);
-          const gitAction = <InlineGitAction status={git} child={Boolean(child)} entry={entry} blocked={gitBlocked} statusError={gitStatusError && (git || space.git) ? gitStatusError : undefined} onAction={action => { setGitReadProblemId(null); onGitAction(space.id, action); }} onReadProblem={readMessage ? () => setGitReadProblemId(space.id) : undefined} />;
+          const gitAction = <InlineGitAction status={git} entry={entry} blocked={gitBlocked} statusError={gitStatusError && (git || space.git) ? gitStatusError : undefined} onAction={action => { setGitReadProblemId(null); onGitAction(space.id, action); }} onReadProblem={readMessage ? () => setGitReadProblemId(space.id) : undefined} />;
           const title = [
             `${row.kind === "child" ? spaceRawName(space) : space.label} · ${word}`,
             branch ? (tracked ? `${branch} · ${position || "level"} vs ${tracked.name} (last fetch)` : branch) : checkout?.state === "detached" ? "Detached HEAD" : checkout?.state === "unavailable" ? checkout.message : null,
             checkout && checkout.state !== "unavailable" ? checkout.root : space.git?.checkout_path,
           ].filter(Boolean).join("\n");
           const accessibleName = [row.label, word, branch ? `branch ${branch}` : null,
-            !row.grouped && tracked ? `${tracked.ahead} ahead, ${tracked.behind} behind ${tracked.name}` : null,
+            tracked ? `${tracked.ahead} ahead, ${tracked.behind} behind ${tracked.name}` : null,
             spaceTags.length ? `tags ${spaceTags.join(", ")}` : null].filter(Boolean).join(", ");
           const pending = pendingSpaceId === space.id;
           const selected = selectedSpaceId === space.id && !pending;
+          const detail = selected ? [
+            row.grouped ? space.git?.repository : null,
+            !child || row.grouped ? branch || (checkout?.state === "detached" ? "detached HEAD" : null) : null,
+            tracked?.ahead ? `↑${tracked.ahead} unpushed` : null,
+            tracked?.behind ? `↓${tracked.behind} unpulled` : null,
+          ].filter(Boolean).join(" · ") : "";
           const side = !row.grouped && dropMark?.targetId === space.id ? dropMark.side : null;
           const note = noteFor(space.id);
           const hiddenUrgency = row.kind === "parent" && !row.expanded && status.className !== ownStatus.className && status.className !== "unknown"
@@ -354,10 +358,10 @@ export function Spaces({ spaces, tags, tagEditorRequest, editorSuspended = false
           const hiddenGitProblem = row.kind === "parent" && !row.expanded && spaces.some(candidate => candidate.id !== space.id
             && candidate.git?.repository_key === row.repositoryKey && !spaceRows.some(visible => visible.space.id === candidate.id)
             && gitEntry(gitStatus.get(candidate.id))?.result?.kind === "problem");
-          const tagDots = tags.ready && rowTags(spaceTags, row.exclude).length > 0;
-          const tagTrigger = tags.ready ? <SpaceTagChip spaceLabel={space.label} tags={spaceTags} exclude={row.exclude} showAdd={!row.exclude} expanded={editor?.rowId === row.rowId} disabled={tags.editBlocked} busy={tags.pending.has(space.id)} onToggle={trigger => openEditor(space.id, row.rowId, trigger)} /> : null;
+          const tagDots = tags.ready && rowTags(spaceTags, selected ? undefined : row.exclude).length > 0;
+          const tagTrigger = tags.ready ? <SpaceTagChip spaceLabel={space.label} tags={spaceTags} exclude={selected ? undefined : row.exclude} showAll={selected} showAdd={!row.exclude} expanded={editor?.rowId === row.rowId} disabled={tags.editBlocked} busy={tags.pending.has(space.id)} onToggle={trigger => openEditor(space.id, row.rowId, trigger)} /> : null;
           return <div key={row.rowId} className="space-row-group" data-space-id={space.id}>
-            <div className={`space-tree-row space-tree-${row.kind}${row.grouped ? " space-tagged-row" : ""}${showBranch || secondary || tagDots ? " has-branch" : ""} state-${status.className}${selected ? " is-selected" : ""}${pending ? " is-pending" : ""}${side ? ` drop-${side}` : ""}`} draggable={!row.grouped && !busy && editingId !== space.id}
+            <div className={`space-tree-row space-tree-${row.kind} state-${status.className}${selected ? " is-selected" : ""}${pending ? " is-pending" : ""}${side ? ` drop-${side}` : ""}`} draggable={!row.grouped && !busy && editingId !== space.id}
               onDragStart={row.grouped ? undefined : (event) => startDrag(event, space)}
               onDragEnd={row.grouped ? undefined : () => { setDragIntent(null); setDropMark(null); }}
               onDragEnter={row.grouped ? undefined : (event) => { if (!busy) event.preventDefault(); }}
@@ -386,12 +390,10 @@ export function Spaces({ spaces, tags, tagEditorRequest, editorSuspended = false
                   <div className="space-row-content" aria-hidden={undefined}>
                     <StateGlyph shape={spaceGlyphShape(status)} />
                     <span className="space-details">
-                      <span className="space-name-line"><span className="space-label">{row.label}</span>{!row.grouped && child ? gitAction : null}</span>
-                      {showBranch ? <span className="space-branch">{branch ? <span className="space-branch-name">{branch}</span> : null}{gitAction}{tagDots ? tagTrigger : null}</span> : null}
-                      {secondary ? <span className="space-branch"><span className="space-tag-secondary">{secondary}</span>{tagDots ? tagTrigger : null}</span> : null}
-                      {tagDots && !showBranch && !secondary ? <span className="space-branch">{tagTrigger}</span> : null}
+                      <span className="space-name-line"><span className="space-label">{row.label}</span>{!tagDots && tagTrigger ? <span className="space-tag-add-anchor">{tagTrigger}</span> : null}{gitAction}</span>
+                      {tagDots ? <span className="space-tag-line">{tagTrigger}</span> : null}
+                      {detail ? <span className="space-detail">{detail}</span> : null}
                     </span>
-                    {tagDots ? null : tagTrigger}
                   </div>
                 </>}
               {row.kind === "parent" && row.repositoryKey

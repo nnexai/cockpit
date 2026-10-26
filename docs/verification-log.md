@@ -2,6 +2,20 @@
 
 These are historical observations, not proof of the current checkout. Each named original source occurrence is reproduced verbatim, including mixed current-rule/result paragraphs, obsolete wording, dates and limitations. Current architecture, rules and source owners live in the root documents. Undated cohorts retain source context rather than an invented run date.
 
+## Adaptive compact sidebar (2026-10-26)
+
+Implemented the approved compact sidebar with permanent meaningful Git counters on the name line, a separate fitted tag line only for tagged Spaces, and full tags/secondary detail on confirmed selection. Agent rows keep their tab suffix and urgent state while expanding secondary detail only when selected.
+
+The production browser build ran against disposable Herdr session `polish-hm08va6z` under `/tmp/cpol-hm08va6z`, with long names, arbitrary tags, real local Git divergence, 23 Spaces and 17 reported agents. The old browser surface measured 32 px base / 48 px tagged and agent rows. The new surface measured 26 px base, 42 px tagged and 74 px for the selected three-tag Space at the default width.
+
+At 224, 240 and 360 px sidebar widths, meaningful Git markers remained inside the sidebar and both lists had equal client/scroll widths (no horizontal overflow). The unselected three-tag row showed one chip plus `+2` at 224/240 px and two chips plus `+1` at 360 px. Both overflowing sections retained more than one-third of the section area. Tags view also retained the repeated Space's Git counters.
+
+Browser interaction covered focus-only arrow navigation without row expansion, Enter selection, picker edits, Escape, 26 px inline rename/cancel, non-overlapping add-tag/Git hit areas, and trusted mouse drag reordering. A push from an unselected Space completed against the fixture-owned bare upstream; its remote feature HEAD matched the local HEAD and selection stayed on the original Space. Screenshots were visually inspected. This is Chromium browser evidence, not native WebKitGTK verification; no persistent session was changed.
+
+Affected checks passed: 136 tests across the sidebar and App integration suites, TypeScript checking and the production frontend build. Vite retained its large-chunk advisory. Fixture startup encountered the documented immediate gateway-registration race; the gateway was listening and its exact session/socket/process/creation membership were verified before cleanup.
+
+The exact gateway was subsequently registered with the fixture ledger and all three registered fixture processes stopped with `pidfd_joined_exit`. Exhaustive shutdown remained `unknown` because protected `/proc` entries and escaped-consumer ownership were unproven; evidence was retained and no force cleanup was attempted.
+
 ## CPU/API/allocation performance audit (2026-10-25)
 
 Base source was `d5d1304f36eb28d1f52ce90b10f1ee0bea4a2883`. Herdr was not modified. Cockpit changes coalesce only already-queued session invalidations before an immediate snapshot, reuse orchestration decodes only after a fresh bounded exact-byte read under the existing lock, retain owned cold-mutator decoding without an extra deep clone, avoid publishing unchanged Git/tag poll results, and clone only the selected Library entry. Cadences, save/identity fences and stream barriers remain intact.

@@ -31,6 +31,19 @@ export function rowTags(tags: readonly string[], exclude?: string): readonly str
   return exclude === undefined ? tags : tags.filter(tag => tag !== exclude);
 }
 
+/** Leading whole chips that fit, reserving the badge for the exact hidden count. Keep one even when it must ellipsize. */
+export function fitTagCount(widths: readonly number[], gap: number, moreWidths: readonly number[], available: number): number {
+  if (widths.length <= 1 || available <= 0) return widths.length;
+  let used = 0;
+  let fit = 1;
+  for (let index = 0; index < widths.length; index++) {
+    used += widths[index] + (index ? gap : 0);
+    const hidden = widths.length - index - 1;
+    if (used + (hidden ? gap + moreWidths[hidden - 1] : 0) <= available) fit = index + 1;
+  }
+  return fit;
+}
+
 export const TAG_HUES = 6;
 
 /** A stable palette slot per tag, case-insensitive, so a tag keeps its colour on every row and across reloads. */

@@ -1,17 +1,15 @@
 /*
  * The sidebar: session header, Spaces, Agents, resizer and narrow-viewport drawer.
- * One definition per selector; design and numbers in planning/ui-polish-2026-09-28/01-sidebar.md.
+ * Compact adaptive rows; current presentation contract lives in DECISIONS.md.
  * Grid: header mark, section labels and top-level badges start at --sb-edge; their labels at --sb-label-x.
- * States (hover, focus, pending, selected) draw with fill, pill and outline only, so no row ever moves.
+ * Only acknowledged selection reveals detail. Hover, DOM focus and pending intent never grow rows.
  */
 .sidebar {
   --sb-edge: 14px;
   --sb-gap: 8px;
   --sb-label-x: 40px;
-  --sb-row: 32px;
-  --sb-row-2: 48px;
-  --sb-row-gap: 2px;
-  --sb-heading: 32px;
+  --sb-row: 26px;
+  --sb-heading: 28px;
   --sb-trunk-x: 23px;
   --sb-conn: 34px;
   --sb-svc-row: 24px;
@@ -160,7 +158,7 @@
 /* Agents sit directly under the Spaces content while the lists fit (Sidebar.tsx measures them); once both overflow,
  * each section reserves one third and entry counts share the rest. Zero-minimum tracks let both lists scroll. */
 .agents-section {
-  padding-top: 8px;
+  padding-top: 4px;
   border-top: 1px solid var(--border);
 }
 
@@ -248,7 +246,6 @@
   height: var(--sb-row);
   align-items: center;
   gap: var(--sb-gap);
-  margin-bottom: var(--sb-row-gap);
   padding: 0 8px 0 var(--sb-edge);
 }
 
@@ -267,8 +264,7 @@
   text-decoration: none;
 }
 
-/* ---- rows: full bleed, square, 2px apart; a 3px pill marks selection ---- */
-/* Keep row margins inside the group box measured when fitting sidebar sections. */
+/* ---- compact full-bleed rows; only selected rows reveal secondary detail ---- */
 .space-row-group { display: flow-root; }
 
 .space-tree-row {
@@ -276,18 +272,17 @@
   display: flex;
   min-height: var(--sb-row);
   align-items: flex-start;
-  margin-bottom: var(--sb-row-gap);
 }
 
 .agent-row {
   position: relative;
   display: flex;
   width: 100%;
-  min-height: var(--sb-row-2);
+  min-height: var(--sb-row);
   align-items: flex-start;
   gap: var(--sb-gap);
-  margin: 0 0 var(--sb-row-gap);
-  padding: 7px 8px 7px var(--sb-edge);
+  margin: 0;
+  padding: 4px 8px 4px var(--sb-edge);
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -346,7 +341,7 @@
   flex: 1;
   align-items: flex-start;
   gap: var(--sb-gap);
-  padding: 7px 8px 7px var(--sb-edge);
+  padding: 4px 8px 4px var(--sb-edge);
   border: 0;
   background: transparent;
   color: var(--text-secondary);
@@ -370,12 +365,13 @@
   flex: 1;
   align-items: flex-start;
   gap: var(--sb-gap);
-  padding: 7px 8px 7px var(--sb-edge);
+  padding: 4px 8px 4px var(--sb-edge);
   pointer-events: none;
 }
 .space-tree-child .space-row-content { padding-left: 0; }
-.space-name-line { display: flex; min-width: 0; align-items: center; gap: 6px; }
-.space-name-line .space-label { flex: 0 1 auto; }
+.space-name-line { position: relative; display: flex; min-width: 0; height: 18px; align-items: center; gap: 6px; }
+.space-name-line .space-label { flex: 1 1 auto; }
+.space-tag-line { display: flex; min-width: 0; }
 .space-git-action {
   position: relative;
   flex: none;
@@ -404,11 +400,14 @@
 .space-git-action.is-warning { color: var(--warning); }
 .space-git-action.is-explanation { cursor: help; }
 .space-git-action.is-explanation:not(.is-warning), .space-git-action.is-quiet { color: var(--text-muted); }
-.space-git-action.is-quiet { opacity: 0; pointer-events: none; }
+.space-git-action.is-quiet { position: absolute; right: 0; opacity: 0; pointer-events: none; }
 .space-tree-row:hover .space-git-action.is-quiet,
 .space-tree-row:focus-within .space-git-action.is-quiet,
 .space-tree-row.is-selected .space-git-action.is-quiet,
 .space-git-action:is([data-phase="pending"], [data-phase="done"], .is-unknown) { opacity: 1; pointer-events: auto; }
+.space-tree-row:is(:hover, :focus-within, .is-selected) .space-git-action.is-quiet { background: var(--sidebar-bg); }
+.space-tree-row:hover .space-git-action.is-quiet { background: var(--surface-hover); }
+.space-tree-row.is-selected .space-git-action.is-quiet { background: var(--select-fill); }
 .space-git-action[data-phase="pending"] { cursor: progress; }
 .space-git-action.is-problem { color: var(--warning); }
 .space-git-action.is-unknown { color: var(--blocked); cursor: not-allowed; }
@@ -470,35 +469,20 @@
 
 .space-tree-child.is-selected .space-label { color: var(--text-primary); }
 
-.space-branch,
+.space-detail,
 .agent-sub {
   display: flex;
   min-width: 0;
-  gap: 6px;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: var(--font-size-2xs);
   line-height: 14px;
   white-space: nowrap;
 }
 
+.space-detail { display: block; overflow: hidden; text-overflow: ellipsis; }
 /* The state word and agent are one string, `State · agent`; the separator is text. */
-.agent-sub { gap: 0; }
-
-.space-tree-row.is-selected .space-branch,
-.agent-row.is-selected .agent-sub { color: var(--text-secondary); }
-
-.space-branch-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Herdr shows the upstream position after the branch, e.g. "main ↑14". */
-.space-ahead-behind {
-  flex: none;
-  color: var(--idle);
-}
+.agent-sub { gap: 0; overflow: hidden; }
 
 .space-chevron {
   position: relative;
@@ -508,7 +492,7 @@
   flex: 0 0 24px;
   align-items: center;
   justify-content: center;
-  margin: 4px 8px 0 0;
+  margin: 1px 8px 0 0;
   padding: 0;
   border: 0;
   border-radius: var(--radius-control);
@@ -536,7 +520,7 @@
   width: auto;
   height: 26px;
   flex: 1;
-  margin: 3px 8px 3px var(--sb-edge);
+  margin: 0 8px 0 var(--sb-edge);
 }
 
 .space-tree-child .inline-rename { margin-left: 0; }
@@ -552,8 +536,8 @@
 
 .space-connector::before {
   position: absolute;
-  top: -2px;
-  bottom: -2px;
+  top: 0;
+  bottom: 0;
   left: var(--sb-trunk-x);
   border-left: 1px solid var(--border-strong);
   content: "";
@@ -561,7 +545,7 @@
 
 .space-connector::after {
   position: absolute;
-  top: 16px;
+  top: 13px;
   left: var(--sb-trunk-x);
   width: 8px;
   border-top: 1px solid var(--border-strong);
@@ -571,7 +555,7 @@
 .space-connector.is-last::before {
   bottom: auto;
   width: 9px;
-  height: 17px;
+  height: 14px;
   border-bottom: 1px solid var(--border-strong);
   border-bottom-left-radius: 6px;
 }
@@ -579,7 +563,7 @@
 .space-connector.is-last::after { display: none; }
 
 /* Read-only services share the Space tree's trunk, without another selection mark. */
-.space-service-list { position: relative; margin: 0 0 var(--sb-row-gap); }
+.space-service-list { position: relative; }
 
 /* A worktree's services are plain indented rows with no guide of their own; the connector's trunk keeps running past them unless this is the last child. */
 .space-service-list.is-child .space-service-row { padding-left: calc(var(--sb-svc-pad) + var(--sb-conn)); }
@@ -639,7 +623,7 @@
 
 /* A rejected mutation, directly under its row. */
 .row-note {
-  margin: 0 0 var(--sb-row-gap);
+  margin: 0;
   padding: 6px 12px 6px var(--sb-label-x);
   border-left: 2px solid var(--blocked);
   color: var(--text-secondary);
@@ -671,31 +655,39 @@
 @keyframes git-problem-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .git-problem { animation: none; } }
 
-/* ---- agent rows: `space · tab` over `State · agent` ---- */
+/* ---- compact agents: pinned tab and urgent state; selected identity detail ---- */
+.agent-line { display: flex; min-width: 0; height: 18px; align-items: center; gap: 6px; }
 .agent-location {
+  display: flex;
   min-width: 0;
+  flex: 1;
   overflow: hidden;
   color: var(--text-muted);
   font-size: var(--font-size-xs);
   font-weight: 400;
   line-height: 18px;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .agent-space {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--text-primary);
   font-weight: 600;
 }
 
+.agent-tab { flex: none; white-space: pre; }
+.agent-flag { flex: none; font: 600 var(--font-size-2xs)/14px var(--font-mono); text-transform: lowercase; }
+
 .agent-word { flex: none; }
 
-.agent-row.state-blocked .agent-word {
+.agent-row.state-blocked :is(.agent-word, .agent-flag) {
   color: var(--blocked);
   font-weight: 600;
 }
 
-.agent-row.state-done .agent-word {
+.agent-row.state-done :is(.agent-word, .agent-flag) {
   color: var(--done);
   font-weight: 600;
 }
@@ -772,19 +764,35 @@
   display: flex; flex: none; align-items: center; min-height: 20px; padding: 0 6px; border: 1px dashed var(--border-strong); border-radius: 3px;
   color: var(--text-muted); font: inherit; font-size: var(--font-size-2xs); line-height: 18px; pointer-events: auto; cursor: pointer;
 }
-/* The add trigger overlays the row end, so an untagged row's name keeps the full width. */
-.space-tag-add { position: absolute; top: 7px; right: 8px; z-index: 3; visibility: hidden; background: var(--surface-hover); }
+/* The add trigger ends before the Git action, never on top of it. Neither changes name width on hover. */
+.space-tag-add-anchor { position: relative; flex: none; width: 0; margin-left: -6px; }
+.space-name-line:has(> .space-git-action.is-quiet) .space-tag-add-anchor { position: absolute; right: 26px; margin: 0; }
+.space-tag-add { position: absolute; top: -10px; right: 0; z-index: 3; visibility: hidden; background: var(--surface-hover); white-space: nowrap; }
 .space-tree-row.is-selected .space-tag-add { background: var(--select-fill); }
 .space-tree-row:is(:hover, :focus-within, .is-selected) .space-tag-add,
 .space-tag-add[aria-expanded="true"] { visibility: visible; }
-/* Tags ride the branch line as coloured dots with names; one trigger opens the tag editor. */
+/* Tags have their own measured line; names never compete with tags for width. */
 .space-tag-dots {
-  display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 8px; margin: -2px -4px; padding: 2px 4px; overflow: hidden;
+  position: relative; display: flex; min-width: 0; max-width: 100%; flex: 0 1 auto; align-items: center; gap: 4px; height: 14px; margin: 0; padding: 0; overflow: hidden;
   border: 0; border-radius: var(--radius-small); background: transparent; color: var(--text-secondary);
   font: inherit; font-family: var(--font-sans); font-size: var(--font-size-2xs); line-height: 14px; white-space: nowrap; pointer-events: auto; cursor: pointer;
 }
-.space-tag { display: inline-flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; }
-.space-tag::before { flex: 0 0 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--tag-color); content: ""; }
+.space-tag {
+  display: inline-flex; min-width: 0; max-width: 100%; height: 14px; flex: none; align-items: center; padding: 0 5px 0 4px; border-radius: var(--radius-small);
+  background: color-mix(in srgb, var(--tag-color) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tag-color) 45%, transparent);
+}
+.space-tag-dots > .space-tag:first-child { flex: 0 1 auto; }
+.space-tag::before { flex: 0 0 5px; width: 5px; height: 5px; margin-right: 4px; border-radius: 50%; background: var(--tag-color); content: ""; }
+.space-tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.space-tag-more { flex: none; height: 14px; padding: 0 4px; border-radius: var(--radius-small); box-shadow: inset 0 0 0 1px var(--border-strong); font: 600 var(--font-size-2xs)/14px var(--font-mono); }
+/* Clip natural-width copies inside the button; they neither scroll ancestors nor enter the accessibility tree. */
+.space-tag-measure { position: absolute; inset: 0; overflow: hidden; visibility: hidden; pointer-events: none; }
+.space-tag-measure-chips, .space-tag-measure-badges { display: flex; gap: 4px; width: max-content; }
+.space-tag-measure .space-tag { max-width: none; }
+.space-tag-dots.is-all { height: auto; flex-wrap: wrap; row-gap: 2px; overflow: visible; }
+.space-tag-dots.is-all > .space-tag { height: auto; min-height: 14px; flex: 0 1 auto; align-items: flex-start; white-space: normal; text-align: left; }
+.space-tag-dots.is-all .space-tag::before { margin-top: 4.5px; }
+.space-tag-dots.is-all .space-tag-name { overflow: visible; overflow-wrap: anywhere; }
 .space-tag[data-hue="0"] { --tag-color: var(--tag-1); }
 .space-tag[data-hue="1"] { --tag-color: var(--tag-2); }
 .space-tag[data-hue="2"] { --tag-color: var(--tag-3); }
@@ -804,7 +812,6 @@
 .space-tag-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .space-tag-group .ui-icon { flex: none; width: 12px; height: 12px; }
 .space-tag-group .section-count { margin-left: auto; }
-.space-tag-secondary { min-width: 0; overflow: hidden; color: var(--text-muted); font-family: var(--font-mono); font-size: var(--font-size-2xs); line-height: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .space-tag-layer { position: fixed; z-index: var(--z-context-menu); }
 .space-tag-popover {
   width: 100%; padding: 8px; border: 1px solid var(--border-strong); border-radius: 5px;
@@ -835,4 +842,8 @@
   .spaces-section .sidebar-section-heading > .section-count { display: none; }
   .spaces-view-switch button { padding-inline: 4px; }
 }
-@media (pointer: coarse) { .space-tag-add { position: relative; top: auto; right: auto; visibility: visible; background: transparent; } }
+@media (pointer: coarse) {
+  .space-name-line .space-tag-add-anchor { position: relative; right: auto; width: auto; margin: 0; }
+  .space-name-line:has(> .space-git-action.is-quiet) .space-tag-add-anchor { margin-right: 26px; }
+  .space-tag-add { position: relative; top: auto; right: auto; visibility: visible; background: transparent; }
+}

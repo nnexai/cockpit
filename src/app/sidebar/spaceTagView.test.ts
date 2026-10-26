@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Space } from "./spaceTree";
-import { findTag, normalizeTag, projectTagGroups, readSpacesView, rowTags, SPACES_VIEW_KEY, tagHue, tagKey, TAG_MAX_CHARS, UNTAGGED_KEY, writeSpacesView } from "./spaceTagView";
+import { findTag, fitTagCount, normalizeTag, projectTagGroups, readSpacesView, rowTags, SPACES_VIEW_KEY, tagHue, tagKey, TAG_MAX_CHARS, UNTAGGED_KEY, writeSpacesView } from "./spaceTagView";
 
 const space = (id: string): Space => ({ id, label: id, number: 1, tab_count: 0, pane_count: 0, focused: false, agent_status: "idle", git: null });
 beforeEach(() => {
@@ -57,6 +57,19 @@ describe("tag chips and groups", () => {
   const catalog = Object.freeze(["My check", "Needs testing", "Demo Friday", "Unused"]);
   const tags = Object.freeze(["My check", "Needs testing", "Demo Friday"]);
 
+
+  it("fits whole leading tags and the exact overflow badge, retaining one overwide tag", () => {
+    expect(fitTagCount([50, 50, 50], 4, [20, 20], 158)).toBe(3);
+    expect(fitTagCount([50, 50, 50], 4, [20, 20], 128)).toBe(2);
+    expect(fitTagCount([50, 50, 50], 4, [20, 20], 127)).toBe(1);
+    expect(fitTagCount([200, 50], 4, [20], 100)).toBe(1);
+    // All tags can fit even when an intermediate prefix plus its badge cannot.
+    expect(fitTagCount([50, 10], 4, [20], 64)).toBe(2);
+    expect(fitTagCount([20, 20, 20], 4, [10, 30], 58)).toBe(2);
+    expect(fitTagCount([], 4, [], 100)).toBe(0);
+    expect(fitTagCount([200], 4, [], 100)).toBe(1);
+    expect(fitTagCount([50, 50], 4, [20], 0)).toBe(2);
+  });
   it("shows every catalog-ordered tag except the group tag, without evicting or reordering tags", () => {
     expect(rowTags(tags)).toEqual(["My check", "Needs testing", "Demo Friday"]);
     expect(rowTags(tags, "Needs testing")).toEqual(["My check", "Demo Friday"]);

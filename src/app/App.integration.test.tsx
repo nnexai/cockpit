@@ -571,9 +571,8 @@ describe("mounted App mutation and session ordering", () => {
     await settle();
 
     expect(fixture.client.spaceGitStatus).toHaveBeenCalledWith("session-1", expect.any(AbortSignal));
-    const line = container.querySelector(".space-branch");
-    expect(line?.querySelector(".space-branch-name")?.textContent).toBe("main");
-    expect(line?.querySelector(".space-ahead-behind")?.textContent).toBe("↑2 ↓1");
+    expect(container.querySelector('[data-space-id="space-1"] .space-detail')?.textContent).toBe("main · ↑2 unpushed · ↓1 unpulled");
+    expect(container.querySelector('[data-space-id="space-1"] .space-name-line .space-ahead-behind')?.textContent).toBe("↑2 ↓1");
     expect(container.querySelector('[data-row-id="space-1"]')?.getAttribute("aria-label")).toContain("branch main");
   });
 

@@ -4,8 +4,8 @@ import { aheadBehindLabel } from "../session/spaceGitStatus";
 import { gitActionReason, gitReadProblem, type GitActionState, type GitProblem } from "../session/spaceGitActions";
 import { UiIcon } from "../UiIcon";
 
-export function SpaceGitAction({ status, child, entry, blocked, statusError, onAction, onReadProblem }: {
-  status: SpaceGitStatus | undefined; child: boolean; entry?: GitActionState; blocked?: string; statusError?: string;
+export function SpaceGitAction({ status, entry, blocked, statusError, onAction, onReadProblem }: {
+  status: SpaceGitStatus | undefined; entry?: GitActionState; blocked?: string; statusError?: string;
   onAction(action: GitAction): void; onReadProblem?(): void;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -29,13 +29,13 @@ export function SpaceGitAction({ status, child, entry, blocked, statusError, onA
   const unknown = result?.kind === "problem" && result.unknown;
   const readProblem = Boolean(onReadProblem && gitReadProblem(status));
   const reason = gitActionReason(status, action, entry, blocked ?? (statusError ? `Git status unavailable: ${statusError}` : undefined));
-  // Level and no-upstream branches carry no news; their mark appears only on hover, focus or selection.
-  const quiet = !statusError && (upstream?.state === "none" || (tracked?.ahead === 0 && tracked.behind === 0));
+  // Quiet actions overlay the name on interaction instead of reserving empty marker space.
+  const quiet = !statusError && !pending && !result && (upstream?.state === "none" || (tracked?.ahead === 0 && tracked.behind === 0));
   const diverged = Boolean(tracked && tracked.ahead > 0 && tracked.behind > 0);
   const position = aheadBehindLabel(status);
   const target = checkout.state === "branch" && tracked ? `${checkout.branch} ${action === "push" ? "→" : "←"} ${tracked.name}` : "";
   const label = reason ?? (action === "push" ? `Push ${tracked?.ahead} commit${tracked?.ahead === 1 ? "" : "s"}: ${target}` : tracked?.behind ? `Pull ${tracked.behind} commit${tracked.behind === 1 ? "" : "s"}: ${target} (fast-forward only)` : `Pull: check ${tracked?.name} and fast-forward ${checkout.state === "branch" ? checkout.branch : ""} if it moved`);
-  const symbol = statusError ? "ⓘ" : unknown ? "?" : checkout.state === "detached" ? (child ? "⦿" : "detached HEAD") : checkout.state === "unavailable" ? "ⓘ" : upstream?.state === "none" ? "⊘" : tracked ? position || "↓" : "ⓘ";
+  const symbol = statusError ? "ⓘ" : unknown ? "?" : checkout.state === "detached" ? "⦿" : checkout.state === "unavailable" ? "ⓘ" : upstream?.state === "none" ? "⊘" : tracked ? position || "↓" : "ⓘ";
   return <button ref={buttonRef} type="button" tabIndex={-1} className={`space-git-action${quiet ? " is-quiet" : ""}${diverged || checkout.state === "detached" ? " is-warning" : ""}${stateReason || statusError ? " is-explanation" : ""}${unknown ? " is-unknown" : ""}${readProblem ? " is-problem" : ""}${phase === "done" && result?.kind === "done" && result.noop ? " is-noop" : ""}`} data-phase={phase} data-git-action={stateReason || statusError || unknown ? undefined : action}
     aria-label={label} aria-disabled={Boolean(reason) || undefined} aria-busy={pending || undefined}
     title={`${reason ?? label}\n${status?.source === "pane_folder" && checkout.state !== "unavailable" ? `${checkout.root}\n` : ""}Counts since last fetch; ${action === "push" ? "normal push, never forced" : "fast-forward only"}`}

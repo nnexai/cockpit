@@ -2,7 +2,7 @@
 import { act, createElement, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { SpaceServiceStatus, SpaceSummary } from "../../protocol/generated/v1";
+import type { SpaceGitStatus, SpaceServiceStatus, SpaceSummary } from "../../protocol/generated/v1";
 import { Spaces } from "./Spaces";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -124,7 +124,7 @@ it("groups duplicate Space references with unique roving identities and services
   const key = async (element: HTMLElement, value: string) => { await act(async () => { element.dispatchEvent(new KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true })); }); };
   try {
     await act(async () => root.render(createElement(Spaces, current)));
-    expect([...host.querySelectorAll(".space-tag-dots .space-tag")].map(tag => tag.textContent)).toEqual(["My check", "Needs testing"]);
+    expect([...host.querySelectorAll(".space-tag-dots > .space-tag")].map(tag => tag.textContent)).toEqual(["My check", "Needs testing"]);
     const switchButton = [...host.querySelectorAll<HTMLButtonElement>(".spaces-view-switch button")].find(button => button.textContent === "Tags")!;
     await act(async () => switchButton.click());
     expect(document.activeElement).toBe(switchButton);
@@ -254,5 +254,48 @@ it("expands a collapsed tag group for an exact Space editor request", async () =
     expect(host.querySelector('[data-space-id="app"]')).not.toBeNull();
     expect(document.querySelector('[role="dialog"]')?.getAttribute("aria-label")).toBe("Tags for app");
     expect(document.activeElement).toBe(document.querySelector(".space-tag-input"));
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+it("keeps Git on every name line while only confirmed selection reveals details and all tags", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const parent = { ...space("app"), git: { repository_key: "repo", repository: "repo", branch: "stale", checkout_path: "/repo", is_linked_worktree: false } };
+  const child = { ...space("child"), git: { ...parent.git, branch: "topic", checkout_path: "/child", is_linked_worktree: true } };
+  const git = (id: string, ahead: number, behind: number): SpaceGitStatus => ({ space_id: id, source: "herdr_checkout", checkout: { state: "branch", root: `/${id}`, branch: id === "app" ? "main" : "topic", upstream: { state: "tracked", name: "origin/main", ahead, behind } } });
+  const current = { ...props(), spaces: [parent, child], selectedSpaceId: null as string | null, gitStatus: new Map([["app", git("app", 2, 1)], ["child", git("child", 1, 0)]]) };
+  current.tags = { ...current.tags, catalog: ["Review", "Testing"], bySpace: new Map([["app", ["Review", "Testing"]]]) };
+  const row = (id: string) => host.querySelector(`[data-space-id="${id}"]`)!;
+  try {
+    await act(async () => root.render(createElement(Spaces, current)));
+    expect(row("app").querySelector(".space-name-line .space-ahead-behind")?.textContent).toBe("↑2 ↓1");
+    expect(row("child").querySelector(".space-name-line .space-ahead-behind")?.textContent).toBe("↑1");
+    expect(host.querySelector(".space-detail")).toBeNull();
+    await act(async () => row("app").querySelector<HTMLButtonElement>(".resource-select")!.focus());
+    expect(host.querySelector(".space-detail")).toBeNull();
+    await act(async () => root.render(createElement(Spaces, { ...current, selectedSpaceId: "app" })));
+    expect(row("app").querySelector(".space-detail")?.textContent).toBe("main · ↑2 unpushed · ↓1 unpulled");
+    expect(row("app").querySelector(".space-tag-dots.is-all")).not.toBeNull();
+    await act(async () => root.render(createElement(Spaces, { ...current, selectedSpaceId: "app", pendingSpaceId: "app" })));
+    expect(host.querySelector(".space-detail")).toBeNull();
+    expect(host.querySelector(".space-tag-dots.is-all")).toBeNull();
+    await act(async () => root.render(createElement(Spaces, { ...current, selectedSpaceId: "child" })));
+    expect(row("child").querySelector(".space-detail")?.textContent).toBe("↑1 unpushed");
+    await act(async () => root.render(createElement(Spaces, { ...current, selectedSpaceId: "app", gitStatus: new Map([["app", git("app", 0, 0)]]) })));
+    expect(row("app").querySelector(".space-detail")?.textContent).toBe("main");
+    expect(host.textContent).not.toMatch(/↑0|↓0/);
+    await act(async () => root.render(createElement(Spaces, current)));
+    await act(async () => host.querySelectorAll<HTMLButtonElement>(".spaces-view-switch button")[1].click());
+    expect(host.querySelectorAll('[data-space-id="app"] .space-name-line .space-ahead-behind')).toHaveLength(2);
+    expect(row("app").querySelector(".space-ahead-behind")?.textContent).toBe("↑2 ↓1");
+    await act(async () => row("child").querySelector<HTMLButtonElement>(".space-git-action")!.click());
+    expect(current.onGitAction).toHaveBeenCalledWith("child", "push");
+    expect(current.onSelect).not.toHaveBeenCalled();
+    await act(async () => root.render(createElement(Spaces, { ...current, selectedSpaceId: "app" })));
+    for (const selected of host.querySelectorAll('[data-space-id="app"]')) {
+      expect(selected.querySelectorAll(".space-tag-dots > .space-tag")).toHaveLength(2);
+      expect(selected.querySelector(".space-detail")?.textContent).toBe("repo · main · ↑2 unpushed · ↓1 unpulled");
+    }
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
