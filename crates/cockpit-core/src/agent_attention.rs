@@ -26,6 +26,8 @@ struct Stored {
     schema: u32,
     epochs: Vec<Epoch>,
     agents: Vec<StoredAgent>,
+    #[serde(default)]
+    retired: Vec<RetiredAgent>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -47,6 +49,37 @@ struct StoredAgent {
     record: AgentAttentionRecord,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct RetiredAgent {
+    session_namespace: String,
+    session_id: String,
+    pane_id: String,
+    terminal_id: String,
+    agent: String,
+    epoch: u64,
+    seq: u64,
+}
+
+fn retire(stored: &mut Stored, index: usize) -> Result<(), InspectionError> {
+    let a = &stored.agents[index];
+    let r = &a.record;
+    if let Some(old) = stored.retired.iter_mut().find(|old| old.session_namespace == a.session_namespace
+        && old.session_id == a.session_id && old.pane_id == r.pane_id
+        && old.terminal_id == r.terminal_id && old.agent == r.agent && old.epoch == r.last.epoch)
+    {
+        old.seq = old.seq.max(r.last.seq);
+    } else {
+        if stored.retired.len() >= MAX_RECORDS { return Err(limit()); }
+        stored.retired.push(RetiredAgent {
+            session_namespace: a.session_namespace.clone(), session_id: a.session_id.clone(),
+            pane_id: r.pane_id.clone(), terminal_id: r.terminal_id.clone(), agent: r.agent.clone(),
+            epoch: r.last.epoch, seq: r.last.seq,
+        });
+    }
+    Ok(())
+}
+
 fn now() -> String {
     time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).expect("UTC timestamp is representable")
 }
@@ -66,6 +99,12 @@ fn stamp(mark: (u64, u64), now: &str) -> AgentAttentionStamp { AgentAttentionSta
 
 fn observe(stored: &mut Stored, ns: &str, session: &str, observation: &AgentAttentionObservation, epoch: u64, now: &str) -> Result<bool, InspectionError> {
     let id = key(epoch, observation.seq);
+    if stored.retired.iter().any(|old| old.session_namespace == ns && old.session_id == session
+        && old.pane_id == observation.pane_id && old.terminal_id == observation.terminal_id
+        && old.agent == observation.agent && old.epoch == epoch && observation.seq <= old.seq)
+    {
+        return Ok(false);
+    }
     let index = stored.agents.iter().position(|a| a.session_namespace == ns && a.session_id == session && a.record.pane_id == observation.pane_id && a.record.historical_id.is_none());
     if let Some(index) = index {
         let r = &stored.agents[index].record;
@@ -88,7 +127,9 @@ fn observe(stored: &mut Stored, ns: &str, session: &str, observation: &AgentAtte
             // Equal-sequence identity changes are ambiguous: a delayed old incarnation
             // must not displace the current one. The unmatched live row stays visible.
             if id == last_key(r) { return Ok(false); }
-            if unseen(r) {
+            let was_unseen = unseen(r);
+            retire(stored, index)?;
+            if was_unseen {
                 let a = &mut stored.agents[index];
                 a.record.historical_id = Some(revision());
                 a.revision = revision();
@@ -106,11 +147,8 @@ fn observe(stored: &mut Stored, ns: &str, session: &str, observation: &AgentAtte
                 // A restored pane/name does not prove process identity across server restarts.
             } else if old_status == "done" && observation.status == "idle" {
                 if id > previous {
-                    let covered = !unseen(r);
-                    if covered {
-                        if let Some(c) = &mut r.completion { if key(c.epoch, c.seq) == previous { c.epoch = id.0; c.seq = id.1; } }
-                    }
-                    if let Some(a) = &mut r.acked { if stamp_key(a) == previous { a.epoch = id.0; a.seq = id.1; } }
+                    // The idle sequence may hide an intervening completion. Carrying an
+                    // acknowledgement forward would falsely acknowledge that result.
                     if let Some(d) = &mut r.dismissed { if stamp_key(d) == previous { d.epoch = id.0; d.seq = id.1; } }
                 }
             } else if observation.status == "done" && (id > previous || old_status != "done") {
@@ -229,10 +267,18 @@ fn load(store: &ProjectStore) -> Result<Stored, InspectionError> {
 }
 fn validate_stored(s: &Stored) -> Result<(), InspectionError> {
     let corrupt = || InspectionError::new("agent_attention_corrupt", "Invalid agent attention store");
-    if s.schema != 1 || s.agents.len() > MAX_RECORDS || s.epochs.len() > MAX_RECORDS { return Err(corrupt()); }
+    if s.schema != 1 || s.agents.len() > MAX_RECORDS || s.epochs.len() > MAX_RECORDS || s.retired.len() > MAX_RECORDS { return Err(corrupt()); }
     let mut epochs = HashSet::new();
     for e in &s.epochs {
         if e.ordinal == 0 || e.session_namespace.len() != 64 || !e.session_namespace.bytes().all(|b| b.is_ascii_hexdigit()) || !valid_id(&e.session_id) || !valid_id(&e.server_instance) || e.first_seen_at.is_empty() || !epochs.insert((&e.session_namespace, &e.session_id)) { return Err(corrupt()); }
+    }
+    let mut retired = HashSet::new();
+    for old in &s.retired {
+        let e = s.epochs.iter().find(|e| e.session_namespace == old.session_namespace && e.session_id == old.session_id).ok_or_else(corrupt)?;
+        if !valid_id(&old.pane_id) || !valid_id(&old.terminal_id) || !valid_id(&old.agent)
+            || old.epoch == 0 || old.epoch > e.ordinal
+            || !retired.insert((&old.session_namespace, &old.session_id, &old.pane_id, &old.terminal_id, &old.agent, old.epoch))
+        { return Err(corrupt()); }
     }
     let mut records = HashSet::new();
     let mut revisions = HashSet::new();
@@ -249,7 +295,7 @@ fn validate_stored(s: &Stored) -> Result<(), InspectionError> {
     Ok(())
 }
 fn persist(store: &ProjectStore, s: &Stored) -> Result<(), InspectionError> {
-    if s.agents.len() > MAX_RECORDS || s.epochs.len() > MAX_RECORDS { return Err(limit()); }
+    if s.agents.len() > MAX_RECORDS || s.epochs.len() > MAX_RECORDS || s.retired.len() > MAX_RECORDS { return Err(limit()); }
     let bytes = serde_json::to_vec_pretty(s).map_err(|e| InspectionError::new("agent_attention_outcome_unknown", e.to_string()))?;
     if bytes.len() as u64 > MAX_BYTES { return Err(limit()); }
     atomic_write_bytes(store.state_dir(), FILE, &bytes).map_err(|e| InspectionError::new("agent_attention_outcome_unknown", e.to_string()))
@@ -323,6 +369,7 @@ impl AgentAttentionService {
                         && last_key(&a.record) == key(epoch, o.seq) && candidates.contains(&a.revision)
                         && (a.record.agent != o.agent || a.record.terminal_id != o.terminal_id))
                     {
+                        retire(&mut s, index)?;
                         if unseen(&s.agents[index].record) {
                             s.agents[index].record.historical_id = Some(revision());
                             s.agents[index].revision = revision();
@@ -332,19 +379,23 @@ impl AgentAttentionService {
                     changed |= observe(&mut s, &ns, &session, &o, epoch, &time)?;
                 }
             }
-            let count = s.agents.len();
-            for a in &mut s.agents {
+            for index in (0..s.agents.len()).rev() {
+                let a = &s.agents[index];
                 if a.session_namespace == ns && a.session_id == session && a.record.historical_id.is_none()
                     && !snapshot.agents.iter().any(|agent| agent.pane_id == a.record.pane_id)
-                    && candidates.contains(&a.revision) && unseen(&a.record)
+                    && candidates.contains(&a.revision)
                 {
-                    a.record.historical_id = Some(revision());
-                    a.revision = revision();
+                    let was_unseen = unseen(&a.record);
+                    retire(&mut s, index)?;
+                    if was_unseen {
+                        s.agents[index].record.historical_id = Some(revision());
+                        s.agents[index].revision = revision();
+                    } else {
+                        s.agents.remove(index);
+                    }
                     changed = true;
                 }
             }
-            s.agents.retain(|a| a.session_namespace != ns || a.session_id != session || a.record.historical_id.is_some() || snapshot.agents.iter().any(|agent| agent.pane_id == a.record.pane_id) || !candidates.contains(&a.revision));
-            changed |= count != s.agents.len();
             if changed { persist(&store, &s)?; }
             let mut result = response(&s, &ns, &session, &snapshot.server_instance, epoch, None);
             result.records.retain(|r| r.historical_id.is_some() || snapshot.agents.iter().any(|a| a.pane_id == r.pane_id));
@@ -390,6 +441,7 @@ mod tests {
 
     struct Adapter {
         instance: AtomicUsize,
+        seq: AtomicUsize,
         present: AtomicBool,
         fail: AtomicBool,
         pause: AtomicBool,
@@ -398,7 +450,7 @@ mod tests {
     }
     impl Adapter {
         fn new() -> Arc<Self> {
-            Arc::new(Self { instance: AtomicUsize::new(0), present: AtomicBool::new(true), fail: AtomicBool::new(false), pause: AtomicBool::new(false), captured: Notify::new(), release: Notify::new() })
+            Arc::new(Self { instance: AtomicUsize::new(0), seq: AtomicUsize::new(0), present: AtomicBool::new(true), fail: AtomicBool::new(false), pause: AtomicBool::new(false), captured: Notify::new(), release: Notify::new() })
         }
         fn instance(&self) -> String { format!("instance-{}", self.instance.load(Ordering::SeqCst)) }
     }
@@ -416,7 +468,7 @@ mod tests {
                 focused_space_id: None, focused_tab_id: None, focused_pane_id: None, herdr_shell: None,
                 spaces: vec![], tabs: vec![],
                 panes: if present { vec![PaneSummary { id: "pane".into(), terminal_id: "terminal".into(), space_id: "space".into(), tab_id: "tab".into(), title: None, focused: false, agent: Some("agent".into()), agent_status: "idle".into(), revision: 0, cwd: None }] } else { vec![] },
-                agents: if present { vec![AgentSummary { pane_id: "pane".into(), space_id: "space".into(), tab_id: "tab".into(), name: "agent".into(), status: "idle".into(), title: None, focused: false, state_change_seq: 0 }] } else { vec![] },
+                agents: if present { vec![AgentSummary { pane_id: "pane".into(), space_id: "space".into(), tab_id: "tab".into(), name: "agent".into(), status: "idle".into(), title: None, focused: false, state_change_seq: self.seq.load(Ordering::SeqCst) as u64 }] } else { vec![] },
             })
         }
         async fn focus(&self, _: &str, _: &FocusRequest) -> Result<FocusResponse, InspectionError> { unused() }
@@ -678,5 +730,47 @@ mod tests {
         let result = service.change("session", &request(&adapter, vec![], Some(seen))).await.unwrap();
         assert!(result.records.is_empty());
         assert!(service.list("session").await.unwrap().records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn snapshot_advance_does_not_acknowledge_queued_new_completion() {
+        let fixture = Fixture::new();
+        let adapter = Adapter::new();
+        let service = fixture.service(adapter.clone());
+        service.change("session", &request(&adapter, vec![observation("done", 1)], Some(see(1)))).await.unwrap();
+        adapter.seq.store(3, Ordering::SeqCst);
+        let listed = service.list("session").await.unwrap();
+        assert_eq!(listed.records[0].acked.as_ref().unwrap().seq, 1);
+        assert!(!unseen(&listed.records[0]));
+
+        let queued = vec![observation("working", 2), observation("done", 3), observation("idle", 3)];
+        let result = service.change("session", &request(&adapter, queued.clone(), None)).await.unwrap();
+        assert!(unseen(&result.records[0]));
+        assert_eq!(result.records[0].completion.as_ref().unwrap().seq, 3);
+        assert!(!result.records[0].completion.as_ref().unwrap().inferred);
+        let result = service.change("session", &request(&adapter, vec![], Some(see(3)))).await.unwrap();
+        assert!(!unseen(&result.records[0]));
+        let result = service.change("session", &request(&adapter, queued, None)).await.unwrap();
+        assert!(!unseen(&result.records[0]));
+    }
+
+    #[tokio::test]
+    async fn retired_incarnation_fences_delayed_observations_after_historical_seen() {
+        let fixture = Fixture::new();
+        let adapter = Adapter::new();
+        let service = fixture.service(adapter.clone());
+        service.change("session", &request(&adapter, vec![observation("done", 1)], None)).await.unwrap();
+        adapter.present.store(false, Ordering::SeqCst);
+        let historical = service.list("session").await.unwrap().records[0].historical_id.clone().unwrap();
+        let delayed = vec![observation("done", 1), observation("idle", 1)];
+        let result = service.change("session", &request(&adapter, delayed.clone(), None)).await.unwrap();
+        assert_eq!(result.records.len(), 1);
+        assert_eq!(result.records[0].historical_id.as_ref(), Some(&historical));
+        service.change("session", &request(&adapter, vec![], Some(AgentAttentionChange::SeenHistorical { historical_id: historical }))).await.unwrap();
+        let result = service.change("session", &request(&adapter, delayed, None)).await.unwrap();
+        assert!(result.records.is_empty());
+        let result = service.change("session", &request(&adapter, vec![observation("done", 2)], None)).await.unwrap();
+        assert_eq!(result.records.len(), 1);
+        assert!(unseen(&result.records[0]));
     }
 }

@@ -10,6 +10,8 @@ export type AgentAttentionState = {
   pending: ReadonlySet<string>;
   notes: ReadonlyMap<string, string>;
   announcement: string;
+  recoveryIncomplete: boolean;
+  acknowledgeRecoveryWarning(): void;
   activate(row: AttentionRow): void;
   seen(row: AttentionRow): Promise<boolean>;
   seenHistorical(record: AgentAttentionRecord): Promise<boolean>;
@@ -23,6 +25,63 @@ export type AgentAttentionState = {
 type Action = { change: AgentAttentionChange; key: string; resolve: (ok: boolean) => void };
 type Intent = { row: AttentionRow; token: number };
 
+// Bound outage memory while retaining the most recent completion, inferred
+// working-to-idle transition, and current state of each pane incarnation.
+const MAX_QUEUED_OBSERVATIONS = 1024;
+const OBSERVATION_BATCH_SIZE = 256;
+function compactObservations(observations: AgentAttentionObservation[]): { observations: AgentAttentionObservation[]; overflow: boolean } {
+  if (observations.length <= MAX_QUEUED_OBSERVATIONS) return { observations, overflow: false };
+  type Segment = { identity: string; last: number; done?: number; beforeIdle?: number; idle?: number };
+  const active = new Map<string, Segment>();
+  const segments: Segment[] = [];
+  observations.forEach((observation, index) => {
+    const identity = JSON.stringify([observation.terminal_id, observation.agent]);
+    let segment = active.get(observation.pane_id);
+    if (!segment || segment.identity !== identity) {
+      segment = { identity, last: index };
+      active.set(observation.pane_id, segment);
+      segments.push(segment);
+    } else {
+      const previous = observations[segment.last]!;
+      if (observation.status === "idle" && observation.seq > previous.seq && (previous.status === "working" || previous.status === "blocked")) {
+        segment.beforeIdle = segment.last;
+        segment.idle = index;
+      }
+      segment.last = index;
+    }
+    if (observation.status === "done") segment.done = index;
+  });
+  // Prefer segments with completion evidence, then newer segments. Retain whole
+  // segments so an inferred transition pair is never cut in half.
+  const retained: number[] = [];
+  let overflow = false;
+  segments.sort((a, b) => Number(b.done !== undefined || b.idle !== undefined) - Number(a.done !== undefined || a.idle !== undefined) || b.last - a.last);
+  for (const segment of segments) {
+    const indices = [...new Set([segment.last, segment.done, segment.beforeIdle, segment.idle].filter((index): index is number => index !== undefined))];
+    if (retained.length + indices.length <= MAX_QUEUED_OBSERVATIONS) retained.push(...indices);
+    else overflow = true;
+  }
+  retained.sort((a, b) => a - b);
+  return { observations: retained.map(index => observations[index]!), overflow };
+}
+
+function takeObservationBatch(observations: AgentAttentionObservation[]): AgentAttentionObservation[] {
+  // Different panes are independent. Keep each pane's observations together so
+  // the server can see an inference pair in the same request.
+  const panes = new Map<string, AgentAttentionObservation[]>();
+  for (const observation of observations) {
+    const group = panes.get(observation.pane_id) ?? [];
+    group.push(observation);
+    panes.set(observation.pane_id, group);
+  }
+  observations.splice(0, observations.length, ...Array.from(panes.values()).flat());
+  let count = Math.min(OBSERVATION_BATCH_SIZE, observations.length);
+  const before = observations[count - 1], after = observations[count];
+  if (before && after && before.pane_id === after.pane_id && before.terminal_id === after.terminal_id && before.agent === after.agent &&
+      (before.status === "working" || before.status === "blocked") && after.status === "idle" && before.seq < after.seq) count--;
+  return observations.splice(0, count);
+}
+
 export function historicalAttentionKey(record: AgentAttentionRecord): string {
   return `historical:${record.historical_id}`;
 }
@@ -32,6 +91,7 @@ export function useAgentAttention(client: CockpitClient, state: SessionState, li
   const snapshot = state.snapshot?.session_id === sessionId ? state.snapshot : null;
   const instance = snapshot?.server_instance ?? null;
   const [, render] = useState(0);
+  const recoveryIncomplete = useRef(false);
   const binding = useMemo(() => ({
     availability: "loading" as AttentionAvailability, response: null as AgentAttentionResponse | null,
     pending: new Set<string>(), notes: new Map<string, string>(), announcement: "",
@@ -91,7 +151,7 @@ export function useAgentAttention(client: CockpitClient, state: SessionState, li
         return;
       }
       if (binding.availability !== "ready" || (!binding.observations.length && !binding.actions.length)) return;
-      const observations = binding.observations.splice(0, 256);
+      const observations = takeObservationBatch(binding.observations);
       const action = binding.observations.length ? undefined : binding.actions.shift();
       binding.busy = true;
       const sequence = ++binding.sequence;
@@ -107,7 +167,9 @@ export function useAgentAttention(client: CockpitClient, state: SessionState, li
         }
       }).catch(error => {
         if (!valid()) { action?.resolve(false); return; }
-        binding.observations.unshift(...observations);
+        const compacted = compactObservations([...observations, ...binding.observations]);
+        binding.observations = compacted.observations;
+        recoveryIncomplete.current ||= compacted.overflow;
         if (action) {
           binding.pending.delete(action.key);
           binding.notes.set(action.key, error instanceof Error ? error.message : "Agent attention change failed");
@@ -141,7 +203,12 @@ export function useAgentAttention(client: CockpitClient, state: SessionState, li
     if (!live || !snapshot || !instance) return;
     const collected = collectObservations(binding.previous, snapshot);
     binding.previous = collected.next;
-    binding.observations.push(...collected.observations);
+    const compacted = compactObservations([...binding.observations, ...collected.observations]);
+    binding.observations = compacted.observations;
+    if (compacted.overflow && !recoveryIncomplete.current) {
+      recoveryIncomplete.current = true;
+      update();
+    }
     binding.pump?.();
   }, [binding, snapshot, live, instance]);
 
@@ -171,6 +238,8 @@ export function useAgentAttention(client: CockpitClient, state: SessionState, li
 
   return {
     availability: binding.availability, response: binding.response, pending: binding.pending, notes: binding.notes, announcement: binding.announcement,
+    recoveryIncomplete: recoveryIncomplete.current,
+    acknowledgeRecoveryWarning: () => { recoveryIncomplete.current = false; update(); },
     activate(row) {
       if (!live || !row.canSeen) return;
       if (!state.focusPending && snapshot?.focused_pane_id === row.agent.pane_id) { void seen(row); return; }

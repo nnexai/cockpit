@@ -13,8 +13,9 @@ const roots: Root[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await act(async () => root.unmount()); vi.useRealTimers(); vi.restoreAllMocks(); });
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>(done => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 const snapshot: SessionSnapshotResponse = { session_id: "s", server_instance: "server", version: "1", protocol: 22, focused_space_id: null, focused_tab_id: null, focused_pane_id: null, spaces: [], tabs: [], panes: [{ id: "p", terminal_id: "t", space_id: "space", tab_id: "tab", title: null, focused: false, agent: "agent", agent_status: "idle", revision: 1 }], agents: [{ pane_id: "p", space_id: "space", tab_id: "tab", name: "agent", status: "idle", title: null, focused: false, state_change_seq: 4 }] };
 const response: AgentAttentionResponse = { session_id: "s", server_instance: "server", epoch: 1, refused: null, records: [{ historical_id: null, pane_id: "p", terminal_id: "t", agent: "agent", last: { epoch: 1, seq: 4, status: "idle", observed_at: "now" }, completion: { epoch: 1, seq: 3, at: "then", inferred: true }, acked: null, dismissed: null }] };
@@ -102,6 +103,103 @@ it("preserves completion and inference evidence when one agent accumulates more 
   expect(observations).toHaveLength(261);
   expect(observations.slice(1, 4).map(item => item.status)).toEqual(["done", "working", "idle"]);
   expect(f.write.mock.calls.every(([, request]) => request.observations.length <= 256)).toBe(true);
+});
+
+it("keeps an inferred transition together at a batch boundary", async () => {
+  const f = fixture();
+  const initial = deferred<AgentAttentionResponse>();
+  f.read.mockReturnValueOnce(initial.promise);
+  f.props.state = { ...f.props.state, snapshot: {
+    ...snapshot,
+    panes: [...Array.from({ length: 255 }, (_, i) => ({ ...snapshot.panes[0]!, id: `other${i}`, terminal_id: `other-t${i}` })), snapshot.panes[0]!],
+    agents: [...Array.from({ length: 255 }, (_, i) => ({ ...snapshot.agents[0]!, pane_id: `other${i}` })), { ...snapshot.agents[0]!, status: "working", state_change_seq: 5 }],
+  } };
+  await f.render();
+  f.props.state = { ...f.props.state, snapshot: { ...f.props.state.snapshot!, agents: [...f.props.state.snapshot!.agents.slice(0, 255), { ...snapshot.agents[0]!, status: "idle", state_change_seq: 6 }] } };
+  await f.render();
+  await act(async () => initial.resolve(response));
+  expect(f.write.mock.calls.map(([, request]) => request.observations.length)).toEqual([255, 2]);
+  expect(f.write.mock.calls[1]![1].observations.map(item => item.status)).toEqual(["working", "idle"]);
+});
+
+it("bounds an unavailable queue while retaining ordered completion and replacement evidence", async () => {
+  const f = fixture();
+  f.read.mockRejectedValueOnce(new Error("corrupt storage"));
+  await f.render();
+  for (let i = 0; i < 1100; i++) {
+    const status = i === 0 ? "working" : i === 1 ? "done" : i === 2 ? "idle" : i % 2 ? "working" : "idle";
+    f.props.state = { ...f.props.state, snapshot: { ...snapshot, agents: [{ ...snapshot.agents[0]!, status, state_change_seq: i + 5 }] } };
+    await f.render();
+  }
+  f.props.state = { ...f.props.state, snapshot: { ...snapshot, panes: [{ ...snapshot.panes[0]!, terminal_id: "replacement" }], agents: [{ ...snapshot.agents[0]!, name: "replacement", status: "done", state_change_seq: 1200 }] } };
+  await f.render();
+  f.props.state = { ...f.props.state, snapshot: { ...f.props.state.snapshot!, agents: [{ ...f.props.state.snapshot!.agents[0]!, status: "idle", state_change_seq: 1201 }] } };
+  await f.render();
+  await act(async () => f.attention.retry());
+  const observations = f.write.mock.calls.flatMap(([, request]) => request.observations);
+  expect(observations.length).toBeLessThanOrEqual(1024);
+  const original = observations.filter(item => item.terminal_id === "t");
+  expect(original.some(item => item.status === "done" && item.seq === 6)).toBe(true);
+  expect(original.some((item, index) => item.status === "working" && original[index + 1]?.status === "idle")).toBe(true);
+  expect(observations.slice(-2).map(item => [item.terminal_id, item.status])).toEqual([["replacement", "done"], ["replacement", "idle"]]);
+  expect(observations.map(item => item.seq)).toEqual([...observations.map(item => item.seq)].sort((a, b) => a - b));
+});
+
+it("compacts a failed in-flight batch together with newer queued observations", async () => {
+  const f = fixture();
+  const pending = deferred<AgentAttentionResponse>();
+  f.write.mockReturnValueOnce(pending.promise);
+  f.props.state = { ...f.props.state, snapshot: { ...snapshot, agents: [{ ...snapshot.agents[0]!, status: "done" }] } };
+  await f.render();
+  for (let i = 0; i < 1024; i++) {
+    f.props.state = { ...f.props.state, snapshot: { ...snapshot, agents: [{ ...snapshot.agents[0]!, status: i % 2 ? "idle" : "working", state_change_seq: i + 5 }] } };
+    await f.render();
+  }
+  await act(async () => pending.reject(new Error("storage full")));
+  f.write.mockClear();
+  await act(async () => f.attention.retry());
+  const observations = f.write.mock.calls.flatMap(([, request]) => request.observations);
+  expect(observations.length).toBeLessThanOrEqual(1024);
+  expect(observations.map(item => item.status)).toEqual(["done", "working", "idle"]);
+  expect(observations.map(item => item.seq)).toEqual([4, 1027, 1028]);
+});
+
+it("evicts the oldest whole incarnations when distinct panes exceed the queue bound", async () => {
+  const f = fixture();
+  f.read.mockRejectedValueOnce(new Error("storage unavailable"));
+  f.props.state = { ...f.props.state, snapshot: {
+    ...snapshot,
+    panes: Array.from({ length: 1025 }, (_, i) => ({ ...snapshot.panes[0]!, id: `p${i}`, terminal_id: `t${i}` })),
+    agents: Array.from({ length: 1025 }, (_, i) => ({ ...snapshot.agents[0]!, pane_id: `p${i}`, status: "done", state_change_seq: i })),
+  } };
+  await f.render();
+  expect(f.attention.recoveryIncomplete).toBe(true);
+  await act(async () => f.attention.retry());
+  expect(f.attention.availability).toBe("ready");
+  expect(f.attention.recoveryIncomplete).toBe(true);
+  const observations = f.write.mock.calls.flatMap(([, request]) => request.observations);
+  expect(observations).toHaveLength(1024);
+  expect(observations[0]!.pane_id).toBe("p1");
+  expect(observations[1023]!.pane_id).toBe("p1024");
+  await act(async () => f.attention.acknowledgeRecoveryWarning());
+  expect(f.attention.recoveryIncomplete).toBe(false);
+});
+
+it("prefers completion evidence to newer uneventful identities at the bound", async () => {
+  const f = fixture();
+  f.read.mockRejectedValueOnce(new Error("storage unavailable"));
+  f.props.state = { ...f.props.state, snapshot: {
+    ...snapshot,
+    panes: Array.from({ length: 1025 }, (_, i) => ({ ...snapshot.panes[0]!, id: `p${i}`, terminal_id: `t${i}` })),
+    agents: Array.from({ length: 1025 }, (_, i) => ({ ...snapshot.agents[0]!, pane_id: `p${i}`, status: i === 0 ? "done" : "idle", state_change_seq: i })),
+  } };
+  await f.render();
+  await act(async () => f.attention.retry());
+  const observations = f.write.mock.calls.flatMap(([, request]) => request.observations);
+  expect(observations).toHaveLength(1024);
+  expect(observations[0]!.pane_id).toBe("p0");
+  expect(observations.some(item => item.pane_id === "p1")).toBe(false);
+  expect(f.attention.recoveryIncomplete).toBe(true);
 });
 
 it("acknowledges a historical identity explicitly without focusing its replacement", async () => {

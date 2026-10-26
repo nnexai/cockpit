@@ -73,6 +73,8 @@ The Agents section is an attention queue: Blocked, Working and unseen completion
 
 Unseen results remain available as historical entries in All even if the agent disappears or is replaced. Mark a historical result seen explicitly; it does not focus a replacement agent.
 
+During an attention-store outage, the client bounds queued observations and prioritizes completion evidence. If that bound forces a discard, it warns that recovery may be incomplete until the warning is acknowledged; observations never received from Herdr cannot be reconstructed.
+
 Every painted active-tab terminal is a direct control attachment rendered by xterm.js. Rendering and input permission remain separate. Herdr owns screen state, scrollback and PTY lifetime; resynchronization supplies a fresh baseline. Keyboard routing combines Cockpit's static prefix registry with identity-checked server-advertised commands. The singleton server popup floats above, rather than reshaping, the split tree.
 
 Files and Review are tab-local viewers opened from a real same-tab source terminal. Their core-issued binding pins the requested root and source identity; subsequent source cwd or lifetime changes do not retarget it. Files renders bounded source, Markdown/Mermaid and safe raster media with original line mapping. Review is a read-only local Git model. Run-local comments retain real paths and side-aware anchors for explicit same-tab paste without submission.
