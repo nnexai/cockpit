@@ -66,6 +66,7 @@ export function QuickTerminal({ client, sessionId, paneId, focusEpoch, returnFoc
       return;
     }
     if (!herdrShadowsPrefix("u", false) && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === "b") {
+      if (prefix.current) { prefix.current = false; return; }
       prefix.current = true; event.preventDefault(); event.stopPropagation();
       return;
     }

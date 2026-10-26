@@ -158,6 +158,18 @@ describe("QuickTerminal", () => {
     expect(document.activeElement).toBe(probe.opener);
   });
 
+  it("passes a second Ctrl+B to the terminal and disarms the prefix", () => {
+    const confirm = vi.spyOn(window, "confirm");
+    const probe = mount();
+    const received: string[] = [];
+    probe.terminal.addEventListener("keydown", event => received.push(`${event.ctrlKey}:${event.key}`));
+    expect(probe.key(probe.terminal, { key: "b", ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(probe.key(probe.terminal, { key: "b", ctrlKey: true }).defaultPrevented).toBe(false);
+    expect(received).toEqual(["true:b"]);
+    expect(probe.key(probe.terminal, { key: "u" }).defaultPrevented).toBe(false);
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
   it("leaves Tab from the terminal available to the shell while cycling focus from the close button", () => {
     const probe = mount();
     probe.terminal.focus();
