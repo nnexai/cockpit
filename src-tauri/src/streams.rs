@@ -20,7 +20,7 @@ use cockpit_host::{
 use cockpit_protocol::{
     v1::{
         ErrorResponse, SessionStreamMessage, TerminalCommand, TerminalOpenRequest,
-        TerminalStreamMessage,
+        TerminalStreamMessage, TerminalTargetKind,
     },
     widget::{WIDGET_MAX_SNAPSHOT_BYTES, WidgetEvent, WidgetWindowReport},
 };
@@ -116,6 +116,7 @@ enum StreamEntry {
     Terminal {
         control: Arc<StreamControl>,
         commands: mpsc::Sender<TerminalCommand>,
+        scratch_owner: Option<String>,
     },
     BrowserView {
         control: Arc<StreamControl>,
@@ -126,21 +127,28 @@ enum StreamEntry {
     },
 }
 
+#[derive(Default)]
+struct RegistryState {
+    entries: HashMap<String, StreamEntry>,
+    page_generations: HashMap<String, u64>,
+}
+
 /// Process-local bounded registry for live native streams.
 #[derive(Clone)]
 pub struct StreamRegistry {
-    entries: Arc<Mutex<HashMap<String, StreamEntry>>>,
+    state: Arc<Mutex<RegistryState>>,
 }
 
 impl StreamRegistry {
     pub fn new() -> Self {
         Self {
-            entries: Arc::new(Mutex::new(HashMap::new())),
+            state: Arc::new(Mutex::new(RegistryState::default())),
         }
     }
 
     fn allocate(&self, entry: StreamEntry) -> Result<String, ErrorResponse> {
-        let mut entries = self.entries.lock().expect("stream registry lock poisoned");
+        let mut state = self.state.lock().expect("stream registry lock poisoned");
+        let entries = &mut state.entries;
         if entries.len() >= MAX_STREAMS {
             return Err(OperationError::rejected(
                 "stream_limit",
@@ -159,7 +167,8 @@ impl StreamRegistry {
     }
 
     fn terminal_commands(&self, stream_id: &str) -> Option<mpsc::Sender<TerminalCommand>> {
-        let entries = self.entries.lock().expect("stream registry lock poisoned");
+        let state = self.state.lock().expect("stream registry lock poisoned");
+        let entries = &state.entries;
         match entries.get(stream_id) {
             Some(StreamEntry::Terminal { commands, .. }) => Some(commands.clone()),
             _ => None,
@@ -167,7 +176,8 @@ impl StreamRegistry {
     }
 
     fn widget_window(&self, stream_id: &str) -> Option<String> {
-        let entries = self.entries.lock().expect("stream registry lock poisoned");
+        let state = self.state.lock().expect("stream registry lock poisoned");
+        let entries = &state.entries;
         match entries.get(stream_id) {
             Some(StreamEntry::Widget { window_id, .. }) => Some(window_id.clone()),
             _ => None,
@@ -176,10 +186,10 @@ impl StreamRegistry {
 
     fn complete(&self, stream_id: &str) {
         let entry = self
-            .entries
+            .state
             .lock()
             .expect("stream registry lock poisoned")
-            .remove(stream_id);
+            .entries.remove(stream_id);
         if let Some(entry) = entry {
             match entry {
                 StreamEntry::Session { control }
@@ -194,10 +204,10 @@ impl StreamRegistry {
 
     async fn cancel(&self, stream_id: &str) {
         let entry = self
-            .entries
+            .state
             .lock()
             .expect("stream registry lock poisoned")
-            .remove(stream_id);
+            .entries.remove(stream_id);
         if let Some(entry) = entry {
             match entry {
                 StreamEntry::Session { control }
@@ -205,6 +215,68 @@ impl StreamRegistry {
                 | StreamEntry::BrowserView { control }
                 | StreamEntry::Widget { control, .. } => control.cancel().await,
             }
+        }
+    }
+    fn page_generation(&self, owner: &str) -> u64 {
+        let state = self.state.lock().expect("stream registry lock poisoned");
+        *state.page_generations.get(owner).unwrap_or(&0)
+    }
+
+    fn allocate_scratch(
+        &self,
+        owner: &str,
+        generation: u64,
+        control: Arc<StreamControl>,
+        commands: mpsc::Sender<TerminalCommand>,
+    ) -> Result<String, ErrorResponse> {
+        let mut state = self.state.lock().expect("stream registry lock poisoned");
+        if *state.page_generations.get(owner).unwrap_or(&0) != generation {
+            return Err(OperationError::rejected(
+                "page_reloaded",
+                "The terminal's webview navigated while it was opening",
+            ).into());
+        }
+        if state.entries.len() >= MAX_STREAMS {
+            return Err(OperationError::rejected(
+                "stream_limit",
+                "The maximum number of active streams has been reached",
+            ).into());
+        }
+        let id = loop {
+            let candidate = Uuid::new_v4().simple().to_string();
+            if !state.entries.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+        state.entries.insert(id.clone(), StreamEntry::Terminal {
+            control,
+            commands,
+            scratch_owner: Some(owner.to_owned()),
+        });
+        Ok(id)
+    }
+
+    /// Advance synchronously with navigation, before any asynchronous cleanup.
+    pub fn page_started(&self, owner: &str) {
+        let controls = {
+            let mut state = self.state.lock().expect("stream registry lock poisoned");
+            let generation = state.page_generations.entry(owner.to_owned()).or_default();
+            *generation = generation.checked_add(1).expect("page generation exhausted");
+            let mut controls = Vec::new();
+            state.entries.retain(|_, entry| {
+                if let StreamEntry::Terminal { control, scratch_owner: Some(entry_owner), .. } = entry
+                    && entry_owner == owner
+                {
+                    controls.push(Arc::clone(control));
+                    false
+                } else {
+                    true
+                }
+            });
+            controls
+        };
+        for control in controls {
+            tauri::async_runtime::spawn(async move { control.cancel().await; });
         }
     }
 }
@@ -307,12 +379,35 @@ pub async fn cockpit_browser_view_subscribe(
 }
 
 #[tauri::command]
-pub async fn cockpit_terminal_open(
+pub fn cockpit_scratch_page_generation<R: tauri::Runtime>(
+    webview: tauri::Webview<R>,
+    registry: State<'_, StreamRegistry>,
+) -> u64 {
+    registry.page_generation(webview.label())
+}
+
+#[tauri::command]
+pub async fn cockpit_terminal_open<R: tauri::Runtime>(
     request: TerminalOpenRequest,
     channel: Channel<TerminalStreamMessage>,
     service: State<'_, CockpitService>,
     registry: State<'_, StreamRegistry>,
+    page_generation: Option<u64>,
+    webview: tauri::Webview<R>,
 ) -> Result<String, ErrorResponse> {
+    let scratch_owner = if request.target_kind == TerminalTargetKind::Scratch {
+        let generation = page_generation.ok_or_else(|| ErrorResponse::from(OperationError::rejected(
+            "page_reloaded", "A current webview generation is required for a scratch terminal",
+        )))?;
+        if generation != registry.page_generation(webview.label()) {
+            return Err(OperationError::rejected(
+                "page_reloaded", "The terminal's webview navigated while it was opening",
+            ).into());
+        }
+        Some((webview.label().to_owned(), generation))
+    } else {
+        None
+    };
     let terminal = service
         .open_terminal(&request)
         .await
@@ -323,10 +418,22 @@ pub async fn cockpit_terminal_open(
         commands,
     } = terminal;
     let control = StreamControl::new(Some(commands.clone()));
-    let stream_id = registry.allocate(StreamEntry::Terminal {
-        control: Arc::clone(&control),
-        commands: commands.clone(),
-    })?;
+    let allocation = if let Some((owner, generation)) = &scratch_owner {
+        registry.allocate_scratch(owner, *generation, Arc::clone(&control), commands.clone())
+    } else {
+        registry.allocate(StreamEntry::Terminal {
+            control: Arc::clone(&control),
+            commands: commands.clone(),
+            scratch_owner: None,
+        })
+    };
+    let stream_id = match allocation {
+        Ok(id) => id,
+        Err(error) => {
+            control.cancel().await;
+            return Err(error);
+        }
+    };
     let task_registry = registry.inner().clone();
     let task_stream_id = stream_id.clone();
     let task_control = Arc::clone(&control);
@@ -510,4 +617,48 @@ pub async fn cockpit_widget_subscribe(
     });
     control.set_abort(task.abort_handle());
     Ok(returned_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn navigation_releases_only_owned_scratch_and_fences_inflight_open() {
+        let registry = StreamRegistry::new();
+        let (a_tx, mut a_rx) = mpsc::channel(1);
+        let a_control = StreamControl::new(Some(a_tx.clone()));
+        let generation = registry.page_generation("a");
+        let a = registry.allocate_scratch("a", generation, a_control, a_tx).unwrap();
+
+        let (b_tx, mut b_rx) = mpsc::channel(1);
+        let b_control = StreamControl::new(Some(b_tx.clone()));
+        let b = registry.allocate_scratch("b", registry.page_generation("b"), b_control, b_tx).unwrap();
+
+        let (ordinary_tx, mut ordinary_rx) = mpsc::channel(1);
+        let ordinary = registry.allocate(StreamEntry::Terminal {
+            control: StreamControl::new(Some(ordinary_tx.clone())),
+            commands: ordinary_tx,
+            scratch_owner: None,
+        }).unwrap();
+
+        registry.page_started("a");
+        assert!(registry.terminal_commands(&a).is_none());
+        assert!(registry.terminal_commands(&b).is_some());
+        assert!(registry.terminal_commands(&ordinary).is_some());
+        assert!(matches!(a_rx.recv().await, Some(TerminalCommand::Release)));
+        assert!(b_rx.try_recv().is_err());
+        assert!(ordinary_rx.try_recv().is_err());
+
+        let (late_tx, mut late_rx) = mpsc::channel(1);
+        let late_control = StreamControl::new(Some(late_tx.clone()));
+        assert!(registry.allocate_scratch("a", generation, Arc::clone(&late_control), late_tx).is_err());
+        late_control.cancel().await;
+        assert!(matches!(late_rx.recv().await, Some(TerminalCommand::Release)));
+        let (new_tx, _new_rx) = mpsc::channel(1);
+        assert!(registry.allocate_scratch(
+            "a", registry.page_generation("a"),
+            StreamControl::new(Some(new_tx.clone())), new_tx,
+        ).is_ok());
+    }
 }

@@ -465,7 +465,7 @@ export const wireSessionStreamMessage: WireDescriptor<V1.SessionStreamMessage> =
 
 export const wireTerminalMode: WireDescriptor<V1.TerminalMode> = literal<V1.TerminalMode>("TerminalMode", ["control"]);
 
-export const wireTerminalTargetKind: WireDescriptor<V1.TerminalTargetKind> = literal<V1.TerminalTargetKind>("TerminalTargetKind", ["pane", "popup"]);
+export const wireTerminalTargetKind: WireDescriptor<V1.TerminalTargetKind> = literal<V1.TerminalTargetKind>("TerminalTargetKind", ["pane", "popup", "scratch"]);
 
 export const wireTerminalOpenRequest: WireDescriptor<V1.TerminalOpenRequest> = struct<V1.TerminalOpenRequest>("TerminalOpenRequest", {
   "session_id": req(str),
@@ -514,6 +514,8 @@ export const wireTerminalCommand: WireDescriptor<V1.TerminalCommand> = tagged<V1
     "modifiers": req(u8),
   },
   "terminal.release": {
+  },
+  "terminal.terminate": {
   },
 });
 

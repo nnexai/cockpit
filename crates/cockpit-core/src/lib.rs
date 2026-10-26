@@ -614,7 +614,7 @@ impl CockpitService {
             )
             .await?;
         let eligibility = match request.target_kind {
-            cockpit_protocol::v1::TerminalTargetKind::Pane =>
+            cockpit_protocol::v1::TerminalTargetKind::Pane | cockpit_protocol::v1::TerminalTargetKind::Scratch =>
                 validate_terminal_pane_membership(&request.session_id, &request.pane_id, &snapshot),
             cockpit_protocol::v1::TerminalTargetKind::Popup =>
                 validate_terminal_popup(&request.session_id, &request.pane_id, &snapshot),

@@ -600,13 +600,14 @@ pub enum TerminalMode {
     Control,
 }
 
-/// Popup targets are terminal IDs, never members of a tab's pane collection.
+/// Popup and scratch targets are terminal IDs, never members of a tab's pane collection.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalTargetKind {
     #[default]
     Pane,
     Popup,
+    Scratch,
 }
 
 /// A request to attach to a pane's terminal stream.
@@ -710,6 +711,9 @@ pub enum TerminalCommand {
     },
     #[ts(rename = "terminal.release")]
     Release,
+    /// Terminate a disposable scratch terminal, rather than detaching from it.
+    #[ts(rename = "terminal.terminate")]
+    Terminate,
 }
 
 const MAX_TERMINAL_INPUT_BYTES: usize = 64 * 1024;
@@ -772,7 +776,7 @@ impl TerminalCommand {
             {
                 return Err("terminal.mouse button does not match event kind");
             }
-            Self::Scroll { .. } | Self::Mouse { .. } | Self::Release => {}
+            Self::Scroll { .. } | Self::Mouse { .. } | Self::Release | Self::Terminate => {}
         }
         Ok(())
     }
@@ -817,6 +821,8 @@ enum TerminalCommandWire {
     },
     #[serde(rename = "terminal.release")]
     Release,
+    #[serde(rename = "terminal.terminate")]
+    Terminate,
 }
 
 impl TryFrom<TerminalCommandWire> for TerminalCommand {
@@ -865,6 +871,7 @@ impl TryFrom<TerminalCommandWire> for TerminalCommand {
                 modifiers,
             },
             TerminalCommandWire::Release => Self::Release,
+            TerminalCommandWire::Terminate => Self::Terminate,
         };
         command.validate()?;
         Ok(command)
@@ -922,6 +929,7 @@ impl Serialize for TerminalCommand {
                 modifiers: *modifiers,
             },
             Self::Release => TerminalCommandWire::Release,
+            Self::Terminate => TerminalCommandWire::Terminate,
         };
         wire.serialize(serializer)
     }

@@ -45,7 +45,7 @@ const mocks = vi.hoisted(() => {
     });
     keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
     readonly attachCustomKeyEventHandler = vi.fn((handler: (event: KeyboardEvent) => boolean) => { this.keyHandler = handler; });
-    readonly attachCustomWheelEventHandler = vi.fn();
+    readonly attachCustomWheelEventHandler = vi.fn((_handler: (event: WheelEvent) => boolean) => {});
 
     constructor(options: Record<string, unknown> = {}) {
       this.options = { fontSize: 14, ...options };
@@ -193,6 +193,133 @@ afterEach(() => {
   mocks.fitProposals.length = 0;
   mocks.native.enabled = false;
   mocks.native.invoke.mockReset();
+});
+
+describe("scratch terminal", () => {
+  it("renders incremental ANSI, uses xterm input and local sizing, and terminates", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const terminateRef: { current: (() => boolean) | null } = { current: null };
+    const onClosed = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, true, {
+          request: { session_id: "session", pane_id: "pane", target_kind: "scratch" },
+          terminateRef, onClosed,
+        })} />);
+        await settle();
+      });
+      const terminal = mocks.terminals.at(-1)!;
+      await act(async () => {
+        messages[0]!(message("owned"));
+        messages[0]!({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream",
+          seq: "1", encoding: "ansi", width: 80, height: 24, full: false, bytes: btoa("\x1b[?1000hhello") });
+      });
+      expect(terminal.write).toHaveBeenCalledWith(
+        Uint8Array.from("\x1b[?1000hhello", (character) => character.charCodeAt(0)), expect.any(Function),
+      );
+      expect(terminal.resize).not.toHaveBeenCalled();
+      expect(host.querySelector('[role="alert"]')).toBeNull();
+
+      const down = pointer("pointerdown", 1);
+      host.querySelector(".terminal-host")!.dispatchEvent(down);
+      expect(down.defaultPrevented).toBe(false);
+      const wheel = new WheelEvent("wheel", { deltaY: 10, cancelable: true });
+      expect(terminal.attachCustomWheelEventHandler.mock.calls[0]![0](wheel)).toBe(true);
+      terminal.dataHandler?.("\x1b[<0;2;3M");
+      expect(sent).toContainEqual({ type: "terminal.input", text: "\x1b[<0;2;3M", bytes: null });
+      expect(sent.some((command) => command.type === "terminal.mouse" || command.type === "terminal.scroll")).toBe(false);
+
+      mocks.fitProposals.push([120, 40]);
+      mocks.fitDimensions.push([120, 40]);
+      await act(async () => {
+        mocks.observers[0]!.callback([], mocks.observers[0] as unknown as ResizeObserver);
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(terminal.cols).toBe(120);
+      expect(terminal.rows).toBe(40);
+      expect(sent).toContainEqual(expect.objectContaining({ type: "terminal.resize", cols: 120, rows: 40 }));
+      await act(async () => { expect(terminateRef.current?.()).toBe(true); });
+      expect(sent).toContainEqual({ type: "terminal.terminate" });
+      await act(async () => {
+        messages[0]!({ type: "closed", session_id: "session", pane_id: "pane", stream_id: "stream", reason: "exited" });
+      });
+      expect(onClosed).toHaveBeenCalledOnce();
+      expect(openTerminal).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => root.unmount());
+      expect(terminateRef.current).toBeNull();
+      host.remove();
+    }
+  });
+
+  it("reports unavailable streams and synchronous termination failures", async () => {
+    const terminateRef: { current: (() => boolean) | null } = { current: null };
+    const onStateChange = vi.fn();
+    const send = vi.fn((command: TerminalCommand) => {
+      if (command.type === "terminal.terminate") throw new Error("Termination send failed");
+    });
+    const client = { openTerminal: vi.fn(() => Promise.resolve({ send, close: vi.fn() })) } as unknown as CockpitClient;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const props = paneProps(client, false, {
+      request: { session_id: "session", pane_id: "pane", target_kind: "scratch" },
+      terminateRef, onStateChange,
+    });
+    try {
+      await act(async () => { root.render(<TerminalPane {...props} deferAttachment />); });
+      expect(terminateRef.current?.()).toBe(false);
+      expect(send).not.toHaveBeenCalled();
+      await act(async () => { root.render(<TerminalPane {...props} />); await settle(); });
+      await act(async () => { expect(terminateRef.current?.()).toBe(false); });
+      expect(send).toHaveBeenCalledWith({ type: "terminal.terminate" });
+      expect(onStateChange).toHaveBeenLastCalledWith({ ready: false, error: "Termination send failed" });
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("does not retry a disconnected scratch process", async () => {
+    vi.useFakeTimers();
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const terminateRef: { current: (() => boolean) | null } = { current: null };
+    const onStateChange = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, {
+          request: { session_id: "session", pane_id: "pane", target_kind: "scratch" },
+          terminateRef, onStateChange,
+        })} />);
+        await settle();
+      });
+      await act(async () => {
+        messages[0]!({ type: "disconnected", session_id: "session", pane_id: "pane", stream_id: "stream",
+          code: "disconnected", message: "Terminal websocket closed" });
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(openTerminal).toHaveBeenCalledOnce();
+      expect(host.textContent).toContain("Terminal websocket closed");
+      expect(host.querySelector("button")).toBeNull();
+      expect(terminateRef.current?.()).toBe(false);
+      expect(onStateChange).toHaveBeenLastCalledWith({ ready: false, error: "Terminal websocket closed" });
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
 });
 
 describe("TerminalPane fitting and pointer ownership", () => {

@@ -47,7 +47,7 @@ export function rendererAvailability(kind: RendererKind, state: ViewerSourcesSta
 
 export interface CommandInput {
   herdr: { commands: readonly HerdrCommand[]; prefixes: readonly HerdrChord[]; reason: string | undefined; popupOpen: boolean };
-  view: Pick<WorkbenchView, "spaces" | "allTabs" | "selectedSpace" | "selectedTab" | "selectedLeaf" | "selectedPane" | "live" | "busy">;
+  view: Pick<WorkbenchView, "spaces" | "allTabs" | "selectedSpace" | "selectedTab" | "selectedLeaf" | "selectedPane" | "sourcePaneId" | "live" | "busy">;
   libraryOpen: boolean;
   notesOpen: boolean;
   liaison: { actionLabel: string | null; startAvailable: boolean; overviewAvailable: boolean; overviewOpen: boolean };
@@ -101,6 +101,7 @@ export function buildCommands(input: CommandInput): CommandAction[] {
         : entry.needs === "tab" && !selectedTab ? "Select a tab first"
         : entry.needs === "pane" && !selectedLeaf ? "Select a pane first"
         : command === "rename-pane" && !selectedPane ? "Terminals only"
+        : command === "quick-terminal" && (!view.live || !view.sourcePaneId) ? "A live terminal in this tab is required"
         : command === "setup-space" && !live ? "Herdr is not live"
         : command === "ask-agent" && !live ? "Herdr is not live"
         : command === "ask-agent" && herdr.popupOpen ? "The popup owns keyboard input"

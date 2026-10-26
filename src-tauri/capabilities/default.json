@@ -54,6 +54,7 @@
     "allow-cockpit-focus",
     "allow-cockpit-mutate",
     "allow-cockpit-session-subscribe",
+    "allow-cockpit-scratch-page-generation",
     "allow-cockpit-terminal-open",
     "allow-cockpit-terminal-command",
     "allow-cockpit-terminal-files-stage",

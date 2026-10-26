@@ -335,7 +335,7 @@ export type SessionStreamMessage = { "type": "snapshot", session_id: string, gen
 
 export type TerminalMode = "control";
 
-export type TerminalTargetKind = "pane" | "popup";
+export type TerminalTargetKind = "pane" | "popup" | "scratch";
 
 export type TerminalOpenRequest = { session_id: string, pane_id: string, target_kind?: TerminalTargetKind, mode: TerminalMode, takeover: boolean, cols: number, rows: number, cell_width_px: number, cell_height_px: number, };
 
@@ -347,7 +347,7 @@ export type TerminalMouseButton = "left" | "right" | "middle";
 
 export type TerminalMouseKind = "down" | "up" | "drag" | "moved";
 
-export type TerminalCommand = { "type": "terminal.input", text: string | null, bytes: string | null, } | { "type": "terminal.resize", cols: number, rows: number, cell_width_px: number, cell_height_px: number, } | { "type": "terminal.scroll", direction: TerminalScrollDirection, lines: number, source: TerminalScrollSource, column: number | null, row: number | null, modifiers: number, } | { "type": "terminal.mouse", kind: TerminalMouseKind, button: TerminalMouseButton | null, column: number, row: number, modifiers: number, } | { "type": "terminal.release" };
+export type TerminalCommand = { "type": "terminal.input", text: string | null, bytes: string | null, } | { "type": "terminal.resize", cols: number, rows: number, cell_width_px: number, cell_height_px: number, } | { "type": "terminal.scroll", direction: TerminalScrollDirection, lines: number, source: TerminalScrollSource, column: number | null, row: number | null, modifiers: number, } | { "type": "terminal.mouse", kind: TerminalMouseKind, button: TerminalMouseButton | null, column: number, row: number, modifiers: number, } | { "type": "terminal.release" } | { "type": "terminal.terminate" };
 
 export type TerminalOwnershipState = "pending" | "owned" | "conflict" | "released" | "lost";
 

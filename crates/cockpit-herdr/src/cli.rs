@@ -1902,6 +1902,15 @@ impl HerdrCliAdapter {
         request
             .validate()
             .map_err(|message| InspectionError::new("invalid_terminal_dimensions", message))?;
+        if request.target_kind == cockpit_protocol::v1::TerminalTargetKind::Scratch {
+            use cockpit_core::SourcePaneAdapter;
+            let evidence = extensions::HerdrSourcePaneAdapter::new(self.clone())
+                .source_pane_evidence(&request.session_id, &request.pane_id).await?;
+            let cwd = evidence.foreground_cwd.or(evidence.cwd).ok_or_else(|| {
+                InspectionError::new("scratch_cwd_unavailable", "Source pane has no working directory")
+            })?;
+            return crate::scratch_terminal::open(request, &cwd);
+        }
         let popup_identity = if request.target_kind == cockpit_protocol::v1::TerminalTargetKind::Popup {
             Some(self.validate_popup_target(request).await?)
         } else {

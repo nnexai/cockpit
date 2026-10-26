@@ -45,6 +45,11 @@ pub fn run() {
         .manage(orchestration_runtime)
         .manage(clipboard::TerminalFilesState::default())
         .manage(StreamRegistry::new())
+        .on_page_load(|webview, payload| {
+            if payload.event() == tauri::webview::PageLoadEvent::Started {
+                webview.state::<StreamRegistry>().page_started(webview.label());
+            }
+        })
         .setup(move |app| {
             let main_window = app
                 .get_webview_window("main")

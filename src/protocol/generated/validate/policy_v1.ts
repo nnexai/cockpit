@@ -155,6 +155,7 @@ export interface WireOwners {
   "TerminalCommand[terminal.scroll]": Extract<V1.TerminalCommand, { "type": "terminal.scroll" }>;
   "TerminalCommand[terminal.mouse]": Extract<V1.TerminalCommand, { "type": "terminal.mouse" }>;
   "TerminalCommand[terminal.release]": Extract<V1.TerminalCommand, { "type": "terminal.release" }>;
+  "TerminalCommand[terminal.terminate]": Extract<V1.TerminalCommand, { "type": "terminal.terminate" }>;
   "TerminalStreamMessage": V1.TerminalStreamMessage;
   "TerminalStreamMessage[mouse_mode]": Extract<V1.TerminalStreamMessage, { "type": "mouse_mode" }>;
   "TerminalStreamMessage[ownership]": Extract<V1.TerminalStreamMessage, { "type": "ownership" }>;
@@ -560,6 +561,7 @@ export interface WireFieldNames {
   "TerminalCommand[terminal.scroll]": "direction" | "lines" | "source" | "column" | "row" | "modifiers";
   "TerminalCommand[terminal.mouse]": "kind" | "button" | "column" | "row" | "modifiers";
   "TerminalCommand[terminal.release]": never;
+  "TerminalCommand[terminal.terminate]": never;
   "TerminalStreamMessage": "session_id" | "pane_id" | "stream_id";
   "TerminalStreamMessage[mouse_mode]": "session_id" | "pane_id" | "stream_id" | "enabled";
   "TerminalStreamMessage[ownership]": "session_id" | "pane_id" | "stream_id" | "state" | "message";
@@ -651,6 +653,7 @@ export interface WireTagNames {
   "TerminalCommand[terminal.scroll]": "type";
   "TerminalCommand[terminal.mouse]": "type";
   "TerminalCommand[terminal.release]": "type";
+  "TerminalCommand[terminal.terminate]": "type";
   "TerminalStreamMessage": "type";
   "TerminalStreamMessage[mouse_mode]": "type";
   "TerminalStreamMessage[ownership]": "type";
@@ -750,6 +753,7 @@ export interface WireCheckpointFieldNames {
   "TerminalCommand[terminal.scroll]": "direction" | "lines" | "source" | "column" | "row" | "modifiers" | "type";
   "TerminalCommand[terminal.mouse]": "kind" | "button" | "column" | "row" | "modifiers" | "type";
   "TerminalCommand[terminal.release]": "type";
+  "TerminalCommand[terminal.terminate]": "type";
   "TerminalStreamMessage": "bytes" | "code" | "enabled" | "encoding" | "full" | "height" | "message" | "pane_id" | "reason" | "seq" | "session_id" | "state" | "stream_id" | "type" | "width";
   "TerminalStreamMessage[mouse_mode]": "session_id" | "pane_id" | "stream_id" | "enabled" | "type";
   "TerminalStreamMessage[ownership]": "session_id" | "pane_id" | "stream_id" | "state" | "message" | "type";

@@ -7,7 +7,7 @@ import { terminalScreenBounds } from "./cockpitTerminal";
 import { applicationFontSize } from "./terminalTheme";
 import { forwardTerminalMouse, terminalMouseButton, terminalScrollCommand } from "./terminalMouse";
 
-export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl, terminalMouseInput: boolean) {
+export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl, terminalMouseInput: boolean, scratch = false) {
   const { hostRef, terminalRef } = refs;
   const { sendInput, requestControl } = control;
   const activeMousePointer = useRef<{ button: TerminalMouseButton; pointerId: number } | null>(null);
@@ -39,6 +39,7 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
     else clearMouseMode();
   };
   const handleWheel = (terminal: Terminal, event: WheelEvent): boolean => {
+    if (scratch) return true;
       if (event.deltaY === 0) return true;
       event.preventDefault();
       requestControl();
@@ -49,6 +50,7 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
   const handlers: Pick<DOMAttributes<HTMLDivElement>, "onPointerDownCapture" | "onPointerMoveCapture" | "onPointerUpCapture" | "onPointerCancel"> = {
     onPointerDownCapture: (event) => {
       const button = terminalMouseButton(event.button);
+      if (scratch) return;
       if (!button) return;
       requestControl();
       // Shift is xterm's conventional selection override for app mouse mode.

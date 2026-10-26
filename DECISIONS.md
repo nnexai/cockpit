@@ -30,6 +30,8 @@ Current rules are grouped by behavioral contract: conditions, limits and caveats
 
 - Herdr owns PTYs, models and scrollback; xterm renders/captures input. Painted active-tab terminals attach control-only at fitted grid/cell pixels, never observe/downgrade; input additionally needs DOM focus, confirmed Herdr focus and owned control. [Owner](crates/cockpit-herdr/src/terminal_wire.rs). Rationale: Rendering alone cannot authorize input.
 
+- The quick terminal is an exception to Herdr PTY ownership: Cockpit owns a disposable shell scoped to its stream and launched in the selected source pane's directory. Explicit close requires confirmation; shell exit or stream release ends the owned shell, without promising containment of deliberately detached processes. It never creates a Herdr pane or closes a Herdr popup. [Owner](crates/cockpit-herdr/src/scratch_terminal.rs).
+
 - Require a full first frame and consecutive subsequent sequences, including full repaints; never reset xterm for a full ANSI baseline. Reconnect needs a new baseline; one uninterrupted reader provides bounded buffering and deterministic shutdown. [Owner](crates/cockpit-herdr/src/terminal_wire.rs). Rationale: Continuous framing preserves terminal state.
 
 - Tab switches prepare painted target attachments before Herdr focus, gated by the focused pane’s first frame or 300 ms, with no gate if none are painted; retain outgoing attachments until swap paint. Fresh membership, not geometry, determines eligibility; Herdr resizes on control attach and restores TUI size on disconnect. [Owner](src/app/session/focusCoordinator.ts). Rationale: The incoming PTY must fit before focus changes.

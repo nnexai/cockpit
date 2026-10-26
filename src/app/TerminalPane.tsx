@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import type { TerminalOwnershipState } from "../protocol/generated/v1";
@@ -40,10 +40,12 @@ export type TerminalPaneProps = {
   accessibleLabel?: string;
   onStateChange?: (state: { ready: boolean; error: string | null }) => void;
   onCellGeometry?: (geometry: { cell_width_px: number; cell_height_px: number }) => void;
+  /** Returns whether the attached stream accepted a scratch process termination command. */
+  terminateRef?: RefObject<(() => boolean) | null>;
 };
 
 
-export function TerminalPane({ client, request, selected, presented = true, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, deferAttachment = false, focusOnAttach = true, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream, accessibleLabel, onStateChange, onCellGeometry }: TerminalPaneProps) {
+export function TerminalPane({ client, request, selected, presented = true, controlAllowed, controlPending, focusEpoch, focusToken, terminalMouseInput, deferAttachment = false, focusOnAttach = true, onRequestControl, onSelect, onReady, onResync, onClosed, onClosePane, registerStream, accessibleLabel, onStateChange, onCellGeometry, terminateRef }: TerminalPaneProps) {
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [ownership, setOwnership] = useState<TerminalOwnershipState>("pending");
   const [error, setError] = useState<PaneError | null>(null);
@@ -56,7 +58,8 @@ export function TerminalPane({ client, request, selected, presented = true, cont
     onStateChange?.({ ready: framePainted && ownership === "owned" && !closed && !error, error: error?.message ?? (closed ? "The popup terminal process has closed; waiting for Herdr state." : ownership === "lost" || ownership === "conflict" ? "Control taken by another client" : null) });
   }, [framePainted, ownership, closed, error, onStateChange]);
   const control = useTerminalControl(refs, request, setError);
-  const pointer = useTerminalPointer(refs, control, terminalMouseInput);
+  const scratch = request.target_kind === "scratch";
+  const pointer = useTerminalPointer(refs, control, terminalMouseInput, scratch);
   const sizing = useTerminalResize(refs);
   const frames = useTerminalFrameQueue(refs, sizing, setFramePainted);
   const clipboard = useTerminalClipboard(refs, control);
@@ -146,6 +149,22 @@ export function TerminalPane({ client, request, selected, presented = true, cont
     ownershipRef.current = ownership;
   }, [ownership]);
   const { retryAttachment } = useTerminalAttachment({ client, request, deferAttachment, terminalReady, refs, control, pointer, clipboard, sizing, frames, setOwnership, setError, setClosed, setFramePainted, onResync, onClosed });
+  useEffect(() => {
+    if (!terminateRef || !scratch) return;
+    const terminate = () => {
+      const stream = refs.streamRef.current;
+      if (!stream) return false;
+      try {
+        stream.send({ type: "terminal.terminate" });
+        return true;
+      } catch (cause) {
+        setError({ code: "terminal_terminate_failed", message: cause instanceof Error ? cause.message : "Could not terminate terminal" });
+        return false;
+      }
+    };
+    terminateRef.current = terminate;
+    return () => { if (terminateRef.current === terminate) terminateRef.current = null; };
+  }, [terminateRef, scratch]);
 
   return (
     <div
@@ -197,14 +216,14 @@ export function TerminalPane({ client, request, selected, presented = true, cont
       ) : error ? (
         <div className="terminal-overlay" role="alert">
           <span>{error.message}</span>
-          <button type="button" className="recovery-button" onClick={() => retryAttachment()}>Retry</button>
-          <button type="button" className="recovery-button" onClick={onResync}>Resync</button>
+          {scratch ? null : <><button type="button" className="recovery-button" onClick={() => retryAttachment()}>Retry</button>
+          <button type="button" className="recovery-button" onClick={onResync}>Resync</button></>}
         </div>
       ) : ownership === "lost" || ownership === "conflict" ? (
         <div className="terminal-overlay" role="alert">
           <span>Control taken by another client</span>
-          <button type="button" className="recovery-button" onClick={() => retryAttachment(true)}>Take control</button>
-          <button type="button" className="recovery-button" onClick={() => retryAttachment()}>Retry</button>
+          {scratch ? null : <><button type="button" className="recovery-button" onClick={() => retryAttachment(true)}>Take control</button>
+          <button type="button" className="recovery-button" onClick={() => retryAttachment()}>Retry</button></>}
         </div>
       ) : null}
     </div>
