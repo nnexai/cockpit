@@ -7,7 +7,7 @@ use cockpit_core::{
         is_project_root_candidate, preferred_project_root, root_checkout_reselection_pending,
         dispatch::{Dispatcher, DispatcherSettings, resume_supported},
         herdr::{OrchestrationHerdr, RuntimeView, RuntimeWorkspace},
-        project_identity::{replacement_consumers_preflight, resolve_directory},
+        project_identity::{self, replacement_consumers_preflight, resolve_directory},
     },
     process_identity::{same_machine_process_running, verified_machine_id},
     projects::ProjectService,
@@ -341,9 +341,12 @@ async fn resolve_physical_mutation_input(
             }
             Ok(resolved)
         }
-        OrchestrationAction::RunResume { run_id, .. } => {
+        OrchestrationAction::RunResume { run_id, confirmed_stopped_attachment_id, .. } => {
             let run = service.run_for_review(&request.session_id, run_id)?;
-            resolve_resume_input(service, herdr, &run).await
+            match confirmed_stopped_attachment_id {
+                Some(id) => Ok(service.observe_confirmed_root_stop(herdr, &run, id).await),
+                None => resolve_resume_input(service, herdr, &run).await,
+            }
         }
         _ => Ok(ResolvedMutationInput::default()),
     }
@@ -654,6 +657,7 @@ fn root_candidate(run: &Run, modern_binding: bool) -> ProjectRootCandidate {
     };
     ProjectRootCandidate {
         root_id: run.run_id.clone(), connection, resume,
+        stop_confirmable: project_identity::root_stop_confirmable(run),
         cause: if incompatible_live { Some(ResumeCause {
             code: "conversation_unregistered".into(),
             message: "The living writer has not registered its conversation with this run's capability. Its process and checkout claim are preserved.".into(),

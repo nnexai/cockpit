@@ -64,7 +64,7 @@ export function Workbench(props: WorkbenchProps) {
     widgets: { pending: widgetsPending, dockTabId: tabLayout?.viewers.widget ? tabLayout.tabId : null, list: widgets.widgets(ctx.sessionId) },
     viewerSources, local: { "quick-switch": () => setSwitcherOpen(true), ...(!limits.absent ? { "subscription-limits": () => setLimitsOpen(true) } : {}) },
     run: {
-      herdr: input.runHerdrCommand, prefix: input.runCommand, supervisor: () => { void liaison.start(); }, overview: () => { if (!overviewOpen) openOverview(); else { closeOverview(); if (props.selection.paneId !== liaison.paneId && liaison.startAvailable) void liaison.start(); } }, git: runGitAction,
+      herdr: input.runHerdrCommand, prefix: input.runCommand, supervisor: () => { void liaison.activate(); }, overview: () => { if (!overviewOpen) openOverview(); else { closeOverview(); if (props.selection.paneId !== liaison.paneId && liaison.startAvailable) void liaison.start(); } }, git: runGitAction,
       recovery: () => setRecoveryOpen(true), toggleNotes: notesOpen ? closeNotes : openNotes, openBrowser: actions.openBrowser,
       editSpaceTags: () => { if (runtime.selectedSpace) runtime.requestTagEditor(runtime.selectedSpace.id); },
       closeBrowser: () => { if (selectedTab) actions.perform(closeBrowserLeaf(ctx, selectedTab.id)); },

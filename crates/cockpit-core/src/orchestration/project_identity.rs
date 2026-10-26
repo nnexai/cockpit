@@ -3,7 +3,7 @@ use std::{path::Path, os::unix::fs::MetadataExt};
 use cockpit_protocol::orchestration::*;
 use sha2::{Digest, Sha256};
 use crate::{InspectionError, process_identity, space_git};
-use super::{OrchestrationService, ResolvedMutationInput, claims::{AttachmentReference, RootMainRecoveryProof, WriterExitProof}};
+use super::{OrchestrationService, ResolvedMutationInput, claims::{AttachmentReference, RootExitBasis, RootMainRecoveryProof, WriterExitProof}};
 
 fn unavailable(text: &str) -> InspectionError { InspectionError::new("project_identity_unavailable", text) }
 fn path_text(path: &Path) -> Result<String, InspectionError> {
@@ -209,13 +209,11 @@ fn same_dispatch(a: Option<&DispatchState>, b: Option<&DispatchState>) -> bool {
     }
 }
 
-fn root_recovery_target(state: &super::store::OrchestrationState, run: &Run) -> Result<(), InspectionError> {
+fn root_recovery_run_target(run: &Run) -> Result<(), InspectionError> {
     if !matches!(run.kind, RunKind::Supervisor | RunKind::Adopted) || run.run_id != run.root_id
         || run.parent_run_id.is_some() || run.checkout_claim_id.is_some() || run.stage == RunStage::Closed
         || run.stage == RunStage::Reported || run.result.is_some()
-        || (run.kind == RunKind::Supervisor && run.dispatch.is_none())
-        || state.checkout_claims.iter().any(|claim| claim.state != super::claims::ClaimState::Released
-            && claim.holder.as_ref().is_some_and(|holder| holder.run_id == run.run_id)) {
+        || (run.kind == RunKind::Supervisor && run.dispatch.is_none()) {
         return Err(root_unproven());
     }
     let attachment = run.attachment.as_ref().ok_or_else(root_unproven)?;
@@ -232,9 +230,53 @@ fn root_recovery_target(state: &super::store::OrchestrationState, run: &Run) -> 
     }
     Ok(())
 }
+fn root_recovery_target(state: &super::store::OrchestrationState, run: &Run) -> Result<(), InspectionError> {
+    root_recovery_run_target(run)?;
+    if state.checkout_claims.iter().any(|claim| claim.state != super::claims::ClaimState::Released
+        && claim.holder.as_ref().is_some_and(|holder| holder.run_id == run.run_id)) {
+        return Err(root_unproven());
+    }
+    Ok(())
+}
+
+pub(crate) fn unrecorded_root_identity(attachment: &ExecutionAttachment) -> bool {
+    attachment.process.is_none() && attachment.shell.is_none()
+        && attachment.process_scope.is_none() && attachment.machine_id.is_none()
+}
+
+fn root_stop_identity_confirmable(run: &Run) -> bool {
+    root_recovery_run_target(run).is_ok() && run.attachment.as_ref().is_some_and(|attachment|
+        unrecorded_root_identity(attachment) && attachment.state != AttachmentState::Reserved)
+}
+
+/// Static display eligibility; admission additionally scans checkout claims under the lock.
+pub fn root_stop_confirmable(run: &Run) -> bool {
+    root_stop_identity_confirmable(run) && run.resume.as_ref().is_none_or(|resume|
+        !matches!(resume.phase, ResumePhase::Reconciling | ResumePhase::Launching))
+}
+
+pub(crate) fn root_stop_confirmation_unavailable() -> InspectionError {
+    InspectionError::new("root_stop_confirmation_unavailable",
+        "Stop confirmation applies only to the exact blocked supervisor attachment that recorded no process identity.")
+}
+
+pub(crate) fn admit_root_stop_confirmation(state: &super::store::OrchestrationState, run: &Run, attachment_id: &str) -> Result<(), InspectionError> {
+    if !root_stop_confirmable(run) || root_recovery_target(state, run).is_err()
+        || run.attachment.as_ref().is_none_or(|attachment| attachment.attachment_id != attachment_id) {
+        return Err(root_stop_confirmation_unavailable());
+    }
+    Ok(())
+}
+
+fn root_identity_unrecorded() -> InspectionError {
+    InspectionError::new("root_main_identity_unrecorded",
+        "This supervisor's launch recorded no process identity, so Cockpit cannot prove it stopped. Confirm it has stopped to start a replacement; its tasks are kept.")
+}
 
 fn root_main_running(attachment: &ExecutionAttachment) -> Result<bool, InspectionError> {
-    let process = attachment.process.as_ref().ok_or_else(root_unproven)?;
+    let process = attachment.process.as_ref().ok_or_else(|| if unrecorded_root_identity(attachment) {
+        root_identity_unrecorded()
+    } else { root_unproven() })?;
     if process.pid == 0 || process.start_ticks == 0
         || process.kernel_boot_id.as_deref().is_none_or(str::is_empty)
         || attachment.machine_id.as_deref().is_none_or(str::is_empty) {
@@ -243,13 +285,25 @@ fn root_main_running(attachment: &ExecutionAttachment) -> Result<bool, Inspectio
     process_identity::same_machine_process_running(process, attachment.machine_id.as_deref())
         .map_err(|_| root_unproven())
 }
+fn root_main_alive(attachment: &ExecutionAttachment, basis: RootExitBasis) -> Result<bool, InspectionError> {
+    match basis {
+        RootExitBasis::ExactIncarnation => root_main_running(attachment),
+        RootExitBasis::OperatorConfirmed if unrecorded_root_identity(attachment) => Ok(false),
+        RootExitBasis::OperatorConfirmed => Err(root_unproven()),
+    }
+}
 
 pub(crate) fn revalidate_root_recovery(state: &super::store::OrchestrationState, run: &Run, proof: &RootMainRecoveryProof) -> Result<(), InspectionError> {
     root_recovery_target(state, run)?;
     let attachment = run.attachment.as_ref().ok_or_else(root_unproven)?;
+    // External admission rejects active resumes before installing this operation.
+    // Cutover runs inside that same locked transaction after it installs Reconciling.
+    if proof.basis == RootExitBasis::OperatorConfirmed && !root_stop_identity_confirmable(run) {
+        return Err(root_unproven());
+    }
     if run.session_id != proof.session_id || run.run_id != proof.run_id
         || !same_root_attachment(attachment, &proof.attachment)
-        || !same_dispatch(run.dispatch.as_ref(), proof.dispatch.as_ref()) || root_main_running(attachment)? {
+        || !same_dispatch(run.dispatch.as_ref(), proof.dispatch.as_ref()) || root_main_alive(attachment, proof.basis)? {
         return Err(root_unproven());
     }
     if run.kind == RunKind::Adopted && run.dispatch.is_none() {
@@ -353,8 +407,17 @@ impl OrchestrationService {
     /// Shared observation for explicit Resume and automatic live-main reattachment.
     /// It never closes a pane, signals a process or inspects worker consumers.
     pub async fn observe_root_resume(&self, herdr: &dyn super::herdr::OrchestrationHerdr, expected: &Run) -> ResolvedMutationInput {
+        self.observe_root_resume_with_basis(herdr, expected, RootExitBasis::ExactIncarnation, None).await
+    }
+
+    /// Human attestation replaces only missing main identity, never terminal safety.
+    pub async fn observe_confirmed_root_stop(&self, herdr: &dyn super::herdr::OrchestrationHerdr, expected: &Run, attachment_id: &str) -> ResolvedMutationInput {
+        self.observe_root_resume_with_basis(herdr, expected, RootExitBasis::OperatorConfirmed, Some(attachment_id)).await
+    }
+
+    async fn observe_root_resume_with_basis(&self, herdr: &dyn super::herdr::OrchestrationHerdr, expected: &Run, basis: RootExitBasis, confirmed: Option<&str>) -> ResolvedMutationInput {
         let mut input = ResolvedMutationInput { project: expected.project.clone(), checkout: expected.checkout.clone(), ..Default::default() };
-        match self.observe_root_main(herdr, expected).await {
+        match self.observe_root_main(herdr, expected, basis, confirmed).await {
             Ok((attachment, proof)) => {
                 input.root_attachment_expected = if attachment.is_some() { expected.attachment.clone() } else { None };
                 input.attachment_observation = attachment;
@@ -367,22 +430,31 @@ impl OrchestrationService {
         input
     }
 
-    async fn observe_root_main(&self, herdr: &dyn super::herdr::OrchestrationHerdr, expected: &Run) -> Result<(Option<ExecutionAttachment>, Option<RootMainRecoveryProof>), InspectionError> {
+    async fn observe_root_main(&self, herdr: &dyn super::herdr::OrchestrationHerdr, expected: &Run, basis: RootExitBasis, confirmed: Option<&str>) -> Result<(Option<ExecutionAttachment>, Option<RootMainRecoveryProof>), InspectionError> {
         {
             let locked = self.store.lock()?;
             let state = locked.read_shared()?;
             let run = state.runs.iter().find(|run| run.run_id == expected.run_id).ok_or_else(root_unproven)?;
             root_recovery_target(&state, run)?;
+            if basis == RootExitBasis::OperatorConfirmed {
+                admit_root_stop_confirmation(&state, run, confirmed.ok_or_else(root_stop_confirmation_unavailable)?)?;
+            }
             if !same_root_attachment(run.attachment.as_ref().ok_or_else(root_unproven)?, expected.attachment.as_ref().ok_or_else(root_unproven)?)
                 || !same_dispatch(run.dispatch.as_ref(), expected.dispatch.as_ref()) {
                 return Err(root_unproven());
             }
         }
         let attachment = expected.attachment.as_ref().ok_or_else(root_unproven)?;
-        let alive = root_main_running(attachment)?;
+        let alive = root_main_alive(attachment, basis)?;
         let runtime = herdr.runtime(&expected.session_id).await.map_err(|_| InspectionError::new(
             "resume_observation_unavailable", "Fresh owned root-container evidence is unavailable; the saved incarnation is preserved"))?;
-        let pane = owned_root_pane(&runtime, expected, !alive)?;
+        let confirmed_container_error = || InspectionError::new("consumer_activity_unproven",
+            "Stop the old supervisor and close its terminal, then confirm again; its tasks are kept. Nothing was closed or launched.");
+        let pane = owned_root_pane(&runtime, expected, !alive).map_err(|error|
+            if basis == RootExitBasis::OperatorConfirmed { confirmed_container_error() } else { error })?;
+        if basis == RootExitBasis::OperatorConfirmed && pane.is_some() {
+            return Err(confirmed_container_error());
+        }
         let mut idle_shell = None;
         let mut observed = None;
         if let Some(pane) = pane {
@@ -430,7 +502,11 @@ impl OrchestrationService {
         // Re-read daemon ownership after process inspection. Ambiguity or a
         // new/restored occupant must not turn an old empty observation into exit.
         let fresh_runtime = herdr.runtime(&expected.session_id).await.map_err(|_| root_container_unproven())?;
-        let fresh_pane = owned_root_pane(&fresh_runtime, expected, !alive)?;
+        let fresh_pane = owned_root_pane(&fresh_runtime, expected, !alive).map_err(|error|
+            if basis == RootExitBasis::OperatorConfirmed { confirmed_container_error() } else { error })?;
+        if basis == RootExitBasis::OperatorConfirmed && fresh_pane.is_some() {
+            return Err(confirmed_container_error());
+        }
         if fresh_runtime.endpoint_identity != runtime.endpoint_identity || fresh_runtime.boot_id != runtime.boot_id
             || fresh_runtime.peer_process != runtime.peer_process
             || match (pane, fresh_pane) {
@@ -438,7 +514,7 @@ impl OrchestrationService {
                     || a.native_session_id != b.native_session_id || a.agent_kind != b.agent_kind,
                 (None, None) => false,
                 _ => true,
-            } || root_main_running(attachment)? != alive {
+            } || root_main_alive(attachment, basis)? != alive {
             return Err(root_container_unproven());
         }
         if let Some(observed) = observed { return Ok((Some(observed), None)); }
@@ -453,7 +529,7 @@ impl OrchestrationService {
             Some(fresh_root_checkout(&fresh_runtime, expected)?.clone())
         } else { None };
         let proof = RootMainRecoveryProof { run_id: expected.run_id.clone(), session_id: expected.session_id.clone(),
-            attachment: attachment.clone(), dispatch: expected.dispatch.clone(), retained_checkout, idle_shell };
+            attachment: attachment.clone(), dispatch: expected.dispatch.clone(), retained_checkout, idle_shell, basis };
         let locked = self.store.lock()?;
         let state = locked.read_shared()?;
         let current = state.runs.iter().find(|run| run.run_id == expected.run_id).ok_or_else(root_unproven)?;

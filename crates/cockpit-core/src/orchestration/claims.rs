@@ -52,6 +52,9 @@ fn exit_basis_matches(old: &ExecutionAttachment, proof: &WriterExitProof) -> boo
         }
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RootExitBasis { ExactIncarnation, OperatorConfirmed }
+
 
 /// Recovery authority for the liaison main only, never consumer closure or
 /// checkout transfer. Constructed from fresh physical root-container evidence.
@@ -63,6 +66,7 @@ pub struct RootMainRecoveryProof {
     pub(crate) dispatch: Option<cockpit_protocol::orchestration::DispatchState>,
     pub(crate) retained_checkout: Option<cockpit_protocol::orchestration::CheckoutIdentity>,
     pub(crate) idle_shell: Option<cockpit_protocol::orchestration::NativeShellIdentity>,
+    pub(crate) basis: RootExitBasis,
 }
 
 fn refusal(code: &str, text: &str) -> InspectionError { InspectionError::new(code, text) }
@@ -456,7 +460,8 @@ mod tests {
         dispatch.endpoint_identity = Some("endpoint".into());
         root.dispatch = Some(dispatch);
         let proof = RootMainRecoveryProof { run_id: id.clone(), session_id: "session".into(),
-            attachment: root.attachment.clone().unwrap(), dispatch: root.dispatch.clone(), retained_checkout: None, idle_shell: None };
+            attachment: root.attachment.clone().unwrap(), dispatch: root.dispatch.clone(), retained_checkout: None, idle_shell: None,
+            basis: RootExitBasis::ExactIncarnation };
         original.runs.push(root);
         let holder = worker(&mut original, "independent-worker");
         let claim_id = reserve_claim(&mut original, &checkout("/worker", "worker-checkout"), &holder, &Uuid::new_v4().to_string()).unwrap();

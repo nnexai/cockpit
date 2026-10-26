@@ -519,6 +519,8 @@ pub struct ProjectRootCandidate {
     pub connection: RootConnection,
     pub resume: RootResumeAvailability,
     pub cause: Option<ResumeCause>,
+    /// Resume may carry operator stop confirmation (core-computed static eligibility).
+    pub stop_confirmable: bool,
     pub updated_at: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1401,6 +1403,10 @@ pub enum OrchestrationAction {
         operation_id: String,
         #[ts(type = "number | null")]
         expected_attachment_epoch: Option<u64>,
+        /// Human operator attests this exact saved root main has stopped.
+        /// Only for roots whose launch recorded no process identity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confirmed_stopped_attachment_id: Option<String>,
     },
     RunRegister { operation_id: String },
     TaskUnassign {
@@ -1625,6 +1631,13 @@ mod tests {
         });
         let action: OrchestrationAction = serde_json::from_value(value.clone()).unwrap();
         assert!(matches!(action, OrchestrationAction::RunResume { expected_attachment_epoch: Some(7), .. }));
+        assert_eq!(serde_json::to_string(&action).unwrap(),
+            r#"{"action":"run_resume","run_id":"run","operation_id":"operation","expected_attachment_epoch":7}"#);
+        assert_eq!(serde_json::to_value(&action).unwrap(), value);
+        let mut confirmed = value.clone();
+        confirmed["confirmed_stopped_attachment_id"] = json!("saved-attachment");
+        let action: OrchestrationAction = serde_json::from_value(confirmed.clone()).unwrap();
+        assert_eq!(serde_json::to_value(action).unwrap(), confirmed);
         let mut forged = value;
         forged["writer_exit_proof"] = json!({"all_consumers_absent": true});
         assert!(serde_json::from_value::<OrchestrationAction>(forged).is_err());

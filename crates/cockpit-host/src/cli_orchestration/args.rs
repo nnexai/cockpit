@@ -737,6 +737,9 @@ pub(super) enum RunCommand {
         operation_id: String,
         #[arg(long)]
         expected_attachment_epoch: Option<u64>,
+        /// Human operator only: confirm the saved supervisor main has stopped (roots that recorded no process identity).
+        #[arg(long = "confirm-stopped-attachment", requires = "expected_attachment_epoch")]
+        confirm_stopped_attachment: Option<String>,
     },
     /// Explicit low-level registration; ordinary credentialed calls register implicitly.
     Register {
@@ -1065,8 +1068,9 @@ impl RunCommand {
                     operation_id, mode: mode.into(), target, label, selected_root_id, expected_project_key,
                 }
             },
-            Self::Resume { run, operation_id, expected_attachment_epoch } =>
-                OrchestrationAction::RunResume { run_id: run, operation_id, expected_attachment_epoch },
+            Self::Resume { run, operation_id, expected_attachment_epoch, confirm_stopped_attachment } =>
+                OrchestrationAction::RunResume { run_id: run, operation_id, expected_attachment_epoch,
+                    confirmed_stopped_attachment_id: confirm_stopped_attachment },
             Self::Register { operation_id } => OrchestrationAction::RunRegister { operation_id },
             Self::Context => return Ok(RunOperation::Context),
             Self::Brief => return Ok(RunOperation::Brief),

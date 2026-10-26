@@ -673,6 +673,22 @@ fn durable_lifecycle_commands_preserve_explicit_operation_payloads() {
 }
 
 #[test]
+fn stop_confirmation_requires_epoch_and_preserves_exact_attachment() {
+    let operation = "81375f7e-a83a-4313-a415-39cc81ef24c2";
+    let attachment = "06e496ca-0aa8-4a84-adcb-9b323af1269a";
+    let flags = ["test", "run", "resume", "run", "--operation-id", operation,
+        "--confirm-stopped-attachment", attachment];
+    assert!(TestCli::try_parse_from(flags).is_err());
+    let TestCommand::Run(args) = TestCli::try_parse_from(flags.into_iter()
+        .chain(["--expected-attachment-epoch", "7"])).unwrap().command else { panic!("expected run"); };
+    let super::super::args::RunOperation::Mutation(action) = args.command.operation(&args.common).unwrap()
+        else { panic!("expected mutation"); };
+    let encoded = serde_json::to_value(action).unwrap();
+    assert_eq!(encoded["confirmed_stopped_attachment_id"], attachment);
+    assert_eq!(encoded["expected_attachment_epoch"], 7);
+}
+
+#[test]
 fn supervisor_start_preserves_all_project_placements_and_no_focus() {
     for target in [
         vec!["--repository", "repo", "--branch", "branch", "--base", "main", "--checkout-path", "/tmp/checkout"],

@@ -329,6 +329,7 @@ fn resume_request(run: &Run) -> OrchestrationMutationRequest {
         action: OrchestrationAction::RunResume {
             operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
             expected_attachment_epoch: run.attachment.as_ref().map(|a| a.epoch),
+            confirmed_stopped_attachment_id: None,
         },
     }
 }
@@ -1620,4 +1621,42 @@ fn private_cli_routing_freezes_named_executables_before_worker_cwd_changes() {
         "cockpit_cli_unavailable");
     fs::set_permissions(&cli, fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(resolve_literal_cli_path(&cli, Some(&path)).unwrap_err().code, "cockpit_cli_unavailable");
+}
+
+#[tokio::test]
+async fn confirmed_resume_observes_missing_container_without_implicit_operator_trust() {
+    let fixture = Fixture::new();
+    let mut run = reviewed();
+    run.dispatch.as_mut().unwrap().step = DispatchStep::Launched;
+    fixture.publish(std::slice::from_ref(&run));
+    let actor = Actor::Operator(OperatorOrigin::Browser);
+    let projects = fixture.projects(None);
+    let ordinary = resolve_mutation_input(&fixture.service, &projects, &empty_observation(), &actor,
+        &resume_request(&run)).await.unwrap();
+    assert_eq!(ordinary.observation_cause.unwrap().code, "root_main_identity_unrecorded");
+    assert!(root_candidate(&run, false).stop_confirmable);
+    let mut request = resume_request(&run);
+    let OrchestrationAction::RunResume { confirmed_stopped_attachment_id, .. } = &mut request.action else { unreachable!() };
+    *confirmed_stopped_attachment_id = Some(run.attachment.as_ref().unwrap().attachment_id.clone());
+    let confirmed = resolve_mutation_input(&fixture.service, &projects, &empty_observation(), &actor, &request).await.unwrap();
+    assert!(confirmed.root_main_recovery.is_some());
+    assert!(confirmed.observation_cause.is_none());
+    let present = resolve_mutation_input(&fixture.service, &projects, &ObservedHerdr(Some(observed())), &actor, &request).await.unwrap();
+    assert!(present.root_main_recovery.is_none());
+    let cause = present.observation_cause.unwrap();
+    assert_eq!(cause.code, "consumer_activity_unproven");
+    assert!(cause.message.contains("close its terminal"));
+    run.resume = Some(ResumeRecord {
+        operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
+        previous_attachment_epoch: Some(1), phase: ResumePhase::Blocked, cause: Some(cause),
+        decision_id: None, replacement_attachment_epoch: None, updated_at: run.updated_at.clone(),
+    });
+    assert!(root_candidate(&run, false).stop_confirmable);
+    run.resume.as_mut().unwrap().phase = ResumePhase::Launching;
+    assert!(!root_candidate(&run, false).stop_confirmable);
+    run.resume = None;
+    run.attachment.as_mut().unwrap().process = Some(NativeProcessIdentity {
+        pid: 1, start_ticks: 1, kernel_boot_id: None,
+    });
+    assert!(!root_candidate(&run, false).stop_confirmable);
 }

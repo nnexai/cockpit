@@ -62,10 +62,7 @@ fn run_resume_identical_replay_preserves_protected_writer_and_changed_payload_co
     let original = fixture.run(&worker);
     let old_claim = fixture.state().checkout_claims.into_iter()
         .find(|claim| original.checkout_claim_id.as_ref() == Some(&claim.claim_id)).unwrap();
-    let action = OrchestrationAction::RunResume {
-        run_id: worker.clone(), operation_id: id(),
-        expected_attachment_epoch: Some(original.attachment.as_ref().unwrap().epoch),
-    };
+    let action = OrchestrationAction::RunResume { run_id: worker.clone(), operation_id: id(), expected_attachment_epoch: Some(original.attachment.as_ref().unwrap().epoch), confirmed_stopped_attachment_id: None };
     let mut receiver = fixture.service.subscribe();
     let first = fixture.operator(action.clone());
     let OrchestrationActionResult::RunResumed { resume: first } = first.result else {
@@ -360,10 +357,7 @@ fn physical_resume_preserves_current_writer_until_current_conversation_registrat
     assert_eq!(serde_json::to_value(protected).unwrap(), serde_json::to_value(&claim).unwrap());
     assert!(fixture.service.recorded_runs_with_bindings(SESSION).unwrap().2.contains_key(&worker));
     let before = fixture.state_bytes();
-    let replay = fixture.operator(OrchestrationAction::RunResume {
-        run_id: worker.clone(), operation_id: blocked.operation_id,
-        expected_attachment_epoch: Some(observed.epoch),
-    });
+    let replay = fixture.operator(OrchestrationAction::RunResume { run_id: worker.clone(), operation_id: blocked.operation_id, expected_attachment_epoch: Some(observed.epoch), confirmed_stopped_attachment_id: None });
     let OrchestrationActionResult::RunResumed { resume: replay } = replay.result else { unreachable!() };
     assert!(replay.duplicate);
     assert_eq!(replay.resume.phase, ResumePhase::Connected);
@@ -899,13 +893,20 @@ struct RootRecoveryHerdr {
     runtime: herdr::RuntimeView,
     process: Option<herdr::PaneProcessInfo>,
     unavailable: bool,
+    drift_endpoint: bool,
+    runtime_reads: std::sync::atomic::AtomicUsize,
 }
 
 #[cfg(target_os = "linux")]
 #[async_trait::async_trait]
 impl herdr::OrchestrationHerdr for RootRecoveryHerdr {
     async fn runtime(&self, _: &str) -> Result<herdr::RuntimeView, InspectionError> {
-        if self.unavailable { Err(error("offline", "Fixture observation is unavailable")) } else { Ok(self.runtime.clone()) }
+        if self.unavailable { return Err(error("offline", "Fixture observation is unavailable")); }
+        let mut runtime = self.runtime.clone();
+        if self.drift_endpoint && self.runtime_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > 0 {
+            runtime.endpoint_identity = "changed-between-reads".into();
+        }
+        Ok(runtime)
     }
     async fn pane_process_info(&self, _: &str, endpoint: &str, pane: &str) -> Result<herdr::PaneProcessInfo, InspectionError> {
         assert_eq!(endpoint, self.runtime.endpoint_identity);
@@ -969,6 +970,7 @@ fn root_recovery_runtime(run: &Run, shell: &NativeShellIdentity) -> RootRecovery
             processes: vec![(shell.process.pid, "sh".into())], shell_identity: Some(shell.clone()),
         }),
         unavailable: false,
+        drift_endpoint: false, runtime_reads: std::sync::atomic::AtomicUsize::new(0),
     }
 }
 
@@ -1164,7 +1166,8 @@ async fn surviving_root_refreshes_settled_endpoint_and_rejects_stale_location_re
     assert_eq!(fixture.state().revision, revision);
     let mut later_runtime = runtime.runtime.clone();
     later_runtime.endpoint_identity = "even-newer-endpoint".into();
-    let later = RootRecoveryHerdr { runtime: later_runtime, process: runtime.process.clone(), unavailable: false };
+    let later = RootRecoveryHerdr { runtime: later_runtime, process: runtime.process.clone(), unavailable: false,
+        drift_endpoint: false, runtime_reads: std::sync::atomic::AtomicUsize::new(0) };
     let fresh = fixture.service.observe_root_resume(&later, &restored).await;
     fixture.service.resume_owner(&restored, &fresh).unwrap();
     let later_saved = fixture.run(&root);
@@ -1340,9 +1343,7 @@ fn seed_checkout_reselection(fixture: &Fixture, root: &str) -> (CheckoutIdentity
     std::fs::create_dir_all(&path).unwrap();
     let (_, fresh) = project_identity::resolve_owned_directory(&path).unwrap();
     fixture.create_task(root, "Keep canonical tasks across explicit checkout re-selection");
-    fixture.operator(OrchestrationAction::RunResume {
-        run_id: root.into(), operation_id: id(), expected_attachment_epoch: Some(1),
-    });
+    fixture.operator(OrchestrationAction::RunResume { run_id: root.into(), operation_id: id(), expected_attachment_epoch: Some(1), confirmed_stopped_attachment_id: None });
     fixture.seed_run(root, |run| {
         run.stage = RunStage::Starting;
         run.attachment = Some(reserved_attachment(2, 2));
@@ -1405,9 +1406,7 @@ fn explicit_root_checkout_reselection_preserves_reserved_identity_tasks_and_capa
     // Even an owner input carrying a fresh checkout cannot turn RunResume into re-selection.
     fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser), OrchestrationMutationRequest {
         session_id: SESSION.into(), expected_revision: None,
-        action: OrchestrationAction::RunResume {
-            run_id: root.clone(), operation_id: id(), expected_attachment_epoch: Some(2),
-        },
+        action: OrchestrationAction::RunResume { run_id: root.clone(), operation_id: id(), expected_attachment_epoch: Some(2), confirmed_stopped_attachment_id: None },
     }, &resolved).unwrap();
     let mut joined = fixture.state();
     assert_eq!(joined.operations.len(), original.operations.len() + 1);
@@ -1951,5 +1950,233 @@ fn root_checkout_reselection_is_an_explicit_operator_start_only() {
         assert_code(fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser), request.clone(), &input),
             "checkout_reselection_unavailable");
         assert_eq!(fixture.state_bytes(), before);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn unrecorded_root(fixture: &Fixture, root: &str) -> Actor {
+    fixture.setup(root);
+    let actor = fixture.launch_and_bind(root);
+    fixture.seed_run(root, |run| {
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.process = None;
+        attachment.shell = None;
+        attachment.process_scope = None;
+        attachment.machine_id = None;
+    });
+    actor
+}
+
+#[cfg(target_os = "linux")]
+fn confirmed_root_action(fixture: &Fixture, root: &str) -> OrchestrationAction {
+    let mut action = fixture.resume_action(root);
+    let OrchestrationAction::RunResume { confirmed_stopped_attachment_id, .. } = &mut action else { unreachable!() };
+    *confirmed_stopped_attachment_id = Some(fixture.run(root).attachment.unwrap().attachment_id);
+    action
+}
+
+#[cfg(target_os = "linux")]
+fn apply_confirmed_root(fixture: &Fixture, action: OrchestrationAction, input: &ResolvedMutationInput) -> Result<OrchestrationMutationResponse, InspectionError> {
+    fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
+        OrchestrationMutationRequest { session_id: SESSION.into(), expected_revision: None, action }, input)
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn unrecorded_root_operator_confirmation_recovers_and_keeps_tasks() {
+    for prior_block in [false, true] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let actor = unrecorded_root(&fixture, &root);
+        let (accepted_task, history, history_actor) = fixture.working(&root);
+        fixture.apply(&history_actor, fixture.successful_result(&history_actor)).unwrap();
+        fixture.operator(OrchestrationAction::Accept { run_id: history.clone(), expected_task_revision: accepted_task.task_revision });
+        let task = fixture.create_task(&root, "Keep this live worker");
+        let worker = fixture.start(&root, &task);
+        fixture.setup(&worker);
+        let worker_actor = fixture.launch_and_bind(&worker);
+        fixture.initialized(&worker_actor);
+        let old = fixture.run(&root);
+        let shell = RootRecoveryPty::new();
+        let mut runtime = root_recovery_runtime(&old, &shell.shell);
+        runtime.runtime.panes.clear();
+        runtime.process = None;
+        let tasks_before = fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap();
+        if prior_block {
+            let saved = fixture.state();
+            let input = fixture.service.observe_root_resume(&runtime, &old).await;
+            assert_eq!(input.observation_cause.as_ref().unwrap().code, "root_main_identity_unrecorded");
+            let blocked = apply_root_recovery(&fixture, &root, &input);
+            assert_eq!(blocked.resume.phase, ResumePhase::Blocked);
+            let after = fixture.state();
+            assert_eq!(serde_json::to_value(&after.credentials).unwrap(), serde_json::to_value(&saved.credentials).unwrap());
+            assert_eq!(serde_json::to_value(&after.checkout_claims).unwrap(), serde_json::to_value(&saved.checkout_claims).unwrap());
+            assert_eq!(serde_json::to_value(&fixture.run(&root).attachment).unwrap(), serde_json::to_value(&old.attachment).unwrap());
+            let mut crossover = confirmed_root_action(&fixture, &root);
+            let OrchestrationAction::RunResume { operation_id, .. } = &mut crossover else { unreachable!() };
+            *operation_id = blocked.resume.operation_id;
+            let bytes = fixture.state_bytes();
+            assert_code(apply_confirmed_root(&fixture, crossover, &input), "operation_conflict");
+            assert_eq!(fixture.state_bytes(), bytes);
+        }
+        let before = fixture.state();
+        let action = confirmed_root_action(&fixture, &root);
+        let input = fixture.service.observe_confirmed_root_stop(&runtime, &fixture.run(&root),
+            &old.attachment.as_ref().unwrap().attachment_id).await;
+        assert!(input.observation_cause.is_none());
+        assert_eq!(input.root_main_recovery.as_ref().unwrap().basis, claims::RootExitBasis::OperatorConfirmed);
+        let response = apply_confirmed_root(&fixture, action.clone(), &input).unwrap();
+        let OrchestrationActionResult::RunResumed { resume } = response.result else { unreachable!() };
+        assert_eq!(resume.resume.phase, ResumePhase::Launching);
+        let replacement = fixture.run(&root);
+        assert_eq!(replacement.root_id, root);
+        assert_eq!(replacement.attachment.as_ref().unwrap().epoch, old.attachment.as_ref().unwrap().epoch + 1);
+        assert_eq!(replacement.dispatch.as_ref().unwrap().launch_attempt, old.dispatch.as_ref().unwrap().launch_attempt + 1);
+        let after = fixture.state();
+        for run in before.runs.iter().filter(|run| run.run_id != root) {
+            assert_eq!(serde_json::to_value(fixture.run(&run.run_id)).unwrap(), serde_json::to_value(run).unwrap());
+        }
+        assert_eq!(serde_json::to_value(&after.checkout_claims).unwrap(), serde_json::to_value(&before.checkout_claims).unwrap());
+        let mut expected_credentials = before.credentials.clone();
+        for credential in expected_credentials.iter_mut().filter(|credential| credential.run_id == root
+            && credential.attachment_id == old.attachment.as_ref().unwrap().attachment_id
+            && credential.attachment_epoch == old.attachment.as_ref().unwrap().epoch) {
+            credential.state = credentials::CredentialState::Revoked;
+        }
+        assert_eq!(serde_json::to_value(&after.credentials).unwrap(), serde_json::to_value(&expected_credentials).unwrap());
+        let mut expected_mail = before.messages.clone();
+        for message in expected_mail.iter_mut().filter(|message| message.to_run_id == root
+            && matches!(message.kind, MessageKind::WorkBrief | MessageKind::SupervisorBrief)) { message.stale = true; }
+        assert_eq!(serde_json::to_value(&after.messages).unwrap(), serde_json::to_value(expected_mail).unwrap());
+        assert_eq!(fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap(), tasks_before);
+        let bytes = fixture.state_bytes();
+        let replay = apply_confirmed_root(&fixture, action.clone(), &input).unwrap();
+        let OrchestrationActionResult::RunResumed { resume } = replay.result else { unreachable!() };
+        assert!(resume.duplicate);
+        assert_eq!(fixture.state_bytes(), bytes);
+        let mut ordinary = action.clone();
+        let OrchestrationAction::RunResume { confirmed_stopped_attachment_id, .. } = &mut ordinary else { unreachable!() };
+        *confirmed_stopped_attachment_id = None;
+        assert_code(apply_confirmed_root(&fixture, ordinary, &input), "operation_conflict");
+        let mut stale = action;
+        let OrchestrationAction::RunResume { operation_id, .. } = &mut stale else { unreachable!() };
+        *operation_id = id();
+        assert_code(apply_confirmed_root(&fixture, stale, &input), "attachment_conflict");
+        assert_eq!(fixture.state_bytes(), bytes);
+        assert_code(fixture.apply(&actor, report(ReportKind::Progress, None, None)), "job_unauthorized");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn stop_confirmation_refusals_write_nothing() {
+    for fault in 0..15 {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let actor = unrecorded_root(&fixture, &root);
+        let shell = RootRecoveryPty::new();
+        let old = fixture.run(&root);
+        let mut runtime = root_recovery_runtime(&old, &shell.shell);
+        runtime.runtime.panes.clear();
+        let mut input = fixture.service.observe_confirmed_root_stop(&runtime, &old,
+            &old.attachment.as_ref().unwrap().attachment_id).await;
+        assert!(input.root_main_recovery.is_some());
+        let mut action = confirmed_root_action(&fixture, &root);
+        match fault {
+            1 => if let OrchestrationAction::RunResume { expected_attachment_epoch, .. } = &mut action { *expected_attachment_epoch = None; },
+            2 => if let OrchestrationAction::RunResume { confirmed_stopped_attachment_id, .. } = &mut action { *confirmed_stopped_attachment_id = Some(id()); },
+            3 | 4 => fixture.seed_run(&root, |run| run.resume = Some(restoration_resume(run,
+                if fault == 3 { ResumePhase::Launching } else { ResumePhase::Reconciling }))),
+            5 => fixture.seed_run(&root, |run| run.attachment.as_mut().unwrap().process = Some(live_process())),
+            6 => fixture.seed_run(&root, |run| run.attachment.as_mut().unwrap().machine_id = Some("recorded-machine".into())),
+            7 => fixture.seed_run(&root, |run| run.attachment.as_mut().unwrap().shell = Some(shell.shell.clone())),
+            8 => fixture.seed_state(|state| {
+                let (_, checkout) = project_identity::resolve_owned_directory(&fixture.root).unwrap();
+                state.checkout_claims.push(claims::CheckoutClaim {
+                    claim_id: id(), checkout, revision: 1, state: claims::ClaimState::Held,
+                    holder: Some(AttachmentReference { run_id: root.clone(), attachment_id: old.attachment.as_ref().unwrap().attachment_id.clone(),
+                        attachment_epoch: old.attachment.as_ref().unwrap().epoch }), transition_operation_id: None,
+                });
+            }),
+            9 => fixture.seed_run(&root, |run| run.kind = RunKind::Worker),
+            10 => fixture.seed_run(&root, |run| run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchPending),
+            11 => if let OrchestrationAction::RunResume { confirmed_stopped_attachment_id, .. } = &mut action { *confirmed_stopped_attachment_id = None; },
+            14 => input.root_main_recovery.as_mut().unwrap().basis = claims::RootExitBasis::ExactIncarnation,
+            _ => {}
+        }
+        let bytes = fixture.state_bytes();
+        let expected = match fault {
+            0 => "operator_confirmation_required",
+            11..=14 => "root_main_exit_unproven",
+            _ => "root_stop_confirmation_unavailable",
+        };
+        if fault == 0 {
+            assert_code(fixture.service.mutate_resolved(&actor, OrchestrationMutationRequest {
+                session_id: SESSION.into(), expected_revision: None, action,
+            }, &input), expected);
+        } else if fault == 12 {
+            assert_eq!(fixture.service.resume_owner(&fixture.run(&root), &input).unwrap_err().code, expected);
+        } else if fault == 13 {
+            let blocked = apply_root_recovery(&fixture, &root, &ResolvedMutationInput::default());
+            let bytes = fixture.state_bytes();
+            assert_eq!(fixture.service.advance_resume_observed(&root, &blocked.resume.operation_id, &input).unwrap_err().code, expected);
+            assert_eq!(fixture.state_bytes(), bytes);
+            continue;
+        } else {
+            assert_code(apply_confirmed_root(&fixture, action, &input), expected);
+        }
+        assert_eq!(fixture.state_bytes(), bytes, "fault {fault}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn confirmed_stop_still_requires_fresh_safe_container() {
+    for fault in 0..11 {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        unrecorded_root(&fixture, &root);
+        let old = fixture.run(&root);
+        let shell = RootRecoveryPty::new();
+        let mut runtime = root_recovery_runtime(&old, &shell.shell);
+        match fault {
+            0 => { runtime.runtime.panes.clear(); runtime.process = None; }
+            1 => runtime.process.as_mut().unwrap().processes.push((std::process::id(), "busy-omp".into())),
+            2 => runtime.runtime.panes[0].native_session_id = Some("foreign-conversation".into()),
+            3 => runtime.runtime.panes[0].launch_pending = true,
+            4 | 5 => {
+                let mut duplicate = runtime.runtime.panes[0].clone();
+                duplicate.pane_id = "other-pane".into();
+                duplicate.terminal_id = Some("other-terminal".into());
+                if fault == 4 { duplicate.tab_label = "different-label".into(); duplicate.agent_name = None; }
+                else { duplicate.native_session_id = None; }
+                runtime.runtime.panes.push(duplicate);
+            }
+            6 => runtime.process.as_mut().unwrap().shell_identity = None,
+            7 => runtime.unavailable = true,
+            8 => runtime.runtime.panes[0].workspace_id = "foreign-workspace".into(),
+            9 => {
+                runtime.runtime.panes.clear();
+                runtime.drift_endpoint = true;
+            }
+            // Even an exactly idle shell is not operator-confirmation authority.
+            10 => {}
+            _ => {}
+        }
+        let before = fixture.state();
+        let input = fixture.service.observe_confirmed_root_stop(&runtime, &old,
+            &old.attachment.as_ref().unwrap().attachment_id).await;
+        let response = apply_confirmed_root(&fixture, confirmed_root_action(&fixture, &root), &input).unwrap();
+        let OrchestrationActionResult::RunResumed { resume } = response.result else { unreachable!() };
+        if fault == 0 {
+            assert_eq!(resume.resume.phase, ResumePhase::Launching);
+        } else {
+            assert_eq!(resume.resume.phase, ResumePhase::Blocked, "fault {fault}");
+            assert!(matches!(resume.resume.cause.as_ref().unwrap().code.as_str(),
+                "consumer_activity_unproven" | "resume_observation_unavailable"));
+            assert!(project_identity::root_stop_confirmable(&fixture.run(&root)));
+            assert_eq!(serde_json::to_value(&fixture.state().credentials).unwrap(), serde_json::to_value(&before.credentials).unwrap());
+            assert_eq!(serde_json::to_value(fixture.run(&root).attachment).unwrap(), serde_json::to_value(old.attachment).unwrap());
+        }
     }
 }

@@ -147,6 +147,9 @@ pub(super) fn derives(attrs: &[Attribute], name: &str) -> Result<bool, String> {
 }
 
 pub(super) fn wire_ty(ty: &Type, owner: &str) -> Result<WireTy, String> {
+    if let Type::Slice(slice) = ty {
+        return Ok(WireTy::List(Box::new(wire_ty(&slice.elem, owner)?)));
+    }
     let Type::Path(path) = ty else {
         return Err(format!("{owner}: unsupported field type"));
     };
@@ -168,7 +171,7 @@ pub(super) fn wire_ty(ty: &Type, owner: &str) -> Result<WireTy, String> {
         return Err(format!("{owner}: unsupported generic type path"));
     }
     let name = segment.ident.to_string();
-    if name == "Option" || name == "Vec" {
+    if matches!(name.as_str(), "Option" | "Vec" | "Box") {
         let PathArguments::AngleBracketed(args) = &segment.arguments else {
             return Err(format!("{owner}: {name} needs one type argument"));
         };
@@ -178,7 +181,11 @@ pub(super) fn wire_ty(ty: &Type, owner: &str) -> Result<WireTy, String> {
         let Some(GenericArgument::Type(inner)) = args.args.first() else {
             return Err(format!("{owner}: unsupported {name} argument"));
         };
-        let inner = Box::new(wire_ty(inner, owner)?);
+        let inner = wire_ty(inner, owner)?;
+        if name == "Box" {
+            return Ok(inner);
+        }
+        let inner = Box::new(inner);
         return Ok(if name == "Option" {
             WireTy::Option(inner)
         } else {

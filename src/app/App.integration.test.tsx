@@ -1260,7 +1260,7 @@ describe("liaison conversation and compact task rail", () => {
     vi.mocked(fixture.client.orchestrationProjectRootLookup).mockImplementation(async () => ({
       status: "resolved", project: { key: "project", source: { kind: "directory", root: "/project" }, repository_id: null, source_workspace_id: "space-1" },
       lookup_revision: current().revision, preferred_root_id: current().runs.length ? "root" : null,
-      roots: current().runs.length ? [{ root_id: "root", connection: "connected", resume: "available", cause: null, updated_at: "2026-10-07T12:00:00Z", ...candidate() }] : [],
+      roots: current().runs.length ? [{ root_id: "root", connection: "connected", resume: "available", stop_confirmable: false, cause: null, updated_at: "2026-10-07T12:00:00Z", ...candidate() }] : [],
     }));
   }
   it("starts a real liaison from Commands and opens its actual terminal tab", async () => {
@@ -1369,7 +1369,7 @@ describe("liaison conversation and compact task rail", () => {
     bindLiaison(fixture, () => current);
     vi.mocked(fixture.client.orchestrationProjectRootLookup).mockResolvedValue({
       status: "resolved", project: { key: "project", source: { kind: "directory", root: "/project" }, repository_id: null, source_workspace_id: "space-1" }, lookup_revision: 1, preferred_root_id: "root",
-      roots: [{ root_id: "root", connection, resume: "available", cause: null, updated_at: "2026-10-07T12:00:00Z" }],
+      roots: [{ root_id: "root", connection, resume: "available", stop_confirmable: false, cause: null, updated_at: "2026-10-07T12:00:00Z" }],
     });
     vi.mocked(fixture.client.orchestrationMutate).mockImplementation(async request => {
       if (request.action.action !== "run_resume") throw new Error("Expected root resume");

@@ -1095,10 +1095,28 @@ describe("orchestration protocol boundary", () => {
     ]) expect(() => parseOrchestrationAction(invalid)).toThrow(CockpitClientError);
   });
 
+  it("keeps supervisor stop confirmation explicit and bound to an attachment identity", () => {
+    const ordinary = { action: "run_resume", run_id: "run", operation_id: assignmentTaskId, expected_attachment_epoch: 1 };
+    const parsedOrdinary = parseOrchestrationAction(ordinary);
+    expect(parsedOrdinary).toEqual(ordinary);
+    expect(Object.hasOwn(parsedOrdinary, "confirmed_stopped_attachment_id")).toBe(false);
+    expect(parseOrchestrationAction({ ...ordinary, confirmed_stopped_attachment_id: undefined })).toEqual(ordinary);
+    expect(parseOrchestrationAction({ ...ordinary, confirmed_stopped_attachment_id: null }))
+      .toEqual({ ...ordinary, confirmed_stopped_attachment_id: null });
+    for (const field of ["run_id", "operation_id", "expected_attachment_epoch"]) {
+      expect(() => parseOrchestrationAction(replaceField(ordinary, [field], undefined, true))).toThrow(CockpitClientError);
+    }
+    const confirmed = { ...ordinary, confirmed_stopped_attachment_id: prerequisiteId };
+    expect(parseOrchestrationAction(confirmed)).toEqual(confirmed);
+    for (const confirmed_stopped_attachment_id of ["", "not-a-uuid", 1, true]) {
+      expect(() => parseOrchestrationAction({ ...ordinary, confirmed_stopped_attachment_id })).toThrow(CockpitClientError);
+    }
+  });
+
   it("decodes strict project lookup records with honest unavailable and disconnected states", () => {
     const request = { session_id: "session", workspace_id: "space", selected_root_id: assignmentTaskId };
     const resolved = { status: "resolved", project, lookup_revision: 2, preferred_root_id: assignmentTaskId,
-      roots: [{ root_id: assignmentTaskId, connection: "disconnected", resume: "blocked", cause: resume.cause, updated_at: at }] };
+      roots: [{ root_id: assignmentTaskId, connection: "disconnected", resume: "blocked", stop_confirmable: false, cause: resume.cause, updated_at: at }] };
     const unavailable = { status: "unavailable", code: "project_unavailable", message: "Directory identity could not be verified" };
     expect(parseProjectRootLookupRequest(request)).toEqual(request);
     expect(parseProjectRootLookupRequest({ ...request, selected_root_id: null })).toBeDefined();

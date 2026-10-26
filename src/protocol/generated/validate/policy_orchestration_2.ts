@@ -135,6 +135,7 @@ export interface WireFields {
   "OrchestrationAction[run_resume].run_id": (Extract<V1.OrchestrationAction, { "action": "run_resume" }>)["run_id"];
   "OrchestrationAction[run_resume].operation_id": (Extract<V1.OrchestrationAction, { "action": "run_resume" }>)["operation_id"];
   "OrchestrationAction[run_resume].expected_attachment_epoch": (Extract<V1.OrchestrationAction, { "action": "run_resume" }>)["expected_attachment_epoch"];
+  "OrchestrationAction[run_resume].confirmed_stopped_attachment_id": (Extract<V1.OrchestrationAction, { "action": "run_resume" }>)["confirmed_stopped_attachment_id"];
   "OrchestrationAction[run_register].operation_id": (Extract<V1.OrchestrationAction, { "action": "run_register" }>)["operation_id"];
   "OrchestrationAction[task_unassign].operation_id": (Extract<V1.OrchestrationAction, { "action": "task_unassign" }>)["operation_id"];
   "OrchestrationAction[task_unassign].root_id": (Extract<V1.OrchestrationAction, { "action": "task_unassign" }>)["root_id"];
@@ -274,7 +275,7 @@ export interface WireFieldNames {
   "OrchestrationAction[task_step_remove]": "root_id" | "task_id" | "expected_task_revision" | "step_id";
   "OrchestrationAction[tasks_assign_ids]": "root_id" | "expected_doc_revision";
   "OrchestrationAction[supervisor_start]": "operation_id" | "mode" | "target" | "label" | "selected_root_id" | "expected_project_key";
-  "OrchestrationAction[run_resume]": "run_id" | "operation_id" | "expected_attachment_epoch";
+  "OrchestrationAction[run_resume]": "run_id" | "operation_id" | "expected_attachment_epoch" | "confirmed_stopped_attachment_id";
   "OrchestrationAction[run_register]": "operation_id";
   "OrchestrationAction[task_unassign]": "operation_id" | "root_id" | "task_id" | "expected_assignment_generation";
   "OrchestrationAction[run_attach]": "operation_id" | "attachment_id" | "expected_attachment_epoch" | "conversation";
@@ -435,7 +436,7 @@ export interface WireTagNames {
 }
 
 export interface WireCheckpointFieldNames {
-  "OrchestrationAction": "action" | "after_seq" | "apply" | "assign" | "attachment_id" | "before_step_id" | "brief" | "checked" | "cleanup_policy" | "conversation" | "depends_on" | "description" | "expected_assignment_generation" | "expected_attachment_epoch" | "expected_doc_revision" | "expected_project_key" | "expected_run_id" | "expected_task_revision" | "follow_up_of" | "in_reply_to" | "intent_id" | "kind" | "label" | "limit" | "location" | "message_id" | "mode" | "operation_id" | "original_claim_id" | "original_task_revision" | "outcome" | "parent_step_id" | "plan" | "reason" | "record" | "recovery" | "registration" | "release" | "request" | "root_id" | "run_id" | "scope" | "selected_root_id" | "source_output" | "source_revision" | "step_id" | "summary" | "target" | "task_id" | "text" | "through_seq" | "title" | "to_run_id";
+  "OrchestrationAction": "action" | "after_seq" | "apply" | "assign" | "attachment_id" | "before_step_id" | "brief" | "checked" | "cleanup_policy" | "confirmed_stopped_attachment_id" | "conversation" | "depends_on" | "description" | "expected_assignment_generation" | "expected_attachment_epoch" | "expected_doc_revision" | "expected_project_key" | "expected_run_id" | "expected_task_revision" | "follow_up_of" | "in_reply_to" | "intent_id" | "kind" | "label" | "limit" | "location" | "message_id" | "mode" | "operation_id" | "original_claim_id" | "original_task_revision" | "outcome" | "parent_step_id" | "plan" | "reason" | "record" | "recovery" | "registration" | "release" | "request" | "root_id" | "run_id" | "scope" | "selected_root_id" | "source_output" | "source_revision" | "step_id" | "summary" | "target" | "task_id" | "text" | "through_seq" | "title" | "to_run_id";
   "OrchestrationAction[task_create]": "root_id" | "task_id" | "title" | "description" | "depends_on" | "follow_up_of" | "expected_doc_revision" | "source_revision" | "action";
   "OrchestrationAction[task_assign]": "root_id" | "task_id" | "title" | "description" | "action";
   "OrchestrationAction[task_assignment_resolve]": "root_id" | "task_id" | "expected_task_revision" | "assign" | "action";
@@ -448,7 +449,7 @@ export interface WireCheckpointFieldNames {
   "OrchestrationAction[task_step_remove]": "root_id" | "task_id" | "expected_task_revision" | "step_id" | "action";
   "OrchestrationAction[tasks_assign_ids]": "root_id" | "expected_doc_revision" | "action";
   "OrchestrationAction[supervisor_start]": "operation_id" | "mode" | "target" | "label" | "selected_root_id" | "expected_project_key" | "action";
-  "OrchestrationAction[run_resume]": "run_id" | "operation_id" | "expected_attachment_epoch" | "action";
+  "OrchestrationAction[run_resume]": "run_id" | "operation_id" | "expected_attachment_epoch" | "confirmed_stopped_attachment_id" | "action";
   "OrchestrationAction[run_register]": "operation_id" | "action";
   "OrchestrationAction[task_unassign]": "operation_id" | "root_id" | "task_id" | "expected_assignment_generation" | "action";
   "OrchestrationAction[run_attach]": "operation_id" | "attachment_id" | "expected_attachment_epoch" | "conversation" | "action";
@@ -513,6 +514,7 @@ export type WireOmittableField =
   | "OrchestrationAction[supervisor_start].selected_root_id"
   | "OrchestrationAction[supervisor_start].expected_project_key"
   | "OrchestrationAction[run_resume].expected_attachment_epoch"
+  | "OrchestrationAction[run_resume].confirmed_stopped_attachment_id"
   | "OrchestrationAction[worker_start].label"
   | "OrchestrationAction[task_schedule].target"
   | "OrchestrationAction[task_schedule].label"
@@ -536,6 +538,7 @@ export type WireOmittableField =
   | never;
 
 export type WireOptionalField =
+  | "OrchestrationAction[run_resume].confirmed_stopped_attachment_id"
   | "OrchestrationAction[report].original_task_revision"
   | "OrchestrationAction[report].original_claim_id"
   | "OrchestrationAction[message_send].original_task_revision"

@@ -127,6 +127,8 @@ Core task/schedule/replacement/credential/messaging/cleanup authority is harness
 
 Project/checkout identity uses canonical local filesystem paths, device/inode and Git common/worktree directories, not a host machine identity. One orchestration store serves one trusted workstation; cross-workstation `state_root` sharing is unsupported. Checkout claims conflict by key/path overlap regardless of host. Missing OS machine identity does not block supervisor startup, project resolution or ordinary claims; physical process/reboot/build/cleanup proofs that require it fail closed.
 
+A supervisor whose launch recorded no process identity reports `root_main_identity_unrecorded`. The operator may explicitly confirm that it has stopped after closing its old terminal. Cockpit requires fresh evidence that the old owned terminal is absent, revokes only that supervisor's old credential and keeps its tasks and history. If the terminal is still present or safety cannot be proven, recovery refuses without closing it or launching a replacement. Workers, checkout claims and cleanup never accept this confirmation.
+
 The CLI descriptor reports `orchestration_protocol: 4` and `store_schema: 4`. Schedule/generation metadata is additive and defaulted within schema 4; no converter is required. Incompatible schemas, including schema 3, fail with `orchestration_state_incompatible` without migrating, deleting or rewriting their bytes. A fresh `state_root` creates separate state, not permission to discard old resources.
 
 ### Credential activation and replaceable workers

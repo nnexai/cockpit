@@ -178,9 +178,7 @@ impl Fixture {
         let response = self.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
             OrchestrationMutationRequest {
                 session_id: SESSION.into(), expected_revision: Some(self.state().revision),
-                action: OrchestrationAction::RunResume {
-                    run_id: run_id.into(), operation_id: id(), expected_attachment_epoch: Some(observed.epoch),
-                },
+                action: OrchestrationAction::RunResume { run_id: run_id.into(), operation_id: id(), expected_attachment_epoch: Some(observed.epoch), confirmed_stopped_attachment_id: None },
             }, &ResolvedMutationInput {
                 attachment_observation: Some(observed), ..ResolvedMutationInput::default()
             }).unwrap();
@@ -189,10 +187,7 @@ impl Fixture {
     }
 
     fn resume_action(&self, run_id: &str) -> OrchestrationAction {
-        OrchestrationAction::RunResume {
-            run_id: run_id.into(), operation_id: id(),
-            expected_attachment_epoch: self.run(run_id).attachment.as_ref().map(|attachment| attachment.epoch),
-        }
+        OrchestrationAction::RunResume { run_id: run_id.into(), operation_id: id(), expected_attachment_epoch: self.run(run_id).attachment.as_ref().map(|attachment| attachment.epoch), confirmed_stopped_attachment_id: None }
     }
 
     fn resume_exited(&self, actor: &Actor, run_id: &str) -> OrchestrationMutationResponse {
@@ -218,9 +213,7 @@ impl Fixture {
         self.service.mutate_resolved(actor, OrchestrationMutationRequest {
             session_id: SESSION.into(),
             expected_revision: matches!(actor, Actor::Operator(_)).then(|| self.state().revision),
-            action: OrchestrationAction::RunResume {
-                run_id: run_id.into(), operation_id: id(), expected_attachment_epoch: Some(attachment.epoch),
-            },
+            action: OrchestrationAction::RunResume { run_id: run_id.into(), operation_id: id(), expected_attachment_epoch: Some(attachment.epoch), confirmed_stopped_attachment_id: None },
         }, &ResolvedMutationInput { writer_exit_proof: Some(proof), ..ResolvedMutationInput::default() }).unwrap()
     }
     fn create_task(&self, root_id: &str, title: &str) -> Task {

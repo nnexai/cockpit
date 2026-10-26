@@ -467,6 +467,7 @@ export interface WireFields {
   "ProjectRootCandidate.connection": (V1.ProjectRootCandidate)["connection"];
   "ProjectRootCandidate.resume": (V1.ProjectRootCandidate)["resume"];
   "ProjectRootCandidate.cause": (V1.ProjectRootCandidate)["cause"];
+  "ProjectRootCandidate.stop_confirmable": (V1.ProjectRootCandidate)["stop_confirmable"];
   "ProjectRootCandidate.updated_at": (V1.ProjectRootCandidate)["updated_at"];
   "ProjectRootLookupResponse[resolved].project": (Extract<V1.ProjectRootLookupResponse, { "status": "resolved" }>)["project"];
   "ProjectRootLookupResponse[resolved].lookup_revision": (Extract<V1.ProjectRootLookupResponse, { "status": "resolved" }>)["lookup_revision"];
@@ -875,7 +876,7 @@ export interface WireFieldNames {
   "ResumeCause": "code" | "message" | "class";
   "ResumeRecord": "operation_id" | "run_id" | "previous_attachment_epoch" | "phase" | "cause" | "decision_id" | "replacement_attachment_epoch" | "updated_at";
   "ProjectRootLookupRequest": "session_id" | "workspace_id" | "selected_root_id";
-  "ProjectRootCandidate": "root_id" | "connection" | "resume" | "cause" | "updated_at";
+  "ProjectRootCandidate": "root_id" | "connection" | "resume" | "cause" | "stop_confirmable" | "updated_at";
   "ProjectRootLookupResponse": never;
   "ProjectRootLookupResponse[resolved]": "project" | "lookup_revision" | "preferred_root_id" | "roots";
   "ProjectRootLookupResponse[unavailable]": "code" | "message";
@@ -1150,7 +1151,7 @@ export interface WireCheckpointFieldNames {
   "ResumeCause": "code" | "message" | "class";
   "ResumeRecord": "operation_id" | "run_id" | "previous_attachment_epoch" | "phase" | "cause" | "decision_id" | "replacement_attachment_epoch" | "updated_at";
   "ProjectRootLookupRequest": "session_id" | "workspace_id" | "selected_root_id";
-  "ProjectRootCandidate": "root_id" | "connection" | "resume" | "cause" | "updated_at";
+  "ProjectRootCandidate": "root_id" | "connection" | "resume" | "cause" | "stop_confirmable" | "updated_at";
   "ProjectRootLookupResponse": "code" | "lookup_revision" | "message" | "preferred_root_id" | "project" | "roots" | "status";
   "ProjectRootLookupResponse[resolved]": "project" | "lookup_revision" | "preferred_root_id" | "roots" | "status";
   "ProjectRootLookupResponse[unavailable]": "code" | "message" | "status";

@@ -88,10 +88,7 @@ pub(in crate::orchestration) fn supervisor_start(
                 } else {
                     let resume_id = id();
                     let epoch = ctx.state.runs[index].attachment.as_ref().map(|a| a.epoch);
-                    super::resume::resume_from_start(ctx, OrchestrationAction::RunResume {
-                        run_id: root_id.clone(), operation_id: resume_id.clone(),
-                        expected_attachment_epoch: epoch,
-                    })?;
+                    super::resume::resume_from_start(ctx, OrchestrationAction::RunResume { run_id: root_id.clone(), operation_id: resume_id.clone(), expected_attachment_epoch: epoch, confirmed_stopped_attachment_id: None })?;
                     let effective = ctx.state.runs[index].resume.as_ref().map(|r| r.operation_id.clone()).unwrap_or(resume_id);
                     (SupervisorStartOutcome::Resuming, Some(effective))
                 };

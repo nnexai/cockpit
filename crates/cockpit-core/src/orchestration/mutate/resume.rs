@@ -270,13 +270,30 @@ pub(super) fn resume_from_start(ctx: &mut MutationCtx<'_>, action: Orchestration
 }
 
 fn resume_inner(ctx: &mut MutationCtx<'_>, action: OrchestrationAction, from_start: bool) -> Result<Applied, InspectionError> {
-    let OrchestrationAction::RunResume { run_id, operation_id, expected_attachment_epoch } = &action else { unreachable!() };
+    let OrchestrationAction::RunResume { run_id, operation_id, expected_attachment_epoch, confirmed_stopped_attachment_id } = &action else { unreachable!() };
+    if confirmed_stopped_attachment_id.is_some() && !matches!(ctx.actor, Actor::Operator(_)) {
+        return Err(error("operator_confirmation_required", "Only the human operator can confirm that a supervisor stopped."));
+    }
     let index = resume_target(ctx, run_id)?;
     if let Some(result) = replay(ctx, operation_id, DurableOperationKind::RunResume, &action)? {
         return Ok(Applied::Document(result));
     }
     if ctx.state.runs[index].stage == RunStage::Closed {
         return Err(error("invalid_stage", "Closed history is not reopened by Resume"));
+    }
+    let old_epoch = ctx.state.runs[index].attachment.as_ref().map(|a| a.epoch);
+    if expected_attachment_epoch.is_some() && *expected_attachment_epoch != old_epoch {
+        return Err(error("attachment_conflict", "Attachment epoch changed before Resume"));
+    }
+    if let Some(attachment_id) = confirmed_stopped_attachment_id {
+        if expected_attachment_epoch.is_none() {
+            return Err(project_identity::root_stop_confirmation_unavailable());
+        }
+        project_identity::admit_root_stop_confirmation(ctx.state, &ctx.state.runs[index], attachment_id)?;
+    }
+    if let Some(proof) = ctx.resolved.and_then(|resolved| resolved.root_main_recovery.as_ref())
+        && (proof.basis == claims::RootExitBasis::OperatorConfirmed) != confirmed_stopped_attachment_id.is_some() {
+        return Err(error("root_main_exit_unproven", "Root-main proof must match explicit operator stop confirmation"));
     }
     if ctx.state.runs[index].kind == RunKind::Worker {
         let run = &ctx.state.runs[index];
@@ -286,10 +303,6 @@ fn resume_inner(ctx: &mut MutationCtx<'_>, action: OrchestrationAction, from_sta
             let task = document.task(run.task_id.as_deref().ok_or_else(|| error("task_not_found", "Worker task is missing"))?)?;
             ctx.state.runs[index].task_revision_at_start = Some(task.task_revision.clone());
         }
-    }
-    let old_epoch = ctx.state.runs[index].attachment.as_ref().map(|a| a.epoch);
-    if expected_attachment_epoch.is_some() && *expected_attachment_epoch != old_epoch {
-        return Err(error("attachment_conflict", "Attachment epoch changed before Resume"));
     }
     // New requests join an unsettled owner operation instead of starting another effect.
     let root_id = ctx.state.runs[index].root_id.clone();
@@ -515,6 +528,9 @@ impl OrchestrationService {
 
     /// Owner-only observations advance the existing operation, never issue a second launch.
     pub fn advance_resume_observed(&self, run_id: &str, operation_id: &str, resolved: &ResolvedMutationInput) -> Result<RunResumeResult, InspectionError> {
+        if resolved.root_main_recovery.as_ref().is_some_and(|proof| proof.basis == claims::RootExitBasis::OperatorConfirmed) {
+            return Err(error("root_main_exit_unproven", "Owner observations cannot attest that a supervisor stopped"));
+        }
         let locked = self.store.lock()?;
         let mut state = locked.read()?;
         let index = run_index(&state, run_id)?;
@@ -591,7 +607,7 @@ impl OrchestrationService {
         let response = self.mutate_resolved(&Actor::Operator(OperatorOrigin::Native), OrchestrationMutationRequest {
             session_id: current.session_id.clone(), expected_revision: None,
             action: OrchestrationAction::RunResume { run_id: current.run_id.clone(), operation_id: id(),
-                expected_attachment_epoch: current.attachment.as_ref().map(|a| a.epoch) },
+                expected_attachment_epoch: current.attachment.as_ref().map(|a| a.epoch), confirmed_stopped_attachment_id: None },
         }, resolved)?;
         match response.result {
             OrchestrationActionResult::RunResumed { resume } => Ok(resume),

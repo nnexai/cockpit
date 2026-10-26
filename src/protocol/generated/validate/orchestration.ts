@@ -372,6 +372,7 @@ export const wireProjectRootCandidate: WireDescriptor<V1.ProjectRootCandidate> =
   "connection": req(named(() => wireRootConnection)),
   "resume": req(named(() => wireRootResumeAvailability)),
   "cause": req(nullable(named(() => wireResumeCause)), { fill: null }),
+  "stop_confirmable": req(bool),
   "updated_at": req(str),
 });
 
@@ -1082,6 +1083,7 @@ export const wireOrchestrationAction: WireDescriptor<V1.OrchestrationAction> = t
     "run_id": req(str),
     "operation_id": req(str),
     "expected_attachment_epoch": req(nullable(u53), { fill: null }),
+    "confirmed_stopped_attachment_id": opt(nullable(str), OMIT, { fill: null, rustOmits: true }),
   },
   "run_register": {
     "operation_id": req(str),

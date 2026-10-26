@@ -702,10 +702,7 @@ async fn explicitly_reselected_root_dispatch_reuses_reserved_credential_and_exac
     let operator = Actor::Operator(OperatorOrigin::Browser);
     fixture.service.mutate_resolved(&operator, OrchestrationMutationRequest {
         session_id: "test-session".into(), expected_revision: None,
-        action: OrchestrationAction::RunResume {
-            run_id: fixture.run.run_id.clone(), operation_id: uuid::Uuid::new_v4().to_string(),
-            expected_attachment_epoch: Some(1),
-        },
+        action: OrchestrationAction::RunResume { run_id: fixture.run.run_id.clone(), operation_id: uuid::Uuid::new_v4().to_string(), expected_attachment_epoch: Some(1), confirmed_stopped_attachment_id: None },
     }, &ResolvedMutationInput::default()).unwrap();
     fixture.change(|run| {
         run.project = Some(project.clone());
@@ -926,10 +923,7 @@ async fn automatic_root_observation_never_replaces_a_stopped_main() {
         fixture.service.mutate_resolved(&super::super::Actor::Operator(OperatorOrigin::Native),
             OrchestrationMutationRequest {
                 session_id: old.session_id.clone(), expected_revision: None,
-                action: OrchestrationAction::RunResume {
-                    run_id: old.run_id.clone(), operation_id: uuid::Uuid::new_v4().to_string(),
-                    expected_attachment_epoch: Some(old.attachment.as_ref().unwrap().epoch),
-                },
+                action: OrchestrationAction::RunResume { run_id: old.run_id.clone(), operation_id: uuid::Uuid::new_v4().to_string(), expected_attachment_epoch: Some(old.attachment.as_ref().unwrap().epoch), confirmed_stopped_attachment_id: None },
             }, &input).unwrap();
         let restarted = fixture.current().1;
         assert_eq!(restarted.resume.as_ref().unwrap().phase, ResumePhase::Launching,

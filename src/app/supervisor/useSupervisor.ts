@@ -16,6 +16,7 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
   const [busy, setBusy] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const generation = useRef(0), floor = useRef(0), pending = useRef(false);
+  const mutationFailure = useRef<unknown>(null);
   const identity = useRef({ client, sessionId, rootId, active, connected: connected && sessionLive });
   identity.current = { client, sessionId, rootId, active, connected: connected && sessionLive };
   const current = useRef<OrchestrationSnapshot | null>(null);
@@ -57,6 +58,7 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
   }, []);
   const mutateResult = useCallback(async (action: LiaisonAction, retainedScope: MutationRequestScope): Promise<OrchestrationActionResult | null> => {
     const observed = current.current, captured = identity.current;
+    mutationFailure.current = null;
     if (!captured.active || !captured.connected || !observed || observed.runtime.status !== "fresh" || pending.current) return null;
     if (retainedScope.stateStoreId !== observed.state_store_id || retainedScope.sessionId !== captured.sessionId || action.action !== "supervisor_start" && retainedScope.rootId !== captured.rootId) {
       setError("Return to the original conversation before retrying. The original request is kept."); return null;
@@ -68,9 +70,10 @@ export function useSupervisor(client: CockpitClient, sessionId: string, rootId: 
       if (!sameScope()) return null;
       floor.current = Math.max(floor.current, response.revision); refresh(); return response.result;
     } catch (failure) {
+      mutationFailure.current = failure;
       if (sameScope()) { setError(failure instanceof Error ? failure.message : "The action was not confirmed. The original request is kept."); refresh(); }
       return null;
     } finally { pending.current = false; setBusy(false); }
   }, [refresh]);
-  return { snapshot, connected, busy, error, refresh, captureMutationScope, mutateResult };
+  return { snapshot, connected, busy, error, refresh, captureMutationScope, mutateResult, mutationFailure };
 }

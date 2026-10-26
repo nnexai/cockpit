@@ -1,0 +1,9 @@
+.confirmed-recovery .library-confirm-body p + p { margin-top: 8px; }
+.confirmed-recovery .library-confirm-body .confirmed-recovery-lead { color: var(--text-primary); font-weight: 600; }
+.confirmed-recovery .library-confirm-body .confirmed-recovery-fine { color: var(--text-muted); }
+.confirmed-recovery button[aria-disabled="true"] { cursor: not-allowed; opacity: .6; }
+@media (max-width: 600px) {
+  .confirmed-recovery .task-setup-footer { flex-wrap: wrap; }
+  .confirmed-recovery .task-setup-footer > .error-slot { flex: 1 1 100%; }
+  .confirmed-recovery .task-setup-footer > button { flex: 1 1 auto; white-space: nowrap; }
+}

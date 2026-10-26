@@ -333,6 +333,39 @@ fn integer_widths_are_not_inferred_from_typescript_numbers() {
 }
 
 #[test]
+fn boxes_preserve_inner_wire_types_and_field_semantics() {
+    let boxed = fixture(
+        r#"#[derive(Deserialize)] struct Snapshot { title: String }
+        #[derive(Deserialize)] #[serde(tag = "type")] enum Event {
+            Attached {
+                snapshot: Box<Snapshot>,
+                values: Box<Vec<Box<u16>>>,
+                snapshots: Box<[Snapshot]>,
+                #[serde(default, skip_serializing_if = "Option::is_none")]
+                label: Option<Box<String>>,
+            }
+        }"#,
+        &["Snapshot", "Event"],
+    )
+    .expect("transparent boxed wire types");
+    let unboxed = fixture(
+        r#"#[derive(Deserialize)] struct Snapshot { title: String }
+        #[derive(Deserialize)] #[serde(tag = "type")] enum Event {
+            Attached {
+                snapshot: Snapshot,
+                values: Vec<u16>,
+                snapshots: Vec<Snapshot>,
+                #[serde(default, skip_serializing_if = "Option::is_none")]
+                label: Option<String>,
+            }
+        }"#,
+        &["Snapshot", "Event"],
+    )
+    .expect("equivalent unboxed wire types");
+    assert_eq!(boxed, unboxed);
+}
+
+#[test]
 fn explicit_optional_and_type_overrides_follow_ts_rs_nullability() {
     let model = fixture(
         r#"#[derive(Deserialize)] struct Optional {
