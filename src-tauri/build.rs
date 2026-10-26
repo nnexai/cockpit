@@ -89,6 +89,7 @@ fn main() {
             "cockpit_focus",
             "cockpit_mutate",
             "cockpit_session_subscribe",
+            "cockpit_scratch_page_generation",
             "cockpit_terminal_open",
             "cockpit_terminal_command",
             "cockpit_terminal_files_stage",

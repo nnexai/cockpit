@@ -245,7 +245,8 @@ fn tagged_alias_and_serde_field_names_are_source_grounded() {
             "terminal.resize",
             "terminal.scroll",
             "terminal.mouse",
-            "terminal.release"
+            "terminal.release",
+            "terminal.terminate"
         ]
     );
     assert_eq!(variants[0].1[0].fill, Some(json!(null)));

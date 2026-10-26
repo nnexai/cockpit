@@ -33,6 +33,7 @@ import type { WorkbenchState } from "./useWorkbenchState";
 import type { WorkbenchActions } from "./useWorkbenchActions";
 
 export type WorkbenchContentProps = WorkbenchProps & WorkbenchState & WorkbenchActions & {
+  quickTerminalOpen: boolean;
   commandActions: CommandAction[];
   commandFailureMessage: string;
   commandStatus?: ReactNode;
@@ -68,7 +69,7 @@ export function WorkbenchContent(props: WorkbenchContentProps) {
   } : null;
   const agentBlocked = (snapshot?.agents ?? []).some(agent => spaceStatus(agent.status || "unknown").className === "blocked");
   return <div className={`workbench${sidebarCollapsed ? " sidebar-collapsed" : ""}${narrowViewport && drawerOpen ? " drawer-open" : ""}`} style={workbenchStyle}>
-    <div className="workbench-underlay" inert={Boolean(popup)}>
+    <div className="workbench-underlay" inert={Boolean(popup) || props.quickTerminalOpen}>
     {narrowViewport && drawerOpen ? <button type="button" className="drawer-scrim" aria-label="Close sidebar" onClick={() => closeDrawer()} /> : null}
     <aside id="cockpit-sidebar" className={sidebarClass} aria-label="Spaces and agents" role={narrowViewport && drawerOpen ? "dialog" : undefined} aria-modal={narrowViewport && drawerOpen ? "true" : undefined} aria-hidden={narrowViewport && !drawerOpen ? "true" : undefined} hidden={narrowViewport ? !drawerOpen : sidebarCollapsed}>
       <Sidebar key={`${state.sessionId}:${snapshot?.server_instance}`} session={sidebarSession} sync={state.sync} narrow={narrowViewport} onSession={openSessionChooser} onClose={() => closeDrawer()} closeRef={sidebarCloseRef} hasSession={state.sessionId !== null} hasSnapshot={snapshot !== null}

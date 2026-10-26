@@ -34,7 +34,7 @@ export type PrefixCommand =
   | "previous-pane" | "next-pane" | "focus-left" | "focus-right" | "focus-up" | "focus-down"
   | "swap-left" | "swap-right" | "swap-up" | "swap-down"
   | "toggle-sidebar" | "focus-spaces" | "focus-agents" | "switch-session"
-  | "toggle-library" | "toggle-browser" | "open-file-picker"
+  | "toggle-library" | "toggle-browser" | "open-file-picker" | "quick-terminal"
   | `select-tab-${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9}`;
 
 /** Actions with no prefix key, including Commands-only navigation. */
@@ -113,6 +113,7 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
   { id: "split-down", label: "New terminal below pane", group: "Pane", scope: "global", prefix: k("-"), palette: false, needs: "pane", paneScoped: true, note: "Creates a terminal below the selected terminal or viewer." },
   { id: "close-pane", label: "Close pane", group: "Pane", scope: "global", prefix: k("x"), needs: "pane", paneScoped: true, note: "Terminals ask for confirmation; Files and Review close locally. Browser close stops its session and removes its managed profile." },
   { id: "zoom-pane", label: "Toggle local pane zoom", group: "Pane", scope: "global", prefix: k("z"), needs: "pane", paneScoped: true, primary: true, note: "Zooms the selected terminal or viewer in Cockpit only." },
+  { id: "quick-terminal", label: "Open quick terminal", group: "Pane", scope: "global", prefix: k("u"), needs: "tab", allowWhileBusy: true, note: "Opens a disposable shell; closing it asks for confirmation." },
   { id: "resize", label: "Focus adjacent pane divider", group: "Navigate", scope: "global", prefix: k("r"), needs: "pane", paneScoped: true, allowWhileBusy: true, note: "Arrow keys resize by 24 px, Shift+arrow by 96 px; Esc returns focus to the selected pane." },
   { id: "focus-left", label: "Focus pane left", group: "Navigate", scope: "global", prefix: k("h"), needs: "pane", allowWhileBusy: true, note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },
   { id: "focus-down", label: "Focus pane below", group: "Navigate", scope: "global", prefix: k("j"), needs: "pane", allowWhileBusy: true, note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },

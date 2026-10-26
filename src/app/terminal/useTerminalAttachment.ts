@@ -21,6 +21,8 @@ export function useTerminalAttachment({ client, request, deferAttachment, termin
   const { clearPendingCommands, flushPending } = control;
   const { clearMouseMode } = pointer;
   const attachmentGeneration = useRef(0);
+  const onClosedRef = useRef(onClosed);
+  onClosedRef.current = onClosed;
   const [attempt, setAttempt] = useState(0);
   const attachRetryKeyRef = useRef<string | null>(null);
   const attachRetryCountRef = useRef(0);
@@ -58,6 +60,7 @@ export function useTerminalAttachment({ client, request, deferAttachment, termin
     }
     let retryScheduled = false;
     const schedulePaneVisibilityRetry = (cause: unknown): boolean => {
+      if (request.target_kind === "scratch") return false;
       const typed = cause instanceof Error
         ? cause as Error & { code?: string; operationCode?: string }
         : cause !== null && typeof cause === "object"
@@ -103,7 +106,7 @@ export function useTerminalAttachment({ client, request, deferAttachment, termin
       stream?.close();
       stream = null;
     };
-    const frameQueue = frames.start({ terminal, cancelled: () => cancelled, isLatest: () => generation === attachmentGeneration.current, fail, onBacklog: onResync });
+    const frameQueue = frames.start({ terminal, cancelled: () => cancelled, isLatest: () => generation === attachmentGeneration.current, fail, onBacklog: request.target_kind === "scratch" ? undefined : onResync, scratch: request.target_kind === "scratch" });
     const onMessage = (message: TerminalStreamMessage) => {
       if (cancelled || generation !== attachmentGeneration.current) return;
       if (message.type !== "mouse_mode" && observedStreamId === null) observedStreamId = message.stream_id;
@@ -164,7 +167,7 @@ export function useTerminalAttachment({ client, request, deferAttachment, termin
         onReadyRef.current?.();
         setOwnership("released");
         streamRef.current = null;
-        onClosed?.();
+        onClosedRef.current?.();
         if (stream) registerAttachment?.(stream, false);
         stream?.close();
         stream = null;

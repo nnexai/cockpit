@@ -12,7 +12,7 @@ import type { WorkbenchActions, PaneFocusDirection } from "./useWorkbenchActions
 export interface WorkbenchInput {
   customCommandReason: string | undefined; runCommand(command: PrefixCommand): void; runHerdrCommand(command: HerdrCommand): void;
 }
-export function useWorkbenchInput(props: WorkbenchProps, runtime: WorkbenchState, actions: WorkbenchActions): WorkbenchInput {
+export function useWorkbenchInput(props: WorkbenchProps, runtime: WorkbenchState, actions: WorkbenchActions, openQuickTerminal: () => void): WorkbenchInput {
   const { state, selection, tabLayout, onMutate, onSplit } = props;
   const { spaces, tabs, panes, snapshot, localLeaves, selectedLeaf, modalOpen, mutationBusy, libraryOpen, openLibrary, closeLibrary, openSessionChooser, canvasRef, view, exitForPaneCommand, setPrefixHint, setSetupOpen, setCommandsOpen, setSwitcherOpen, runGitAction, narrowViewport, drawerOpen, sidebarCollapsed, openDrawer, toggleSidebarCollapsed, toggleSidebar, shell, popup, popupPending, setPopupPending, setCommandNotice, prefixActive, armedPrefix, customPrefixes, customBindings, setArmedPrefix, setPrefixActive } = runtime;
   const { beginRename, closeSpace, closeTab, closeLeaf, zoom, focusTab, selectLeaf, neighbour, swap, toggleBrowser } = actions;
@@ -22,6 +22,7 @@ export function useWorkbenchInput(props: WorkbenchProps, runtime: WorkbenchState
     const tab = byId(tabs, selection.tabId);
     const pane = byId(panes, selection.paneId);
     const execute = () => {
+      if (command === "quick-terminal") openQuickTerminal();
       if (command === "new-space") onMutate("space:new", { type: "space_create", label: null, cwd: null }, true);
       if (command === "setup-space" && state.sync === "live") setSetupOpen(true);
       if (command === "rename-space" && space) beginRename({ kind: "space", id: space.id });

@@ -564,6 +564,7 @@ fn command_to_message(command: TerminalCommand) -> Result<ClientMessage, &'stati
             })
         }
         TerminalCommand::Release => Ok(ClientMessage::Detach),
+        TerminalCommand::Terminate => Err("terminal.terminate is only valid for scratch terminals"),
     }
 }
 
@@ -936,6 +937,14 @@ mod tests {
             panic!("expected raw input");
         };
         assert_eq!(data, [0, 255, 128]);
+    }
+
+    #[test]
+    fn terminate_is_rejected_for_herdr_terminals() {
+        assert!(matches!(
+            command_to_message(TerminalCommand::Terminate),
+            Err("terminal.terminate is only valid for scratch terminals")
+        ));
     }
 
     #[tokio::test]

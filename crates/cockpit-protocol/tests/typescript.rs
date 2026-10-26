@@ -243,6 +243,16 @@ fn session_and_terminal_contracts_use_exact_wire_tags() {
             "cell_height_px": 16
         })
     );
+    assert_eq!(
+        serde_json::from_value::<cockpit_protocol::v1::TerminalTargetKind>(json!("scratch"))
+            .expect("scratch target deserializes"),
+        cockpit_protocol::v1::TerminalTargetKind::Scratch
+    );
+    assert_eq!(
+        serde_json::to_value(cockpit_protocol::v1::TerminalTargetKind::Scratch)
+            .expect("scratch target serializes"),
+        json!("scratch")
+    );
     assert!(
         serde_json::from_value::<TerminalOpenRequest>(json!({
             "session_id": "session-1",
@@ -307,6 +317,15 @@ fn session_and_terminal_contracts_use_exact_wire_tags() {
     assert_eq!(
         serde_json::to_value(TerminalCommand::Release).expect("release serializes"),
         json!({"type": "terminal.release"})
+    );
+    assert_eq!(
+        serde_json::to_value(TerminalCommand::Terminate).expect("terminate serializes"),
+        json!({"type": "terminal.terminate"})
+    );
+    assert_eq!(
+        serde_json::from_value::<TerminalCommand>(json!({"type": "terminal.terminate"}))
+            .expect("terminate deserializes"),
+        TerminalCommand::Terminate
     );
 
     let terminal_event = TerminalStreamMessage::Frame {

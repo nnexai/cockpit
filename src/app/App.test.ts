@@ -285,7 +285,7 @@ function commandInput(): CommandInput {
     herdr: { commands: [], prefixes: [], reason: undefined, popupOpen: false },
     view: {
       spaces: source.spaces, allTabs: source.tabs, selectedSpace: source.spaces[0], selectedTab: source.tabs[0],
-      selectedLeaf: { t: "leaf", kind: "terminal", id: "pane-1", w: 1 }, selectedPane: source.panes[0], live: true, busy: false,
+      selectedLeaf: { t: "leaf", kind: "terminal", id: "pane-1", w: 1 }, selectedPane: source.panes[0], sourcePaneId: "pane-1", live: true, busy: false,
     },
     libraryOpen: false, notesOpen: false, browser: { open: false, reason: null },
     liaison: { actionLabel: "Start supervisor", startAvailable: true, overviewAvailable: false, overviewOpen: false },

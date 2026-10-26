@@ -23,12 +23,12 @@ type QueuedFrame = {
 };
 export type FrameAttachment = {
   terminal: Terminal; cancelled(): boolean; isLatest(): boolean;
-  fail(code: string, message: string): void; onBacklog?: () => void;
+  fail(code: string, message: string): void; onBacklog?: () => void; scratch?: boolean;
 };
 
 export function useTerminalFrameQueue(refs: TerminalRefs, resize: TerminalResizeController, setFramePainted: (painted: boolean) => void) {
   const { terminalRef, ownershipRef, controlAllowedRef, selectedRef, presentedRef, onReadyRef } = refs;
-  const start = ({ terminal, cancelled, isLatest, fail, onBacklog }: FrameAttachment) => {
+  const start = ({ terminal, cancelled, isLatest, fail, onBacklog, scratch = false }: FrameAttachment) => {
     let lastSequence: bigint | null = null;
     let readinessRender: { dispose(): void } | null = null;
     let frameQueue: QueuedFrame[] = [];
@@ -80,6 +80,10 @@ export function useTerminalFrameQueue(refs: TerminalRefs, resize: TerminalResize
         return;
       }
       try {
+        if (scratch) {
+          terminal.write(text, finishFrame);
+          return;
+        }
         const frameGrid = { cols: frame.width, rows: frame.height };
         resize.acceptFrameGrid(frameGrid);
         const present = () => {
@@ -121,7 +125,7 @@ export function useTerminalFrameQueue(refs: TerminalRefs, resize: TerminalResize
           return;
         }
         const firstFrame = lastSequence === null;
-        if (lastSequence === null && !message.full) {
+        if (!scratch && lastSequence === null && !message.full) {
           fail("terminal_sequence", "Terminal stream must begin with a full frame");
           return;
         }

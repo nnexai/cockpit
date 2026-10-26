@@ -27,8 +27,8 @@ export function useTerminalControl(refs: TerminalRefs, request: TerminalPaneRequ
   };
   const sendInput = (command: TerminalCommand) => {
     if (!selectedRef.current || ownershipRef.current === "lost" || ownershipRef.current === "conflict") return;
-    // Popup input is never buffered while attaching or reconnecting.
-    if (request.target_kind === "popup" && (!controlAllowedRef.current || ownershipRef.current !== "owned" || !streamRef.current)) return;
+    // Disposable terminal input is never buffered while attaching.
+    if ((request.target_kind === "popup" || request.target_kind === "scratch") && (!controlAllowedRef.current || ownershipRef.current !== "owned" || !streamRef.current)) return;
     const hasSelectedFocusIntent = selectedRef.current && focusTokenRef.current > 0;
     if (!controlAllowedRef.current && !controlRequestPendingRef.current && !controlPendingRef.current && !hasSelectedFocusIntent) return;
     if (controlAllowedRef.current && ownershipRef.current === "owned" && streamRef.current) sendStreamCommand(streamRef.current, command);

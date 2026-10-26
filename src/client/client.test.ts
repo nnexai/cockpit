@@ -846,6 +846,23 @@ describe("browser CockpitClient", () => {
     expect(socket.readyState).toBe(3);
   });
 
+  it("routes scratch terminal input to the scratch target", async () => {
+    const socket = new FakeSocket();
+    const factory = vi.fn(() => socket);
+    const client = createBrowserClient(vi.fn(async () => jsonResponse(snapshot)), factory);
+    const open = client.openTerminal(
+      terminalOpen({ session_id: "s_1", pane_id: "scratch:1", target_kind: "scratch", mode: "control" }),
+      vi.fn(),
+      vi.fn(),
+    );
+    expect(factory).toHaveBeenCalledWith("/api/v1/sessions/s_1/panes/scratch%3A1/terminal?mode=control&takeover=false&cols=80&rows=24&cell_width_px=8&cell_height_px=16&target_kind=scratch");
+    socket.open();
+    const stream = await open;
+    stream.send({ type: "terminal.input", text: "echo scratch", bytes: null });
+    expect(socket.sent).toEqual([JSON.stringify({ type: "terminal.input", text: "echo scratch", bytes: null })]);
+    stream.close();
+  });
+
   it("aborts a browser terminal before the handshake and ignores later events", async () => {
     const socket = new FakeSocket();
     const controller = new AbortController();
@@ -958,6 +975,51 @@ describe("native CockpitClient", () => {
     expect(calls).toContainEqual(["cockpit_terminal_command", { streamId: "term-1", command: { type: "terminal.release" } }]);
     expect(calls).toContainEqual(["cockpit_mutate", { sessionId: "session-1", request: { type: "pane_close", pane_id: "pane-1" } }]);
     expect(errors).toEqual([]);
+  });
+
+  it("requests the page generation before opening a native scratch terminal", async () => {
+    const request = terminalOpen({ pane_id: "scratch:1", target_kind: "scratch", mode: "control" });
+    let channel: NativeChannel<unknown> | undefined;
+    const invoke = vi.fn(async (command: string) => {
+      if (command === "cockpit_scratch_page_generation") return 7;
+      if (command === "cockpit_terminal_open") return "scratch-stream";
+      return undefined;
+    });
+    const client = createNativeClient(invoke, <T,>(onmessage: (message: T) => void) => {
+      const created = { onmessage };
+      channel = created as NativeChannel<unknown>;
+      return created;
+    });
+
+    const stream = await client.openTerminal(request, vi.fn(), vi.fn());
+    expect(invoke.mock.calls.slice(0, 2)).toEqual([
+      ["cockpit_scratch_page_generation"],
+      ["cockpit_terminal_open", { request, channel, pageGeneration: 7 }],
+    ]);
+    stream.close();
+    expect(invoke).toHaveBeenCalledWith("cockpit_stream_cancel", { streamId: "scratch-stream" });
+  });
+
+  it("does not open a scratch terminal when aborted while requesting the page generation", async () => {
+    // The project's ES2022 library has no Promise.withResolvers.
+    let resolveGeneration!: (generation: number) => void;
+    const generation = new Promise<number>((resolve) => { resolveGeneration = resolve; });
+    const invoke = vi.fn((command: string) => command === "cockpit_scratch_page_generation"
+      ? generation
+      : Promise.resolve("unexpected-stream"));
+    const controller = new AbortController();
+    const request = terminalOpen({ pane_id: "scratch:1", target_kind: "scratch", mode: "control" });
+    const client = createNativeClient(invoke, <T,>(onmessage: (message: T) => void) => ({ onmessage }));
+    const open = client.openTerminal(request, vi.fn(), vi.fn(), controller.signal);
+
+    expect(invoke).toHaveBeenCalledExactlyOnceWith("cockpit_scratch_page_generation");
+    controller.abort();
+    await expect(open).rejects.toMatchObject({ code: "stream_error", message: "Terminal attach was cancelled" });
+    resolveGeneration(7);
+    await generation;
+    await Promise.resolve();
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).not.toHaveBeenCalledWith("cockpit_terminal_open", expect.anything());
   });
 
   it("rejects native terminal first-frame violations", async () => {

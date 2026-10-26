@@ -516,7 +516,16 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
     };
     if (signal?.aborted) { abort(); return; }
     signal?.addEventListener("abort", abort, { once: true });
-    void invokeAndParse(invoke, "cockpit_terminal_open", { request: validated, channel }, "terminal open", streamId).then((id) => {
+    const open = validated.target_kind === "scratch"
+      ? invokeAndParse(invoke, "cockpit_scratch_page_generation", undefined, "scratch page generation", (value) => {
+        if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("Invalid page generation");
+        return value;
+      }).then((pageGeneration) => {
+        if (closed) throw streamFailure("Terminal attach was cancelled");
+        return invokeAndParse(invoke, "cockpit_terminal_open", { request: validated, channel, pageGeneration }, "terminal open", streamId);
+      })
+      : invokeAndParse(invoke, "cockpit_terminal_open", { request: validated, channel }, "terminal open", streamId);
+    void open.then((id) => {
       activeStreamId = id;
       if (closed) { cancel(id); return; }
       ready = true;

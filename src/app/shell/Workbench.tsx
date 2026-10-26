@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { FocusRequest, SessionSummary, WidgetSummary } from "../../protocol/generated/v1";
 import type { SessionState } from "../session/sessionStore";
@@ -11,6 +11,7 @@ import { useWorkbenchState } from "./useWorkbenchState";
 import { useWorkbenchActions } from "./useWorkbenchActions";
 import { useWorkbenchInput } from "./useWorkbenchInput";
 import { WorkbenchContent } from "./WorkbenchContent";
+import { QuickTerminal } from "./QuickTerminal";
 
 export interface WorkbenchProps {
   client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; terminalMouseInput: boolean; mutations: MutationCoordinatorState;
@@ -24,7 +25,16 @@ export interface WorkbenchProps {
 export function Workbench(props: WorkbenchProps) {
   const runtime = useWorkbenchState(props);
   const actions = useWorkbenchActions(props, runtime);
-  const input = useWorkbenchInput(props, runtime, actions);
+  const [quickTerminal, setQuickTerminal] = useState<{ sessionId: string; paneId: string; returnFocus: HTMLElement | null } | null>(null);
+  const quickTerminalRef = useRef(quickTerminal);
+  quickTerminalRef.current = quickTerminal;
+  const openQuickTerminal = () => {
+    if (quickTerminalRef.current) return;
+    if (!props.state.sessionId || !runtime.sourcePaneId || props.state.sync !== "live") { runtime.setPrefixHint("A live terminal in this tab is required"); return; }
+    const focused = runtime.commandsOpen ? runtime.commandsOpener.current : document.activeElement;
+    setQuickTerminal({ sessionId: props.state.sessionId, paneId: runtime.sourcePaneId, returnFocus: focused instanceof HTMLElement ? focused : null });
+  };
+  const input = useWorkbenchInput(props, runtime, actions, openQuickTerminal);
   useEffect(() => {
     const target = runtime.switchTarget;
     if (!target || runtime.switcherOpen) return;
@@ -76,5 +86,6 @@ export function Workbench(props: WorkbenchProps) {
   const commandFailures = Object.values(mutations.errors).filter(failure => failure.operation.request.type === "command_invoke");
   const commandFailureMessage = commandFailures.map(failure => `${failure.code === "request_outcome_unknown" ? "Herdr did not confirm this command. Check the session before running it again." : "Could not run Herdr command:"} ${failure.message}`).join(" ");
   const commandStatus = commandNotice || commandFailureMessage || lifecycleError ? <p role="alert">{commandNotice || commandFailureMessage || lifecycleError}</p> : null;
-  return <WorkbenchContent {...props} {...runtime} {...actions} commandActions={commandActions} commandFailureMessage={commandFailureMessage} commandStatus={commandStatus} />;
+  return <><WorkbenchContent {...props} {...runtime} {...actions} quickTerminalOpen={Boolean(quickTerminal)} commandActions={commandActions} commandFailureMessage={commandFailureMessage} commandStatus={commandStatus} />
+    {quickTerminal ? <QuickTerminal client={props.client} sessionId={quickTerminal.sessionId} paneId={quickTerminal.paneId} focusEpoch={props.state.epoch} returnFocus={quickTerminal.returnFocus} suspended={Boolean(popup)} onDismiss={() => setQuickTerminal(null)} /> : null}</>;
 }

@@ -57,6 +57,7 @@ macro_rules! native_commands {
             tauri::generate_handler![
                 $($command,)*
                 crate::streams::cockpit_session_subscribe,
+                crate::streams::cockpit_scratch_page_generation,
                 crate::streams::cockpit_terminal_open,
                 crate::streams::cockpit_terminal_command,
                 crate::streams::cockpit_stream_cancel,
