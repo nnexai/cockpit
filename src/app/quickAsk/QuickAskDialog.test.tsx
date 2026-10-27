@@ -115,9 +115,43 @@ it("retains the submitted question in the mounted composer until New question", 
   await act(async () => confirmation().click());
   await click("Send question");
   expect(fixture.action).toHaveBeenCalledTimes(1);
+  expect(host.querySelector(".error-slot-dialog")).not.toBeNull();
+  expect(button("Open tab").classList.contains("setup-primary")).toBe(true);
+  expect(button("Open tab").disabled).toBe(false);
+  expect(host.textContent).toContain("Kept here. New question clears it.");
+  expect([...host.querySelectorAll("button")].some(element => ["Sent", "Started"].includes(element.textContent?.trim() ?? ""))).toBe(false);
   expect(host.querySelector("textarea")!.value).toBe(question);
   expect(host.querySelector("textarea")!.readOnly).toBe(true);
   await click("New question");
   expect(host.querySelector("textarea")!.value).toBe("");
   expect(host.querySelector("textarea")!.readOnly).toBe(false);
+});
+
+it("shows delivery guidance and keeps long errors in the reserved status slot", async () => {
+  await setup();
+  const render = async (overrides: Partial<Parameters<typeof QuickAskDialog>[0]>) => {
+    await act(async () => root!.render(<QuickAskDialog {...state} cwdSource={'Checkout of Space "Work"'} onClose={() => {}} {...overrides} />));
+  };
+  const longError = "Failure detail ".repeat(30);
+  await render({ status: null, directLaunch: true, manualPaste: false, error: longError });
+  expect(host.textContent).toContain("Sent at launch in the command line.");
+  expect(host.querySelector(".quick-ask-path")?.textContent).toContain("Space checkout");
+  expect(host.querySelector(".error-slot-dialog .error-slot-message > span")?.getAttribute("title")).toBe(longError);
+  const textarea = host.querySelector("textarea")!;
+  expect(textarea.getAttribute("aria-describedby")).toContain(host.querySelector(".quick-ask-delivery")!.id);
+  await render({ status: null, directLaunch: false, manualPaste: true, error: null });
+  expect(host.textContent).toContain("You paste it into the agent yourself.");
+  await render({ status: null, directLaunch: false, manualPaste: false, error: null });
+  expect(host.textContent).toContain("You confirm the agent’s prompt before it is sent.");
+});
+
+it("keeps unavailable agents visible and omits an impossible multiline send", async () => {
+  await setup();
+  const status = { ...state.status!, phase: "ready_to_send" as const };
+  await act(async () => root!.render(<QuickAskDialog {...state} cwdSource="Terminal folder" onClose={() => {}} status={status} manualPaste
+    availability={{ agents: [{ harness: "omp", executable: "omp", found: true }, { harness: "pi", executable: "pi", found: false }] }} />));
+  expect(host.querySelector<HTMLInputElement>('input[value="pi"]')?.disabled).toBe(true);
+  expect(host.textContent).toContain("not on PATH");
+  expect(button("Copy question")).toBeDefined();
+  expect([...host.querySelectorAll("button")].some(element => element.textContent?.trim() === "Send question")).toBe(false);
 });

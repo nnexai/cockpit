@@ -145,12 +145,6 @@ fn observe(stored: &mut Stored, ns: &str, session: &str, observation: &AgentAtte
             if epoch > r.last.epoch {
                 if observation.status == "done" { completion = Some(false); }
                 // A restored pane/name does not prove process identity across server restarts.
-            } else if old_status == "done" && observation.status == "idle" {
-                if id > previous {
-                    // The idle sequence may hide an intervening completion. Carrying an
-                    // acknowledgement forward would falsely acknowledge that result.
-                    if let Some(d) = &mut r.dismissed { if stamp_key(d) == previous { d.epoch = id.0; d.seq = id.1; } }
-                }
             } else if observation.status == "done" && (id > previous || old_status != "done") {
                 completion = Some(false);
             } else if id > previous && observation.status == "idle" && (matches!(old_status, "working" | "blocked") || (old_status == "idle" && INFER_IDLE_ADVANCE)) {
@@ -177,7 +171,7 @@ fn observe(stored: &mut Stored, ns: &str, session: &str, observation: &AgentAtte
             pane_id: observation.pane_id.clone(), terminal_id: observation.terminal_id.clone(), agent: observation.agent.clone(), historical_id: None,
             last: AgentAttentionLast { epoch, seq: observation.seq, status: observation.status.clone(), observed_at: now.to_owned() },
             completion: (observation.status == "done").then(|| AgentAttentionCompletion { epoch, seq: observation.seq, at: now.to_owned(), inferred: false }),
-            acked: None, dismissed: None,
+            acked: None,
         },
     });
     Ok(true)
@@ -220,37 +214,18 @@ fn apply_change(stored: &mut Stored, ns: &str, session: &str, change: &AgentAtte
         stored.agents.remove(index);
         return Ok(true);
     }
-    if matches!(change, AgentAttentionChange::RestoreAll) {
-        let mut changed = false;
-        for a in &mut stored.agents {
-            if a.session_namespace == ns && a.session_id == session && a.record.historical_id.is_none() && a.record.dismissed.take().is_some() { a.revision = revision(); changed = true; }
-        }
-        return Ok(changed);
-    }
-    let (pane, agent) = match change {
-        AgentAttentionChange::Seen { pane_id, agent, .. } | AgentAttentionChange::Dismiss { pane_id, agent, .. } | AgentAttentionChange::Restore { pane_id, agent } => (pane_id, agent),
-        AgentAttentionChange::RestoreAll | AgentAttentionChange::SeenHistorical { .. } => unreachable!(),
+    let AgentAttentionChange::Seen { pane_id, terminal_id, agent, transition } = change else {
+        unreachable!();
     };
-    let a = stored.agents.iter_mut().find(|a| a.session_namespace == ns && a.session_id == session && a.record.historical_id.is_none() && a.record.pane_id == *pane && a.record.agent == *agent)
+    let a = stored.agents.iter_mut().find(|a| a.session_namespace == ns && a.session_id == session && a.record.historical_id.is_none() && a.record.pane_id == *pane_id && a.record.agent == *agent)
         .ok_or_else(|| refusal("agent_attention_target_changed", "Agent identity changed"))?;
     let r = &mut a.record;
-    let changed = match change {
-        AgentAttentionChange::Restore { .. } => r.dismissed.take().is_some(),
-        AgentAttentionChange::Seen { terminal_id, transition, .. } | AgentAttentionChange::Dismiss { terminal_id, transition, .. } => {
-            let id = key(transition.epoch, transition.seq);
-            if r.terminal_id != *terminal_id || id > last_key(r) {
-                return Err(refusal("agent_attention_target_changed", "Agent identity changed"));
-            }
-            if matches!(change, AgentAttentionChange::Dismiss { .. }) && (id != last_key(r) || !matches!(r.last.status.as_str(), "idle" | "done")) {
-                return Err(refusal("agent_attention_not_dismissible", "Agent is no longer dismissible"));
-            }
-            let mut changed = false;
-            if r.acked.as_ref().is_none_or(|a| stamp_key(a) < id) { r.acked = Some(stamp(id, now)); changed = true; }
-            if matches!(change, AgentAttentionChange::Dismiss { .. }) && r.dismissed.as_ref().is_none_or(|d| stamp_key(d) != id) { r.dismissed = Some(stamp(id, now)); changed = true; }
-            changed
-        }
-        AgentAttentionChange::RestoreAll | AgentAttentionChange::SeenHistorical { .. } => unreachable!(),
-    };
+    let id = key(transition.epoch, transition.seq);
+    if r.terminal_id != *terminal_id || id > last_key(r) {
+        return Err(refusal("agent_attention_target_changed", "Agent identity changed"));
+    }
+    let changed = r.acked.as_ref().is_none_or(|a| stamp_key(a) < id);
+    if changed { r.acked = Some(stamp(id, now)); }
     if changed { a.revision = revision(); }
     Ok(changed)
 }
@@ -290,7 +265,7 @@ fn validate_stored(s: &Stored) -> Result<(), InspectionError> {
         if let Some(id) = &r.historical_id {
             if uuid::Uuid::parse_str(id).is_err() || !historical_ids.insert(id) || !unseen(r) { return Err(corrupt()); }
         } else if !records.insert((&a.session_namespace, &a.session_id, &r.pane_id)) { return Err(corrupt()); }
-        if r.completion.as_ref().is_some_and(|c| c.epoch == 0 || key(c.epoch, c.seq) > last_key(r) || c.at.is_empty()) || r.acked.as_ref().is_some_and(|v| v.epoch == 0 || stamp_key(v) > last_key(r) || v.at.is_empty()) || r.dismissed.as_ref().is_some_and(|v| v.epoch == 0 || stamp_key(v) > last_key(r) || v.at.is_empty()) { return Err(corrupt()); }
+        if r.completion.as_ref().is_some_and(|c| c.epoch == 0 || key(c.epoch, c.seq) > last_key(r) || c.at.is_empty()) || r.acked.as_ref().is_some_and(|v| v.epoch == 0 || stamp_key(v) > last_key(r) || v.at.is_empty()) { return Err(corrupt()); }
     }
     Ok(())
 }
@@ -319,10 +294,8 @@ fn validate_request(session: &str, request: &AgentAttentionChangeRequest) -> Res
     if !valid_id(session) || !valid_id(&request.server_instance) || request.observations.len() > 256 || request.observations.iter().any(|o| !valid_id(&o.pane_id) || !valid_id(&o.terminal_id) || !valid_id(&o.agent) || !valid_status(&o.status)) { return Err(invalid()); }
     if let Some(change) = &request.change {
         let valid = match change {
-            AgentAttentionChange::Seen { pane_id, terminal_id, agent, transition } | AgentAttentionChange::Dismiss { pane_id, terminal_id, agent, transition } => valid_id(pane_id) && valid_id(terminal_id) && valid_id(agent) && transition.epoch > 0,
+            AgentAttentionChange::Seen { pane_id, terminal_id, agent, transition } => valid_id(pane_id) && valid_id(terminal_id) && valid_id(agent) && transition.epoch > 0,
             AgentAttentionChange::SeenHistorical { historical_id } => uuid::Uuid::parse_str(historical_id).is_ok(),
-            AgentAttentionChange::Restore { pane_id, agent } => valid_id(pane_id) && valid_id(agent),
-            AgentAttentionChange::RestoreAll => true,
         };
         if !valid { return Err(invalid()); }
     }
@@ -513,9 +486,6 @@ mod tests {
     fn see(seq: u64) -> AgentAttentionChange {
         AgentAttentionChange::Seen { pane_id: "pane".into(), terminal_id: "terminal".into(), agent: "agent".into(), transition: AgentAttentionMark { epoch: 1, seq } }
     }
-    fn dismiss(seq: u64) -> AgentAttentionChange {
-        AgentAttentionChange::Dismiss { pane_id: "pane".into(), terminal_id: "terminal".into(), agent: "agent".into(), transition: AgentAttentionMark { epoch: 1, seq } }
-    }
     fn update(s: &mut Stored, status: &str, seq: u64) {
         observe(s, "namespace", "session", &observation(status, seq), 1, "time").unwrap();
     }
@@ -586,24 +556,6 @@ mod tests {
     }
 
     #[test]
-    fn dismissal_fencing_restore_and_new_activity() {
-        let mut s = Stored::default();
-        update(&mut s, "idle", 1);
-        update(&mut s, "idle", 2);
-        assert!(apply_change(&mut s, "namespace", "session", &dismiss(1), "time").is_err());
-        apply_change(&mut s, "namespace", "session", &dismiss(2), "time").unwrap();
-        assert_eq!(stamp_key(s.agents[0].record.dismissed.as_ref().unwrap()), (1, 2));
-        update(&mut s, "working", 3);
-        assert_ne!(stamp_key(s.agents[0].record.dismissed.as_ref().unwrap()), last_key(&s.agents[0].record));
-        apply_change(&mut s, "namespace", "session", &AgentAttentionChange::Restore { pane_id: "pane".into(), agent: "agent".into() }, "time").unwrap();
-        assert!(s.agents[0].record.dismissed.is_none());
-        update(&mut s, "idle", 4);
-        apply_change(&mut s, "namespace", "session", &dismiss(4), "time").unwrap();
-        apply_change(&mut s, "namespace", "session", &AgentAttentionChange::RestoreAll, "time").unwrap();
-        assert!(s.agents[0].record.dismissed.is_none());
-    }
-
-    #[test]
     fn epoch_restart_is_fail_visible_and_retains_unseen() {
         let mut s = Stored::default();
         update(&mut s, "done", 1);
@@ -612,9 +564,7 @@ mod tests {
         assert_eq!(s.agents[0].record.completion.as_ref().unwrap().epoch, 1);
         let mut s = Stored::default();
         update(&mut s, "idle", 1);
-        apply_change(&mut s, "namespace", "session", &dismiss(1), "time").unwrap();
         observe(&mut s, "namespace", "session", &observation("idle", 1), 2, "later").unwrap();
-        assert_ne!(stamp_key(s.agents[0].record.dismissed.as_ref().unwrap()), last_key(&s.agents[0].record));
         assert!(s.agents[0].record.completion.is_none());
     }
 
@@ -655,10 +605,27 @@ mod tests {
         persist(&store, &s).unwrap();
         let loaded = load(&store).unwrap();
         assert!(unseen(&loaded.agents[0].record));
+        assert!(serde_json::to_value(&loaded.agents[0].record).unwrap().get("dismissed").is_none());
+        apply_change(&mut s, &namespace, "session", &see(1), "time").unwrap();
+        persist(&store, &s).unwrap();
+        let loaded = load(&store).unwrap();
+        assert!(!unseen(&loaded.agents[0].record));
+        assert_eq!(loaded.agents[0].record.acked.as_ref().unwrap().seq, 1);
         std::fs::write(root.join(FILE), b"{broken").unwrap();
         assert_eq!(load(&store).err().unwrap().code, "agent_attention_corrupt");
         assert_eq!(std::fs::read(root.join(FILE)).unwrap(), b"{broken");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn removed_attention_operations_are_rejected() {
+        for change in [
+            serde_json::json!({ "kind": "dismiss", "pane_id": "pane", "terminal_id": "terminal", "agent": "agent", "transition": { "epoch": 1, "seq": 1 } }),
+            serde_json::json!({ "kind": "restore", "pane_id": "pane", "agent": "agent" }),
+            serde_json::json!({ "kind": "restore_all" }),
+        ] {
+            assert!(serde_json::from_value::<AgentAttentionChange>(change).is_err());
+        }
     }
 
     #[test]

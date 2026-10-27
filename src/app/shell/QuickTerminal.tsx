@@ -2,13 +2,15 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type Keyboar
 import type { CockpitClient } from "../../client/CockpitClient";
 import { TerminalPane } from "../TerminalPane";
 import { herdrShadowsPrefix } from "../input/herdrBindings";
+import { formatShortcut } from "../input/shortcuts";
+import { UiIcon } from "../UiIcon";
 
 type Props = {
   client: CockpitClient; sessionId: string; paneId: string; focusEpoch: number;
-  returnFocus: HTMLElement | null; suspended: boolean; onDismiss(): void;
+  returnFocus: HTMLElement | null; suspended: boolean; cwd?: string | null; onDismiss(): void;
 };
 
-export function QuickTerminal({ client, sessionId, paneId, focusEpoch, returnFocus, suspended, onDismiss }: Props) {
+export function QuickTerminal({ client, sessionId, paneId, focusEpoch, returnFocus, suspended, cwd, onDismiss }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const terminate = useRef<(() => boolean) | null>(null);
   const closePending = useRef(false);
@@ -75,11 +77,21 @@ export function QuickTerminal({ client, sessionId, paneId, focusEpoch, returnFoc
       if (event.key.toLowerCase() === "u" && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); close(); }
     }
   };
+  const shortcut = formatShortcut("quick-terminal");
+  const width = rect ? Math.min(rect.width - 8, Math.max(320, Math.min(960, rect.width < 640 ? rect.width - 8 : rect.width - 48))) : 0;
+  const height = rect ? Math.min(rect.height - 8, Math.max(200, Math.min(640, rect.height * 0.8))) : 0;
   return <div className="quick-terminal-backdrop" inert={suspended}>
     <div ref={container} tabIndex={-1} className="quick-terminal" role="dialog" aria-modal="true" aria-label="Quick terminal" onKeyDownCapture={keyDown}
-      style={rect ? { left: rect.left + rect.width * 0.1, top: rect.top + rect.height * 0.1, width: rect.width * 0.8, height: rect.height * 0.8 } : undefined}>
-      <header className="quick-terminal-header"><span>Quick terminal</span><button type="button" aria-label="Close quick terminal" disabled={closeState === "pending"} onClick={close}>{closeState === "pending" ? "Closing…" : closeState === "unconfirmed" ? "Dismiss…" : "Close"}</button></header>
-      {closeState === "pending" ? <div role="status">Waiting for the terminal to close…</div> : closeState === "unconfirmed" ? <div role="alert">Terminal closure could not be confirmed. The shell or detached processes may still be running.</div> : null}
+      style={rect ? { left: rect.left + (rect.width - width) / 2, top: rect.top + (rect.height - height) / 2, width, height } : undefined}>
+      <header className="quick-terminal-header">
+        <span className="quick-terminal-title">Quick terminal</span>
+        <span className="quick-terminal-chip" title="Closing terminates this shell">disposable</span>
+        {cwd ? <span className="quick-terminal-cwd" title={cwd}>{cwd}</span> : null}
+        <span className={`quick-terminal-status${closeState === "unconfirmed" ? " is-unconfirmed" : ""}`} role={closeState === "pending" ? "status" : closeState === "unconfirmed" ? "alert" : undefined} title={closeState === "unconfirmed" ? "The shell or detached processes may still be running." : undefined}>
+          {closeState === "pending" ? <><UiIcon name="refresh" />Closing…</> : closeState === "unconfirmed" ? <><UiIcon name="info" />Closure not confirmed</> : null}
+        </span>
+        <button type="button" className={`quick-terminal-close${closeState === "unconfirmed" ? " is-unconfirmed" : ""}`} aria-label="Close quick terminal" disabled={closeState === "pending"} onClick={close}>{closeState === "unconfirmed" ? "Dismiss anyway" : "Close"}{shortcut && closeState !== "unconfirmed" ? <kbd>{shortcut}</kbd> : null}</button>
+      </header>
       <div className="quick-terminal-body"><TerminalPane client={client} request={{ session_id: sessionId, pane_id: paneId, target_kind: "scratch" }} selected presented controlAllowed controlPending={false} focusEpoch={focusEpoch} focusToken={1} terminalMouseInput terminateRef={terminate} accessibleLabel="Quick terminal shell" onStateChange={onTerminalStateChange} onClosed={onDismiss} /></div>
     </div>
   </div>;

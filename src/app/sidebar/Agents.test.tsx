@@ -3,6 +3,7 @@ import { act, createElement, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import type { AgentAttentionResponse, SessionSnapshotResponse } from "../../protocol/generated/v1";
+import { focusSidebarList, registerSidebarFocus } from "../input/shortcuts";
 import { Agents } from "./Agents";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -12,44 +13,35 @@ const snapshot = { session_id: "s", server_instance: "server", panes: [{ id: "a"
 ] } as SessionSnapshotResponse;
 const response: AgentAttentionResponse = { session_id: "s", server_instance: "server", epoch: 1, refused: null, records: [] };
 
-function mockStorage() {
-  const values = new Map<string, string>();
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => values.set(key, value),
-  });
-}
 
-it("dismisses only on response, hands off focus, and restores from All", async () => {
-  mockStorage();
+it("automatically filters idle agents and acknowledges an unseen result", async () => {
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
-  const dismiss = vi.fn(async () => true); const restore = vi.fn(async () => true); const seen = vi.fn(async () => true);
-  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "ready", response, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), dismiss, restore, seen, seenHistorical: vi.fn(async () => true), restoreAll: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const seen = vi.fn(async () => true);
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "ready", response, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen, seenHistorical: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
   const props: ComponentProps<typeof Agents> = { snapshot, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: vi.fn(), focusRef: { current: null } };
   try {
     await act(async () => root.render(createElement(Agents, props)));
-    const row = host.querySelector<HTMLButtonElement>('[data-row-id="a:one"]')!;
-    await act(async () => { row.focus(); row.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true })); });
-    expect(dismiss).toHaveBeenCalledOnce(); expect(host.contains(row)).toBe(true);
-    const hidden = { ...response, records: [{ historical_id: null, pane_id: "a", terminal_id: "ta", agent: "one", last: { epoch: 1, seq: 2, status: "idle", observed_at: "now" }, completion: null, acked: { epoch: 1, seq: 2, at: "now" }, dismissed: { epoch: 1, seq: 2, at: "now" } }] };
-    await act(async () => root.render(createElement(Agents, { ...props, attention: { ...attention, response: hidden } })));
-    expect(host.contains(row)).toBe(false); expect((document.activeElement as HTMLElement).dataset.rowId).toBe("b:two");
-    const showAll = [...host.querySelectorAll("button")].find(button => button.textContent === "Show all")!;
-    await act(async () => showAll.click());
-    const restoredRow = host.querySelector<HTMLButtonElement>('[data-row-id="a:one"]')!;
-    await act(async () => { restoredRow.focus(); restoredRow.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true })); });
-    expect(restore).toHaveBeenCalledOnce();
+    expect(host.querySelector('[data-row-id="a:one"]')).toBeNull();
+    expect(host.textContent).not.toMatch(/Dismiss|Restore|Show all/);
     const done = host.querySelector<HTMLButtonElement>('[data-row-id="b:two"]')!;
+    expect(done).toBeTruthy();
     await act(async () => done.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true })));
     expect(seen).toHaveBeenCalledOnce();
-  } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }
+    const retained = { ...response, records: [{ historical_id: null, pane_id: "a", terminal_id: "ta", agent: "one", last: { epoch: 1, seq: 2, status: "idle", observed_at: "now" }, completion: { epoch: 1, seq: 1, at: "now", inferred: false }, acked: null }] };
+    await act(async () => root.render(createElement(Agents, { ...props, attention: { ...attention, response: retained } })));
+    expect(host.querySelector('[data-row-id="a:one"]')?.getAttribute("aria-label")).toContain("not seen");
+    const acknowledged = { ...retained, records: [{ ...retained.records[0]!, acked: { epoch: 1, seq: 1, at: "now" } }] };
+    await act(async () => root.render(createElement(Agents, { ...props, attention: { ...attention, response: acknowledged } })));
+    expect(host.querySelector('[data-row-id="a:one"]')).toBeNull();
+  } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
-it("fails visible when unavailable and fences a pointer that moved to another row", async () => {
-  mockStorage(); const host = document.createElement("div"); document.body.append(host); const root = createRoot(host); const select = vi.fn();
-  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: true, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), dismiss: vi.fn(async () => true), restore: vi.fn(async () => true), seen: vi.fn(async () => true), seenHistorical: vi.fn(async () => true), restoreAll: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+it("keeps active statuses visible when unavailable and fences a pointer that moved to another row", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host); const select = vi.fn();
+  const active = { ...snapshot, agents: [{ ...snapshot.agents[0]!, status: "working" }, snapshot.agents[1]!] };
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: true, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen: vi.fn(async () => true), seenHistorical: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
   try {
-    await act(async () => root.render(createElement(Agents, { snapshot, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: select, focusRef: { current: null } })));
+    await act(async () => root.render(createElement(Agents, { snapshot: active, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: select, focusRef: { current: null } })));
     expect(host.textContent).toContain("Results may be missing");
     await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Acknowledge")!.click());
     expect(attention.acknowledgeRecoveryWarning).toHaveBeenCalledOnce();
@@ -57,22 +49,78 @@ it("fails visible when unavailable and fences a pointer that moved to another ro
     expect(a).toBeTruthy(); expect(b).toBeTruthy();
     await act(async () => { a.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })); b.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
     expect(select).not.toHaveBeenCalled();
-  } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }
+  } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
 it("marks a past result seen without activating the replacement pane", async () => {
-  mockStorage();
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
-  const historical = { historical_id: "history-1", pane_id: "a", terminal_id: "old", agent: "one", last: { epoch: 1, seq: 1, status: "done", observed_at: "now" }, completion: { epoch: 1, seq: 1, at: "now", inferred: false }, acked: null, dismissed: null };
+  const historical = { historical_id: "history-1", pane_id: "a", terminal_id: "old", agent: "one", last: { epoch: 1, seq: 1, status: "done", observed_at: "now" }, completion: { epoch: 1, seq: 1, at: "now", inferred: false }, acked: null };
   const seenHistorical = vi.fn(async () => true); const onSelect = vi.fn();
-  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "ready", response: { ...response, records: [historical] }, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), dismiss: vi.fn(async () => true), restore: vi.fn(async () => true), seen: vi.fn(async () => true), seenHistorical, restoreAll: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "ready", response: { ...response, records: [historical] }, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen: vi.fn(async () => true), seenHistorical, retry: vi.fn(), clearNote: vi.fn() };
   try {
     await act(async () => root.render(createElement(Agents, { snapshot, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect, focusRef: { current: null } })));
-    await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Show all")!.click());
     const mark = host.querySelector<HTMLButtonElement>('[aria-label="Mark past result from one seen"]')!;
     expect(mark).toBeTruthy();
     await act(async () => mark.click());
     expect(seenHistorical).toHaveBeenCalledWith(historical);
     expect(onSelect).not.toHaveBeenCalled();
-  } finally { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); }
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+it("focuses the row that takes the removed row's position", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen: vi.fn(async () => true), seenHistorical: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const active = { ...snapshot, agents: snapshot.agents.map(agent => ({ ...agent, status: "working" })) };
+  const props: ComponentProps<typeof Agents> = { snapshot: active, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: vi.fn(), focusRef: { current: null } };
+  try {
+    await act(async () => root.render(createElement(Agents, props)));
+    const rows = [...host.querySelectorAll<HTMLButtonElement>("[data-row-id]")];
+    await act(async () => rows[0]!.focus());
+    const remaining = active.agents.filter(agent => `${agent.pane_id}:${agent.name}` !== rows[0]!.dataset.rowId);
+    await act(async () => root.render(createElement(Agents, { ...props, snapshot: { ...active, agents: remaining } })));
+    expect(document.activeElement).toBe(rows[1]);
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
+it("hands focus to the adjacent remaining row, then back to the sidebar origin", async () => {
+  const host = document.createElement("div"); host.id = "cockpit-sidebar"; document.body.append(host);
+  const origin = document.createElement("button"); document.body.append(origin);
+  const root = createRoot(host);
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen: vi.fn(async () => true), seenHistorical: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const active = { ...snapshot, agents: snapshot.agents.map(agent => ({ ...agent, status: "working" })) };
+  const focusRef: ComponentProps<typeof Agents>["focusRef"] = { current: null };
+  const props: ComponentProps<typeof Agents> = { snapshot: active, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: vi.fn(), focusRef };
+  const unregister = registerSidebarFocus({ spaces: () => {}, agents: () => focusRef.current?.() });
+  try {
+    await act(async () => root.render(createElement(Agents, props)));
+    origin.focus();
+    await act(async () => { focusSidebarList("agents"); });
+    const rows = [...host.querySelectorAll<HTMLButtonElement>("[data-row-id]")];
+    expect(rows).toHaveLength(2);
+    await act(async () => rows[1]!.focus());
+    const remaining = active.agents.filter(agent => `${agent.pane_id}:${agent.name}` !== rows[1]!.dataset.rowId);
+    await act(async () => root.render(createElement(Agents, { ...props, snapshot: { ...active, agents: remaining } })));
+    expect(document.activeElement).toBe(host.querySelector("[data-row-id]"));
+    await act(async () => root.render(createElement(Agents, { ...props, snapshot: { ...active, agents: [] } })));
+    expect(document.activeElement).toBe(origin);
+  } finally { unregister(); await act(async () => root.unmount()); host.remove(); origin.remove(); }
+});
+
+it("does not steal focus when a previously focused row disappears after focus leaves", async () => {
+  const host = document.createElement("div"); document.body.append(host);
+  const outside = document.createElement("button"); document.body.append(outside);
+  const root = createRoot(host);
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen: vi.fn(async () => true), seenHistorical: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const active = { ...snapshot, agents: snapshot.agents.map(agent => ({ ...agent, status: "working" })) };
+  const props: ComponentProps<typeof Agents> = { snapshot: active, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: vi.fn(), focusRef: { current: null } };
+  try {
+    await act(async () => root.render(createElement(Agents, props)));
+    const row = host.querySelector<HTMLButtonElement>("[data-row-id]")!;
+    await act(async () => { row.focus(); outside.focus(); });
+    await act(async () => root.render(createElement(Agents, { ...props, snapshot: { ...active, agents: active.agents.filter(agent => `${agent.pane_id}:${agent.name}` !== row.dataset.rowId) } })));
+    expect(document.activeElement).toBe(outside);
+    await act(async () => { host.querySelector<HTMLButtonElement>("[data-row-id]")!.focus(); (document.activeElement as HTMLElement).blur(); });
+    await act(async () => root.render(createElement(Agents, { ...props, snapshot: { ...active, agents: [] } })));
+    expect(document.activeElement).toBe(document.body);
+  } finally { await act(async () => root.unmount()); host.remove(); outside.remove(); }
 });

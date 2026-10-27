@@ -18,7 +18,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 const snapshot: SessionSnapshotResponse = { session_id: "s", server_instance: "server", version: "1", protocol: 22, focused_space_id: null, focused_tab_id: null, focused_pane_id: null, spaces: [], tabs: [], panes: [{ id: "p", terminal_id: "t", space_id: "space", tab_id: "tab", title: null, focused: false, agent: "agent", agent_status: "idle", revision: 1 }], agents: [{ pane_id: "p", space_id: "space", tab_id: "tab", name: "agent", status: "idle", title: null, focused: false, state_change_seq: 4 }] };
-const response: AgentAttentionResponse = { session_id: "s", server_instance: "server", epoch: 1, refused: null, records: [{ historical_id: null, pane_id: "p", terminal_id: "t", agent: "agent", last: { epoch: 1, seq: 4, status: "idle", observed_at: "now" }, completion: { epoch: 1, seq: 3, at: "then", inferred: true }, acked: null, dismissed: null }] };
+const response: AgentAttentionResponse = { session_id: "s", server_instance: "server", epoch: 1, refused: null, records: [{ historical_id: null, pane_id: "p", terminal_id: "t", agent: "agent", last: { epoch: 1, seq: 4, status: "idle", observed_at: "now" }, completion: { epoch: 1, seq: 3, at: "then", inferred: true }, acked: null }] };
 function fixture() {
   const read = vi.fn((_session: string, _signal?: AbortSignal): Promise<AgentAttentionResponse> => Promise.resolve(response));
   const write = vi.fn((_session: string, request: AgentAttentionChangeRequest): Promise<AgentAttentionResponse> => Promise.resolve({ ...response, server_instance: request.server_instance }));
@@ -73,7 +73,7 @@ it("refetches on focus and visible events without polling and exposes refusals",
   f.write.mockResolvedValueOnce({ ...response, refused: { code: "agent_attention_target_changed", message: "Changed" } });
   const row = deriveAgentQueue(snapshot, response, "ready").visible[0]!;
   let result!: boolean;
-  await act(async () => { result = await f.attention.dismiss(row); });
+  await act(async () => { result = await f.attention.seen(row); });
   expect(result).toBe(false); expect(f.attention.notes.get("p")).toBe("Changed");
 });
 

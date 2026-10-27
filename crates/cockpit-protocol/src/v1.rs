@@ -240,7 +240,6 @@ pub struct AgentAttentionRecord {
     pub last: AgentAttentionLast,
     pub completion: Option<AgentAttentionCompletion>,
     pub acked: Option<AgentAttentionStamp>,
-    pub dismissed: Option<AgentAttentionStamp>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -275,9 +274,6 @@ pub struct AgentAttentionObservation {
 pub enum AgentAttentionChange {
     Seen { pane_id: String, terminal_id: String, agent: String, transition: AgentAttentionMark },
     SeenHistorical { historical_id: String },
-    Dismiss { pane_id: String, terminal_id: String, agent: String, transition: AgentAttentionMark },
-    Restore { pane_id: String, agent: String },
-    RestoreAll,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]

@@ -15,9 +15,6 @@ export type AgentAttentionState = {
   activate(row: AttentionRow): void;
   seen(row: AttentionRow): Promise<boolean>;
   seenHistorical(record: AgentAttentionRecord): Promise<boolean>;
-  dismiss(row: AttentionRow): Promise<boolean>;
-  restore(row: AttentionRow): Promise<boolean>;
-  restoreAll(): Promise<boolean>;
   retry(): void;
   clearNote(paneId: string): void;
 };
@@ -249,9 +246,6 @@ export function useAgentAttention(client: CockpitClient, state: SessionState, li
     seenHistorical: record => record.historical_id
       ? change(historicalAttentionKey(record), { kind: "seen_historical", historical_id: record.historical_id })
       : Promise.resolve(false),
-    dismiss: row => row.terminalId && row.transition ? change(row.agent.pane_id, { kind: "dismiss", pane_id: row.agent.pane_id, terminal_id: row.terminalId, agent: row.agent.name, transition: row.transition }) : Promise.resolve(false),
-    restore: row => change(row.agent.pane_id, { kind: "restore", pane_id: row.agent.pane_id, agent: row.agent.name }),
-    restoreAll: () => change("*", { kind: "restore_all" }),
     retry: () => { binding.refresh = true; binding.pump?.(); },
     clearNote: paneId => { binding.notes.delete(paneId); update(); },
   };

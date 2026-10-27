@@ -271,7 +271,7 @@ export type AgentAttentionRecord = { pane_id: string, terminal_id: string, agent
 /**
  * Stable identifier for an unseen completion whose agent is no longer live.
  */
-historical_id: string | null, last: AgentAttentionLast, completion: AgentAttentionCompletion | null, acked: AgentAttentionStamp | null, dismissed: AgentAttentionStamp | null, };
+historical_id: string | null, last: AgentAttentionLast, completion: AgentAttentionCompletion | null, acked: AgentAttentionStamp | null, };
 
 export type AgentAttentionRefusal = { code: string, message: string, };
 
@@ -279,7 +279,7 @@ export type AgentAttentionResponse = { session_id: string, server_instance: stri
 
 export type AgentAttentionObservation = { pane_id: string, terminal_id: string, agent: string, status: string, seq: number, };
 
-export type AgentAttentionChange = { "kind": "seen", pane_id: string, terminal_id: string, agent: string, transition: AgentAttentionMark, } | { "kind": "seen_historical", historical_id: string, } | { "kind": "dismiss", pane_id: string, terminal_id: string, agent: string, transition: AgentAttentionMark, } | { "kind": "restore", pane_id: string, agent: string, } | { "kind": "restore_all" };
+export type AgentAttentionChange = { "kind": "seen", pane_id: string, terminal_id: string, agent: string, transition: AgentAttentionMark, } | { "kind": "seen_historical", historical_id: string, };
 
 export type AgentAttentionChangeRequest = { server_instance: string, observations: Array<AgentAttentionObservation>, change: AgentAttentionChange | null, };
 

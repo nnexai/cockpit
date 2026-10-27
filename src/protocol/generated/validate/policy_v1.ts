@@ -110,9 +110,6 @@ export interface WireOwners {
   "AgentAttentionChange": V1.AgentAttentionChange;
   "AgentAttentionChange[seen]": Extract<V1.AgentAttentionChange, { "kind": "seen" }>;
   "AgentAttentionChange[seen_historical]": Extract<V1.AgentAttentionChange, { "kind": "seen_historical" }>;
-  "AgentAttentionChange[dismiss]": Extract<V1.AgentAttentionChange, { "kind": "dismiss" }>;
-  "AgentAttentionChange[restore]": Extract<V1.AgentAttentionChange, { "kind": "restore" }>;
-  "AgentAttentionChange[restore_all]": Extract<V1.AgentAttentionChange, { "kind": "restore_all" }>;
   "AgentAttentionChangeRequest": V1.AgentAttentionChangeRequest;
   "SpaceSummary": V1.SpaceSummary;
   "TabSummary": V1.TabSummary;
@@ -264,7 +261,6 @@ export interface WireFields {
   "AgentAttentionRecord.last": (V1.AgentAttentionRecord)["last"];
   "AgentAttentionRecord.completion": (V1.AgentAttentionRecord)["completion"];
   "AgentAttentionRecord.acked": (V1.AgentAttentionRecord)["acked"];
-  "AgentAttentionRecord.dismissed": (V1.AgentAttentionRecord)["dismissed"];
   "AgentAttentionRefusal.code": (V1.AgentAttentionRefusal)["code"];
   "AgentAttentionRefusal.message": (V1.AgentAttentionRefusal)["message"];
   "AgentAttentionResponse.session_id": (V1.AgentAttentionResponse)["session_id"];
@@ -282,12 +278,6 @@ export interface WireFields {
   "AgentAttentionChange[seen].agent": (Extract<V1.AgentAttentionChange, { "kind": "seen" }>)["agent"];
   "AgentAttentionChange[seen].transition": (Extract<V1.AgentAttentionChange, { "kind": "seen" }>)["transition"];
   "AgentAttentionChange[seen_historical].historical_id": (Extract<V1.AgentAttentionChange, { "kind": "seen_historical" }>)["historical_id"];
-  "AgentAttentionChange[dismiss].pane_id": (Extract<V1.AgentAttentionChange, { "kind": "dismiss" }>)["pane_id"];
-  "AgentAttentionChange[dismiss].terminal_id": (Extract<V1.AgentAttentionChange, { "kind": "dismiss" }>)["terminal_id"];
-  "AgentAttentionChange[dismiss].agent": (Extract<V1.AgentAttentionChange, { "kind": "dismiss" }>)["agent"];
-  "AgentAttentionChange[dismiss].transition": (Extract<V1.AgentAttentionChange, { "kind": "dismiss" }>)["transition"];
-  "AgentAttentionChange[restore].pane_id": (Extract<V1.AgentAttentionChange, { "kind": "restore" }>)["pane_id"];
-  "AgentAttentionChange[restore].agent": (Extract<V1.AgentAttentionChange, { "kind": "restore" }>)["agent"];
   "AgentAttentionChangeRequest.server_instance": (V1.AgentAttentionChangeRequest)["server_instance"];
   "AgentAttentionChangeRequest.observations": (V1.AgentAttentionChangeRequest)["observations"];
   "AgentAttentionChangeRequest.change": (V1.AgentAttentionChangeRequest)["change"];
@@ -509,16 +499,13 @@ export interface WireFieldNames {
   "AgentAttentionLast": "epoch" | "seq" | "status" | "observed_at";
   "AgentAttentionCompletion": "epoch" | "seq" | "at" | "inferred";
   "AgentAttentionStamp": "epoch" | "seq" | "at";
-  "AgentAttentionRecord": "pane_id" | "terminal_id" | "agent" | "historical_id" | "last" | "completion" | "acked" | "dismissed";
+  "AgentAttentionRecord": "pane_id" | "terminal_id" | "agent" | "historical_id" | "last" | "completion" | "acked";
   "AgentAttentionRefusal": "code" | "message";
   "AgentAttentionResponse": "session_id" | "server_instance" | "epoch" | "records" | "refused";
   "AgentAttentionObservation": "pane_id" | "terminal_id" | "agent" | "status" | "seq";
   "AgentAttentionChange": never;
   "AgentAttentionChange[seen]": "pane_id" | "terminal_id" | "agent" | "transition";
   "AgentAttentionChange[seen_historical]": "historical_id";
-  "AgentAttentionChange[dismiss]": "pane_id" | "terminal_id" | "agent" | "transition";
-  "AgentAttentionChange[restore]": "pane_id" | "agent";
-  "AgentAttentionChange[restore_all]": never;
   "AgentAttentionChangeRequest": "server_instance" | "observations" | "change";
   "SpaceSummary": "id" | "label" | "number" | "tab_count" | "pane_count" | "focused" | "agent_status" | "git";
   "TabSummary": "id" | "space_id" | "label" | "number" | "pane_count" | "focused" | "focused_pane_id";
@@ -584,11 +571,9 @@ export interface WireChildNames {
   "AgentAttentionRecord.last": "AgentAttentionLast";
   "AgentAttentionRecord.completion": "AgentAttentionCompletion";
   "AgentAttentionRecord.acked": "AgentAttentionStamp";
-  "AgentAttentionRecord.dismissed": "AgentAttentionStamp";
   "AgentAttentionResponse.refused": "AgentAttentionRefusal";
   "AgentAttentionChange.transition": "AgentAttentionMark";
   "AgentAttentionChange[seen].transition": "AgentAttentionMark";
-  "AgentAttentionChange[dismiss].transition": "AgentAttentionMark";
   "AgentAttentionChangeRequest.change": "AgentAttentionChange";
   "SpaceSummary.git": "SpaceGitSummary";
   "SessionSnapshotResponse.herdr_shell": "HerdrShellState";
@@ -622,9 +607,6 @@ export interface WireTagNames {
   "AgentAttentionChange": "kind";
   "AgentAttentionChange[seen]": "kind";
   "AgentAttentionChange[seen_historical]": "kind";
-  "AgentAttentionChange[dismiss]": "kind";
-  "AgentAttentionChange[restore]": "kind";
-  "AgentAttentionChange[restore_all]": "kind";
   "PaneMoveDestination": "type";
   "PaneMoveDestination[existing_tab]": "type";
   "PaneMoveDestination[new_tab]": "type";
@@ -701,16 +683,13 @@ export interface WireCheckpointFieldNames {
   "AgentAttentionLast": "epoch" | "seq" | "status" | "observed_at";
   "AgentAttentionCompletion": "epoch" | "seq" | "at" | "inferred";
   "AgentAttentionStamp": "epoch" | "seq" | "at";
-  "AgentAttentionRecord": "pane_id" | "terminal_id" | "agent" | "historical_id" | "last" | "completion" | "acked" | "dismissed";
+  "AgentAttentionRecord": "pane_id" | "terminal_id" | "agent" | "historical_id" | "last" | "completion" | "acked";
   "AgentAttentionRefusal": "code" | "message";
   "AgentAttentionResponse": "session_id" | "server_instance" | "epoch" | "records" | "refused";
   "AgentAttentionObservation": "pane_id" | "terminal_id" | "agent" | "status" | "seq";
   "AgentAttentionChange": "agent" | "historical_id" | "kind" | "pane_id" | "terminal_id" | "transition";
   "AgentAttentionChange[seen]": "pane_id" | "terminal_id" | "agent" | "transition" | "kind";
   "AgentAttentionChange[seen_historical]": "historical_id" | "kind";
-  "AgentAttentionChange[dismiss]": "pane_id" | "terminal_id" | "agent" | "transition" | "kind";
-  "AgentAttentionChange[restore]": "pane_id" | "agent" | "kind";
-  "AgentAttentionChange[restore_all]": "kind";
   "AgentAttentionChangeRequest": "server_instance" | "observations" | "change";
   "SpaceSummary": "id" | "label" | "number" | "tab_count" | "pane_count" | "focused" | "agent_status" | "git";
   "TabSummary": "id" | "space_id" | "label" | "number" | "pane_count" | "focused" | "focused_pane_id";
@@ -773,7 +752,6 @@ export type WireOmittableField =
   | "AgentAttentionRecord.historical_id"
   | "AgentAttentionRecord.completion"
   | "AgentAttentionRecord.acked"
-  | "AgentAttentionRecord.dismissed"
   | "AgentAttentionResponse.refused"
   | "AgentAttentionChangeRequest.change"
   | "SpaceSummary.git"

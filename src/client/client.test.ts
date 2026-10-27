@@ -522,7 +522,7 @@ describe("Agent attention contracts", () => {
       await expect(clientFor({ ...response, epoch: "bad" }).agentAttention("session-1")).rejects.toMatchObject({ code: "malformed_response" });
     });
     it(`${transport} transports distinct historical completion identities`, async () => {
-      const record = { historical_id: "history-id", pane_id: "p", terminal_id: "t", agent: "a", last: { epoch: 1, seq: 4, status: "idle", observed_at: "now" }, completion: { epoch: 1, seq: 3, at: "then", inferred: true }, acked: null, dismissed: null };
+      const record = { historical_id: "history-id", pane_id: "p", terminal_id: "t", agent: "a", last: { epoch: 1, seq: 4, status: "idle", observed_at: "now" }, completion: { epoch: 1, seq: 3, at: "then", inferred: true }, acked: null };
       const history = { ...response, records: [record] };
       const change = { server_instance: "server-1", observations: [], change: { kind: "seen_historical" as const, historical_id: "history-id" } };
       await expect(clientFor(history).agentAttention("session-1")).resolves.toEqual(history);

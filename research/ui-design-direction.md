@@ -110,12 +110,12 @@ The desired drag behavior distinguishes reorder from reparent, previews the dest
 Agents is an attention queue, not a directory and not a chat transcript.
 
 - Show agent status, identity, and useful Space/tab context in a glanceable row.
-- Order the queue Blocked, unseen Done, Working, Idle, Unknown; a working agent with an earlier unseen result is in the Done tier, and acknowledged Herdr Done is in Idle. Within a tier use newest epoch and state change, then focused and pane ID.
+- Order the queue Blocked, unseen Done, Working, acknowledged Done, then Unknown; a working agent with an earlier unseen result is in the Done tier. Automatically exclude ordinary idle agents without unseen completion. Within a tier use newest epoch and state change, then focused and pane ID.
 - State is never a color-only dot. A compact 26 px row shows `space · tab`, pinning the tab after an ellipsized Space name, with an 18 px SVG badge (a state-tinted disc and one distinct shape per state). Unselected Blocked/Done rows also print the urgent state word inline; only acknowledged selection adds `State · agent` below. Hover, DOM focus and pending intent do not grow rows. Use a spinner only for a pending operation, not as the permanent Working icon. See the sidebar presentation contract in `DECISIONS.md`.
 - Clicking a row requests focus of its owning pane and attachment. The highlight moves only when Herdr acknowledges focus.
-- Retain a completion until explicitly marked seen or the Agents row activation is confirmed by Herdr. Dismiss idle or Done rows with the word action without closing a terminal; All provides Restore and Restore all. New activity returns a dismissed agent to the queue.
-- Keep unseen results from disappeared or replaced agents as historical entries in All, with explicit mark-seen and no activation of a replacement.
-- Blocked and Done may receive stronger state emphasis; Working and Idle remain identifiable without relying on color.
+- Retain a completion until explicitly marked seen or the Agents row activation is confirmed by Herdr. Automatically filter ordinary idle agents without unseen completions; new activity returns them to the queue without changing their terminals.
+- Keep unseen results from disappeared or replaced agents as historical entries in the Agents list, with explicit mark-seen and no activation of a replacement.
+- Blocked and Done may receive stronger state emphasis; state remains identifiable without relying on color.
 
 ### Main work area
 
@@ -290,7 +290,7 @@ This is a conceptual wireframe, not a prescribed measurement or current layout. 
 - No separate inbox popup; keep Cockpit-managed acknowledgment in the persistent Agents queue.
 - No agent avatars or chat bubbles in the attention queue.
 - No status encoded by color alone and no unlabeled rainbow-dot matrix.
-- No optimistic dismissal or selection that implies an unconfirmed operation succeeded.
+- No optimistic acknowledgment or selection that implies an unconfirmed operation succeeded.
 - No browser-style close button that implies a disconnected terminal process was killed.
 - No custom terminal prompt, command blocks, output summaries, translucent terminal, or terminal text restyling.
 - Keep pane headers where needed for focus and resource context. Exact geometry follows current styles; drag targeting is not yet implemented.

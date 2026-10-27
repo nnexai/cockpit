@@ -208,7 +208,6 @@ export const wireAgentAttentionRecord: WireDescriptor<V1.AgentAttentionRecord> =
   "last": req(named(() => wireAgentAttentionLast)),
   "completion": req(nullable(named(() => wireAgentAttentionCompletion)), { fill: null }),
   "acked": req(nullable(named(() => wireAgentAttentionStamp)), { fill: null }),
-  "dismissed": req(nullable(named(() => wireAgentAttentionStamp)), { fill: null }),
 });
 
 export const wireAgentAttentionRefusal: WireDescriptor<V1.AgentAttentionRefusal> = struct<V1.AgentAttentionRefusal>("AgentAttentionRefusal", {
@@ -241,18 +240,6 @@ export const wireAgentAttentionChange: WireDescriptor<V1.AgentAttentionChange> =
   },
   "seen_historical": {
     "historical_id": req(str),
-  },
-  "dismiss": {
-    "pane_id": req(str),
-    "terminal_id": req(str),
-    "agent": req(str),
-    "transition": req(named(() => wireAgentAttentionMark)),
-  },
-  "restore": {
-    "pane_id": req(str),
-    "agent": req(str),
-  },
-  "restore_all": {
   },
 });
 
