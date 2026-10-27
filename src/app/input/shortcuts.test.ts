@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { SHORTCUTS, formatShortcut, prefixCommandForKey, returnFocusFromSidebar, focusSidebarList, registerSidebarFocus, viewerShortcutAction, type PrefixCommand } from "./shortcuts";
+import { SHORTCUTS, directCommandForEvent, formatShortcut, prefixCommandForKey, returnFocusFromSidebar, focusSidebarList, registerSidebarFocus, viewerShortcutAction, type PrefixCommand } from "./shortcuts";
 import { herdrPrefixes, setEffectiveHerdrBindings } from "./herdrBindings";
 
 function chord(overrides: Partial<{ key: string; code: string; shiftKey: boolean; ctrlKey: boolean; altKey: boolean; metaKey: boolean; target: EventTarget | null }>) {
@@ -36,10 +36,17 @@ describe("shortcut registry", () => {
     }
   });
 
-  it("binds quick ask to the unshifted prefix t", () => {
-    expect(prefixCommandForKey("t", false)).toBe("ask-agent");
+  it("uses direct chords for quick ask and quick terminal rather than prefix keys", () => {
+    expect(prefixCommandForKey("t", false)).toBeNull();
+    expect(prefixCommandForKey("u", false)).toBeNull();
     expect(prefixCommandForKey("T", true)).toBe("rename-tab");
-    expect(formatShortcut("ask-agent", "other")).toBe("Ctrl+B t");
+    expect(formatShortcut("ask-agent", "other")).toBe("Ctrl+Shift+A");
+    expect(formatShortcut("ask-agent", "mac")).toBe("Cmd+Shift+A");
+    expect(formatShortcut("quick-terminal", "other")).toBe("Ctrl+`");
+    expect(formatShortcut("quick-terminal", "mac")).toBe("Ctrl+`");
+    expect(directCommandForEvent(chord({ key: "`", code: "Backquote", ctrlKey: true }))).toBe("quick-terminal");
+    expect(directCommandForEvent(chord({ key: "A", shiftKey: true, ctrlKey: true }))).toBe("ask-agent");
+    expect(directCommandForEvent(chord({ key: "A", shiftKey: true, metaKey: true }))).toBe("ask-agent");
   });
 
   it("formats keys for each platform and only lists a sequence's prefix as Ctrl+B", () => {

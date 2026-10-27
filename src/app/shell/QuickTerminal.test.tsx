@@ -5,7 +5,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { TerminalPaneProps } from "../TerminalPane";
-import { herdrBindings, herdrPrefixes, setEffectiveHerdrBindings } from "../input/herdrBindings";
 
 const mocks = vi.hoisted(() => ({
   pane: vi.fn(),
@@ -45,7 +44,6 @@ afterEach(async () => {
   document.body.replaceChildren();
   mocks.pane.mockReset();
   mocks.terminate.mockReset();
-  setEffectiveHerdrBindings([]);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -81,85 +79,47 @@ describe("QuickTerminal", () => {
       focusEpoch: 7, focusToken: 1, terminalMouseInput: true,
       accessibleLabel: "Quick terminal shell",
     }));
-    expect(probe.dialog.style.left).toBe("124px");
-    expect(probe.dialog.style.top).toBe("140px");
-    expect(probe.dialog.style.width).toBe("752px");
-    expect(probe.dialog.style.height).toBe("480px");
+    expect(probe.dialog.style.left).toBe("156px");
+    expect(probe.dialog.style.top).toBe("128px");
+    expect(probe.dialog.style.width).toBe("688px");
+    expect(probe.dialog.style.height).toBe("468px");
   });
 
   it("centers and caps large work areas, and fits narrow work areas", () => {
     const probe = mount({ rect: new DOMRect(20, 40, 1600, 900) });
-    expect(probe.dialog.style.left).toBe("340px");
-    expect(probe.dialog.style.top).toBe("170px");
-    expect(probe.dialog.style.width).toBe("960px");
-    expect(probe.dialog.style.height).toBe("640px");
+    expect(probe.dialog.style.left).toBe("300px");
+    expect(probe.dialog.style.top).toBe("88px");
+    expect(probe.dialog.style.width).toBe("1040px");
+    expect(probe.dialog.style.height).toBe("680px");
     act(() => { root!.unmount(); root = null; });
     document.body.replaceChildren();
     const narrow = mount({ rect: new DOMRect(0, 0, 360, 700) });
-    expect(narrow.dialog.style.left).toBe("4px");
-    expect(narrow.dialog.style.width).toBe("352px");
-    expect(narrow.dialog.style.height).toBe("560px");
+    expect(narrow.dialog.style.left).toBe("20px");
+    expect(narrow.dialog.style.width).toBe("320px");
+    expect(narrow.dialog.style.height).toBe("546px");
   });
 
   it("shows the source cwd and available shortcut without guessing an absent cwd", () => {
     const probe = mount({ cwd: "/home/user/project" });
     expect(probe.dialog.querySelector(".quick-terminal-cwd")?.getAttribute("title")).toBe("/home/user/project");
-    expect(probe.close.querySelector("kbd")?.textContent).toBe("Ctrl+B u");
-    expect(probe.dialog.querySelector(".quick-terminal-chip")?.textContent).toBe("disposable");
+    expect(probe.dialog.querySelector(".quick-terminal-key")?.textContent).toBe("Ctrl+`");
   });
 
-  it("omits the cwd when the source does not report one", () => {
-    expect(mount().dialog.querySelector(".quick-terminal-cwd")).toBeNull();
+  it("uses a generic label when the source does not report a cwd", () => {
+    const label = mount().dialog.querySelector(".quick-terminal-cwd");
+    expect(label?.textContent).toBe("Quick terminal");
+    expect(label?.hasAttribute("title")).toBe(false);
   });
 
-  it("keeps the shell open when close is cancelled, then terminates before dismissing on acceptance", () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+  it.each([true, false])("immediately dismisses on close after attempting termination (sent: %s)", (sent) => {
+    mocks.terminate.mockReturnValue(sent);
+    const confirm = vi.spyOn(window, "confirm");
     const probe = mount();
     act(() => probe.close.click());
-    expect(confirm).toHaveBeenCalledOnce();
-    expect(mocks.terminate).not.toHaveBeenCalled();
-    expect(probe.onDismiss).not.toHaveBeenCalled();
-    act(() => probe.close.click());
-    expect(mocks.terminate).toHaveBeenCalledOnce();
-    expect(probe.onDismiss).not.toHaveBeenCalled();
-    expect(probe.close.disabled).toBe(true);
-    expect(probe.dialog.querySelector(".quick-terminal-header [role=status]")?.textContent).toContain("Closing…");
-    expect(probe.dialog.querySelector(".quick-terminal-body")?.previousElementSibling?.tagName).toBe("HEADER");
-    act(() => (mocks.pane.mock.lastCall![0] as TerminalPaneProps).onClosed!());
-    expect(probe.onDismiss).toHaveBeenCalledOnce();
-  });
-
-  it("requires explicit dismissal when termination cannot be sent", () => {
-    mocks.terminate.mockReturnValue(false);
-    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(true).mockReturnValueOnce(false).mockReturnValueOnce(true);
-    const probe = mount();
-    act(() => probe.close.click());
-    expect(mocks.terminate).toHaveBeenCalledOnce();
-    expect(probe.onDismiss).not.toHaveBeenCalled();
-    expect(probe.dialog.querySelector('[role="alert"]')).not.toBeNull();
-    expect(probe.dialog.querySelector(".quick-terminal-header [role=alert]")?.getAttribute("title")).toBe("The shell or detached processes may still be running.");
-    expect(probe.close.textContent).toBe("Dismiss anyway");
-    act(() => probe.close.click());
-    expect(probe.onDismiss).not.toHaveBeenCalled();
-    act(() => probe.close.click());
-    expect(confirm).toHaveBeenCalledTimes(3);
+    expect(confirm).not.toHaveBeenCalled();
     expect(mocks.terminate).toHaveBeenCalledOnce();
     expect(probe.onDismiss).toHaveBeenCalledOnce();
-  });
-
-  it("offers explicit dismissal if an accepted termination loses confirmation", () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    const probe = mount();
-    act(() => probe.close.click());
-    expect(probe.close.disabled).toBe(true);
-    act(() => (mocks.pane.mock.lastCall![0] as TerminalPaneProps).onStateChange!({ ready: false, error: "connection lost" }));
-    expect(probe.close.disabled).toBe(false);
-    expect(probe.dialog.querySelector('[role="alert"]')).not.toBeNull();
-    expect(probe.onDismiss).not.toHaveBeenCalled();
-    act(() => probe.close.click());
-    expect(confirm).toHaveBeenCalledTimes(2);
-    expect(mocks.terminate).toHaveBeenCalledOnce();
-    expect(probe.onDismiss).toHaveBeenCalledOnce();
+    expect(mocks.terminate.mock.invocationCallOrder[0]).toBeLessThan(probe.onDismiss.mock.invocationCallOrder[0]);
   });
 
   it("dismisses on shell exit without confirming or terminating again", () => {
@@ -172,31 +132,16 @@ describe("QuickTerminal", () => {
     expect(mocks.terminate).not.toHaveBeenCalled();
   });
 
-  it("toggles closed with Ctrl-B U and restores focus after unmount", async () => {
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  it("toggles closed with Ctrl+Backquote and restores focus after unmount", async () => {
+    const confirm = vi.spyOn(window, "confirm");
     const probe = mount();
     probe.terminal.focus();
-    expect(probe.key(probe.terminal, { key: "b", ctrlKey: true }).defaultPrevented).toBe(true);
-    expect(probe.key(probe.terminal, { key: "u" }).defaultPrevented).toBe(true);
-    expect(confirm).toHaveBeenCalledOnce();
+    expect(probe.key(probe.terminal, { key: "`", code: "Backquote", ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(confirm).not.toHaveBeenCalled();
     expect(mocks.terminate).toHaveBeenCalledOnce();
-    expect(probe.onDismiss).not.toHaveBeenCalled();
-    act(() => (mocks.pane.mock.lastCall![0] as TerminalPaneProps).onClosed!());
     expect(probe.onDismiss).toHaveBeenCalledOnce();
     await act(async () => { root!.unmount(); root = null; });
     expect(document.activeElement).toBe(probe.opener);
-  });
-
-  it("passes a second Ctrl+B to the terminal and disarms the prefix", () => {
-    const confirm = vi.spyOn(window, "confirm");
-    const probe = mount();
-    const received: string[] = [];
-    probe.terminal.addEventListener("keydown", event => received.push(`${event.ctrlKey}:${event.key}`));
-    expect(probe.key(probe.terminal, { key: "b", ctrlKey: true }).defaultPrevented).toBe(true);
-    expect(probe.key(probe.terminal, { key: "b", ctrlKey: true }).defaultPrevented).toBe(false);
-    expect(received).toEqual(["true:b"]);
-    expect(probe.key(probe.terminal, { key: "u" }).defaultPrevented).toBe(false);
-    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("leaves Tab from the terminal available to the shell while cycling focus from the close button", () => {
@@ -210,15 +155,4 @@ describe("QuickTerminal", () => {
     expect(document.activeElement).toBe(probe.terminal);
   });
 
-  it("does not intercept the toggle prefix when Herdr owns it", () => {
-    const command = { command_id: "prefix:u", binding_labels: ["prefix+u"], action: "shell" as const, description: "Configured action" };
-    setEffectiveHerdrBindings(herdrBindings([command]), herdrPrefixes(["ctrl+b"]));
-    const confirm = vi.spyOn(window, "confirm");
-    const probe = mount();
-    expect(probe.close.querySelector("kbd")).toBeNull();
-    expect(probe.key(probe.terminal, { key: "b", ctrlKey: true }).defaultPrevented).toBe(false);
-    expect(probe.key(probe.terminal, { key: "u" }).defaultPrevented).toBe(false);
-    expect(confirm).not.toHaveBeenCalled();
-    expect(probe.onDismiss).not.toHaveBeenCalled();
-  });
 });

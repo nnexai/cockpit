@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef } from "react";
 import type { SessionSnapshotResponse } from "../../protocol/generated/v1";
 import { returnFocusFromSidebar } from "../input/shortcuts";
-import { historicalAttentionKey, type AgentAttentionState } from "../session/agentAttention";
+import type { AgentAttentionState } from "../session/agentAttention";
 import { deriveAgentQueue, type AttentionRow } from "./agentAttentionModel";
 import { StateGlyph } from "./StateGlyph";
 import { SidebarSkeleton } from "./SidebarSkeleton";
@@ -16,7 +16,6 @@ export function Agents({ snapshot, attention, live, spaces, tabs, selectedPaneId
   onSelect: (row: AttentionRow) => void; focusRef: { current: (() => void) | null };
 }) {
   const queue = snapshot ? deriveAgentQueue(snapshot, attention.response, attention.availability) : { visible: [] };
-  const historical = attention.availability === "ready" && snapshot && attention.response && attention.response.server_instance === snapshot.server_instance && attention.response.session_id === snapshot.session_id ? attention.response.records.filter(record => record.historical_id !== null && record.completion) : [];
   const rows = queue.visible;
   const pointer = useRef<string | null>(null);
   const focusedRow = useRef<{ key: string; index: number } | null>(null);
@@ -53,7 +52,7 @@ export function Agents({ snapshot, attention, live, spaces, tabs, selectedPaneId
     const status = spaceStatus(row.display);
     const pending = agent.pane_id === pendingPaneId;
     const selected = agent.pane_id === selectedPaneId && !pending;
-    const flag = row.flag === "unseen" ? "Earlier result not seen" : row.flag === "done" ? "Done" : row.flag === "blocked" ? "Blocked" : null;
+    const flag = row.flag === "unseen" ? "Unseen" : row.flag === "done" ? "Done" : row.flag === "blocked" ? "Blocked" : null;
     const description = [location, agent.name, status.word, row.unseen ? row.display === "working" ? "earlier result not seen" : "not seen" : null].filter(Boolean).join(", ");
     const title = [description, row.unseen && row.display === "done" && agent.status !== "done" ? "Completion retained until seen" : null, row.completionAt ? `Completed ${row.completionAt}${row.inferred ? " (inferred)" : ""}` : null].filter(Boolean).join(" · ");
     const note = attention.notes.get(agent.pane_id);
@@ -66,9 +65,8 @@ export function Agents({ snapshot, attention, live, spaces, tabs, selectedPaneId
   };
   const waiting = loading || (hasSession && snapshot !== null && (attention.availability === "loading" || (attention.availability === "ready" && attention.response?.server_instance !== snapshot.server_instance)));
   return <section className="sidebar-section agents-section" aria-labelledby="agents-heading">
-    <div className="sidebar-section-heading"><h2 id="agents-heading">Agents</h2><span className="section-count">{queue.visible.length + historical.length}</span></div>
+    <div className="sidebar-section-heading"><h2 id="agents-heading">Agents</h2><span className="section-count">{queue.visible.length}</span></div>
     {attention.availability === "unavailable" && hasSession ? <p className="agent-notice">Attention unavailable. <button type="button" onClick={attention.retry}>Retry</button></p> : null}
-    {attention.recoveryIncomplete ? <p className="agent-notice" role="status">Some agent activity could not be retained while attention was unavailable. Results may be missing. <button type="button" onClick={attention.acknowledgeRecoveryWarning}>Acknowledge</button></p> : null}
     <div className="agent-list" role="group" aria-label="Agents" ref={roving.listRef} {...roving.listProps}
       onFocus={event => {
         roving.listProps.onFocus(event);
@@ -80,11 +78,7 @@ export function Agents({ snapshot, attention, live, spaces, tabs, selectedPaneId
         roving.listProps.onBlur(event);
         if (!event.currentTarget.contains(event.relatedTarget as Node | null) && (event.relatedTarget || (event.target as HTMLElement).isConnected)) focusedRow.current = null;
       }}>
-      {waiting ? <SidebarSkeleton rows={2} /> : !hasSession ? <p className="empty-row">No session selected</p> : rows.length === 0 && historical.length === 0 ? <p className="empty-row">No agents need attention</p> : <>{rows.map(renderRow)}{historical.length > 0 ? <><div className="agent-history-heading">Past results not seen</div>{historical.map(record => {
-        const key = historicalAttentionKey(record);
-        const disabled = !live || attention.pending.has(key);
-        return <div className="agent-historical" key={key}><span>{record.agent} · Past result not seen · {record.completion?.at}</span><button type="button" aria-label={`Mark past result from ${record.agent} seen`} aria-disabled={disabled || undefined} title={!live ? "Herdr is not live" : undefined} onClick={() => { if (!disabled) void attention.seenHistorical(record); }}>Mark seen</button>{attention.notes.get(key) ? <p className="agent-row-note" role="status">{attention.notes.get(key)}</p> : null}</div>;
-      })}</> : null}</>}
+      {waiting ? <SidebarSkeleton rows={2} /> : !hasSession ? <p className="empty-row">No session selected</p> : rows.length === 0 ? <p className="empty-row">No agents need attention</p> : rows.map(renderRow)}
     </div>
     <span className="sr-only" role="status" aria-live="polite">{attention.announcement}</span>
   </section>;

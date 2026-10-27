@@ -8,7 +8,7 @@ The liaison's real terminal is the primary conversation. A compact read-only rai
 
 Batch completion leaves the liaison Active for later work on the same project root; worker `run done` and source cleanup do not retire the liaison. Root completion is conversational, not another operational button.
 
-**Ask an agent…** in Commands is a separate quick-question surface, not supervisor startup or task delegation. It opens a dedicated agent tab in the selected Space and creates no orchestration registration. Before asking, the composer shows the applicable startup-argument, explicit-send or manual-paste delivery path. A submitted or launch-supplied question remains visible until **New question**; **Open tab** navigates to the agent without claiming it received or answered the question.
+**Ask an agent…** (Ctrl+Shift+A or Commands) is a separate quick-question surface, not supervisor startup or task delegation. It starts the agent in a new tab of the selected Space with the question as its startup argument, switches to that tab and creates no orchestration registration.
 
 ### Current UI contract and source map
 

@@ -1,7 +1,7 @@
 import type { HerdrCommand, SpaceGitAction, SpaceGitStatus, ViewerSourceOptions, WidgetSummary } from "../../protocol/generated/v1";
 import type { UiIconName } from "../UiIcon";
 import { herdrCommandShortcut, type HerdrChord } from "../input/herdrBindings";
-import { SHORTCUTS, formatShortcut, shortcutEntry, type LocalShortcutId, type PrefixCommand } from "../input/shortcuts";
+import { DIRECT_COMMANDS, SHORTCUTS, formatShortcut, shortcutEntry, type LocalShortcutId, type PrefixCommand } from "../input/shortcuts";
 import { gitActionReason, gitTargetDetail, type GitActionState } from "../session/spaceGitActions";
 import type { Space } from "../sidebar/spaceTree";
 import { widgetKey } from "../widgets/widgetStore";
@@ -92,7 +92,7 @@ export function buildCommands(input: CommandInput): CommandAction[] {
     ...(input.liaison.startAvailable ? [{ id: "start-supervisor", label: input.liaison.actionLabel ?? "Start supervisor", primary: true, group: "Navigate" as const, run: run.supervisor }] : []),
     ...(input.liaison.overviewAvailable || input.liaison.overviewOpen ? [{ id: "show-overview", label: input.liaison.overviewOpen ? "Back to conversation" : "Show overview", group: "Navigate" as const, run: run.overview }] : []),
     ...SHORTCUTS.filter(entry => entry.palette === undefined).flatMap((entry): CommandAction[] => {
-      if (!entry.prefix) {
+      if (!entry.prefix && !DIRECT_COMMANDS.includes(entry.id as PrefixCommand)) {
         const handler = local[entry.id as LocalShortcutId];
         return handler ? [{ id: entry.id, label: entry.label, primary: entry.primary, shortcut: formatShortcut(entry.id), group: entry.group, run: handler }] : [];
       }

@@ -292,7 +292,7 @@
   cursor: pointer;
 }
 
-.agent-row-note, .agent-notice, .agent-history-heading {
+.agent-row-note, .agent-notice {
   margin: 0;
   padding: 3px var(--sb-edge);
   color: var(--text-secondary);
@@ -305,8 +305,6 @@
   cursor: pointer;
   font-size: var(--font-size-2xs);
 }
-.agent-historical { padding: 4px var(--sb-edge); color: var(--text-secondary); font-size: var(--font-size-xs); }
-.agent-historical button { margin-left: 8px; color: var(--text-primary); }
 
 .space-tree-row:hover,
 .agent-row:hover { background: var(--surface-hover); }

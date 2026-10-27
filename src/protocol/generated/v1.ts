@@ -267,11 +267,7 @@ export type AgentAttentionCompletion = { epoch: number, seq: number, at: string,
 
 export type AgentAttentionStamp = { epoch: number, seq: number, at: string, };
 
-export type AgentAttentionRecord = { pane_id: string, terminal_id: string, agent: string,
-/**
- * Stable identifier for an unseen completion whose agent is no longer live.
- */
-historical_id: string | null, last: AgentAttentionLast, completion: AgentAttentionCompletion | null, acked: AgentAttentionStamp | null, };
+export type AgentAttentionRecord = { pane_id: string, terminal_id: string, agent: string, last: AgentAttentionLast, completion: AgentAttentionCompletion | null, acked: AgentAttentionStamp | null, };
 
 export type AgentAttentionRefusal = { code: string, message: string, };
 
@@ -279,7 +275,7 @@ export type AgentAttentionResponse = { session_id: string, server_instance: stri
 
 export type AgentAttentionObservation = { pane_id: string, terminal_id: string, agent: string, status: string, seq: number, };
 
-export type AgentAttentionChange = { "kind": "seen", pane_id: string, terminal_id: string, agent: string, transition: AgentAttentionMark, } | { "kind": "seen_historical", historical_id: string, };
+export type AgentAttentionChange = { "kind": "seen", pane_id: string, terminal_id: string, agent: string, transition: AgentAttentionMark, };
 
 export type AgentAttentionChangeRequest = { server_instance: string, observations: Array<AgentAttentionObservation>, change: AgentAttentionChange | null, };
 
@@ -914,21 +910,9 @@ export type QuotaStatusResponse = { generated_at_ms: number, collecting: boolean
 
 export type QuickAskHarness = "omp" | "pi" | "claude" | "copilot" | "codex" | "opencode";
 
-export type QuickAskStartRequest = { request_id: string, server_instance: string, space_id: string, cwd: string, harness: QuickAskHarness, prompt: string, };
+export type QuickAskRequest = { server_instance: string, space_id: string, cwd: string, harness: QuickAskHarness, prompt: string, };
 
-export type QuickAskAction = "cancel" | "send";
-
-export type QuickAskActionRequest = { request_id: string, action: QuickAskAction, };
-
-export type QuickAskPhase = "creating_tab" | "checking_environment" | "starting_agent" | "waiting_for_agent" | "ready_to_send" | "sending" | "submitted" | "initial_question_supplied" | "cancelled" | "failed" | "outcome_unknown";
-
-export type QuickAskDelivery = "not_sent" | "submitted" | "initial_question_supplied" | "unknown";
-
-export type QuickAskLocation = { space_id: string, tab_id: string, pane_id: string, terminal_id: string, tab_label: string, agent_name: string, };
-
-export type QuickAskFailure = { code: string, message: string, };
-
-export type QuickAskStatus = { request_id: string, session_id: string, server_instance: string, harness: QuickAskHarness, phase: QuickAskPhase, delivery: QuickAskDelivery, cancellable: boolean, location: QuickAskLocation | null, error: QuickAskFailure | null, updated_at_ms: number, };
+export type QuickAskLocation = { space_id: string, tab_id: string, pane_id: string, terminal_id: string, tab_label: string, };
 
 export type QuickAskAgentAvailability = { harness: QuickAskHarness, executable: string, found: boolean, };
 

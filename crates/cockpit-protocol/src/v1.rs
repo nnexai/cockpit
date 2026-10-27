@@ -234,9 +234,6 @@ pub struct AgentAttentionRecord {
     pub pane_id: String,
     pub terminal_id: String,
     pub agent: String,
-    /// Stable identifier for an unseen completion whose agent is no longer live.
-    #[serde(default)]
-    pub historical_id: Option<String>,
     pub last: AgentAttentionLast,
     pub completion: Option<AgentAttentionCompletion>,
     pub acked: Option<AgentAttentionStamp>,
@@ -273,7 +270,6 @@ pub struct AgentAttentionObservation {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AgentAttentionChange {
     Seen { pane_id: String, terminal_id: String, agent: String, transition: AgentAttentionMark },
-    SeenHistorical { historical_id: String },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]

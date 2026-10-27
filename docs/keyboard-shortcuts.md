@@ -8,11 +8,9 @@ Open **Commands** (Ctrl+B ?) to search available actions by name or by key. The 
 
 **Agents attention queue:** `Ctrl+B a` focuses the Agents list. Arrow keys and Home/End move row focus without selecting or acknowledging; Enter, Space or click activates an agent, and its completion is marked seen only after Herdr confirms focus. Shift+Enter marks an unseen result seen without activating it. Ordinary idle agents without unseen completions are automatically excluded, and return on new activity; this does not close or stop their terminals. Quick-switcher navigation does not acknowledge a completion.
 
-The list also retains historical unseen results for agents that disappeared or were replaced. Use their explicit **Mark seen** action to acknowledge them; they do not activate or focus a replacement agent.
-**Ask an agent…** (`Ctrl+B t`, also in Commands) opens a composer for OMP, Pi, Claude Code, Copilot CLI, Codex CLI or OpenCode in the selected Space. A missing executable on Cockpit's host PATH is unavailable. Copilot CLI and OpenCode use startup question arguments; the other four use a positional question only if it contains an ASCII space or line feed and its first character is neither `@` nor `-`. Startup arguments expose the question in process arguments and Herdr layout metadata; launch acknowledgment does not prove consumption. Otherwise, for a single-line question, open the pane and explicitly confirm that the agent's normal question prompt is visible and empty before choosing **Send question**. Opening the tab does not itself confirm readiness. Other fallback input requires copying for manual paste. Herdr idle alone does not prove the input is ready. A submission receipt acknowledges dispatch, not consumption. The question remains in the composer until **New question** is chosen. If identity changes are observed, or launch or delivery is uncertain, inspect the tab before asking again; Cockpit does not automatically retry. This is not supervisor task creation.
+**Ask an agent…** (`Ctrl+Shift+A`, `Cmd+Shift+A` on macOS, also in Commands) opens a one-line composer over the selected Space. OMP is preselected; only agents found on Cockpit's host PATH are offered (OMP, Claude Code, Codex CLI, Pi, Copilot CLI, OpenCode). Enter starts the agent in a new tab named after the question, with the question as its startup argument, and switches to that tab; Shift+Enter adds a line, Escape closes and keeps the draft. The folder defaults to the Space checkout, else the selected terminal's folder; click it to change.
 
-Questions may contain line feeds. If an input uses the fallback path and contains multiple lines, copy it and paste it manually into the verified agent prompt; Cockpit does not submit that multiline fallback.
-**Quick terminal** (`Ctrl+B u`, or Commands) opens a disposable shell over the current tab without creating a Herdr pane. Its header shows the source terminal's folder when available. Close or toggle it to confirm termination; shell exit closes it automatically. If closure cannot be confirmed, the header offers **Dismiss anyway** after another confirmation: the shell or detached processes may still be running. Focus returns to the previous control. A Herdr binding on the same prefix takes precedence.
+**Quick terminal** (``Ctrl+` ``, or Commands) toggles a throwaway shell over the current tab, in the selected terminal's folder, without creating a Herdr pane. The same keys or the close button end the shell immediately; exiting the shell closes it too. Focus returns to the previous control.
 
 **Pull Space (fast-forward only)** and **Push Space to upstream** are keyless Space commands. Commands names the selected Space's own branch and upstream, including linked worktrees; a row's inline count or context menu targets that row without selecting it. Pull never merges, rebases or stashes, and push never forces or sets an upstream. Counts describe the last fetched tracking refs; an in-sync or ahead-only branch can still be pulled from Commands or the menu. A cached diverged branch is blocked. Results stay under the affected row; an uncertain result offers no Retry—check that Space's terminal first.
 
@@ -28,6 +26,8 @@ Within Supervisor, Tasks arrows move local focus without selecting or changing a
 
 | Keys | Action |
 | --- | --- |
+| Ctrl+Shift+A | Ask an agent…. Starts the agent in a new tab with your question. Cmd+Shift+A on macOS; available in terminals and editors outside dialogs. |
+| Ctrl+` | Toggle quick terminal. A throwaway shell over the current tab, in the selected terminal's folder. The same keys close it and end the shell; exiting the shell closes it too. |
 | Ctrl+K | Go to Space or agent…. Fuzzy search over this session's Spaces and agents. Cmd+K on macOS; available in terminals and editors outside dialogs. |
 
 ### Prefix commands
@@ -47,13 +47,11 @@ Press Ctrl+B, release it, then press the key. Shift and other modifier keys keep
 | Ctrl+B Shift+W | Rename Space |
 | Ctrl+B Shift+D | Close Space. Asks for confirmation. |
 | Ctrl+B Shift+S | Set up a Space. Opens the task Space setup dialog, like the Spaces + button. |
-| Ctrl+B t | Ask an agent… |
 | Ctrl+B Shift+P | Rename terminal. Real terminals only; viewers have fixed titles. |
 | Ctrl+B v | New terminal beside pane. Creates a terminal beside the selected terminal or viewer. |
 | Ctrl+B - | New terminal below pane. Creates a terminal below the selected terminal or viewer. |
 | Ctrl+B x | Close pane. Terminals ask for confirmation; Files and Review close locally. Browser close stops its session and removes its managed profile. |
 | Ctrl+B z | Toggle local pane zoom. Zooms the selected terminal or viewer in Cockpit only. |
-| Ctrl+B u | Open quick terminal. Opens a disposable shell; closing it asks for confirmation. |
 | Ctrl+B r | Focus adjacent pane divider. Arrow keys resize by 24 px, Shift+arrow by 96 px; Esc returns focus to the selected pane. |
 | Ctrl+B h | Focus pane left. Uses local geometry across terminals and viewers; restores zoom if the target is hidden. |
 | Ctrl+B j | Focus pane below. Uses local geometry across terminals and viewers; restores zoom if the target is hidden. |
@@ -83,7 +81,7 @@ Press Ctrl+B, release it, then press the key. Shift and other modifier keys keep
 
 ### Terminal panes
 
-With a terminal or the browser surface focused, Cockpit takes Ctrl+K (Cmd+K on macOS), Ctrl+B and the key after it, these clipboard chords and Shift+Enter. Every other unbound key reaches the program, including Tab, Shift+Tab, Esc, function keys, Alt chords and other Ctrl+letter chords.
+With a terminal or the browser surface focused, Cockpit takes Ctrl+K and Ctrl+Shift+A (Cmd+K and Cmd+Shift+A on macOS), Ctrl+`, Ctrl+B and the key after it, these clipboard chords and Shift+Enter. Every other unbound key reaches the program, including Tab, Shift+Tab, Esc, function keys, Alt chords and other Ctrl+letter chords.
 
 | Keys | Action |
 | --- | --- |

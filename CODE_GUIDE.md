@@ -16,7 +16,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Viewer/widget/liaison shell coordination | `src/app/shell/useViewerSources.ts`; `src/app/shell/useWidgetWindowState.ts`; `src/app/shell/useLiaisonNavigation.ts` |
 | Commands and tab strip | `src/app/shell/commands.ts`; `src/app/shell/CommandOverlay.tsx`; `src/app/shell/TabStrip.tsx` |
 | Space/agent quick switcher | `src/app/shell/quickSwitch.ts`; `src/app/shell/QuickSwitcher.tsx`; shared `rankFuzzyMatches` in `src/app/input/fileNavigation.ts`; `Workbench.tsx` re-resolves current-session IDs and dispatches sidebar focus callbacks after modal close |
-| Quick ask composer and operation state | `src/app/quickAsk/QuickAskDialog.tsx`; `src/app/quickAsk/useQuickAsk.ts`; `src/app/quickAsk/quickAsk.ts`; workbench commands, input and tab strip |
+| Quick ask composer | `src/app/quickAsk/QuickAskDialog.tsx`; `src/app/quickAsk/useQuickAsk.ts`; `src/app/quickAsk/quickAsk.ts`; workbench commands and input |
 | Shell menus | `src/app/shell/ContextMenu.tsx`; `src/app/shell/ResourceContextMenu.tsx` |
 | Shell dialogs/recovery | `src/app/shell/PaneDialogOverlay.tsx`; `src/app/shell/SessionDialogOverlay.tsx`; `src/app/shell/RecoveryPanel.tsx` |
 | Compatibility notice | `src/app/shell/CompatibilityNotice.tsx` |
@@ -100,7 +100,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Change | Current owner |
 | --- | --- |
 | Configuration roots/limits | `crates/cockpit-core/src/config.rs`; `crates/cockpit-core/src/config/roots.rs`; `crates/cockpit-core/src/config/limits.rs` |
-| Quick ask validation, lifecycle and authority preflight | `crates/cockpit-core/src/quick_ask.rs`; `crates/cockpit-core/src/quick_ask/herdr.rs` |
+| Quick ask validation, launch arguments and tab label | `crates/cockpit-core/src/quick_ask.rs`; `crates/cockpit-core/src/quick_ask/herdr.rs` |
 | Project facade/defaults/plan / unique automatic orchestration branches | `crates/cockpit-core/src/projects/mod.rs`; `crates/cockpit-core/src/projects/defaults.rs`; `crates/cockpit-core/src/projects/plan.rs` (`plan_orchestration`, shared private `plan_impl`; ordinary `plan` unchanged) |
 | Project execute/reconcile/teardown | `crates/cockpit-core/src/projects/execute.rs`; `crates/cockpit-core/src/projects/reconcile.rs`; `crates/cockpit-core/src/projects/teardown.rs` |
 | Accepted Git integration identity bridge | `crates/cockpit-core/src/project_teardown.rs` (`integrated_owned_head`); canonical source/target project keys bridge through recorded Git common-dir to exact owned raw repository/common-dir keys |
@@ -286,9 +286,9 @@ The shared session pump coalesces at most 32 already-queued `Changed` invalidati
 
 ### Quick ask
 
-Commands or `Ctrl+B t` opens a run-local composer for one of OMP, Pi, Claude Code, Copilot CLI, Codex CLI or OpenCode. Availability checks the Cockpit host PATH; the selected Space and an existing absolute working directory bind placement. Herdr `layout.apply` starts an agent in a dedicated tab with a sanitized environment. Copilot CLI and OpenCode use startup question arguments (`-i` and `--prompt`); the other four use a positional question only if it contains an ASCII space or line feed and its first character is neither `@` nor `-`. Startup arguments expose the question in process arguments and Herdr layout metadata; `initial_question_supplied` acknowledges launch, not consumption. Otherwise, single-line questions require the user to inspect the pane, separately confirm the normal question prompt is visible and empty, and choose **Send question**; multiline fallback requires copying for manual paste. Exact target identity and current agent state are checked before at most one `agent.prompt`. Herdr idle does not prove an input is ready; the receipt acknowledges dispatch, not consumption. The question remains available until **New question**. Uncertain launch or prompt outcomes and observed identity changes require manual inspection rather than replay. This protects existing panes and drafts but does not atomically exclude arbitrary external mutations. The request registry and composer draft are in memory, not an orchestration store.
+`Ctrl+Shift+A` (`Cmd+Shift+A` on macOS) or Commands opens the composer. Availability checks the Cockpit host PATH for OMP, Pi, Claude Code, Copilot CLI, Codex CLI and OpenCode; OMP is the default. `POST /api/v1/sessions/{session_id}/quick-ask` validates the Space and an existing absolute folder, then one Herdr `layout.apply` starts the agent in a new tab with a sanitized environment and the question as its startup argument, and returns the tab location; the client focuses it. Copilot CLI uses `--interactive=`, OpenCode `--prompt=`; the others take a positional argument, prefixed with a space when the question starts with `-` or has no whitespace so it cannot parse as a flag or subcommand. There is no status polling, explicit send or cancellation.
 
-For changes to this path, select scenarios covering literal single-line input and validation, all agent availability states, authority preflight including unsupported platforms, explicit send and cancellation races, blocked readiness, target or draft changes, unknown submission without retry, tab retention and absence of orchestration registration. These are scenario-selection guidance, not verification results.
+For changes to this path, cover argument building (flags, single words, multiline), validation, availability states and the tab label; smoke one real launch in a disposable fixture.
 
 ### Supervisor tasks, execution and messages
 

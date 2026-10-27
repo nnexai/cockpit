@@ -108,13 +108,13 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
   { id: "pull-space", label: "Pull Space (fast-forward only)", group: "Space", scope: "global", needs: "space", palette: "custom", primary: true, note: "Commands or a Space row menu; targets the selected checkout's upstream. No assigned shortcut." },
   { id: "push-space", label: "Push Space to upstream", group: "Space", scope: "global", needs: "space", palette: "custom", primary: true, note: "Commands or a Space row menu; normal push to the tracked upstream, never forced. No assigned shortcut." },
   { id: "setup-space", label: "Set up a Space", group: "Navigate", scope: "global", prefix: k("s", true), primary: true, note: "Opens the task Space setup dialog, like the Spaces + button." },
-  { id: "ask-agent", label: "Ask an agent…", group: "Navigate", scope: "global", prefix: k("t"), needs: "space", primary: true },
+  { id: "ask-agent", label: "Ask an agent…", group: "Navigate", scope: "global", chords: [{ mod: true, shift: true, key: "a", display: "A" }], needs: "space", primary: true, note: "Starts the agent in a new tab with your question. Cmd+Shift+A on macOS; available in terminals and editors outside dialogs." },
   { id: "rename-pane", label: "Rename terminal", group: "Pane", scope: "global", prefix: k("p", true), needs: "pane", paneScoped: true, note: "Real terminals only; viewers have fixed titles." },
   { id: "split-right", label: "New terminal beside pane", group: "Pane", scope: "global", prefix: k("v"), palette: false, needs: "pane", paneScoped: true, note: "Creates a terminal beside the selected terminal or viewer." },
   { id: "split-down", label: "New terminal below pane", group: "Pane", scope: "global", prefix: k("-"), palette: false, needs: "pane", paneScoped: true, note: "Creates a terminal below the selected terminal or viewer." },
   { id: "close-pane", label: "Close pane", group: "Pane", scope: "global", prefix: k("x"), needs: "pane", paneScoped: true, note: "Terminals ask for confirmation; Files and Review close locally. Browser close stops its session and removes its managed profile." },
   { id: "zoom-pane", label: "Toggle local pane zoom", group: "Pane", scope: "global", prefix: k("z"), needs: "pane", paneScoped: true, primary: true, note: "Zooms the selected terminal or viewer in Cockpit only." },
-  { id: "quick-terminal", label: "Open quick terminal", group: "Pane", scope: "global", prefix: k("u"), needs: "tab", allowWhileBusy: true, note: "Opens a disposable shell; closing it asks for confirmation." },
+  { id: "quick-terminal", label: "Toggle quick terminal", group: "Pane", scope: "global", chords: [{ ctrl: true, code: "Backquote", display: "`" }], needs: "tab", primary: true, allowWhileBusy: true, note: "A throwaway shell over the current tab, in the selected terminal's folder. The same keys close it and end the shell; exiting the shell closes it too." },
   { id: "resize", label: "Focus adjacent pane divider", group: "Navigate", scope: "global", prefix: k("r"), needs: "pane", paneScoped: true, allowWhileBusy: true, note: "Arrow keys resize by 24 px, Shift+arrow by 96 px; Esc returns focus to the selected pane." },
   { id: "focus-left", label: "Focus pane left", group: "Navigate", scope: "global", prefix: k("h"), needs: "pane", allowWhileBusy: true, note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },
   { id: "focus-down", label: "Focus pane below", group: "Navigate", scope: "global", prefix: k("j"), needs: "pane", allowWhileBusy: true, note: "Uses local geometry across terminals and viewers; restores zoom if the target is hidden." },
@@ -171,6 +171,14 @@ export function shortcutEntry(id: ShortcutId): ShortcutEntry {
   const entry = BY_ID.get(id);
   if (!entry) throw new Error(`Unknown shortcut ${id}`);
   return entry;
+}
+
+/** Workbench commands bound to a direct chord instead of a Ctrl+B key; the global router runs them like prefix commands. */
+export const DIRECT_COMMANDS: readonly PrefixCommand[] = ["quick-terminal", "ask-agent"];
+
+/** The direct-chord workbench command a keydown asks for, or null. */
+export function directCommandForEvent(event: ShortcutKeyEvent): PrefixCommand | null {
+  return DIRECT_COMMANDS.find((id) => shortcutEntry(id).chords!.some((chord) => chordMatches(chord, event))) ?? null;
 }
 
 export function detectPlatform(): Platform {
@@ -362,7 +370,7 @@ export function renderShortcutDocs(): string {
     "### Prefix commands", "", "Press Ctrl+B, release it, then press the key. Shift and other modifier keys keep the prefix armed; Escape cancels it; there is no timeout.", "",
     docsTable(prefix, ["Keys", "Action"]), "",
     "### Prefix control keys", "", docsTable(meta, ["Keys", "Action"]), "",
-    "### Terminal panes", "", "With a terminal or the browser surface focused, Cockpit takes Ctrl+K (Cmd+K on macOS), Ctrl+B and the key after it, these clipboard chords and Shift+Enter. Every other unbound key reaches the program, including Tab, Shift+Tab, Esc, function keys, Alt chords and other Ctrl+letter chords.", "",
+    "### Terminal panes", "", "With a terminal or the browser surface focused, Cockpit takes Ctrl+K and Ctrl+Shift+A (Cmd+K and Cmd+Shift+A on macOS), Ctrl+`, Ctrl+B and the key after it, these clipboard chords and Shift+Enter. Every other unbound key reaches the program, including Tab, Shift+Tab, Esc, function keys, Alt chords and other Ctrl+letter chords.", "",
     docsTable(local("terminal"), ["Keys", "Action"]), "",
     "### Files, Review, Context and Library viewers", "", "Local chords act when focus is inside the viewer and not in a text field or dialog. Alt chords match the physical key, so Option works on macOS.", "",
     docsTable(local("viewer"), ["Keys", "Action"]), "",

@@ -36,12 +36,10 @@ export function Workbench(props: WorkbenchProps) {
     setQuickTerminal({ sessionId: props.state.sessionId, paneId: runtime.sourcePaneId, cwd: runtime.snapshot?.panes.find(pane => pane.id === runtime.sourcePaneId)?.cwd ?? null, returnFocus: focused instanceof HTMLElement ? focused : null });
   };
   const input = useWorkbenchInput(props, runtime, actions, openQuickTerminal);
-  const initialCwd = runtime.selectedSpace?.git?.checkout_path ?? runtime.selectedPane?.cwd ?? "";
   const ask = useQuickAsk({
     client: props.client, sessionId: props.state.sessionId, serverInstance: runtime.snapshot?.server_instance ?? null,
-    spaceId: runtime.confirmedSpaceId, initialCwd, open: runtime.askOpen, setOpen: runtime.setAskOpen,
-    live: props.state.sync === "live", mutationBusy: runtime.mutationBusy,
-    spaceIds: runtime.spaces.map(space => space.id),
+    spaceId: runtime.confirmedSpaceId, initialCwd: runtime.selectedSpace?.git?.checkout_path ?? runtime.selectedPane?.cwd ?? "",
+    open: runtime.askOpen, setOpen: runtime.setAskOpen,
     onOpenTab: location => {
       runtime.leave("focus");
       props.onFocus({ kind: "pane", target_id: location.pane_id }, { spaceId: location.space_id, tabId: location.tab_id, paneId: location.pane_id });
@@ -99,6 +97,6 @@ export function Workbench(props: WorkbenchProps) {
   const commandFailures = Object.values(mutations.errors).filter(failure => failure.operation.request.type === "command_invoke");
   const commandFailureMessage = commandFailures.map(failure => `${failure.code === "request_outcome_unknown" ? "Herdr did not confirm this command. Check the session before running it again." : "Could not run Herdr command:"} ${failure.message}`).join(" ");
   const commandStatus = commandNotice || commandFailureMessage || lifecycleError ? <p role="alert">{commandNotice || commandFailureMessage || lifecycleError}</p> : null;
-  return <><WorkbenchContent {...props} {...runtime} {...actions} ask={ask} askCwdSource={runtime.selectedSpace?.git?.checkout_path ? `Checkout of Space "${runtime.selectedSpace.label}"` : runtime.selectedPane?.cwd ? "Folder of the selected terminal" : "Enter an absolute path"} quickTerminalOpen={Boolean(quickTerminal)} commandActions={commandActions} commandFailureMessage={commandFailureMessage} commandStatus={commandStatus} />
+  return <><WorkbenchContent {...props} {...runtime} {...actions} ask={ask} quickTerminalOpen={Boolean(quickTerminal)} commandActions={commandActions} commandFailureMessage={commandFailureMessage} commandStatus={commandStatus} />
     {quickTerminal ? <QuickTerminal client={props.client} sessionId={quickTerminal.sessionId} paneId={quickTerminal.paneId} cwd={quickTerminal.cwd} focusEpoch={props.state.epoch} returnFocus={quickTerminal.returnFocus} suspended={Boolean(popup)} onDismiss={() => setQuickTerminal(null)} /> : null}</>;
 }

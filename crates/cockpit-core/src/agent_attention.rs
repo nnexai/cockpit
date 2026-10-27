@@ -105,7 +105,7 @@ fn observe(stored: &mut Stored, ns: &str, session: &str, observation: &AgentAtte
     {
         return Ok(false);
     }
-    let index = stored.agents.iter().position(|a| a.session_namespace == ns && a.session_id == session && a.record.pane_id == observation.pane_id && a.record.historical_id.is_none());
+    let index = stored.agents.iter().position(|a| a.session_namespace == ns && a.session_id == session && a.record.pane_id == observation.pane_id);
     if let Some(index) = index {
         let r = &stored.agents[index].record;
         // A late literal completion is evidence even when a newer observation has
@@ -127,15 +127,9 @@ fn observe(stored: &mut Stored, ns: &str, session: &str, observation: &AgentAtte
             // Equal-sequence identity changes are ambiguous: a delayed old incarnation
             // must not displace the current one. The unmatched live row stays visible.
             if id == last_key(r) { return Ok(false); }
-            let was_unseen = unseen(r);
+            // A replaced agent takes its unseen result with it: the old conversation is gone.
             retire(stored, index)?;
-            if was_unseen {
-                let a = &mut stored.agents[index];
-                a.record.historical_id = Some(revision());
-                a.revision = revision();
-            } else {
-                stored.agents.remove(index);
-            }
+            stored.agents.remove(index);
         } else {
             let a = &mut stored.agents[index];
             let r = &mut a.record;
@@ -168,7 +162,7 @@ fn observe(stored: &mut Stored, ns: &str, session: &str, observation: &AgentAtte
     stored.agents.push(StoredAgent {
         session_namespace: ns.to_owned(), session_id: session.to_owned(), revision: revision(),
         record: AgentAttentionRecord {
-            pane_id: observation.pane_id.clone(), terminal_id: observation.terminal_id.clone(), agent: observation.agent.clone(), historical_id: None,
+            pane_id: observation.pane_id.clone(), terminal_id: observation.terminal_id.clone(), agent: observation.agent.clone(),
             last: AgentAttentionLast { epoch, seq: observation.seq, status: observation.status.clone(), observed_at: now.to_owned() },
             completion: (observation.status == "done").then(|| AgentAttentionCompletion { epoch, seq: observation.seq, at: now.to_owned(), inferred: false }),
             acked: None,
@@ -188,7 +182,7 @@ fn observe_batch(stored: &mut Stored, ns: &str, session: &str, observations: &[A
                 && before.seq < observation.seq && observation.status == "idle"
                 && (matches!(before.status.as_str(), "working" | "blocked") || (before.status == "idle" && INFER_IDLE_ADVANCE))
             {
-                if let Some(a) = stored.agents.iter_mut().find(|a| a.session_namespace == ns && a.session_id == session && a.record.pane_id == observation.pane_id && a.record.historical_id.is_none()) {
+                if let Some(a) = stored.agents.iter_mut().find(|a| a.session_namespace == ns && a.session_id == session && a.record.pane_id == observation.pane_id) {
                     let r = &mut a.record;
                     let id = key(epoch, observation.seq);
                     if r.last.epoch == epoch && r.agent == observation.agent && r.terminal_id == observation.terminal_id
@@ -208,16 +202,8 @@ fn observe_batch(stored: &mut Stored, ns: &str, session: &str, observations: &[A
 
 fn refusal(code: &str, message: &str) -> AgentAttentionRefusal { AgentAttentionRefusal { code: code.into(), message: message.into() } }
 fn apply_change(stored: &mut Stored, ns: &str, session: &str, change: &AgentAttentionChange, now: &str) -> Result<bool, AgentAttentionRefusal> {
-    if let AgentAttentionChange::SeenHistorical { historical_id } = change {
-        let index = stored.agents.iter().position(|a| a.session_namespace == ns && a.session_id == session && a.record.historical_id.as_ref() == Some(historical_id))
-            .ok_or_else(|| refusal("agent_attention_target_changed", "Historical completion is no longer present"))?;
-        stored.agents.remove(index);
-        return Ok(true);
-    }
-    let AgentAttentionChange::Seen { pane_id, terminal_id, agent, transition } = change else {
-        unreachable!();
-    };
-    let a = stored.agents.iter_mut().find(|a| a.session_namespace == ns && a.session_id == session && a.record.historical_id.is_none() && a.record.pane_id == *pane_id && a.record.agent == *agent)
+    let AgentAttentionChange::Seen { pane_id, terminal_id, agent, transition } = change;
+    let a = stored.agents.iter_mut().find(|a| a.session_namespace == ns && a.session_id == session && a.record.pane_id == *pane_id && a.record.agent == *agent)
         .ok_or_else(|| refusal("agent_attention_target_changed", "Agent identity changed"))?;
     let r = &mut a.record;
     let id = key(transition.epoch, transition.seq);
@@ -257,14 +243,11 @@ fn validate_stored(s: &Stored) -> Result<(), InspectionError> {
     }
     let mut records = HashSet::new();
     let mut revisions = HashSet::new();
-    let mut historical_ids = HashSet::new();
     for a in &s.agents {
         let r = &a.record;
         let e = s.epochs.iter().find(|e| e.session_namespace == a.session_namespace && e.session_id == a.session_id).ok_or_else(corrupt)?;
         if !valid_id(&r.pane_id) || !valid_id(&r.terminal_id) || !valid_id(&r.agent) || !valid_status(&r.last.status) || r.last.epoch == 0 || r.last.epoch > e.ordinal || r.last.observed_at.is_empty() || uuid::Uuid::parse_str(&a.revision).is_err() || !revisions.insert(&a.revision) { return Err(corrupt()); }
-        if let Some(id) = &r.historical_id {
-            if uuid::Uuid::parse_str(id).is_err() || !historical_ids.insert(id) || !unseen(r) { return Err(corrupt()); }
-        } else if !records.insert((&a.session_namespace, &a.session_id, &r.pane_id)) { return Err(corrupt()); }
+        if !records.insert((&a.session_namespace, &a.session_id, &r.pane_id)) { return Err(corrupt()); }
         if r.completion.as_ref().is_some_and(|c| c.epoch == 0 || key(c.epoch, c.seq) > last_key(r) || c.at.is_empty()) || r.acked.as_ref().is_some_and(|v| v.epoch == 0 || stamp_key(v) > last_key(r) || v.at.is_empty()) { return Err(corrupt()); }
     }
     Ok(())
@@ -293,11 +276,8 @@ fn response(s: &Stored, ns: &str, session: &str, instance: &str, epoch: u64, ref
 fn validate_request(session: &str, request: &AgentAttentionChangeRequest) -> Result<(), InspectionError> {
     if !valid_id(session) || !valid_id(&request.server_instance) || request.observations.len() > 256 || request.observations.iter().any(|o| !valid_id(&o.pane_id) || !valid_id(&o.terminal_id) || !valid_id(&o.agent) || !valid_status(&o.status)) { return Err(invalid()); }
     if let Some(change) = &request.change {
-        let valid = match change {
-            AgentAttentionChange::Seen { pane_id, terminal_id, agent, transition } => valid_id(pane_id) && valid_id(terminal_id) && valid_id(agent) && transition.epoch > 0,
-            AgentAttentionChange::SeenHistorical { historical_id } => uuid::Uuid::parse_str(historical_id).is_ok(),
-        };
-        if !valid { return Err(invalid()); }
+        let AgentAttentionChange::Seen { pane_id, terminal_id, agent, transition } = change;
+        if !(valid_id(pane_id) && valid_id(terminal_id) && valid_id(agent) && transition.epoch > 0) { return Err(invalid()); }
     }
     Ok(())
 }
@@ -338,15 +318,12 @@ impl AgentAttentionService {
                     // A proven snapshot can disambiguate an equal-sequence replacement
                     // only if no concurrent writer changed the candidate.
                     if let Some(index) = s.agents.iter().position(|a| a.session_namespace == ns && a.session_id == session
-                        && a.record.historical_id.is_none() && a.record.pane_id == o.pane_id
+                        && a.record.pane_id == o.pane_id
                         && last_key(&a.record) == key(epoch, o.seq) && candidates.contains(&a.revision)
                         && (a.record.agent != o.agent || a.record.terminal_id != o.terminal_id))
                     {
                         retire(&mut s, index)?;
-                        if unseen(&s.agents[index].record) {
-                            s.agents[index].record.historical_id = Some(revision());
-                            s.agents[index].revision = revision();
-                        } else { s.agents.remove(index); }
+                        s.agents.remove(index);
                         changed = true;
                     }
                     changed |= observe(&mut s, &ns, &session, &o, epoch, &time)?;
@@ -354,24 +331,19 @@ impl AgentAttentionService {
             }
             for index in (0..s.agents.len()).rev() {
                 let a = &s.agents[index];
-                if a.session_namespace == ns && a.session_id == session && a.record.historical_id.is_none()
+                if a.session_namespace == ns && a.session_id == session
                     && !snapshot.agents.iter().any(|agent| agent.pane_id == a.record.pane_id)
                     && candidates.contains(&a.revision)
                 {
-                    let was_unseen = unseen(&a.record);
+                    // Agents that disappeared drop out of the queue with any unseen result.
                     retire(&mut s, index)?;
-                    if was_unseen {
-                        s.agents[index].record.historical_id = Some(revision());
-                        s.agents[index].revision = revision();
-                    } else {
-                        s.agents.remove(index);
-                    }
+                    s.agents.remove(index);
                     changed = true;
                 }
             }
             if changed { persist(&store, &s)?; }
             let mut result = response(&s, &ns, &session, &snapshot.server_instance, epoch, None);
-            result.records.retain(|r| r.historical_id.is_some() || snapshot.agents.iter().any(|a| a.pane_id == r.pane_id));
+            result.records.retain(|r| snapshot.agents.iter().any(|a| a.pane_id == r.pane_id));
             Ok(result)
         }).await.map_err(|e| InspectionError::new("agent_attention_outcome_unknown", e.to_string()))?
     }
@@ -582,14 +554,12 @@ mod tests {
         let mut replacement = observation("idle", 5);
         replacement.terminal_id = "new".into();
         observe(&mut s, "namespace", "session", &replacement, 1, "later").unwrap();
-        assert!(unseen(&s.agents[0].record));
-        let historical_id = s.agents[0].record.historical_id.clone().unwrap();
-        assert!(s.agents[1].record.completion.is_none());
+        assert_eq!(s.agents.len(), 1);
+        assert_eq!(s.agents[0].record.terminal_id, "new");
+        assert!(s.agents[0].record.completion.is_none());
         replacement.agent = "other".into();
         replacement.seq = 6;
         observe(&mut s, "namespace", "session", &replacement, 1, "later").unwrap();
-        assert_eq!(s.agents[1].record.agent, "other");
-        apply_change(&mut s, "namespace", "session", &AgentAttentionChange::SeenHistorical { historical_id }, "time").unwrap();
         assert_eq!(s.agents.len(), 1);
         assert_eq!(s.agents[0].record.agent, "other");
     }
@@ -683,20 +653,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disappeared_completion_is_returned_until_explicitly_seen() {
+    async fn disappeared_agent_drops_its_unseen_completion() {
         let fixture = Fixture::new();
         let adapter = Adapter::new();
         let service = fixture.service(adapter.clone());
         service.change("session", &request(&adapter, vec![observation("done", 1)], None)).await.unwrap();
         adapter.present.store(false, Ordering::SeqCst);
-        let listed = service.list("session").await.unwrap();
-        let id = listed.records[0].historical_id.clone().unwrap();
-        assert!(unseen(&listed.records[0]));
-        assert_eq!(service.list("session").await.unwrap().records[0].historical_id.as_ref(), Some(&id));
-        let seen = AgentAttentionChange::SeenHistorical { historical_id: id };
-        let result = service.change("session", &request(&adapter, vec![], Some(seen))).await.unwrap();
-        assert!(result.records.is_empty());
         assert!(service.list("session").await.unwrap().records.is_empty());
+        assert!(load(&service.store).unwrap().agents.is_empty());
     }
 
     #[tokio::test]
@@ -722,18 +686,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retired_incarnation_fences_delayed_observations_after_historical_seen() {
+    async fn retired_incarnation_fences_delayed_observations() {
         let fixture = Fixture::new();
         let adapter = Adapter::new();
         let service = fixture.service(adapter.clone());
         service.change("session", &request(&adapter, vec![observation("done", 1)], None)).await.unwrap();
         adapter.present.store(false, Ordering::SeqCst);
-        let historical = service.list("session").await.unwrap().records[0].historical_id.clone().unwrap();
+        assert!(service.list("session").await.unwrap().records.is_empty());
         let delayed = vec![observation("done", 1), observation("idle", 1)];
-        let result = service.change("session", &request(&adapter, delayed.clone(), None)).await.unwrap();
-        assert_eq!(result.records.len(), 1);
-        assert_eq!(result.records[0].historical_id.as_ref(), Some(&historical));
-        service.change("session", &request(&adapter, vec![], Some(AgentAttentionChange::SeenHistorical { historical_id: historical }))).await.unwrap();
         let result = service.change("session", &request(&adapter, delayed, None)).await.unwrap();
         assert!(result.records.is_empty());
         let result = service.change("session", &request(&adapter, vec![observation("done", 2)], None)).await.unwrap();

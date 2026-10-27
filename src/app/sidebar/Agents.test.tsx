@@ -17,7 +17,7 @@ const response: AgentAttentionResponse = { session_id: "s", server_instance: "se
 it("automatically filters idle agents and acknowledges an unseen result", async () => {
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
   const seen = vi.fn(async () => true);
-  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "ready", response, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen, seenHistorical: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "ready", response, pending: new Set(), notes: new Map(), announcement: "", activate: vi.fn(), seen, retry: vi.fn(), clearNote: vi.fn() };
   const props: ComponentProps<typeof Agents> = { snapshot, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: vi.fn(), focusRef: { current: null } };
   try {
     await act(async () => root.render(createElement(Agents, props)));
@@ -25,11 +25,16 @@ it("automatically filters idle agents and acknowledges an unseen result", async 
     expect(host.textContent).not.toMatch(/Dismiss|Restore|Show all/);
     const done = host.querySelector<HTMLButtonElement>('[data-row-id="b:two"]')!;
     expect(done).toBeTruthy();
+    expect(done.querySelector(".agent-flag")?.textContent).toBe("Done");
     await act(async () => done.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true })));
     expect(seen).toHaveBeenCalledOnce();
-    const retained = { ...response, records: [{ historical_id: null, pane_id: "a", terminal_id: "ta", agent: "one", last: { epoch: 1, seq: 2, status: "idle", observed_at: "now" }, completion: { epoch: 1, seq: 1, at: "now", inferred: false }, acked: null }] };
+    const retained = { ...response, records: [{ pane_id: "a", terminal_id: "ta", agent: "one", last: { epoch: 1, seq: 2, status: "idle", observed_at: "now" }, completion: { epoch: 1, seq: 1, at: "now", inferred: false }, acked: null }] };
     await act(async () => root.render(createElement(Agents, { ...props, attention: { ...attention, response: retained } })));
     expect(host.querySelector('[data-row-id="a:one"]')?.getAttribute("aria-label")).toContain("not seen");
+    expect(host.querySelector('[data-row-id="a:one"] .agent-flag')?.textContent).toBe("Done");
+    const working = { ...snapshot, agents: [{ ...snapshot.agents[0]!, status: "working" }, snapshot.agents[1]!] };
+    await act(async () => root.render(createElement(Agents, { ...props, snapshot: working, attention: { ...attention, response: retained } })));
+    expect(host.querySelector('[data-row-id="a:one"] .agent-flag')?.textContent).toBe("Unseen");
     const acknowledged = { ...retained, records: [{ ...retained.records[0]!, acked: { epoch: 1, seq: 1, at: "now" } }] };
     await act(async () => root.render(createElement(Agents, { ...props, attention: { ...attention, response: acknowledged } })));
     expect(host.querySelector('[data-row-id="a:one"]')).toBeNull();
@@ -39,12 +44,12 @@ it("automatically filters idle agents and acknowledges an unseen result", async 
 it("keeps active statuses visible when unavailable and fences a pointer that moved to another row", async () => {
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host); const select = vi.fn();
   const active = { ...snapshot, agents: [{ ...snapshot.agents[0]!, status: "working" }, snapshot.agents[1]!] };
-  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: true, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen: vi.fn(async () => true), seenHistorical: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", activate: vi.fn(), seen: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
   try {
     await act(async () => root.render(createElement(Agents, { snapshot: active, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: select, focusRef: { current: null } })));
-    expect(host.textContent).toContain("Results may be missing");
-    await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Acknowledge")!.click());
-    expect(attention.acknowledgeRecoveryWarning).toHaveBeenCalledOnce();
+    expect(host.textContent).toContain("Attention unavailable.");
+    await act(async () => [...host.querySelectorAll("button")].find(button => button.textContent === "Retry")!.click());
+    expect(attention.retry).toHaveBeenCalledOnce();
     const a = host.querySelector<HTMLButtonElement>('[data-row-id="a:one"]')!; const b = host.querySelector<HTMLButtonElement>('[data-row-id="b:two"]')!;
     expect(a).toBeTruthy(); expect(b).toBeTruthy();
     await act(async () => { a.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true })); b.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); });
@@ -52,24 +57,10 @@ it("keeps active statuses visible when unavailable and fences a pointer that mov
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
-it("marks a past result seen without activating the replacement pane", async () => {
-  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
-  const historical = { historical_id: "history-1", pane_id: "a", terminal_id: "old", agent: "one", last: { epoch: 1, seq: 1, status: "done", observed_at: "now" }, completion: { epoch: 1, seq: 1, at: "now", inferred: false }, acked: null };
-  const seenHistorical = vi.fn(async () => true); const onSelect = vi.fn();
-  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "ready", response: { ...response, records: [historical] }, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen: vi.fn(async () => true), seenHistorical, retry: vi.fn(), clearNote: vi.fn() };
-  try {
-    await act(async () => root.render(createElement(Agents, { snapshot, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect, focusRef: { current: null } })));
-    const mark = host.querySelector<HTMLButtonElement>('[aria-label="Mark past result from one seen"]')!;
-    expect(mark).toBeTruthy();
-    await act(async () => mark.click());
-    expect(seenHistorical).toHaveBeenCalledWith(historical);
-    expect(onSelect).not.toHaveBeenCalled();
-  } finally { await act(async () => root.unmount()); host.remove(); }
-});
 
 it("focuses the row that takes the removed row's position", async () => {
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
-  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen: vi.fn(async () => true), seenHistorical: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", activate: vi.fn(), seen: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
   const active = { ...snapshot, agents: snapshot.agents.map(agent => ({ ...agent, status: "working" })) };
   const props: ComponentProps<typeof Agents> = { snapshot: active, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: vi.fn(), focusRef: { current: null } };
   try {
@@ -86,7 +77,7 @@ it("hands focus to the adjacent remaining row, then back to the sidebar origin",
   const host = document.createElement("div"); host.id = "cockpit-sidebar"; document.body.append(host);
   const origin = document.createElement("button"); document.body.append(origin);
   const root = createRoot(host);
-  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen: vi.fn(async () => true), seenHistorical: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", activate: vi.fn(), seen: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
   const active = { ...snapshot, agents: snapshot.agents.map(agent => ({ ...agent, status: "working" })) };
   const focusRef: ComponentProps<typeof Agents>["focusRef"] = { current: null };
   const props: ComponentProps<typeof Agents> = { snapshot: active, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: vi.fn(), focusRef };
@@ -110,7 +101,7 @@ it("does not steal focus when a previously focused row disappears after focus le
   const host = document.createElement("div"); document.body.append(host);
   const outside = document.createElement("button"); document.body.append(outside);
   const root = createRoot(host);
-  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", recoveryIncomplete: false, acknowledgeRecoveryWarning: vi.fn(), activate: vi.fn(), seen: vi.fn(async () => true), seenHistorical: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", activate: vi.fn(), seen: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
   const active = { ...snapshot, agents: snapshot.agents.map(agent => ({ ...agent, status: "working" })) };
   const props: ComponentProps<typeof Agents> = { snapshot: active, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: vi.fn(), focusRef: { current: null } };
   try {

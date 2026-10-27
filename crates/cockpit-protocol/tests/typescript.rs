@@ -5,6 +5,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use cockpit_protocol::browser::{
     BrowserCleanupScope, BrowserCleanupStatus, BrowserFeedbackSendRequest, BrowserWorkScope,
 };
+use cockpit_protocol::quick_ask::{
+    QuickAskAgentAvailability, QuickAskAvailability, QuickAskHarness, QuickAskLocation,
+    QuickAskRequest,
+};
 use cockpit_protocol::typescript::{check, check_generated, render_generated, write_generated};
 use cockpit_protocol::v1::{
     CockpitCapabilities, CockpitMode, FocusKind, FocusRequest, FocusResponse, HerdrCompatibility,
@@ -32,6 +36,71 @@ fn temporary_target() -> (PathBuf, PathBuf) {
 fn remove_temporary_directory(directory: PathBuf) {
     fs::remove_dir_all(directory).expect("temporary directory removed");
 }
+
+#[test]
+fn quick_ask_one_shot_wire_contract_and_redacted_debug() {
+    let wire = json!({
+        "server_instance": "server-1",
+        "space_id": "space-1",
+        "cwd": "/work",
+        "harness": "claude",
+        "prompt": "private question"
+    });
+    let request: QuickAskRequest = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&request).unwrap(), wire);
+    let debug = format!("{request:?}");
+    assert!(debug.contains("[redacted]"));
+    assert!(!debug.contains("private question"));
+    let mut obsolete = wire;
+    obsolete["request_id"] = json!("old-id");
+    assert!(serde_json::from_value::<QuickAskRequest>(obsolete).is_err());
+
+    let location = QuickAskLocation {
+        space_id: "space-1".into(),
+        tab_id: "tab-1".into(),
+        pane_id: "pane-1".into(),
+        terminal_id: "terminal-1".into(),
+        tab_label: "Ask".into(),
+    };
+    assert_eq!(serde_json::to_value(&location).unwrap(), json!({
+        "space_id": "space-1",
+        "tab_id": "tab-1",
+        "pane_id": "pane-1",
+        "terminal_id": "terminal-1",
+        "tab_label": "Ask"
+    }));
+    assert_eq!(
+        serde_json::from_value::<QuickAskLocation>(serde_json::to_value(&location).unwrap()).unwrap(),
+        location
+    );
+}
+
+#[test]
+fn quick_ask_availability_and_harness_wire_contract_is_unchanged() {
+    let harnesses = [
+        (QuickAskHarness::Omp, "omp"),
+        (QuickAskHarness::Pi, "pi"),
+        (QuickAskHarness::Claude, "claude"),
+        (QuickAskHarness::Copilot, "copilot"),
+        (QuickAskHarness::Codex, "codex"),
+        (QuickAskHarness::Opencode, "opencode"),
+    ];
+    for (harness, tag) in harnesses {
+        assert_eq!(serde_json::to_value(harness).unwrap(), json!(tag));
+        assert_eq!(serde_json::from_value::<QuickAskHarness>(json!(tag)).unwrap(), harness);
+    }
+    let availability = QuickAskAvailability {
+        agents: vec![QuickAskAgentAvailability {
+            harness: QuickAskHarness::Omp,
+            executable: "omp".into(),
+            found: true,
+        }],
+    };
+    assert_eq!(serde_json::to_value(availability).unwrap(), json!({
+        "agents": [{ "harness": "omp", "executable": "omp", "found": true }]
+    }));
+}
+
 
 #[test]
 fn browser_work_rejects_unknown_fields() {

@@ -9,7 +9,7 @@ const compare = (a: Mark | null | undefined, b: Mark | null | undefined) => !a ?
 export function deriveAgentQueue(snapshot: SessionSnapshotResponse, attention: AgentAttentionResponse | null, availability: AttentionAvailability): { visible: AttentionRow[] } {
   const usable = availability === "ready" && attention?.server_instance === snapshot.server_instance && attention.session_id === snapshot.session_id ? attention : null;
   const terminals = new Map(snapshot.panes.map(pane => [pane.id, pane.terminal_id]));
-  const records = new Map((usable?.records ?? []).filter(record => record.historical_id === null).map(record => [record.pane_id, record]));
+  const records = new Map((usable?.records ?? []).map(record => [record.pane_id, record]));
   const rows = snapshot.agents.map(agent => {
     const terminalId = terminals.get(agent.pane_id) ?? null;
     let record: AgentAttentionRecord | undefined = records.get(agent.pane_id);

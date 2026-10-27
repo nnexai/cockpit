@@ -204,6 +204,37 @@ describe("quick switcher chord", () => {
   });
 });
 
+describe("direct quick chords", () => {
+  it.each([
+    [{ key: "`", code: "Backquote", ctrlKey: true }, "quick-terminal"],
+    [{ key: "A", code: "KeyA", ctrlKey: true, shiftKey: true }, "ask-agent"],
+    [{ key: "A", code: "KeyA", metaKey: true, shiftKey: true }, "ask-agent"],
+  ] as const)("routes %s from a terminal to %s", (keys, command) => {
+    const target = mount('<div class="terminal-host"><textarea></textarea></div>', "textarea");
+    const { route, runCommand, armed } = harness();
+    const event = keyEvent({ ...keys, target });
+    route(event);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(event.stopPropagation).toHaveBeenCalledOnce();
+    expect(runCommand).toHaveBeenCalledExactlyOnceWith(command);
+    expect(armed()).toBe(false);
+  });
+
+  it("consumes repeats without running the command again and leaves modal input alone", () => {
+    const target = mount('<div class="terminal-host"><textarea></textarea></div>', "textarea");
+    const { route, runCommand } = harness();
+    const repeat = keyEvent({ key: "`", code: "Backquote", ctrlKey: true, repeat: true, target });
+    route(repeat);
+    expect(repeat.preventDefault).toHaveBeenCalledOnce();
+    expect(runCommand).not.toHaveBeenCalled();
+    const modal = harness(true);
+    const event = keyEvent({ key: "A", ctrlKey: true, shiftKey: true, target });
+    modal.route(event);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(modal.runCommand).not.toHaveBeenCalled();
+  });
+});
+
 describe("terminal and browser focus", () => {
   it("never consumes a plain Tab or Shift+Tab in a terminal, armed or not", () => {
     const { route, runCommand, setPrefixActive } = harness();

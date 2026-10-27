@@ -4,8 +4,7 @@ import { struct, tagged, literal, req, opt, named, str, bool, f64, u8, u16, u32,
 
 export const wireQuickAskHarness: WireDescriptor<V1.QuickAskHarness> = literal<V1.QuickAskHarness>("QuickAskHarness", ["omp", "pi", "claude", "copilot", "codex", "opencode"]);
 
-export const wireQuickAskStartRequest: WireDescriptor<V1.QuickAskStartRequest> = struct<V1.QuickAskStartRequest>("QuickAskStartRequest", {
-  "request_id": req(str),
+export const wireQuickAskRequest: WireDescriptor<V1.QuickAskRequest> = struct<V1.QuickAskRequest>("QuickAskRequest", {
   "server_instance": req(str),
   "space_id": req(str),
   "cwd": req(str),
@@ -13,42 +12,12 @@ export const wireQuickAskStartRequest: WireDescriptor<V1.QuickAskStartRequest> =
   "prompt": req(str),
 });
 
-export const wireQuickAskAction: WireDescriptor<V1.QuickAskAction> = literal<V1.QuickAskAction>("QuickAskAction", ["cancel", "send"]);
-
-export const wireQuickAskActionRequest: WireDescriptor<V1.QuickAskActionRequest> = struct<V1.QuickAskActionRequest>("QuickAskActionRequest", {
-  "request_id": req(str),
-  "action": req(named(() => wireQuickAskAction)),
-});
-
-export const wireQuickAskPhase: WireDescriptor<V1.QuickAskPhase> = literal<V1.QuickAskPhase>("QuickAskPhase", ["creating_tab", "checking_environment", "starting_agent", "waiting_for_agent", "ready_to_send", "sending", "submitted", "initial_question_supplied", "cancelled", "failed", "outcome_unknown"]);
-
-export const wireQuickAskDelivery: WireDescriptor<V1.QuickAskDelivery> = literal<V1.QuickAskDelivery>("QuickAskDelivery", ["not_sent", "submitted", "initial_question_supplied", "unknown"]);
-
 export const wireQuickAskLocation: WireDescriptor<V1.QuickAskLocation> = struct<V1.QuickAskLocation>("QuickAskLocation", {
   "space_id": req(str),
   "tab_id": req(str),
   "pane_id": req(str),
   "terminal_id": req(str),
   "tab_label": req(str),
-  "agent_name": req(str),
-});
-
-export const wireQuickAskFailure: WireDescriptor<V1.QuickAskFailure> = struct<V1.QuickAskFailure>("QuickAskFailure", {
-  "code": req(str),
-  "message": req(str),
-});
-
-export const wireQuickAskStatus: WireDescriptor<V1.QuickAskStatus> = struct<V1.QuickAskStatus>("QuickAskStatus", {
-  "request_id": req(str),
-  "session_id": req(str),
-  "server_instance": req(str),
-  "harness": req(named(() => wireQuickAskHarness)),
-  "phase": req(named(() => wireQuickAskPhase)),
-  "delivery": req(named(() => wireQuickAskDelivery)),
-  "cancellable": req(bool),
-  "location": req(nullable(named(() => wireQuickAskLocation)), { fill: null }),
-  "error": req(nullable(named(() => wireQuickAskFailure)), { fill: null }),
-  "updated_at_ms": req(u53),
 });
 
 export const wireQuickAskAgentAvailability: WireDescriptor<V1.QuickAskAgentAvailability> = struct<V1.QuickAskAgentAvailability>("QuickAskAgentAvailability", {

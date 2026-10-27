@@ -204,7 +204,6 @@ export const wireAgentAttentionRecord: WireDescriptor<V1.AgentAttentionRecord> =
   "pane_id": req(str),
   "terminal_id": req(str),
   "agent": req(str),
-  "historical_id": req(nullable(str), { fill: null }),
   "last": req(named(() => wireAgentAttentionLast)),
   "completion": req(nullable(named(() => wireAgentAttentionCompletion)), { fill: null }),
   "acked": req(nullable(named(() => wireAgentAttentionStamp)), { fill: null }),
@@ -237,9 +236,6 @@ export const wireAgentAttentionChange: WireDescriptor<V1.AgentAttentionChange> =
     "terminal_id": req(str),
     "agent": req(str),
     "transition": req(named(() => wireAgentAttentionMark)),
-  },
-  "seen_historical": {
-    "historical_id": req(str),
   },
 });
 

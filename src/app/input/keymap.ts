@@ -1,4 +1,4 @@
-import { type PrefixCommand, prefixCommandForKey, unboundPrefixMessage, chordMatches, detectPlatform, shortcutEntry } from "./shortcuts";
+import { type PrefixCommand, prefixCommandForKey, unboundPrefixMessage, chordMatches, detectPlatform, directCommandForEvent, shortcutEntry } from "./shortcuts";
 import { matchingHerdrCommand, herdrBindingMatches, type HerdrBindingEvent, type HerdrBinding, type HerdrChord } from "./herdrBindings";
 import type { HerdrCommand } from "../../protocol/generated/v1";
 
@@ -38,8 +38,8 @@ const MODAL_DIALOG = 'dialog[open], [role="dialog"][aria-modal="true"]:not(#cock
 
 /**
  * The window-level (capture) router for Cockpit navigation and the Ctrl+B prefix.
- * Mod+K opens the quick switcher even from editors; other non-prefix input still
- * belongs to terminals and the inline browser. Modal input always stays local.
+ * Mod+K and the direct quick chords act even from editors; other non-prefix input
+ * still belongs to terminals and the inline browser. Modal input always stays local.
  */
 export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: WorkbenchKeyRouting): void {
   if (event.isComposing) return;
@@ -78,6 +78,15 @@ export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: Workben
     event.stopPropagation();
     routing.setPrefixActive(false);
     if (!event.repeat) routing.onQuickSwitch();
+    return;
+  }
+  const direct = !serverPrefix && !matchingHerdrCommand(routing.herdrBindings ?? [], event as HerdrBindingEvent, false)
+    ? directCommandForEvent({ key: event.key, code: event.code ?? "", ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey, altKey: event.altKey }) : null;
+  if (direct) {
+    event.preventDefault();
+    event.stopPropagation();
+    routing.setPrefixActive(false);
+    if (!event.repeat) routing.runCommand(direct);
     return;
   }
   const plainCtrlB = event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "b";

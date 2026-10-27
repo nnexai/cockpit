@@ -3,14 +3,8 @@ section!(
     quick_ask,
     [
         QuickAskHarness,
-        QuickAskStartRequest,
-        QuickAskAction,
-        QuickAskActionRequest,
-        QuickAskPhase,
-        QuickAskDelivery,
+        QuickAskRequest,
         QuickAskLocation,
-        QuickAskFailure,
-        QuickAskStatus,
         QuickAskAgentAvailability,
         QuickAskAvailability,
     ]

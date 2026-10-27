@@ -210,9 +210,7 @@ class AppFixture {
     status: vi.fn(async () => status),
     quotaStatus: vi.fn(async () => { throw new CockpitClientError("http_error", "Subscription quota is not configured in this fixture", { status: 503, operationCode: "quota_unavailable" }); }),
     quickAskAvailability: vi.fn(async () => { throw new Error("Unexpected quick ask availability in fixture"); }),
-    quickAskStart: vi.fn(async () => { throw new Error("Unexpected quick ask start in fixture"); }),
-    quickAskStatus: vi.fn(async () => { throw new Error("Unexpected quick ask status in fixture"); }),
-    quickAskAction: vi.fn(async () => { throw new Error("Unexpected quick ask action in fixture"); }),
+    quickAsk: vi.fn(async () => { throw new Error("Unexpected quick ask in fixture"); }),
     subscribeWidgets: vi.fn(async onEvent => {
       this.widgetEvent = onEvent;
       this.liveWidgetSubscriptions.add(onEvent);
@@ -486,6 +484,41 @@ function htmlWidget(arrival: WidgetSummary["arrival"] = "own_tab"): WidgetSummar
     arrival, resolved_from: "current_pane", change: "opened", created_at_ms: 1, updated_at_ms: 1, selection: null,
   };
 }
+
+it("launches a quick ask in the selected Space and focuses the returned pane", async () => {
+  const fixture = new AppFixture();
+  vi.mocked(fixture.client.quickAskAvailability).mockResolvedValue({
+    agents: [{ harness: "omp", executable: "omp", found: true }],
+  });
+  vi.mocked(fixture.client.quickAsk).mockResolvedValue({
+    space_id: "space-1", tab_id: "tab-2", pane_id: "pane-2", terminal_id: "terminal-2", tab_label: "Second tab",
+  });
+  await mount(fixture);
+  press(window, "A", { ctrlKey: true, shiftKey: true });
+  await settle();
+  expect(container.querySelector('[role="dialog"][aria-label="Ask an agent"]')).not.toBeNull();
+  click(button("Choose a folder"));
+  const folder = container.querySelector<HTMLInputElement>('input[aria-label="Folder"]')!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(folder, "/work");
+    folder.dispatchEvent(new Event("input", { bubbles: true }));
+    folder.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  });
+  const question = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Question for OMP"]')!;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(question, "Explain this");
+    question.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  fixture.focusCalls.mockClear();
+  await act(async () => question.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+  await settle();
+  expect(fixture.client.quickAsk).toHaveBeenCalledOnce();
+  expect(fixture.client.quickAsk).toHaveBeenCalledWith("session-1", {
+    server_instance: "0123456789abcdef", space_id: "space-1", cwd: "/work", harness: "omp", prompt: "Explain this",
+  });
+  expect(container.querySelector('[role="dialog"][aria-label="Ask an agent"]')).toBeNull();
+  expect(fixture.focusCalls).toHaveBeenCalledWith("session-1", expect.objectContaining({ kind: "pane", target_id: "pane-2" }));
+});
 
 it.each(["own_tab", "cross_source"] as const)("reveals an %s widget without changing selected terminal, DOM focus or Herdr focus", async arrival => {
   const fixture = new AppFixture();

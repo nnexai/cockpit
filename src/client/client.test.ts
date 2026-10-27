@@ -94,9 +94,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     orchestrationProjectRootLookup: vi.fn(async () => { throw new Error("Unexpected project root lookup in terminal fixture"); }),
     quotaStatus: vi.fn(async () => { throw new CockpitClientError("http_error", "Subscription quota is not configured in this fixture", { status: 503, operationCode: "quota_unavailable" }); }),
     quickAskAvailability: vi.fn(async () => { throw new Error("Unexpected quick ask availability in terminal fixture"); }),
-    quickAskStart: vi.fn(async () => { throw new Error("Unexpected quick ask start in terminal fixture"); }),
-    quickAskStatus: vi.fn(async () => { throw new Error("Unexpected quick ask status in terminal fixture"); }),
-    quickAskAction: vi.fn(async () => { throw new Error("Unexpected quick ask action in terminal fixture"); }),
+    quickAsk: vi.fn(async () => { throw new Error("Unexpected quick ask in terminal fixture"); }),
     subscribeWidgets: vi.fn(async () => { throw new Error("Unexpected widget subscription in terminal fixture"); }),
     widgetContent: vi.fn(async () => { throw new Error("Unexpected widget content in terminal fixture"); }),
     widgetRemove: vi.fn(async () => { throw new Error("Unexpected widget removal in terminal fixture"); }),
@@ -520,13 +518,6 @@ describe("Agent attention contracts", () => {
         await expect(clientFor({ ...response, [field]: "other" }).changeAgentAttention("session-1", request)).rejects.toMatchObject({ code: "malformed_response" });
       }
       await expect(clientFor({ ...response, epoch: "bad" }).agentAttention("session-1")).rejects.toMatchObject({ code: "malformed_response" });
-    });
-    it(`${transport} transports distinct historical completion identities`, async () => {
-      const record = { historical_id: "history-id", pane_id: "p", terminal_id: "t", agent: "a", last: { epoch: 1, seq: 4, status: "idle", observed_at: "now" }, completion: { epoch: 1, seq: 3, at: "then", inferred: true }, acked: null };
-      const history = { ...response, records: [record] };
-      const change = { server_instance: "server-1", observations: [], change: { kind: "seen_historical" as const, historical_id: "history-id" } };
-      await expect(clientFor(history).agentAttention("session-1")).resolves.toEqual(history);
-      await expect(clientFor(response).changeAgentAttention("session-1", change)).resolves.toEqual(response);
     });
     it(`${transport} snapshots nested observations at submission`, async () => {
       let finish!: (value: unknown) => void;

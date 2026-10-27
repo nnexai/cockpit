@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { AgentAttentionChange, AgentAttentionObservation, AgentAttentionRecord, AgentAttentionResponse } from "../../protocol/generated/v1";
+import type { AgentAttentionChange, AgentAttentionObservation, AgentAttentionResponse } from "../../protocol/generated/v1";
 import { collectObservations, deriveAgentQueue, type AttentionAvailability, type AttentionRow } from "../sidebar/agentAttentionModel";
 import type { SessionState } from "./sessionStore";
 
@@ -10,11 +10,8 @@ export type AgentAttentionState = {
   pending: ReadonlySet<string>;
   notes: ReadonlyMap<string, string>;
   announcement: string;
-  recoveryIncomplete: boolean;
-  acknowledgeRecoveryWarning(): void;
   activate(row: AttentionRow): void;
   seen(row: AttentionRow): Promise<boolean>;
-  seenHistorical(record: AgentAttentionRecord): Promise<boolean>;
   retry(): void;
   clearNote(paneId: string): void;
 };
@@ -26,8 +23,8 @@ type Intent = { row: AttentionRow; token: number };
 // working-to-idle transition, and current state of each pane incarnation.
 const MAX_QUEUED_OBSERVATIONS = 1024;
 const OBSERVATION_BATCH_SIZE = 256;
-function compactObservations(observations: AgentAttentionObservation[]): { observations: AgentAttentionObservation[]; overflow: boolean } {
-  if (observations.length <= MAX_QUEUED_OBSERVATIONS) return { observations, overflow: false };
+function compactObservations(observations: AgentAttentionObservation[]): AgentAttentionObservation[] {
+  if (observations.length <= MAX_QUEUED_OBSERVATIONS) return observations;
   type Segment = { identity: string; last: number; done?: number; beforeIdle?: number; idle?: number };
   const active = new Map<string, Segment>();
   const segments: Segment[] = [];
@@ -51,15 +48,13 @@ function compactObservations(observations: AgentAttentionObservation[]): { obser
   // Prefer segments with completion evidence, then newer segments. Retain whole
   // segments so an inferred transition pair is never cut in half.
   const retained: number[] = [];
-  let overflow = false;
   segments.sort((a, b) => Number(b.done !== undefined || b.idle !== undefined) - Number(a.done !== undefined || a.idle !== undefined) || b.last - a.last);
   for (const segment of segments) {
     const indices = [...new Set([segment.last, segment.done, segment.beforeIdle, segment.idle].filter((index): index is number => index !== undefined))];
     if (retained.length + indices.length <= MAX_QUEUED_OBSERVATIONS) retained.push(...indices);
-    else overflow = true;
   }
   retained.sort((a, b) => a - b);
-  return { observations: retained.map(index => observations[index]!), overflow };
+  return retained.map(index => observations[index]!);
 }
 
 function takeObservationBatch(observations: AgentAttentionObservation[]): AgentAttentionObservation[] {
@@ -79,16 +74,11 @@ function takeObservationBatch(observations: AgentAttentionObservation[]): AgentA
   return observations.splice(0, count);
 }
 
-export function historicalAttentionKey(record: AgentAttentionRecord): string {
-  return `historical:${record.historical_id}`;
-}
-
 export function useAgentAttention(client: CockpitClient, state: SessionState, live: boolean): AgentAttentionState {
   const sessionId = state.sessionId;
   const snapshot = state.snapshot?.session_id === sessionId ? state.snapshot : null;
   const instance = snapshot?.server_instance ?? null;
   const [, render] = useState(0);
-  const recoveryIncomplete = useRef(false);
   const binding = useMemo(() => ({
     availability: "loading" as AttentionAvailability, response: null as AgentAttentionResponse | null,
     pending: new Set<string>(), notes: new Map<string, string>(), announcement: "",
@@ -164,9 +154,7 @@ export function useAgentAttention(client: CockpitClient, state: SessionState, li
         }
       }).catch(error => {
         if (!valid()) { action?.resolve(false); return; }
-        const compacted = compactObservations([...observations, ...binding.observations]);
-        binding.observations = compacted.observations;
-        recoveryIncomplete.current ||= compacted.overflow;
+        binding.observations = compactObservations([...observations, ...binding.observations]);
         if (action) {
           binding.pending.delete(action.key);
           binding.notes.set(action.key, error instanceof Error ? error.message : "Agent attention change failed");
@@ -200,12 +188,7 @@ export function useAgentAttention(client: CockpitClient, state: SessionState, li
     if (!live || !snapshot || !instance) return;
     const collected = collectObservations(binding.previous, snapshot);
     binding.previous = collected.next;
-    const compacted = compactObservations([...binding.observations, ...collected.observations]);
-    binding.observations = compacted.observations;
-    if (compacted.overflow && !recoveryIncomplete.current) {
-      recoveryIncomplete.current = true;
-      update();
-    }
+    binding.observations = compactObservations([...binding.observations, ...collected.observations]);
     binding.pump?.();
   }, [binding, snapshot, live, instance]);
 
@@ -235,17 +218,12 @@ export function useAgentAttention(client: CockpitClient, state: SessionState, li
 
   return {
     availability: binding.availability, response: binding.response, pending: binding.pending, notes: binding.notes, announcement: binding.announcement,
-    recoveryIncomplete: recoveryIncomplete.current,
-    acknowledgeRecoveryWarning: () => { recoveryIncomplete.current = false; update(); },
     activate(row) {
       if (!live || !row.canSeen) return;
       if (!state.focusPending && snapshot?.focused_pane_id === row.agent.pane_id) { void seen(row); return; }
       binding.intent = { row, token: state.focusToken + 1 };
     },
     seen,
-    seenHistorical: record => record.historical_id
-      ? change(historicalAttentionKey(record), { kind: "seen_historical", historical_id: record.historical_id })
-      : Promise.resolve(false),
     retry: () => { binding.refresh = true; binding.pump?.(); },
     clearNote: paneId => { binding.notes.delete(paneId); update(); },
   };
