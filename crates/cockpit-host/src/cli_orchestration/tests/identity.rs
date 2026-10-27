@@ -458,31 +458,48 @@ fn no_extension_context_registration_uses_private_capability_without_live_herdr(
 #[tokio::test]
 #[ignore = "private CLI environment child, launched by the artifact Result boundary test"]
 async fn artifact_result_cli_child() {
+    // The two scenarios exercise the same CLI paths on libtest's bounded stack.
+    // Boxing their separate futures avoids retaining both debug-sized frames at once.
+    if std::env::var("COCKPIT_TEST_RESULT_ROLE").unwrap() == "root" {
+        Box::pin(artifact_result_root()).await;
+    } else {
+        Box::pin(artifact_result_worker()).await;
+    }
+}
+
+fn artifact_result_parse(flags: &[&str]) -> super::RunArgs {
     use clap::Parser;
     use super::{TestCli, TestCommand};
+    let TestCommand::Run(args) = TestCli::try_parse_from(
+        ["test", "run"].into_iter().chain(flags.iter().copied()),
+    ).unwrap().command else { panic!("expected run") };
+    args
+}
+
+async fn artifact_result_root() {
     use super::super::context::Context;
-    use cockpit_protocol::orchestration::{CheckStatus, SourceOutput};
-    let parse = |flags: &[&str]| {
-        let TestCommand::Run(args) = TestCli::try_parse_from(
-            ["test", "run"].into_iter().chain(flags.iter().copied()),
-        ).unwrap().command else { panic!("expected run") };
-        args
-    };
-    let initial = parse(&["context", "--json"]);
+    use cockpit_protocol::orchestration::SourceOutput;
+    let initial = artifact_result_parse(&["context", "--json"]);
     let context = Context::open(&initial.common, true).await.unwrap();
     let snapshot = context.snapshot(None).await.unwrap();
     let task = &snapshot.board.as_ref().unwrap().tasks[0].task;
-    if std::env::var("COCKPIT_TEST_RESULT_ROLE").unwrap() == "root" {
-        let worker = snapshot.runs.iter().find(|run| run.task_id.is_some()).unwrap();
-        assert!(matches!(&worker.source_output, Some(SourceOutput::NonCode {
-            task_revision, result_message_id, ..
-        }) if task_revision == &task.task_revision && result_message_id == "research-result"));
-        parse(&["accept", &worker.run_id, "--task-revision", &task.task_revision, "--json"])
-            .run().await.unwrap();
-        let accepted = context.snapshot(None).await.unwrap();
-        assert!(accepted.board.unwrap().tasks[0].task.checked);
-        return;
-    }
+    let worker = snapshot.runs.iter().find(|run| run.task_id.is_some()).unwrap();
+    assert!(matches!(&worker.source_output, Some(SourceOutput::NonCode {
+        task_revision, result_message_id, ..
+    }) if task_revision == &task.task_revision && result_message_id == "research-result"));
+    artifact_result_parse(&["accept", &worker.run_id, "--task-revision", &task.task_revision, "--json"])
+        .run().await.unwrap();
+    let accepted = context.snapshot(None).await.unwrap();
+    assert!(accepted.board.unwrap().tasks[0].task.checked);
+}
+
+async fn artifact_result_worker() {
+    use super::super::context::Context;
+    use cockpit_protocol::orchestration::{CheckStatus, SourceOutput};
+    let initial = artifact_result_parse(&["context", "--json"]);
+    let context = Context::open(&initial.common, true).await.unwrap();
+    let snapshot = context.snapshot(None).await.unwrap();
+    let task = &snapshot.board.as_ref().unwrap().tasks[0].task;
     let run = context.own_run(&snapshot).unwrap();
     if run.checkout.as_ref().unwrap().git.is_some() {
         let output = context.source_output("code-result", Vec::new(), Vec::new()).await.unwrap();
@@ -495,14 +512,14 @@ async fn artifact_result_cli_child() {
             .await.unwrap_err().code, "orchestration_usage");
     }
     let artifact = std::env::var("COCKPIT_TEST_RESULT_ARTIFACT").unwrap();
-    let malformed = parse(&["done", "--message-id", "invalid-check", "--summary", "Research",
+    let malformed = artifact_result_parse(&["done", "--message-id", "invalid-check", "--summary", "Research",
         "--artifact", &artifact, "--check", "research::read report::unknown"]);
     assert_eq!(malformed.run().await.unwrap_err().code, "orchestration_usage");
-    let invalid = parse(&["done", "--message-id", "invalid-artifact", "--summary", "Research",
+    let invalid = artifact_result_parse(&["done", "--message-id", "invalid-artifact", "--summary", "Research",
         "--artifact", " "]);
     assert_eq!(invalid.run().await.unwrap_err().code, "invalid_source_output");
     assert_eq!(context.snapshot(None).await.unwrap().revision, snapshot.revision);
-    parse(&["done", "--message-id", "research-result", "--summary", "Read-only repository analysis",
+    artifact_result_parse(&["done", "--message-id", "research-result", "--summary", "Read-only repository analysis",
         "--artifact", &artifact, "--check", "research::read analysis report::passed", "--json"])
         .run().await.unwrap();
     let reported = context.snapshot(None).await.unwrap();
