@@ -49,11 +49,12 @@ export function QuickTerminal({ client, sessionId, paneId, focusEpoch, returnFoc
     }
   };
   const shortcut = formatShortcut("quick-terminal");
-  const width = rect ? Math.min(rect.width - 16, Math.max(320, Math.min(1040, rect.width * 0.86))) : 0;
+  // Horizontally centred on the window (the sidebar must not shift it); vertically placed in the work area.
+  const width = Math.min(window.innerWidth - 16, Math.max(320, Math.min(1040, window.innerWidth * 0.8)));
   const height = rect ? Math.min(rect.height - 16, Math.max(200, Math.min(680, rect.height * 0.78))) : 0;
   return <div className="quick-terminal-backdrop" inert={suspended}>
     <div ref={container} tabIndex={-1} className="quick-terminal" role="dialog" aria-modal="true" aria-label="Quick terminal" onKeyDownCapture={keyDown}
-      style={rect ? { left: rect.left + (rect.width - width) / 2, top: rect.top + Math.min(48, (rect.height - height) / 2), width, height } : undefined}>
+      style={rect ? { left: (window.innerWidth - width) / 2, top: rect.top + Math.min(48, (rect.height - height) / 2), width, height } : undefined}>
       <header className="quick-terminal-header">
         <UiIcon name="terminal" />
         <span className="quick-terminal-cwd" title={cwd ?? undefined}><bdi>{cwd ?? "Quick terminal"}</bdi></span>
