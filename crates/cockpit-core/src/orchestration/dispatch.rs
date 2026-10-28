@@ -1014,8 +1014,8 @@ impl Dispatcher {
             .ok_or_else(|| InspectionError::new("setup_missing", "No setup receipt"))?;
         let runtime = self.herdr.runtime(&run.session_id).await?;
         let retained_restart = initial_retained_restart(&self.service, run, &runtime)?;
-        let workspace_id = if retained_restart {
-            match resume_staging_choice(run, &runtime)? {
+        let workspace_id = if let Some(server_proven) = retained_restart {
+            match if server_proven { resume_staging_choice(run, &runtime) } else { None } {
                 Some(retained) => retained,
                 None => self.staging_space(run).await?,
             }
@@ -1488,26 +1488,26 @@ fn resumed_checkout_epoch(run: &Run) -> bool {
         && setup.workspace_id.is_some() && setup.checkout_path == checkout.path
 }
 
-fn resume_staging_choice(run: &Run, runtime: &RuntimeView) -> Result<Option<String>, InspectionError> {
-    let setup = run.setup.as_ref().ok_or_else(|| InspectionError::new("setup_missing", "No setup receipt"))?;
-    let retained = setup.workspace_id.as_ref().ok_or_else(|| InspectionError::new("setup_receipt_missing", "Retained Space receipt is missing"))?;
+/// The retained Space when it still uniquely holds this checkout; otherwise the
+/// restart stages a fresh Space and leaves the changed or ambiguous one alone.
+fn resume_staging_choice(run: &Run, runtime: &RuntimeView) -> Option<String> {
+    let retained = run.setup.as_ref()?.workspace_id.as_ref()?;
+    let checkout = std::path::Path::new(&run.setup.as_ref()?.checkout_path);
     let mut spaces = runtime.workspaces.iter().filter(|space| &space.workspace_id == retained);
-    if let Some(space) = spaces.next() {
-        if spaces.next().is_some()
-            || std::fs::canonicalize(&space.cwd).ok().as_deref() != Some(std::path::Path::new(&setup.checkout_path)) {
-            return Err(InspectionError::new("retained_space_checkout_changed", "The exact retained Space no longer has this reserved checkout"));
-        }
-        Ok(Some(retained.clone()))
-    } else {
-        Ok(None)
-    }
+    let space = spaces.next()?;
+    (spaces.next().is_none() && std::fs::canonicalize(&space.cwd).ok().as_deref() == Some(checkout))
+        .then(|| retained.clone())
 }
 
+/// `None` for an ordinary launch. A retained checkout restart answers whether
+/// its recorded Space ID still names the same server's Space; when that is
+/// unproven (for example after a Herdr restart) the restart stages a fresh
+/// Space instead of trusting or refusing the old ID.
 fn initial_retained_restart(
     service: &OrchestrationService, expected: &Run, runtime: &RuntimeView,
-) -> Result<bool, InspectionError> {
+) -> Result<Option<bool>, InspectionError> {
     use cockpit_protocol::orchestration::{AttachmentState, OwnedResourceIdentity, ResumePhase};
-    if !resumed_checkout_epoch(expected) { return Ok(false); }
+    if !resumed_checkout_epoch(expected) { return Ok(None); }
     let locked = service.store.lock()?;
     let state = locked.read_shared()?;
     let run = state.runs.iter().find(|run| run.run_id == expected.run_id)
@@ -1537,7 +1537,7 @@ fn initial_retained_restart(
     let recorded = state.operations.iter().find(|operation| operation.operation_id == resume.operation_id)
         .and_then(|operation| operation.effect_receipts.iter().find_map(|receipt| match receipt {
             super::store::DurableEffectReceipt::Launch { attachment_epoch, dispatch, .. } if *attachment_epoch == previous =>
-                dispatch.source_location.as_ref(),
+                Some(dispatch),
             _ => None,
         }));
     let matches_server = |endpoint: &str, boot: Option<&String>, peer: Option<&cockpit_protocol::orchestration::NativeProcessIdentity>| {
@@ -1547,16 +1547,25 @@ fn initial_retained_restart(
                 None => peer.is_some_and(|peer| peer.kernel_boot_id.is_some() && runtime.peer_process.as_ref() == Some(peer)),
             }
     };
-    let server_proven = recorded.is_some_and(|location|
-        matches_server(&location.endpoint_identity, location.boot_id.as_ref(), location.peer_process.as_ref()))
+    // An in-place launch records no move source; its own dispatch endpoint
+    // names the peer's pid and start ticks, which identify one server only
+    // within the kernel boot its launch scope was captured in.
+    let launched_on_this_server = |dispatch: &cockpit_protocol::orchestration::DispatchState| {
+        dispatch.endpoint_identity.as_deref() == Some(runtime.endpoint_identity.as_str())
+            && runtime.peer_process.as_ref().is_some_and(|peer|
+                runtime.endpoint_identity.contains(&format!(":pid={}:", peer.pid))
+                    && runtime.endpoint_identity.ends_with(&format!(":start={}", peer.start_ticks))
+                    && dispatch.pre_move_scope.as_ref().is_some_and(|scope|
+                        peer.kernel_boot_id.as_deref() == Some(scope.kernel_boot_id.as_str())))
+    };
+    let server_proven = recorded.is_some_and(|dispatch| launched_on_this_server(dispatch)
+        || dispatch.source_location.as_ref().is_some_and(|location|
+            matches_server(&location.endpoint_identity, location.boot_id.as_ref(), location.peer_process.as_ref())))
         || state.owned_resources.iter().filter(|resource| resource.run_id == run.run_id).any(|resource|
             matches!(&resource.identity, OwnedResourceIdentity::WorkerTerminal { identity }
                 if identity.attachment_epoch == Some(previous)
                     && matches_server(&identity.endpoint_identity, identity.herdr_boot_id.as_ref(), identity.herdr_peer.as_ref())));
-    if !server_proven {
-        return Err(InspectionError::new("retained_space_identity_unproven", "The recorded server incarnation for the retained checkout restart is not freshly proven"));
-    }
-    Ok(true)
+    Ok(Some(server_proven))
 }
 
 fn restarts_in_retained_space(run: &Run) -> bool {

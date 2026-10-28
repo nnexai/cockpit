@@ -568,7 +568,8 @@ fn root_candidate(run: &Run, modern_binding: bool) -> LiaisonCandidate {
         .and_then(|_| run.dispatch.as_ref()?.error.as_ref());
     let retryable_refusal = refused_launch.is_some_and(|error|
         (error.code == "harness_resume_unsupported" && resume_supported(&run.launch_config))
-            || (error.code == "workspace_missing" && run.kind == RunKind::Supervisor));
+            || (matches!(error.code.as_str(), "workspace_missing" | "retained_space_identity_unproven" | "retained_space_checkout_changed")
+                && run.kind == RunKind::Supervisor));
     let resume = if incompatible_live { RootResumeAvailability::Blocked }
     else if refused_launch.is_some() {
         if retryable_refusal { RootResumeAvailability::Available }

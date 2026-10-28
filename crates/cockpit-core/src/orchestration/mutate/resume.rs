@@ -209,7 +209,8 @@ fn resume_operation_open(state: &OrchestrationState, run: &Run) -> bool {
 fn retryable_effect_free_resume_launch(state: &OrchestrationState, run: &Run) -> bool {
     effect_free_reserved_resume_launch(run)
         && run.dispatch.as_ref().and_then(|dispatch| dispatch.error.as_ref()).is_some_and(|error|
-            (error.code == "workspace_missing" && run.kind == RunKind::Supervisor)
+            (matches!(error.code.as_str(), "workspace_missing" | "retained_space_identity_unproven" | "retained_space_checkout_changed")
+                && run.kind == RunKind::Supervisor)
                 || (error.code == "harness_resume_unsupported" && dispatch::resume_supported(&run.launch_config)
                     && run.attachment.as_ref().is_some_and(|attachment| attachment.conversation.is_some())))
         && resume_operation_open(state, run)

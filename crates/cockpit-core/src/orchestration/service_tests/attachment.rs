@@ -1228,6 +1228,8 @@ async fn omp_default_resume_relaunches_root_after_saved_unsupported_block() {
 async fn pending_resume_requeues_only_supported_effect_free_prelaunch_refusal() {
     assert_effect_free_resume_retry("harness_resume_unsupported").await;
     assert_effect_free_resume_retry("workspace_missing").await;
+    assert_effect_free_resume_retry("retained_space_identity_unproven").await;
+    assert_effect_free_resume_retry("retained_space_checkout_changed").await;
 }
 
 #[cfg(target_os = "linux")]
@@ -1280,7 +1282,7 @@ async fn assert_effect_free_resume_retry(error_code: &str) {
                 7 => run.attachment.as_mut().unwrap().location = original.attachment.as_ref().unwrap().location.clone(),
                 8 => dispatch.launch_attempt += 1,
                 9 => dispatch.error.as_mut().unwrap().code = "launch_outcome_unknown".into(),
-                10 if error_code == "workspace_missing" => dispatch.endpoint_identity = Some("possibly-created-endpoint".into()),
+                10 if error_code != "harness_resume_unsupported" => dispatch.endpoint_identity = Some("possibly-created-endpoint".into()),
                 10 => run.launch_config.harness_kind = "unsupported-agent".into(),
                 11 => run.attachment.as_mut().unwrap().state = AttachmentState::Connecting,
                 _ => unreachable!(),

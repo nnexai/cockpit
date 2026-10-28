@@ -2473,7 +2473,7 @@ async fn resumed_supervisor_uses_retained_space_or_fresh_focused_staging() {
                 cwd: checkout.path.clone(),
             });
         }
-        let choice = resume_staging_choice(&run, &observed).unwrap();
+        let choice = resume_staging_choice(&run, &observed);
         assert_eq!(choice.as_deref(), retained_open.then_some("retained-space"));
         let adapter = Arc::new(CountingHerdr::new(observed, false, false));
         let dispatcher = fixture.dispatcher(adapter);
@@ -2496,7 +2496,82 @@ async fn resumed_supervisor_uses_retained_space_or_fresh_focused_staging() {
 }
 
 #[test]
-fn resumed_space_choice_rejects_changed_or_ambiguous_retained_checkout() {
+fn in_place_supervisor_restart_proves_its_server_from_the_previous_launch_receipt() {
+    use cockpit_protocol::orchestration::{
+        AttachmentState, NativeProcessIdentity, OwnedProcessScope, ResumePhase, ResumeRecord, ScopeKind,
+    };
+    use super::super::store::{DurableEffectReceipt, DurableOperationKind, DurableOperationRecord};
+    let endpoint = "unix-socket:/run/herdr.sock:pid=7:uid=1:gid=1:start=99";
+    let peer = NativeProcessIdentity { pid: 7, start_ticks: 99, kernel_boot_id: Some("boot-a".into()) };
+    let fixture = ReviewFixture::new(RunStage::Starting);
+    let (_, checkout) = super::super::project_identity::resolve_owned_directory(&fixture.root).unwrap();
+    let operation_id = uuid::Uuid::new_v4().to_string();
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let run = state.runs.iter_mut().find(|run| run.run_id == fixture.run.run_id).unwrap();
+        run.checkout = Some(checkout.clone());
+        run.setup = Some(SetupSummary {
+            operation_id: None, generation: None, workspace_id: Some("retained-space".into()),
+            checkout_path: checkout.path.clone(), repository_id: None, branch: None, base: None,
+            base_commit: None, ownership: None, effects: Vec::new(), warnings: Vec::new(),
+            project_workspace_id: None,
+        });
+        run.target = Some(DispatchTarget::ExistingSpace { workspace_id: "retained-space".into() });
+        // The previous epoch launched in place: no move source and no owned terminal resource.
+        let mut previous = run.dispatch.clone().unwrap();
+        previous.endpoint_identity = Some(endpoint.into());
+        previous.source_location = None;
+        previous.pre_move_scope = Some(OwnedProcessScope {
+            kind: ScopeKind::SystemdUserScope, unit: "unit.scope".into(), invocation_id: "invocation".into(),
+            control_group: "/cgroup".into(), cgroup_device: "1".into(), cgroup_inode: "2".into(),
+            machine_id: "machine".into(), kernel_boot_id: "boot-a".into(),
+            member: NativeProcessIdentity { pid: 11, start_ticks: 12, kernel_boot_id: Some("boot-a".into()) },
+            captured_at: now(),
+        });
+        let attachment = test_attachment(run);
+        let receipt = DurableEffectReceipt::Launch {
+            attachment_id: attachment.attachment_id.clone(), attachment_epoch: 1, dispatch: previous,
+        };
+        attachment.epoch = 2;
+        attachment.state = AttachmentState::Reserved;
+        attachment.location = None;
+        attachment.process = None;
+        attachment.shell = None;
+        run.resume = Some(ResumeRecord {
+            operation_id: operation_id.clone(), run_id: run.run_id.clone(),
+            previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+            phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now(),
+        });
+        run.dispatch = Some(crate::orchestration::dispatch(DispatchStep::SetupPending));
+        let (root_id, run_id, at) = (run.root_id.clone(), run.run_id.clone(), now());
+        state.operations.push(DurableOperationRecord {
+            operation_id: operation_id.clone(), actor_run_id: Some(root_id.clone()),
+            principal_key: "operator".into(), root_id, kind: DurableOperationKind::RunResume,
+            request_digest: "resume".into(), run_id: Some(run_id), resume_operation_id: Some(operation_id.clone()),
+            result: None, effect_receipts: vec![receipt], created_at: at.clone(), updated_at: at,
+        });
+        locked.save(&mut state).unwrap();
+    }
+    let run = fixture.current().1;
+    let observe = |endpoint: &str, peer: NativeProcessIdentity| {
+        let mut observed = runtime();
+        observed.endpoint_identity = endpoint.into();
+        observed.peer_process = Some(peer);
+        initial_retained_restart(&fixture.service, &run, &observed).unwrap()
+    };
+    assert_eq!(observe(endpoint, peer.clone()), Some(true), "same server process in the same boot");
+    assert_eq!(observe(endpoint, NativeProcessIdentity { kernel_boot_id: Some("boot-b".into()), ..peer.clone() }), Some(false),
+        "pid and start ticks name a different process after reboot");
+    assert_eq!(observe("unix-socket:/run/herdr.sock:pid=8:uid=1:gid=1:start=120",
+        NativeProcessIdentity { pid: 8, start_ticks: 120, ..peer.clone() }), Some(false),
+        "a restarted Herdr server cannot vouch for the old Space ID; the restart stages a fresh Space");
+    assert_eq!(observe(endpoint, NativeProcessIdentity { pid: 9, ..peer.clone() }), Some(false),
+        "the endpoint must encode the observed socket peer");
+}
+
+#[test]
+fn resumed_space_choice_stages_fresh_space_for_changed_or_ambiguous_retained_checkout() {
     let fixture = ReviewFixture::new(RunStage::Starting);
     let (_, checkout) = super::super::project_identity::resolve_owned_directory(&fixture.root).unwrap();
     let mut run = fixture.run.clone();
@@ -2507,11 +2582,11 @@ fn resumed_space_choice_rejects_changed_or_ambiguous_retained_checkout() {
         project_workspace_id: None,
     });
     let mut observed = runtime();
-    assert_eq!(resume_staging_choice(&run, &observed).unwrap_err().code, "retained_space_checkout_changed");
+    assert_eq!(resume_staging_choice(&run, &observed), None, "a Space now showing another directory is left alone");
     observed.workspaces[0].cwd = checkout.path;
-    assert_eq!(resume_staging_choice(&run, &observed).unwrap().as_deref(), Some("space"));
+    assert_eq!(resume_staging_choice(&run, &observed).as_deref(), Some("space"));
     observed.workspaces.push(observed.workspaces[0].clone());
-    assert_eq!(resume_staging_choice(&run, &observed).unwrap_err().code, "retained_space_checkout_changed");
+    assert_eq!(resume_staging_choice(&run, &observed), None, "an ambiguous Space ID is never reused");
 }
 
 #[tokio::test]
