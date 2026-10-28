@@ -78,7 +78,7 @@ cockpit_host::cockpit_operations!(native_commands);
 #[cfg(test)]
 mod tests {
     #[test]
-    fn project_root_lookup_is_granted_only_to_the_main_window() {
+    fn liaison_lookup_is_granted_only_to_the_main_window() {
         let capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
         assert_eq!(capability["windows"], serde_json::json!(["main"]));
@@ -88,7 +88,7 @@ mod tests {
             permissions
                 .iter()
                 .filter(|permission| {
-                    permission.as_str() == Some("allow-orchestration-project-root-lookup")
+                    permission.as_str() == Some("allow-orchestration-liaison-lookup")
                 })
                 .count(),
             1
