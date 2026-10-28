@@ -259,6 +259,60 @@ describe("scratch terminal", () => {
     }
   });
 
+  it("sends the fitted scratch grid when it changed before the stream was ready", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    const sent: TerminalCommand[] = [];
+    let receive!: (value: TerminalStreamMessage) => void;
+    let resolveOpen!: (value: TerminalStream) => void;
+    // The configured TypeScript target does not include Promise.withResolvers.
+    const opened = new Promise<TerminalStream>((resolve) => { resolveOpen = resolve; });
+    const openTerminal = vi.fn((_request: TerminalOpenRequest, onMessage: (value: TerminalStreamMessage) => void) => {
+      receive = onMessage;
+      return opened;
+    });
+    const client = { openTerminal } as unknown as CockpitClient;
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    mocks.fitDimensions.push([141, 33]);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, {
+          request: { session_id: "session", pane_id: "pane", target_kind: "scratch" },
+        })} />);
+        await settle();
+      });
+      expect(openTerminal.mock.calls[0]![0]).toEqual(expect.objectContaining({ cols: 141, rows: 33 }));
+      const terminal = mocks.terminals.at(-1)!;
+      const fit = mocks.fits.at(-1)!;
+      // Real FitAddon does not emit onResize when the terminal already fits.
+      fit.fit.mockImplementation(() => {});
+      await act(async () => {
+        terminal.resize(127, 30);
+        receive(message("owned"));
+        receive({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream",
+          seq: "1", encoding: "ansi", width: 141, height: 33, full: true, bytes: "" });
+        resolveOpen(stream(sent));
+        await settle();
+      });
+      expect(sent).toContainEqual(expect.objectContaining({ type: "terminal.resize", cols: 127, rows: 30 }));
+      expect(terminal.cols).toBe(127);
+      expect(terminal.rows).toBe(30);
+
+      fit.fit.mockImplementation(() => terminal.resize(120, 28));
+      mocks.fitProposals.push([120, 28]);
+      await act(async () => {
+        mocks.observers[0]!.callback([], mocks.observers[0] as unknown as ResizeObserver);
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(sent).toContainEqual(expect.objectContaining({ type: "terminal.resize", cols: 120, rows: 28 }));
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it("reports unavailable streams and synchronous termination failures", async () => {
     const terminateRef: { current: (() => boolean) | null } = { current: null };
     const onStateChange = vi.fn();

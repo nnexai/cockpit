@@ -60,7 +60,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   const control = useTerminalControl(refs, request, setError);
   const scratch = request.target_kind === "scratch";
   const pointer = useTerminalPointer(refs, control, terminalMouseInput, scratch);
-  const sizing = useTerminalResize(refs);
+  const sizing = useTerminalResize(refs, scratch);
   const frames = useTerminalFrameQueue(refs, sizing, setFramePainted);
   const clipboard = useTerminalClipboard(refs, control);
   const { clipboardError, clipboardBusy, terminalContextOpen, setTerminalContextOpen, terminalContextPosition, setTerminalContextPosition, contextSelectionRef, copySelection, pasteClipboard, pasteFiles } = clipboard;

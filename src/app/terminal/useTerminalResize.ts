@@ -14,7 +14,7 @@ function sameResize(previous: TerminalResize | null, command: TerminalResize): b
     && previous.cell_width_px === command.cell_width_px && previous.cell_height_px === command.cell_height_px;
 }
 
-export function useTerminalResize(refs: TerminalRefs) {
+export function useTerminalResize(refs: TerminalRefs, scratch = false) {
   const { fitRef, terminalRef, streamRef, ownershipRef, onCellGeometryRef } = refs;
   const lastResizeRef = useRef<TerminalResize | null>(null);
   const desiredViewportGridRef = useRef<TerminalGrid | null>(null);
@@ -42,6 +42,10 @@ export function useTerminalResize(refs: TerminalRefs) {
       fit.fit();
       desiredViewportGridRef.current = { cols: terminal.cols, rows: terminal.rows };
       renderedGridRef.current = { cols: terminal.cols, rows: terminal.rows };
+      // Scratch output is a byte stream, not authoritative screen frames.
+      // Fitting may already have happened before the stream became owned, in
+      // which case xterm emits no resize event when fit() is called again.
+      if (scratch) handleTerminalResize(terminal, { cols: terminal.cols, rows: terminal.rows });
       return;
     }
     const stream = streamRef.current;
