@@ -5,8 +5,18 @@ export type AttentionAvailability = "loading" | "ready" | "unavailable";
 type Mark = { epoch: number; seq: number };
 export type AttentionRow = { agent: Agent; key: string; terminalId: string | null; transition: Mark | null; completion: Mark | null; display: StatusClass; flag: "blocked" | "done" | "unseen" | null; unseen: boolean; completionAt: string | null; inferred: boolean; canSeen: boolean };
 const compare = (a: Mark | null | undefined, b: Mark | null | undefined) => !a ? (!b ? 0 : -1) : !b ? 1 : a.epoch - b.epoch || a.seq - b.seq;
+export const AGENTS_VIEW_KEY = "cockpit.sidebar.agentsView.v1";
+export type AgentsView = "attention" | "all";
+export function readAgentsView(): AgentsView {
+  try { return localStorage.getItem(AGENTS_VIEW_KEY) === "all" ? "all" : "attention"; }
+  catch { return "attention"; }
+}
+export function writeAgentsView(view: AgentsView): void {
+  try { localStorage.setItem(AGENTS_VIEW_KEY, view); } catch { /* Preferences are optional. */ }
+}
 
-export function deriveAgentQueue(snapshot: SessionSnapshotResponse, attention: AgentAttentionResponse | null, availability: AttentionAvailability): { visible: AttentionRow[] } {
+
+export function deriveAgentQueue(snapshot: SessionSnapshotResponse, attention: AgentAttentionResponse | null, availability: AttentionAvailability, includeIdle = false): { visible: AttentionRow[]; hiddenIdle: number } {
   const usable = availability === "ready" && attention?.server_instance === snapshot.server_instance && attention.session_id === snapshot.session_id ? attention : null;
   const terminals = new Map(snapshot.panes.map(pane => [pane.id, pane.terminal_id]));
   const records = new Map((usable?.records ?? []).map(record => [record.pane_id, record]));
@@ -20,11 +30,12 @@ export function deriveAgentQueue(snapshot: SessionSnapshotResponse, attention: A
     const unseen = availability !== "unavailable" && (completion ? compare(completion, record?.acked) > 0 : status === "done");
     const display = availability === "unavailable" ? status : status === "blocked" || status === "working" ? status : unseen ? "done" : status === "done" ? "idle" : status;
     const flag = availability === "unavailable" ? null : status === "blocked" ? "blocked" : unseen ? status === "working" ? "unseen" : "done" : null;
-    const tier = status === "blocked" ? 0 : unseen ? 1 : status === "working" ? 2 : 3;
+    const tier = status === "blocked" ? 0 : unseen ? 1 : status === "working" ? 2 : status === "idle" ? 4 : 3;
     return { agent, key: `${agent.pane_id}:${agent.name}`, terminalId, transition, completion: completion ?? null, display, flag, unseen, completionAt: record?.completion?.at ?? null, inferred: record?.completion?.inferred ?? false, canSeen: Boolean(transition && terminalId && unseen), tier } satisfies AttentionRow & { tier: number };
   });
   rows.sort((a, b) => a.tier - b.tier || compare(b.transition, a.transition) || Number(b.agent.focused) - Number(a.agent.focused) || a.agent.pane_id.localeCompare(b.agent.pane_id));
-  return { visible: rows.filter(row => stateClass(row.agent.status || "unknown") !== "idle" || row.unseen) };
+  const hiddenIdle = rows.filter(row => row.tier === 4).length;
+  return { visible: includeIdle ? rows : rows.filter(row => row.tier !== 4), hiddenIdle };
 }
 
 export function collectObservations(previous: ReadonlyMap<string, string>, snapshot: SessionSnapshotResponse): { next: Map<string, string>; observations: AgentAttentionObservation[] } {

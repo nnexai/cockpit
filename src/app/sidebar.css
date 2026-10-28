@@ -764,16 +764,22 @@
 /* Space tags are organisation, separate from the runtime state glyph. */
 .spaces-section .sidebar-section-heading { gap: 5px; padding-left: 10px; }
 .spaces-view-switch { display: flex; gap: 2px; margin-left: auto; }
-.spaces-view-switch button {
+.spaces-view-switch button,
+.agents-view-toggle {
   min-height: 24px; padding: 2px 6px; border: 0; border-radius: 3px;
   background: transparent; color: var(--text-muted); font: inherit; font-size: var(--font-size-2xs); cursor: pointer;
 }
-.spaces-view-switch button:hover { background: var(--surface-hover); }
-.spaces-view-switch button[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-primary); }
+.agents-view-toggle { margin-left: auto; }
+.agents-view-toggle span { color: var(--text-muted); font-family: var(--font-mono); font-weight: 600; }
+.agents-view-toggle:disabled { cursor: default; opacity: 0.5; }
+.spaces-view-switch button:hover:not(:disabled), .agents-view-toggle:hover:not(:disabled) { background: var(--surface-hover); }
+.spaces-view-switch button[aria-pressed="true"], .agents-view-toggle[aria-pressed="true"] { background: var(--surface-selected); color: var(--text-primary); }
 .spaces-view-switch button:focus-visible,
+.agents-view-toggle:focus-visible,
 .space-tag-group:focus-visible,
 .space-tag-dots:focus-visible,
 .space-tag-add:focus-visible { outline: 2px solid var(--focus-strong); outline-offset: -2px; }
+@media (pointer: coarse) { .agents-view-toggle { min-height: 32px; } }
 .space-tag-add {
   display: flex; flex: none; align-items: center; min-height: 20px; padding: 0 6px; border: 1px dashed var(--border-strong); border-radius: 3px;
   color: var(--text-muted); font: inherit; font-size: var(--font-size-2xs); line-height: 18px; pointer-events: auto; cursor: pointer;

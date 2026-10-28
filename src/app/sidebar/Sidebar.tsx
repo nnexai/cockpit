@@ -3,7 +3,7 @@ import type { SessionSummary } from "../../protocol/generated/v1";
 import type { SessionState } from "../session/sessionStore";
 import { registerSidebarFocus } from "../input/shortcuts";
 import { Agents } from "./Agents";
-import { deriveAgentQueue } from "./agentAttentionModel";
+import { deriveAgentQueue, readAgentsView, writeAgentsView, type AgentsView } from "./agentAttentionModel";
 import { SidebarHeader } from "./SidebarHeader";
 import { Spaces } from "./Spaces";
 
@@ -15,7 +15,7 @@ type SidebarProps = {
   onClose: () => void;
   closeRef?: RefObject<HTMLButtonElement | null>;
   spaces: Omit<ComponentProps<typeof Spaces>, "loading" | "hasSession" | "focusRef">;
-  agents: Omit<ComponentProps<typeof Agents>, "loading" | "hasSession" | "focusRef">;
+  agents: Omit<ComponentProps<typeof Agents>, "loading" | "hasSession" | "focusRef" | "view" | "onViewChange">;
   hasSession: boolean;
   hasSnapshot: boolean;
 };
@@ -27,9 +27,10 @@ export function Sidebar({ session, sync, narrow, onSession, onClose, closeRef, s
   useEffect(() => registerSidebarFocus({ spaces: () => spacesFocus.current?.(), agents: () => agentsFocus.current?.() }), []);
   const loading = hasSession && !hasSnapshot;
   const sectionsRef = useRef<HTMLDivElement>(null);
+  const [agentsView, setAgentsView] = useState<AgentsView>(readAgentsView);
   const fittedRows = useFittedSectionRows(sectionsRef);
   const spaceCount = spaces.spaces.length;
-  const agentCount = agents.snapshot ? deriveAgentQueue(agents.snapshot, agents.attention.response, agents.attention.availability).visible.length : 0;
+  const agentCount = agents.snapshot ? deriveAgentQueue(agents.snapshot, agents.attention.response, agents.attention.availability, agentsView === "all").visible.length : 0;
   const total = spaceCount + agentCount;
   const sectionRows = fittedRows ?? (total === 0
     ? "minmax(0, 1fr) minmax(0, 1fr)"
@@ -38,7 +39,7 @@ export function Sidebar({ session, sync, narrow, onSession, onClose, closeRef, s
     <SidebarHeader session={session} sync={sync} hasSnapshot={hasSnapshot} narrow={narrow} onSession={onSession} onClose={onClose} closeRef={closeRef} />
     <div className="sidebar-sections" ref={sectionsRef} style={{ gridTemplateRows: sectionRows }}>
       <Spaces {...spaces} loading={loading} hasSession={hasSession} focusRef={spacesFocus} />
-      <Agents {...agents} loading={loading} hasSession={hasSession} focusRef={agentsFocus} />
+      <Agents {...agents} loading={loading} hasSession={hasSession} focusRef={agentsFocus} view={agentsView} onViewChange={view => { setAgentsView(view); writeAgentsView(view); }} />
     </div>
   </>;
 }

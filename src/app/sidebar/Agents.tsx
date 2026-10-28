@@ -1,8 +1,8 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { SessionSnapshotResponse } from "../../protocol/generated/v1";
 import { returnFocusFromSidebar } from "../input/shortcuts";
 import type { AgentAttentionState } from "../session/agentAttention";
-import { deriveAgentQueue, type AttentionRow } from "./agentAttentionModel";
+import { deriveAgentQueue, type AgentsView, type AttentionRow } from "./agentAttentionModel";
 import { StateGlyph } from "./StateGlyph";
 import { SidebarSkeleton } from "./SidebarSkeleton";
 import { spaceStatus, type Space } from "./spaceTree";
@@ -10,13 +10,15 @@ import { useRovingList } from "./useRovingList";
 
 type Tab = SessionSnapshotResponse["tabs"][number];
 
-export function Agents({ snapshot, attention, live, spaces, tabs, selectedPaneId, pendingPaneId, loading, hasSession, onSelect, focusRef }: {
+export function Agents({ snapshot, attention, live, spaces, tabs, selectedPaneId, pendingPaneId, loading, hasSession, onSelect, focusRef, view, onViewChange }: {
   snapshot: SessionSnapshotResponse | null; attention: AgentAttentionState; live: boolean; spaces: Space[]; tabs: Tab[];
   selectedPaneId: string | null; pendingPaneId: string | null; loading: boolean; hasSession: boolean;
   onSelect: (row: AttentionRow) => void; focusRef: { current: (() => void) | null };
+  view: AgentsView; onViewChange: (view: AgentsView) => void;
 }) {
-  const queue = snapshot ? deriveAgentQueue(snapshot, attention.response, attention.availability) : { visible: [] };
+  const queue = snapshot ? deriveAgentQueue(snapshot, attention.response, attention.availability, view === "all") : { visible: [], hiddenIdle: 0 };
   const rows = queue.visible;
+  const [viewAnnouncement, setViewAnnouncement] = useState("");
   const pointer = useRef<string | null>(null);
   const focusedRow = useRef<{ key: string; index: number } | null>(null);
   const rowIds = rows.map(row => row.key);
@@ -65,7 +67,17 @@ export function Agents({ snapshot, attention, live, spaces, tabs, selectedPaneId
   };
   const waiting = loading || (hasSession && snapshot !== null && (attention.availability === "loading" || (attention.availability === "ready" && attention.response?.server_instance !== snapshot.server_instance)));
   return <section className="sidebar-section agents-section" aria-labelledby="agents-heading">
-    <div className="sidebar-section-heading"><h2 id="agents-heading">Agents</h2><span className="section-count">{queue.visible.length}</span></div>
+    <div className="sidebar-section-heading"><h2 id="agents-heading">Agents</h2><span className="section-count">{rows.length}</span>
+      <button type="button" className="agents-view-toggle" aria-pressed={view === "all"} disabled={!hasSession}
+        aria-label={view === "attention" && queue.hiddenIdle ? `Show all agents, ${queue.hiddenIdle} idle hidden` : "Show all agents"}
+        title="Show all agents, including idle" onClick={event => {
+          const next = view === "all" ? "attention" : "all";
+          const count = next === "all" ? rows.length + queue.hiddenIdle : rows.length - queue.hiddenIdle;
+          onViewChange(next);
+          setViewAnnouncement(next === "all" ? `Showing all ${count} agents` : `Showing ${count} agents that need attention`);
+          event.currentTarget.focus({ preventScroll: true });
+        }}>All{view === "attention" && queue.hiddenIdle > 0 ? <span aria-hidden="true"> +{queue.hiddenIdle}</span> : null}</button>
+    </div>
     {attention.availability === "unavailable" && hasSession ? <p className="agent-notice">Attention unavailable. <button type="button" onClick={attention.retry}>Retry</button></p> : null}
     <div className="agent-list" role="group" aria-label="Agents" ref={roving.listRef} {...roving.listProps}
       onFocus={event => {
@@ -78,8 +90,9 @@ export function Agents({ snapshot, attention, live, spaces, tabs, selectedPaneId
         roving.listProps.onBlur(event);
         if (!event.currentTarget.contains(event.relatedTarget as Node | null) && (event.relatedTarget || (event.target as HTMLElement).isConnected)) focusedRow.current = null;
       }}>
-      {waiting ? <SidebarSkeleton rows={2} /> : !hasSession ? <p className="empty-row">No session selected</p> : rows.length === 0 ? <p className="empty-row">No agents need attention</p> : rows.map(renderRow)}
+      {waiting ? <SidebarSkeleton rows={2} /> : !hasSession ? <p className="empty-row">No session selected</p> : rows.length === 0 ? <p className="empty-row">{view === "all" ? "No agents in this session" : "No agents need attention"}</p> : rows.map(renderRow)}
     </div>
     <span className="sr-only" role="status" aria-live="polite">{attention.announcement}</span>
+    <span className="sr-only" role="status" aria-live="polite">{viewAnnouncement}</span>
   </section>;
 }

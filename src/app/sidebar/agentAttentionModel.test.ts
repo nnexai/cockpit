@@ -25,6 +25,20 @@ it("automatically excludes ordinary idle but keeps actual done after acknowledge
   expect(deriveAgentQueue(done, null, "unavailable").visible).toHaveLength(1);
 });
 
+it("appends ordinary idle agents in all view without changing attention order", () => {
+  const mixed = { ...snapshot, panes: [...snapshot.panes, { id: "w", terminal_id: "tw" }, { id: "d", terminal_id: "td" }], agents: [
+    snapshot.agents[0]!, { ...snapshot.agents[0]!, pane_id: "w", name: "worker", status: "working", state_change_seq: 2 },
+    { ...snapshot.agents[0]!, pane_id: "d", name: "done", status: "done", state_change_seq: 1 },
+  ] } as SessionSnapshotResponse;
+  const queue = deriveAgentQueue(mixed, null, "unavailable");
+  const all = deriveAgentQueue(mixed, null, "unavailable", true);
+  expect(queue.hiddenIdle).toBe(1);
+  expect(all.hiddenIdle).toBe(1);
+  expect(all.visible.map(row => row.agent.pane_id)).toEqual([...queue.visible.map(row => row.agent.pane_id), "p"]);
+  expect(all.visible[2]).toMatchObject({ display: "idle", unseen: false, canSeen: false });
+  expect(deriveAgentQueue(snapshot, response, "ready", true)).toMatchObject({ hiddenIdle: 0, visible: [{ unseen: true, display: "done" }] });
+});
+
 it("keeps active and unseen agents", () => {
   expect(deriveAgentQueue(snapshot, response, "ready").visible[0]).toMatchObject({ unseen: true, display: "done" });
   for (const status of ["working", "blocked"]) {
