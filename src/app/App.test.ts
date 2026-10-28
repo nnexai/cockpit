@@ -288,14 +288,14 @@ function commandInput(): CommandInput {
       selectedLeaf: { t: "leaf", kind: "terminal", id: "pane-1", w: 1 }, selectedPane: source.panes[0], sourcePaneId: "pane-1", live: true, busy: false,
     },
     libraryOpen: false, notesOpen: false, browser: { open: false, reason: null },
-    liaison: { actionLabel: "Start supervisor", startAvailable: true, overviewAvailable: false, overviewOpen: false },
+    liaison: { label: "Start supervisor", reason: null, overviewAvailable: false, overviewOpen: false },
     git: { target: undefined, status: undefined, pending: undefined, blocked: undefined },
     tags: { blocked: null },
     widgets: { pending: false, dockTabId: null, list: [] },
     viewerSources: { status: "ready", options: viewerOptions() },
     local: {},
     run: {
-      herdr: vi.fn(), prefix: vi.fn(), askAgent: vi.fn(), supervisor: vi.fn(), overview: vi.fn(), git: vi.fn(), editSpaceTags: vi.fn(), recovery: vi.fn(), toggleNotes: vi.fn(),
+      herdr: vi.fn(), prefix: vi.fn(), askAgent: vi.fn(), liaison: vi.fn(), overview: vi.fn(), git: vi.fn(), editSpaceTags: vi.fn(), recovery: vi.fn(), toggleNotes: vi.fn(),
       openBrowser: vi.fn(), closeBrowser: vi.fn(), retryBrowserCleanup: vi.fn(), showWidgets: vi.fn(),
       cycleWidget: vi.fn(), removeWidget: vi.fn(), goToWidget: vi.fn(), libraryAdd: vi.fn(), library: vi.fn(), openViewer: vi.fn(),
     },
@@ -336,15 +336,16 @@ describe("command consumers", () => {
     expect(buildCommands(input).find(row => row.id === "subscription-limits")).toBeDefined();
   });
 
-  it("offers only actionable liaison entrypoints and a read-only overview while tasks exist", () => {
+  it("always offers the liaison entrypoint and a read-only overview while tasks exist", () => {
     const input = commandInput();
-    const start = buildCommands(input).find(row => row.id === "start-supervisor")!;
+    const start = buildCommands(input).find(row => row.id === "liaison")!;
+    expect(start).toMatchObject({ label: "Start supervisor", primary: true, disabled: false });
     start.run();
-    expect(input.run.supervisor).toHaveBeenCalledOnce();
+    expect(input.run.liaison).toHaveBeenCalledOnce();
     expect(buildCommands(input).some(row => row.id === "show-overview")).toBe(false);
-    input.liaison = { actionLabel: null, startAvailable: false, overviewAvailable: true, overviewOpen: false };
+    input.liaison = { label: "Go to liaison", reason: "Nothing to return to", overviewAvailable: true, overviewOpen: false };
     const rows = buildCommands(input);
-    expect(rows.some(row => row.id === "start-supervisor")).toBe(false);
+    expect(rows.find(row => row.id === "liaison")).toMatchObject({ disabled: true, reason: "Nothing to return to" });
     rows.find(row => row.id === "show-overview")!.run();
     expect(input.run.overview).toHaveBeenCalledOnce();
   });

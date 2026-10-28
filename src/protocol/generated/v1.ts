@@ -371,7 +371,11 @@ initial_prompt_args: Array<string> | null,
 /**
  * None enables the OMP hook; an empty argv disables it.
  */
-hook_args: Array<string> | null, max_parallel: number, process_scope: ScopeMode, inbox_prompt_hints: boolean, routes: Array<OrchestrationRoute>, };
+hook_args: Array<string> | null,
+/**
+ * Maximum non-closed workers per project key within a Herdr session.
+ */
+max_parallel: number, process_scope: ScopeMode, inbox_prompt_hints: boolean, routes: Array<OrchestrationRoute>, };
 
 export type ScopeMode = "auto" | "off";
 
@@ -1058,7 +1062,9 @@ export type TaskDependencyBlocker = { task_id: string, reason: TaskDependencyBlo
 
 export type TaskDependencyBlockerReason = "unchecked" | "missing" | "ambiguous";
 
-export type TaskView = { task: Task, lane: TaskLane, current_run_id: string | null, dependencies: TaskDependencies, scheduled: boolean, attempt: AttemptBadge | null, };
+export type TaskProject = { key: string | null, label: string, };
+
+export type TaskView = { task: Task, project: TaskProject | null, lane: TaskLane, current_run_id: string | null, dependencies: TaskDependencies, scheduled: boolean, attempt: AttemptBadge | null, };
 
 export type TaskLane = "blocked" | "ready" | "working" | "review" | "accepted";
 
@@ -1132,21 +1138,19 @@ export type ResumeCause = { code: string, message: string, class: ResumeCauseCla
 
 export type ResumeRecord = { operation_id: string, run_id: string, previous_attachment_epoch: number | null, phase: ResumePhase, cause: ResumeCause | null, decision_id: string | null, replacement_attachment_epoch: number | null, updated_at: string, };
 
-export type ProjectRootLookupRequest = { session_id: string, workspace_id: string, selected_root_id: string | null, };
+export type LiaisonLookupRequest = { session_id: string, selected_root_id: string | null, };
 
 export type RootConnection = "connected" | "reconnecting" | "disconnected" | "unknown";
 
 export type RootResumeAvailability = "available" | "in_progress" | "blocked";
 
-export type ProjectRootCandidate = { root_id: string, connection: RootConnection, resume: RootResumeAvailability, cause: ResumeCause | null,
+export type LiaisonCandidate = { root_id: string, connection: RootConnection, resume: RootResumeAvailability, cause: ResumeCause | null,
 /**
  * Resume may carry operator stop confirmation (core-computed static eligibility).
  */
 stop_confirmable: boolean, updated_at: string, };
 
-export type ProjectRootLookupResponse = { "status": "resolved", project: ProjectIdentity, lookup_revision: number, preferred_root_id: string | null, roots: Array<ProjectRootCandidate>, } | { "status": "unavailable", code: string, message: string, };
-
-export type SupervisorStartMode = "reuse_or_resume" | "another";
+export type LiaisonLookupResponse = { "status": "resolved", lookup_revision: number, preferred_root_id: string | null, roots: Array<LiaisonCandidate>, } | { "status": "unavailable", code: string, message: string, };
 
 export type SupervisorStartOutcome = "reused" | "resuming" | "created";
 
@@ -1302,7 +1306,7 @@ export type AttentionKind = "to_accept" | "needs_input" | "runtime_blocked" | "b
 
 export type Attention = { kind: AttentionKind, run_id: string | null, task_id: string | null, message_seq: number | null, since: string, };
 
-export type OrchestrationAction = { "action": "task_create", root_id: string, task_id: string, title: string, description: string, depends_on: Array<string>, follow_up_of: string | null, expected_doc_revision: string | null, source_revision: string | null, } | { "action": "task_assign", root_id: string, task_id: string, title: string, description: string, } | { "action": "task_assignment_resolve", root_id: string, task_id: string, expected_task_revision: string | null, assign: boolean, } | { "action": "task_update", root_id: string, task_id: string, expected_task_revision: string, title: string | null, description: string | null, } | { "action": "task_dependencies_set", root_id: string, task_id: string, expected_task_revision: string, expected_doc_revision: string, depends_on: Array<string>, } | { "action": "task_step_add", root_id: string, task_id: string, expected_task_revision: string, step_id: string, parent_step_id: string | null, before_step_id: string | null, title: string, } | { "action": "task_step_rename", root_id: string, task_id: string, expected_task_revision: string, step_id: string, title: string, } | { "action": "task_step_set_checked", root_id: string, task_id: string, expected_task_revision: string, step_id: string, checked: boolean, scope: TaskStepScope, } | { "action": "task_step_move", root_id: string, task_id: string, expected_task_revision: string, step_id: string, parent_step_id: string | null, before_step_id: string | null, } | { "action": "task_step_remove", root_id: string, task_id: string, expected_task_revision: string, step_id: string, } | { "action": "tasks_assign_ids", root_id: string, expected_doc_revision: string, } | { "action": "supervisor_start", operation_id: string, mode: SupervisorStartMode, target: DispatchTarget | null, label: string | null, selected_root_id: string | null, expected_project_key: string | null, } | { "action": "run_resume", run_id: string, operation_id: string, expected_attachment_epoch: number | null,
+export type OrchestrationAction = { "action": "task_create", root_id: string, task_id: string, title: string, description: string, depends_on: Array<string>, follow_up_of: string | null, expected_doc_revision: string | null, source_revision: string | null, } | { "action": "task_assign", root_id: string, task_id: string, title: string, description: string, } | { "action": "task_assignment_resolve", root_id: string, task_id: string, expected_task_revision: string | null, assign: boolean, } | { "action": "task_update", root_id: string, task_id: string, expected_task_revision: string, title: string | null, description: string | null, } | { "action": "task_dependencies_set", root_id: string, task_id: string, expected_task_revision: string, expected_doc_revision: string, depends_on: Array<string>, } | { "action": "task_step_add", root_id: string, task_id: string, expected_task_revision: string, step_id: string, parent_step_id: string | null, before_step_id: string | null, title: string, } | { "action": "task_step_rename", root_id: string, task_id: string, expected_task_revision: string, step_id: string, title: string, } | { "action": "task_step_set_checked", root_id: string, task_id: string, expected_task_revision: string, step_id: string, checked: boolean, scope: TaskStepScope, } | { "action": "task_step_move", root_id: string, task_id: string, expected_task_revision: string, step_id: string, parent_step_id: string | null, before_step_id: string | null, } | { "action": "task_step_remove", root_id: string, task_id: string, expected_task_revision: string, step_id: string, } | { "action": "tasks_assign_ids", root_id: string, expected_doc_revision: string, } | { "action": "supervisor_start", operation_id: string, target: DispatchTarget | null, label: string | null, selected_root_id: string | null, } | { "action": "run_resume", run_id: string, operation_id: string, expected_attachment_epoch: number | null,
 /**
  * Human operator attests this exact saved root main has stopped.
  * Only for roots whose launch recorded no process identity.

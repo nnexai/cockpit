@@ -88,7 +88,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 
 | Change | Current owner |
 | --- | --- |
-| Liaison project-root lookup/start/reuse/resume/focus | `src/app/supervisor/useLiaison.ts`; `src/app/shell/useLiaisonNavigation.ts` |
+| Session liaison lookup/start/reuse/resume/focus | `src/app/supervisor/useLiaison.ts`; `src/app/shell/useLiaisonNavigation.ts`; `crates/cockpit-host/src/orchestration_runtime.rs` |
 | Scoped notification observer and start/resume actions | `src/app/supervisor/useSupervisor.ts` |
 | Optional fullscreen Overview, shared task-history drill-down and conversation return | `src/app/supervisor/SupervisorView.tsx`; `src/app/shell/WorkbenchContent.tsx`; `src/app/shell/useWorkarea.ts` |
 | Compact terminal task rail, task history and read-only board | `src/app/supervisor/SupervisorTasks.tsx`; `TaskHistoryDetail.tsx` (record disclosure); `taskHistory.ts` (selected-task evidence projection); `src/app/layout/LeafHost.tsx`; `src/app/layout/TerminalLeaf.tsx` |
@@ -321,7 +321,7 @@ Idle waits register notifications before reads and coalesce/resync without a ful
 
 The optional OMP hook spawns registration/wait CLI children in a new POSIX session/process group (`detached: true`) with ignored stdin and captured output, while retaining inherited owned-cgroup membership. Exact AbortSignal cancellation and no `unref` keep lifecycle ownership; detached waiters do not become terminal foreground consumers or grant writer-exit proof. A live foreground/cgroup smoke, not the option alone, establishes the affected runtime behavior.
 
-Start reuses/reattaches the project root. Literal harness configuration, whole-argument `{prompt}`, `{hook_path}` and optional `{session_id}` resume rules live in [configuration](docs/configuration.md#supervisor-launch-and-attempt-authority). Launch acknowledgement, observed physical readiness, credential activation and first model response are distinct. The real liaison terminal owns conversation; its compact rail and optional fullscreen board/prerequisite graph are observational. Unknown effects and old consumers remain protected; this navigation grants no persistent-session repair authority. Additive schema-4 metadata needs no converter; incompatible schemas preserve their bytes on rejection.
+Start reuses/reattaches the session's eligible liaison; `orchestration_liaison_lookup` takes session and optional selected root, not a project key. New liaison state and terminal are separate from worker project placement. Literal harness configuration, whole-argument `{prompt}`, `{hook_path}` and optional `{session_id}` resume rules live in [configuration](docs/configuration.md#supervisor-launch-and-attempt-authority). Launch acknowledgement, observed physical readiness, credential activation and first model response are distinct. The real liaison terminal owns conversation; its project-grouped rail and optional fullscreen board/prerequisite graph are observational. Unknown effects and old consumers remain protected; this navigation grants no persistent-session repair authority. Additive schema-4 metadata needs no converter; incompatible schemas preserve their bytes on rejection.
 
 ### Library follow refresh, sources and token storage
 

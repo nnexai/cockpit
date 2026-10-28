@@ -50,7 +50,7 @@ export interface CommandInput {
   view: Pick<WorkbenchView, "spaces" | "allTabs" | "selectedSpace" | "selectedTab" | "selectedLeaf" | "selectedPane" | "sourcePaneId" | "live" | "busy">;
   libraryOpen: boolean;
   notesOpen: boolean;
-  liaison: { actionLabel: string | null; startAvailable: boolean; overviewAvailable: boolean; overviewOpen: boolean };
+  liaison: { label: string; reason: string | null; overviewAvailable: boolean; overviewOpen: boolean };
   browser: { open: boolean; reason: string | null };
   git: { target: Space | undefined; status: SpaceGitStatus | undefined; pending: GitActionState | undefined; blocked: string | undefined };
   tags: { blocked: string | null };
@@ -61,7 +61,7 @@ export interface CommandInput {
     herdr(command: HerdrCommand): void;
     prefix(command: PrefixCommand): void;
     askAgent(): void;
-    supervisor(): void;
+    liaison(): void;
     overview(): void;
     git(spaceId: string, action: SpaceGitAction): void;
     editSpaceTags(): void;
@@ -89,7 +89,7 @@ export function buildCommands(input: CommandInput): CommandAction[] {
       id: `herdr:${command.command_id}`, label: command.description ? command.description.charAt(0).toUpperCase() + command.description.slice(1) : "Custom command", icon: command.action === "popup" ? "more" : command.action === "plugin_action" ? "file" : "terminal", shortcut: herdrCommandShortcut(command, herdr.prefixes), group: "Herdr",
       disabled: Boolean(herdr.reason || herdr.popupOpen), reason: herdr.reason, run: () => run.herdr(command),
     })),
-    ...(input.liaison.startAvailable ? [{ id: "start-supervisor", label: input.liaison.actionLabel ?? "Start supervisor", primary: true, group: "Navigate" as const, run: run.supervisor }] : []),
+    { id: "liaison", label: input.liaison.label, primary: true, group: "Navigate", shortcut: formatShortcut("liaison"), disabled: Boolean(input.liaison.reason), reason: input.liaison.reason ?? undefined, run: run.liaison },
     ...(input.liaison.overviewAvailable || input.liaison.overviewOpen ? [{ id: "show-overview", label: input.liaison.overviewOpen ? "Back to conversation" : "Show overview", group: "Navigate" as const, run: run.overview }] : []),
     ...SHORTCUTS.filter(entry => entry.palette === undefined).flatMap((entry): CommandAction[] => {
       if (!entry.prefix && !DIRECT_COMMANDS.includes(entry.id as PrefixCommand)) {

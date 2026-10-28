@@ -1634,7 +1634,7 @@ fn latch_effect_intent_is_at_most_once_except_proven_reader_absence_and_preserve
 }
 
 #[test]
-fn root_placement_sets_only_actual_project_space_and_preserves_explicit_source() {
+fn supervisor_placement_does_not_invent_a_project_source_space() {
     for explicit in [None, Some("explicit-project-space")] {
         let fixture = Fixture::new();
         let root = fixture.root();
@@ -1659,7 +1659,7 @@ fn root_placement_sets_only_actual_project_space_and_preserves_explicit_source()
         let (location, setup) = moved_receipts(&staged);
         fixture.service.record_placement(&fixture.run(&root), location.clone(), setup).unwrap();
         let placed = fixture.run(&root);
-        assert_eq!(placed.project.as_ref().unwrap().source_workspace_id.as_deref(), Some(explicit.unwrap_or(&location.workspace_id)));
+        assert_eq!(placed.project.as_ref().unwrap().source_workspace_id.as_deref(), explicit);
         assert_eq!(placed.dispatch.as_ref().unwrap().staging_workspace_id.as_deref(), Some(source.workspace_id.as_str()));
         assert_ne!(placed.attachment.as_ref().unwrap().location.as_ref().unwrap().workspace_id, source.workspace_id);
     }

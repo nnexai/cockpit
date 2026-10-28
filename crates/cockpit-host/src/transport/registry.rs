@@ -325,13 +325,13 @@ macro_rules! cockpit_operations {
                   limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
                   guard = after(Orchestration); status = service
             }
-            { id: orchestration_project_root_lookup, ctx: orchestration, out: ::cockpit_protocol::orchestration::ProjectRootLookupResponse,
-              call: $crate::transport::operations::orchestration::orchestration_project_root_lookup,
-              native: orchestration_project_root_lookup(request: ::serde_json::Value)
+            { id: orchestration_liaison_lookup, ctx: orchestration, out: ::cockpit_protocol::orchestration::LiaisonLookupResponse,
+              call: $crate::transport::operations::orchestration::orchestration_liaison_lookup,
+              native: orchestration_liaison_lookup(request: ::serde_json::Value)
                   => $crate::transport::native_input::value($crate::transport::limits::MUTATION_BYTES, "orchestration"),
-              http: post "/api/v1/sessions/{session_id}/orchestration/project-roots"
-                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::orchestration::ProjectRootLookupRequest>, ::axum::extract::rejection::JsonRejection>)
-                  => $crate::transport::operations::orchestration::project_root_lookup_input();
+              http: post "/api/v1/sessions/{session_id}/orchestration/liaison"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::orchestration::LiaisonLookupRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::operations::orchestration::liaison_lookup_input();
                   limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
                   guard = after(Orchestration); status = service
             }

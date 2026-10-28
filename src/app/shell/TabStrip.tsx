@@ -5,7 +5,7 @@ import type { SpaceStatus } from "../sidebar/spaceTree";
 import { InlineRename } from "../InlineRename";
 import { LibraryProblems } from "../library/LibraryProblems";
 import { tabDropInsertionIndex } from "../layout/layoutProjection";
-import { withShortcut } from "../input/shortcuts";
+import { ariaKeyShortcuts, withShortcut } from "../input/shortcuts";
 import type { ContextTarget } from "./ContextMenu";
 import type { Mutate, Tab } from "./model";
 
@@ -20,7 +20,7 @@ export function tabLabelIsRedundant(label: string, displayedNumber: number): boo
 /** The active Space, shown before the tabs while the sidebar is hidden. */
 export type TabStripSpaceContext = { label: string; branch: string | null; status: SpaceStatus };
 
-export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDisabledReason, libraryOpen, supervisorAction, supervisorActionDisabled, supervisorActionReason, liaisonTab, waitingTabId, onSupervisor, notesOpen, onNotesToggle, widgetDots, widgetsPending, onWidgets, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, onQuickSwitch, sidebarOpen, spaceContext, agentBlocked, onToggleSidebar, mutate }: {
+export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, browserDisabledReason, libraryOpen, supervisorAction, supervisorActionDisabled, supervisorActionReason, liaisonRunning, inLiaisonPane, liaisonWaiting, liaisonTab, waitingTabId, onSupervisor, notesOpen, onNotesToggle, widgetDots, widgetsPending, onWidgets, onEdit, onSelect, onContext, onCreate, onBrowserToggle, onLibraryToggle, onCommands, onQuickSwitch, sidebarOpen, spaceContext, agentBlocked, onToggleSidebar, mutate }: {
   tabs: Tab[];
   selectedTabId: string | null;
   editingId: string | null;
@@ -28,9 +28,12 @@ export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, br
   browserOpen: boolean;
   browserDisabledReason: string | null;
   libraryOpen: boolean;
-  supervisorAction: string | null;
+  supervisorAction: string;
   supervisorActionDisabled: boolean;
   supervisorActionReason: string | null;
+  liaisonRunning: boolean;
+  inLiaisonPane: boolean;
+  liaisonWaiting: boolean;
   liaisonTab: { id: string; launchTag: string } | null;
   waitingTabId: string | null;
   onSupervisor(): void;
@@ -94,6 +97,6 @@ export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, br
     </div>;
   })}
     <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" />{widgetsPending ? <button type="button" className="tab-strip-action" aria-label="Show widgets" disabled={busy} onClick={onWidgets}>Widgets <span className="widget-dot" aria-hidden="true" /></button> : null}<button type="button" className="tab-icon-button" aria-label="Go to Space or agent" title={withShortcut("Go to Space or agent", "quick-switch")} onClick={onQuickSwitch}><UiIcon name="search" /></button><button type="button" className="tab-icon-button" disabled={busy || Boolean(browserDisabledReason)} aria-label="Browser" aria-pressed={browserOpen} title={browserDisabledReason ?? withShortcut(browserOpen ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : "Open browser for tab", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><LibraryProblems /><button type="button" className="tab-icon-button" aria-label="Notes" aria-controls="cockpit-notes" aria-pressed={notesOpen} title={notesOpen ? "Close Notes" : "Open Notes"} onClick={onNotesToggle}><UiIcon name="file" /></button><button type="button" className="tab-icon-button" aria-label="Commands" title={withShortcut("Commands", "help")} onClick={onCommands}><UiIcon name="command" /></button></div>
-    {supervisorAction ? <div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" /><button type="button" className="tab-icon-button" aria-label={supervisorAction} disabled={supervisorActionDisabled} title={supervisorActionReason ?? supervisorAction} onClick={onSupervisor}><UiIcon name="supervisor" /></button></div> : null}
+    <div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" /><button type="button" className="tab-icon-button" aria-label={`${supervisorAction}${liaisonWaiting && !inLiaisonPane ? ", waiting for you" : ""}`} aria-pressed={liaisonRunning ? inLiaisonPane : undefined} aria-keyshortcuts={ariaKeyShortcuts("liaison")} disabled={supervisorActionDisabled} title={supervisorActionReason ?? withShortcut(supervisorAction, "liaison")} onClick={onSupervisor}><UiIcon name="supervisor" />{liaisonWaiting && !inLiaisonPane ? <span className="tab-attention-dot is-waiting" aria-hidden="true" /> : null}</button></div>
   </nav>;
 }

@@ -57,6 +57,23 @@ pub(super) async fn inbox_next(
     };
     let captured = !messages.is_empty();
     let messages: Vec<_> = messages.into_iter().filter(|message| !deliverable || meaningful(message)).collect();
+    let contexts = if messages.is_empty() { Default::default() } else {
+        context.service.inbox_message_context(caller, &messages).unwrap_or_else(|error| {
+            eprintln!("Inbox context unavailable: {}", error.message);
+            Default::default()
+        })
+    };
+    let messages = messages.into_iter().map(|message| {
+        let mut value = serde_json::to_value(&message)
+            .map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+        if let Some(context) = contexts.get(&message.message_id) {
+            value.as_object_mut().expect("message serializes as an object").insert(
+                "context".into(),
+                serde_json::to_value(context).map_err(|error| CliError::new("orchestration_output", error.to_string()))?,
+            );
+        }
+        Ok(value)
+    }).collect::<Result<Vec<_>, CliError>>()?;
     let remaining = context.service.wait_inbox(caller, read_through_seq, Duration::ZERO).await?;
     let capture_file = match capture_file {
         Some(path) => Some(path),

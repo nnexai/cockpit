@@ -323,8 +323,8 @@ fn operator_only_intents_never_gain_root_or_worker_authority() {
         },
         OrchestrationAction::IntentResolve { intent_id: id(), apply: false },
         OrchestrationAction::SupervisorStart {
-            operation_id: id(), mode: SupervisorStartMode::Another, target: Some(target()), label: None,
-            selected_root_id: None, expected_project_key: Some(matrix.fixture.project().key),
+            operation_id: id(), target: Some(target()), label: None,
+            selected_root_id: None,
         },
         OrchestrationAction::RunAdopt { label: "Operator adoption".into(), location: attachment.location.clone().unwrap() },
         OrchestrationAction::RunAttach {

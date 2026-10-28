@@ -4,7 +4,7 @@ fn main() {
             "cockpit_status",
             "cockpit_quota_status",
             "orchestration_snapshot",
-            "orchestration_project_root_lookup",
+            "orchestration_liaison_lookup",
             "orchestration_mutate",
             "orchestration_wait",
             "cockpit_notes_execute",

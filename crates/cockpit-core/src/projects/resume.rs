@@ -11,8 +11,8 @@ use crate::{InspectionError, library::LibraryService,
 use super::{ProjectService, validate_session, validate_text};
 
 impl ProjectService {
-    /// Bind only a new moved Space for a reserved resumed worker incarnation.
-    /// The caller fences the worker epoch/claim; the original filesystem creator never changes.
+    /// Bind a new moved Space for a reserved resumed incarnation.
+    /// The caller fences the epoch and any worker claim; the filesystem creator never changes.
     pub async fn bind_resumed_space(
         &self, session: &str, previous_operation_id: Option<&str>, expected_checkout: &CheckoutIdentity,
         source_location: &RunLocation, request: &BindMovedSpaceRequest, library: &LibraryService,
@@ -87,7 +87,7 @@ impl ProjectService {
                 label: previous.as_ref().map(|operation| operation.plan.label.clone()).unwrap_or_else(|| source_location.launch_tag.clone()),
                 focus: false, artifact: artifact.clone(),
                 linked_artifacts: previous.as_ref().map(|operation| operation.plan.linked_artifacts.clone()).unwrap_or_default(),
-                effects: vec!["bind resumed worker's newly moved Space; retain existing checkout ownership".into()], warnings: vec![],
+                effects: vec!["bind resumed actor's newly moved Space; retain existing checkout ownership".into()], warnings: vec![],
             };
             let journal = OwnedCheckoutJournal {
                 request: OwnedCheckoutRequest { operation_id: request.operation_id.clone(),

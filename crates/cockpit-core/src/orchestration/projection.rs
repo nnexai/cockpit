@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use cockpit_protocol::orchestration::*;
 use cockpit_protocol::v1::ErrorResponse;
+use cockpit_protocol::projects::WorkspaceSetupRequest;
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::herdr::RuntimeView;
@@ -134,6 +135,7 @@ pub(crate) fn snapshot(
         .iter()
         .filter(|intent| root_ids.contains(intent.root_id.as_str()))
         .collect();
+    let board = project_board(boards, selected_root, state, &intents, runtime.as_ref().ok())?;
     let runtime = observe(&runs, runtime, now);
     let observations: HashMap<&str, &RunObservation> = match &runtime.0 {
         RuntimeObservation::Fresh { runs, .. } => runs
@@ -146,7 +148,6 @@ pub(crate) fn snapshot(
         &runs, &inboxes, &observations, &intents, &run_by_id, &state.messages,
         AttentionClock { at: clock, text: now },
     );
-    let board = project_board(boards, selected_root, state, &intents)?;
     let mut open_counts: HashMap<&str, u32> = HashMap::new();
     for run in &runs {
         if run.stage != RunStage::Closed {
@@ -280,6 +281,7 @@ fn project_board(
     selected_root: Option<&str>,
     state: &OrchestrationState,
     intents: &[&TaskIntent],
+    runtime: Option<&RuntimeView>,
 ) -> Result<Option<TaskBoard>, InspectionError> {
     let intent_runs: HashSet<&str> = intents
         .iter()
@@ -303,6 +305,7 @@ fn project_board(
                 view.lane = lane(&view.task, &view.dependencies, current, &intent_runs);
                 view.scheduled = state.task_ownership.iter().any(|record|
                     record.root_id == root_id && record.task_id == view.task.task_id && record.schedule.is_some());
+                view.project = task_project(state, root_id, &view.task.task_id, runtime);
                 view.attempt = current.filter(|run| run.stage != RunStage::Closed).map(|run| AttemptBadge {
                     run_id: run.run_id.clone(), attempt: run.attempt,
                     state: if run.resume.as_ref().is_some_and(|resume| resume.phase == ResumePhase::Blocked)
@@ -329,6 +332,59 @@ fn project_board(
         }
     };
     Ok(board)
+}
+
+pub(super) fn task_project(
+    state: &OrchestrationState,
+    root_id: &str,
+    task_id: &str,
+    runtime: Option<&RuntimeView>,
+) -> Option<TaskProject> {
+    let latest = state.runs.iter()
+        .filter(|run| run.root_id == root_id && run.kind == RunKind::Worker
+            && run.task_id.as_deref() == Some(task_id))
+        .max_by(|a, b| (a.attempt, &a.created_at, &a.run_id).cmp(&(b.attempt, &b.created_at, &b.run_id)));
+    let dedicated = |project: &ProjectIdentity| state.runs.iter().find(|run| run.run_id == root_id
+        && run.kind == RunKind::Supervisor)
+        .and_then(|run| run.project.as_ref())
+        .is_some_and(|root| matches!(&root.source, ProjectSource::Directory { .. }) && root.key == project.key);
+    let labelled = |project: &ProjectIdentity| -> Option<TaskProject> {
+        if dedicated(project) { return None; }
+        // Path names read better than catalog IDs, which are opaque hashes.
+        let label = match &project.source {
+            ProjectSource::Git { common_dir } => std::path::Path::new(common_dir).parent().and_then(path_label),
+            ProjectSource::Directory { root } => path_label(std::path::Path::new(root)),
+        }.or_else(|| project.repository_id.clone())?;
+        Some(TaskProject { key: Some(project.key.clone()), label })
+    };
+    if let Some(project) = latest.and_then(|run| run.project.as_ref()) {
+        return labelled(project);
+    }
+    let target = state.task_ownership.iter()
+        .find(|ownership| ownership.root_id == root_id && ownership.task_id == task_id)?
+        .schedule.as_ref()?.target.as_ref()?;
+    let label = match target {
+        DispatchTarget::ExistingSpace { workspace_id } | DispatchTarget::SpaceWorktree { workspace_id, .. } => {
+            // Reuse the project another attempt already resolved from this
+            // source Space so queued siblings group under the same key.
+            if let Some(project) = state.runs.iter().filter_map(|run| run.project.as_ref())
+                .find(|project| project.source_workspace_id.as_deref() == Some(workspace_id.as_str())) {
+                return labelled(project);
+            }
+            runtime.and_then(|view| view.workspaces.iter().find(|space| space.workspace_id == *workspace_id))
+                .map(|space| space.label.clone()).unwrap_or_else(|| workspace_id.clone())
+        }
+        DispatchTarget::Setup { request: WorkspaceSetupRequest::Open { path, .. } } =>
+            path_label(std::path::Path::new(path))?,
+        DispatchTarget::Setup { request: WorkspaceSetupRequest::Create { repository_id, .. } } =>
+            repository_id.clone(),
+        DispatchTarget::OwnedAttemptDirectory { .. } => return None,
+    };
+    Some(TaskProject { key: None, label })
+}
+
+fn path_label(path: &std::path::Path) -> Option<String> {
+    path.file_name().map(|name| name.to_string_lossy().into_owned())
 }
 
 fn attempt_order(run: &Run) -> (bool, u32, &str, &str) {
@@ -798,6 +854,7 @@ mod tests {
                 current_run_id: None,
                 scheduled: false,
                 attempt: None,
+                project: None,
                 dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: Vec::new(), problems: Vec::new() },
             }],
         }
@@ -827,6 +884,81 @@ mod tests {
                 state_changed_at: Some(START.into()),
             }],
         }
+    }
+
+    #[test]
+    fn task_project_uses_latest_attempt_identity_and_suppresses_liaison_directory() {
+        let mut durable = state(worker(RunStage::Working));
+        durable.runs[0].project = Some(ProjectIdentity {
+            key: "directory:/liaison".into(),
+            source: ProjectSource::Directory { root: "/liaison".into() },
+            repository_id: None, source_workspace_id: None,
+        });
+        durable.runs[1].project = Some(ProjectIdentity {
+            key: "git:one".into(), source: ProjectSource::Git { common_dir: "/src/one/.git".into() },
+            repository_id: Some("configured-repo".into()), source_workspace_id: None,
+        });
+        let mut latest = worker(RunStage::Closed);
+        latest.run_id = "latest".into();
+        latest.attempt = 2;
+        latest.project = Some(ProjectIdentity {
+            key: "git:two".into(), source: ProjectSource::Git { common_dir: "/src/two/.git".into() },
+            repository_id: None, source_workspace_id: None,
+        });
+        durable.runs.push(latest);
+        let projected = task_project(&durable, ROOT, TASK, None).unwrap();
+        assert_eq!(projected.key.as_deref(), Some("git:two"));
+        assert_eq!(projected.label, "two");
+        let snapshot = project(&durable, Ok(runtime("working")));
+        assert_eq!(snapshot.board.unwrap().tasks[0].project.as_ref().unwrap().label, "two");
+        durable.runs[2].project = durable.runs[0].project.clone();
+        assert!(task_project(&durable, ROOT, TASK, None).is_none());
+        durable.runs[2].project = Some(ProjectIdentity {
+            key: "directory:other".into(), source: ProjectSource::Directory { root: "/src/other".into() },
+            repository_id: None, source_workspace_id: None,
+        });
+        assert_eq!(task_project(&durable, ROOT, TASK, None).unwrap().label, "other");
+        // Catalog IDs are opaque hashes; the readable path name wins.
+        durable.runs[2].project.as_mut().unwrap().repository_id = Some("repo-id".into());
+        assert_eq!(task_project(&durable, ROOT, TASK, None).unwrap().label, "other");
+    }
+
+    #[test]
+    fn task_project_uses_scheduled_target_when_no_attempt_identity() {
+        let mut durable = state(worker(RunStage::Queued));
+        durable.task_ownership[0].schedule = Some(TaskSchedule {
+            operation_id: "op".into(), principal_key: "principal".into(),
+            target: Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() }),
+            brief: "brief".into(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
+            label: None, scheduled_at: START.into(),
+        });
+        let mut view = runtime("working");
+        view.workspaces.push(super::super::herdr::RuntimeWorkspace {
+            workspace_id: "space".into(), label: "Fresh label".into(), cwd: "/src".into(),
+        });
+        let project = task_project(&durable, ROOT, TASK, Some(&view)).unwrap();
+        assert_eq!(project.label, "Fresh label");
+        assert!(project.key.is_none());
+        assert_eq!(task_project(&durable, ROOT, TASK, None).unwrap().label, "space");
+        durable.task_ownership[0].schedule.as_mut().unwrap().target = Some(DispatchTarget::SpaceWorktree {
+            workspace_id: "space".into(), branch: None, base_ref: None,
+        });
+        assert_eq!(task_project(&durable, ROOT, TASK, Some(&view)).unwrap().label, "Fresh label");
+        durable.task_ownership[0].schedule.as_mut().unwrap().target = Some(DispatchTarget::Setup {
+            request: WorkspaceSetupRequest::Open {
+                path: "/src/opened".into(), label: None, task_name: None, focus: false,
+            },
+        });
+        assert_eq!(task_project(&durable, ROOT, TASK, None).unwrap().label, "opened");
+        durable.task_ownership[0].schedule.as_mut().unwrap().target = Some(DispatchTarget::Setup {
+            request: WorkspaceSetupRequest::Create {
+                repository_id: "created".into(), branch: None, base_ref: None, checkout_path: None,
+                label: None, task_name: None, artifact_url: None, linked_artifact_urls: Vec::new(), focus: false,
+            },
+        });
+        assert_eq!(task_project(&durable, ROOT, TASK, None).unwrap().label, "created");
+        durable.task_ownership[0].schedule.as_mut().unwrap().target = None;
+        assert!(task_project(&durable, ROOT, TASK, None).is_none());
     }
 
     fn brief(kind: MessageKind, stage: DeliveryStage) -> Message {

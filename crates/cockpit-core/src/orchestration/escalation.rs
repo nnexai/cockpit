@@ -122,20 +122,15 @@ fn append_failure(state: &mut OrchestrationState, index: usize, unresolved: bool
     let dispatch = run.dispatch.as_ref().expect("dispatch");
     let prefix = format!("dispatch-failure:{}:", incarnation(run));
     let code = dispatch.error.as_ref().map(|error| error.code.as_str()).unwrap_or("dispatch_uncertain");
-    let (key, semantic) = if let Some(boundary) = placement_boundary(run) {
-        (format!("{prefix}{boundary}"), None)
+    let key = if let Some(boundary) = placement_boundary(run) {
+        format!("{prefix}{boundary}")
     } else if unresolved {
-        (format!("{prefix}launch_unresolved"), None)
+        format!("{prefix}launch_unresolved")
     } else {
         let step = serde_json::to_value(dispatch.step).expect("serializable step");
-        let semantic = format!("{prefix}{}:{code}:", step.as_str().expect("step string"));
-        (format!("{semantic}{}", dispatch.updated_at), Some(semantic))
+        format!("{prefix}{}:{code}", step.as_str().expect("step string"))
     };
-    if state.messages.iter().any(|message| {
-        dispatcher_message(message, &run.root_id) && (message.message_id == key
-            || semantic.as_ref().is_some_and(|prefix| message.message_id.starts_with(prefix)
-                && message.stage == DeliveryStage::Stored))
-    }) {
+    if state.messages.iter().any(|message| dispatcher_message(message, &run.root_id) && message.message_id == key) {
         return Ok(false);
     }
     let (effect, next, operator_reason) = next_steps(run);

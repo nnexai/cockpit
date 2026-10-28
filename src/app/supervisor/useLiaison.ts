@@ -1,25 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { CockpitClientError } from "../../client/CockpitClient";
-import type { OrchestrationSnapshot, ProjectRootLookupResponse, Run, TaskView } from "../../protocol/generated/v1";
+import type { OrchestrationSnapshot, LiaisonLookupResponse, Run, TaskView } from "../../protocol/generated/v1";
 import type { WorkbenchProps } from "../shell/Workbench";
 import { useSupervisor, type LiaisonAction, type MutationRequestScope } from "./useSupervisor";
 
-type ConfirmationAttachment = { sessionId: string; spaceId: string; stateStoreId: string; rootId: string; attachmentId: string; epoch: number };
+type ConfirmationAttachment = { sessionId: string; stateStoreId: string; rootId: string; attachmentId: string; epoch: number };
 type RecoveryState = ConfirmationAttachment & { message: string | null; retry: boolean; unavailable: boolean };
-type RetainedOperation = { action: LiaisonAction; scope: MutationRequestScope; spaceId: string; confirmation?: ConfirmationAttachment };
+type RetainedOperation = { action: LiaisonAction; scope: MutationRequestScope; confirmation?: ConfirmationAttachment };
 export interface ConfirmedRecovery {
   busy: boolean; unavailable: boolean; retry: boolean; message: string | null; error: boolean;
   confirm(): Promise<void>; close(): void;
 }
 export interface LiaisonController {
   snapshot: OrchestrationSnapshot | null; root: Run | null; tasks: TaskView[];
-  waiting: boolean; fresh: boolean; status: string | null; actionLabel: string | null; actionEnabled: boolean; actionReason: string | null; startAvailable: boolean; error: string | null;
+  waiting: boolean; fresh: boolean; connected: boolean; status: string | null; actionLabel: string | null; actionEnabled: boolean; actionReason: string | null; startAvailable: boolean; error: string | null;
   paneId: string | null; tabId: string | null; start(): Promise<void>; activate(): Promise<void>; recovery: ConfirmedRecovery | null;
 }
 export function useLiaison(props: WorkbenchProps, openConversation: () => void, navigate: (paneId: string, run: Run, snapshot: OrchestrationSnapshot) => Promise<void>, conversationVisible: boolean): LiaisonController {
   const { client, state, selection, onReconnect } = props;
-  const [project, setProject] = useState<{ sessionId: string; spaceId: string; lookup: ProjectRootLookupResponse; token: number; preferredRootId: string | null } | null>(null);
-  const [rootSelection, setRootSelection] = useState<{ sessionId: string; spaceId: string; rootId: string; token: number } | null>(null);
+  const [project, setProject] = useState<{ sessionId: string; lookup: LiaisonLookupResponse; token: number; preferredRootId: string | null } | null>(null);
+  const [rootSelection, setRootSelection] = useState<{ sessionId: string; rootId: string; token: number } | null>(null);
   const [lookupToken, setLookupToken] = useState(0);
   const lookupGeneration = useRef(0);
   const [navigationError, setNavigationError] = useState<string | null>(null);
@@ -29,64 +29,62 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
   const confirming = useRef(false);
   const focusRoot = useRef<{ sessionId: string; rootId: string; sourcePaneId: string | null } | null>(null);
   const navigating = useRef(false);
-  const lookup = project?.sessionId === state.sessionId && project.spaceId === selection.spaceId ? project.lookup : null;
-  const selected = rootSelection?.sessionId === state.sessionId && rootSelection.spaceId === selection.spaceId ? rootSelection.rootId : null;
+  const lookup = project?.sessionId === state.sessionId ? project.lookup : null;
+  const selected = rootSelection?.sessionId === state.sessionId ? rootSelection.rootId : null;
   // Keep a just-started root selected until the lookup following that selection arrives.
   const selectedValid = selected && (lookup?.status !== "resolved" || lookup.roots.some(item => item.root_id === selected) || project!.token < rootSelection!.token);
-  const preferredRootId = project?.sessionId === state.sessionId && project.spaceId === selection.spaceId ? project.preferredRootId : null;
+  const preferredRootId = project?.sessionId === state.sessionId ? project.preferredRootId : null;
   const rootId = selectedValid ? selected : preferredRootId;
   const observer = useSupervisor(client, state.sessionId ?? "", rootId, !!state.sessionId, state.sync === "live");
   useEffect(() => {
     let cancelled = false, timer = 0;
-    if (!state.sessionId || !selection.spaceId || state.sync !== "live") return;
-    const sessionId = state.sessionId, spaceId = selection.spaceId;
+    if (!state.sessionId || state.sync !== "live") return;
+    const sessionId = state.sessionId;
     const load = async () => {
       try {
-        const next = await client.orchestrationProjectRootLookup({ session_id: sessionId, workspace_id: spaceId, selected_root_id: null });
+        const next = await client.orchestrationLiaisonLookup({ session_id: sessionId, selected_root_id: null });
         if (!cancelled) {
-          setProject(previous => ({ sessionId, spaceId, lookup: next, token: lookupToken, preferredRootId: next.status === "resolved" ? next.preferred_root_id : previous?.sessionId === sessionId && previous.spaceId === spaceId ? previous.preferredRootId : null }));
+          setProject(previous => ({ sessionId, lookup: next, token: lookupToken, preferredRootId: next.status === "resolved" ? next.preferred_root_id : previous?.sessionId === sessionId ? previous.preferredRootId : null }));
           if (next.status === "unavailable") timer = window.setTimeout(() => void load(), 1500);
         }
       } catch { if (!cancelled) timer = window.setTimeout(() => void load(), 1500); }
     };
     void load();
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [client, state.sessionId, state.sync, selection.spaceId, lookupToken, observer.snapshot]);
+  }, [client, state.sessionId, state.sync, lookupToken, observer.snapshot]);
   const snapshot = observer.snapshot;
   const root = rootId ? snapshot?.runs.find(run => run.run_id === rootId && run.root_id === rootId) ?? null : null;
   const candidate = lookup?.status === "resolved" ? lookup.roots.find(item => item.root_id === rootId) : undefined;
   const fresh = observer.connected && state.sync === "live" && snapshot?.runtime.status === "fresh";
   const observation = fresh && snapshot?.runtime.status === "fresh" && root ? snapshot.runtime.runs.find(item => item.run_id === root.run_id) : undefined;
   const waiting = !!root && root.stage !== "closed" && !!snapshot?.questions.some(question => question.run_id === root.run_id && question.receipt.status === "unresolved");
-  const retainedScopeMatches = !retained.current || retained.current.spaceId === selection.spaceId && retained.current.scope.sessionId === state.sessionId && retained.current.scope.stateStoreId === snapshot?.state_store_id;
-  const actionable = fresh && !observer.busy && !state.focusPending && !state.focusError && lookup?.status === "resolved" && !!selection.spaceId && selection.spaceId === state.snapshot?.focused_space_id && retainedScopeMatches;
+  const retainedScopeMatches = !retained.current || retained.current.scope.sessionId === state.sessionId && retained.current.scope.stateStoreId === snapshot?.state_store_id;
+  const actionable = fresh && !observer.busy && !state.focusPending && !state.focusError && lookup?.status === "resolved" && retainedScopeMatches;
   const live = root && root.stage !== "closed" && root.stage !== "reported";
   const initialStarting = !!root && (root.stage === "queued" || root.stage === "starting") && !root.resume;
   const retainedConfirmation = retained.current?.confirmation;
-  const kind = !selection.spaceId ? null
-    : lookup?.status !== "resolved" ? rootId ? "resume" : "start"
+  const kind = lookup?.status !== "resolved" ? rootId ? "resume" : "start"
     : !rootId ? "start"
-    : !live || !candidate ? null
+    : !root || !candidate ? null
+    : !live ? "start"
     : retainedConfirmation && retainedScopeMatches ? "confirm"
     : candidate.connection === "connected" ? null
-    : candidate.resume === "blocked" && candidate.cause?.code === "checkout_identity_changed" ? "reselect"
     : candidate.resume === "in_progress" || candidate.resume === "blocked" && root.resume?.phase !== "blocked" || initialStarting ? "pending"
     : candidate.stop_confirmable ? "confirm"
-    : candidate.resume === "available" || candidate.resume === "blocked" && root.resume?.phase === "blocked" ? "resume" : null;
-  const pendingReason = kind !== "pending" ? null : candidate?.resume === "in_progress" ? "Resuming…" : candidate?.resume === "blocked" ? candidate.cause?.message ?? null : "Starting…";
-  const actionLabel = kind === "start" || kind === "pending" && initialStarting && candidate?.resume === "available" ? "Start supervisor" : kind === "reselect" ? "Resume in this folder" : kind === "confirm" ? "Confirm stopped and resume…" : kind === "resume" || kind === "pending" ? "Resume supervisor" : null;
-  const actionEnabled = actionable && (kind === "start" || kind === "resume" || kind === "reselect" || kind === "confirm");
-  const reselect = actionEnabled && kind === "reselect";
+    : candidate.resume === "available" || candidate.resume === "blocked" && root.resume?.phase === "blocked" ? "resume" : "pending";
+  const pendingReason = kind !== "pending" ? null : candidate?.resume === "in_progress" ? "Resuming…" : candidate?.cause?.message ?? (initialStarting ? "Starting…" : "Supervisor unavailable");
+  const actionLabel = kind === "start" || kind === "pending" && initialStarting && candidate?.resume === "available" ? "Start supervisor" : kind === "confirm" || kind === "resume" || kind === "pending" ? "Resume supervisor" : null;
+  const actionEnabled = actionable && (kind === "start" || kind === "resume" || kind === "confirm");
   const startAvailable = actionEnabled || actionable && observation?.presence === "present" && !!observation.pane_id;
   const tasks = root && snapshot?.board?.root_id === root.run_id ? snapshot.board.tasks : [];
   const status = !fresh ? "Offline" : observer.busy ? root ? "Resuming…" : "Starting…" : candidate?.resume === "blocked" && candidate.cause ? candidate.cause.message : root?.resume && ["reconciling", "launching"].includes(root.resume.phase) ? "Resuming…" : root?.stage === "starting" || root?.stage === "queued" ? "Starting…" : null;
-  const actionReason = actionEnabled || !actionLabel ? null : lookup?.status !== "resolved" ? lookup?.message ?? "Checking supervisor…" : !fresh || observer.busy ? status : kind === "pending" ? pendingReason : retainedScopeMatches ? "Select this Space to continue" : "Return to the original conversation before retrying. The original request is kept.";
+  const actionReason = actionEnabled || !actionLabel ? null : state.sync !== "live" ? "Offline" : lookup?.status !== "resolved" ? lookup?.message ?? "Checking supervisor…" : !fresh || observer.busy ? status : kind === "pending" ? pendingReason : retainedScopeMatches ? "Supervisor unavailable" : "The original request is kept.";
   const perform = async (operation: RetainedOperation) => {
     const result = await observer.mutateResult(operation.action, operation.scope);
     if (result?.result === "supervisor_started" && result.start.operation_id === operation.action.operation_id) {
       retained.current = null; focusRoot.current = { sessionId: operation.scope.sessionId, rootId: result.start.root_id, sourcePaneId: selection.paneId };
       const token = ++lookupGeneration.current;
-      setRootSelection({ sessionId: operation.scope.sessionId, spaceId: operation.spaceId, rootId: result.start.root_id, token });
+      setRootSelection({ sessionId: operation.scope.sessionId, rootId: result.start.root_id, token });
       setLookupToken(token); onReconnect();
     } else if (result?.result === "run_resumed" && result.resume.resume.operation_id === operation.action.operation_id) {
       retained.current = null;
@@ -96,41 +94,41 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
     return result;
   };
   const start = async () => {
-    if (!startAvailable || !state.sessionId || !selection.spaceId || !snapshot || lookup?.status !== "resolved" || retained.current?.confirmation || kind === "confirm" && !retained.current) return;
+    if (!startAvailable || !state.sessionId || !snapshot || lookup?.status !== "resolved" || retained.current?.confirmation || kind === "confirm" && !retained.current) return;
     openConversation();
     setNavigationError(null);
-    const acting = kind === "resume" || kind === "reselect" || !!retained.current;
-    if (root && !acting && observation?.presence === "present" && observation.pane_id) {
+    const acting = kind === "resume" || !!retained.current;
+    if (root && !acting && kind !== "start" && observation?.presence === "present" && observation.pane_id) {
       try { await navigate(observation.pane_id, root, snapshot); }
       catch (failure) { setNavigationError(failure instanceof Error ? failure.message : "The conversation could not be opened."); }
       return;
     }
-    if (root && !acting) return;
+    if (root && !acting && kind !== "start") return;
     let operation = retained.current;
-    if (operation && (operation.spaceId !== selection.spaceId || operation.scope.sessionId !== state.sessionId || operation.scope.stateStoreId !== snapshot.state_store_id)) return;
+    if (operation && (operation.scope.sessionId !== state.sessionId || operation.scope.stateStoreId !== snapshot.state_store_id)) return;
     // Unknown outcomes must replay the original operation before changing kinds.
     if (!operation) {
-      const action: LiaisonAction = root && !reselect ? { action: "run_resume", run_id: root.run_id, operation_id: crypto.randomUUID(), expected_attachment_epoch: root.attachment?.epoch ?? null }
-        : { action: "supervisor_start", operation_id: crypto.randomUUID(), mode: "reuse_or_resume", target: { target: "existing_space", workspace_id: selection.spaceId }, label: null, selected_root_id: rootId, expected_project_key: lookup.project.key };
+      const action: LiaisonAction = root && kind !== "start" ? { action: "run_resume", run_id: root.run_id, operation_id: crypto.randomUUID(), expected_attachment_epoch: root.attachment?.epoch ?? null }
+        : { action: "supervisor_start", operation_id: crypto.randomUUID(), target: selection.spaceId ? { target: "existing_space", workspace_id: selection.spaceId } : null, label: null, selected_root_id: live ? rootId : null };
       const scope = observer.captureMutationScope(action);
       if (!scope) return;
-      operation = { action, scope, spaceId: selection.spaceId }; retained.current = operation;
+      operation = { action, scope }; retained.current = operation;
     }
     await perform(operation);
   };
   const activate = async () => {
     if (retained.current && !retained.current.confirmation || kind !== "confirm") { await start(); return; }
-    if (!actionEnabled || !state.sessionId || !selection.spaceId || !snapshot) return;
+    if (!actionEnabled || !state.sessionId || !snapshot) return;
     const captured = retained.current?.confirmation ?? (root?.attachment ? {
-      sessionId: state.sessionId, spaceId: selection.spaceId, stateStoreId: snapshot.state_store_id,
+      sessionId: state.sessionId, stateStoreId: snapshot.state_store_id,
       rootId: root.run_id, attachmentId: root.attachment.attachment_id, epoch: root.attachment.epoch,
     } : null);
     if (captured) setRecovery({ ...captured, retry: !!retained.current, unavailable: false, message: retained.current ? "No answer yet. Retrying sends the same request." : null });
   };
-  const recoveryScopeMatches = !!recovery && recovery.sessionId === state.sessionId && recovery.spaceId === selection.spaceId && recovery.stateStoreId === snapshot?.state_store_id && recovery.rootId === root?.run_id;
+  const recoveryScopeMatches = !!recovery && recovery.sessionId === state.sessionId && recovery.stateStoreId === snapshot?.state_store_id && recovery.rootId === root?.run_id;
   useEffect(() => {
-    if (recovery && (recovery.sessionId !== state.sessionId || recovery.spaceId !== selection.spaceId) && !confirming.current) setRecovery(null);
-  }, [recovery, state.sessionId, selection.spaceId]);
+    if (recovery && recovery.sessionId !== state.sessionId && !confirming.current) setRecovery(null);
+  }, [recovery, state.sessionId]);
   const confirmRecovery = async () => {
     if (!recovery || recovery.unavailable || !recoveryScopeMatches || kind !== "confirm" || !actionable || confirming.current || !snapshot) return;
     confirming.current = true;
@@ -141,7 +139,7 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
       const action: LiaisonAction = { action: "run_resume", run_id: recovery.rootId, operation_id: crypto.randomUUID(), expected_attachment_epoch: recovery.epoch, confirmed_stopped_attachment_id: recovery.attachmentId };
       const scope = observer.captureMutationScope(action);
       if (!scope) { confirming.current = false; return; }
-      operation = { action, scope, spaceId: recovery.spaceId, confirmation: recovery };
+      operation = { action, scope, confirmation: recovery };
       retained.current = operation;
     }
     try {
@@ -171,7 +169,7 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
   }, [root, snapshot, observation, state.sessionId, state.snapshot, selection.paneId, conversationVisible, navigate]);
   const savedLocation = root?.session_id === state.sessionId ? root.attachment?.location : null;
   const recoveryMessage = observer.busy ? "Working…" : !actionable ? actionReason : recovery?.message ?? null;
-  return { snapshot, root, tasks, waiting, fresh, status, actionLabel, actionEnabled, actionReason, startAvailable, start, activate,
+  return { snapshot, root, tasks, waiting, fresh, connected: !!live && candidate?.connection === "connected", status, actionLabel, actionEnabled, actionReason, startAvailable, start, activate,
     recovery: recovery && recoveryScopeMatches && kind === "confirm" ? { busy: observer.busy, unavailable: recovery.unavailable || !actionable, retry: recovery.retry, message: recoveryMessage, error: !observer.busy && actionable && !!recovery.message, confirm: confirmRecovery, close: () => { if (!observer.busy && !confirming.current) setRecovery(null); } } : null,
     error: observer.error ?? navigationError ?? (fresh && candidate?.resume === "blocked" ? candidate.cause?.message ?? null : null), paneId: observation?.presence === "present" ? observation.pane_id : savedLocation?.pane_id ?? null, tabId: observation?.presence === "present" ? observation.tab_id : savedLocation?.tab_id ?? null };
 }

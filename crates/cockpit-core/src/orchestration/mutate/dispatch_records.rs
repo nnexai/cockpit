@@ -494,8 +494,8 @@ impl OrchestrationService {
         let dispatch = run.dispatch.as_ref().expect("fenced launch");
         let Some(source) = &dispatch.source_location else { return Ok(false); };
         let Some(previous_setup) = &run.setup else { return Ok(false); };
-        let retained_space_rebind = run.kind == RunKind::Worker && previous_setup.workspace_id.as_ref()
-            .is_some_and(|workspace| workspace != &source.workspace_id);
+        let retained_space_rebind = matches!(run.kind, RunKind::Worker | RunKind::Supervisor)
+            && previous_setup.workspace_id.as_ref().is_some_and(|workspace| workspace != &source.workspace_id);
         if retained_space_rebind {
             let attachment = run.attachment.as_ref().expect("fenced incarnation");
             let resume = run.resume.as_ref().filter(|resume|
@@ -551,7 +551,7 @@ impl OrchestrationService {
         }
         let run = &mut state.runs[index];
         run.setup = Some(setup);
-        if run.run_id == run.root_id && run.task_id.is_none()
+        if run.kind == RunKind::Adopted && run.run_id == run.root_id && run.task_id.is_none()
             && let Some(project) = &mut run.project
                 && project.source_workspace_id.is_none() {
                     project.source_workspace_id = Some(location.workspace_id.clone());

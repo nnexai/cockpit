@@ -112,18 +112,34 @@ impl Fixture {
     }
 
     fn root(&self) -> String {
-        let response = self.operator(OrchestrationAction::SupervisorStart {
-            operation_id: id(),
-            mode: SupervisorStartMode::Another,
-            target: Some(target()),
-            label: Some("Test supervisor".into()),
-            selected_root_id: None,
-            expected_project_key: Some(self.project().key),
-        });
-        match response.result {
+        // Cross-root authority tests need historical foreign roots. Start them
+        // in distinct sessions and seed their session identity for those tests;
+        // normal Start no longer creates a second liaison in the same session.
+        let foreign = self.state().runs.iter().any(|run| run.session_id == SESSION
+            && run.parent_run_id.is_none());
+        let session = if foreign { id() } else { SESSION.into() };
+        let response = self.service.mutate_resolved(
+            &Actor::Operator(OperatorOrigin::Browser),
+            OrchestrationMutationRequest {
+                session_id: session,
+                expected_revision: Some(self.state().revision),
+                action: OrchestrationAction::SupervisorStart {
+                    operation_id: id(),
+                    target: Some(target()),
+                    label: Some("Test supervisor".into()),
+                    selected_root_id: None,
+                },
+            },
+            &ResolvedMutationInput::default(),
+        ).unwrap();
+        let root = match response.result {
             OrchestrationActionResult::SupervisorStarted { start } => start.root_id,
             other => panic!("Expected supervisor start, got {other:?}"),
+        };
+        if foreign {
+            self.seed_run(&root, |run| run.session_id = SESSION.into());
         }
+        root
     }
 
     fn auth(&self, run_id: &str, role: JobRole) -> JobAuth {
@@ -330,7 +346,7 @@ impl Fixture {
                     launch_tag: location.launch_tag.clone(),
                     launch_attempt: attempt,
                     endpoint_identity: location.endpoint_identity.clone(),
-                    staging_workspace_id: None,
+                    staging_workspace_id: run.dispatch.as_ref().and_then(|dispatch| dispatch.staging_workspace_id.clone()),
                     scope_unit: None,
                     latch: None,
                 },

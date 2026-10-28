@@ -24,6 +24,7 @@ export interface WireTypes {
   "TaskDependencyState": V1.TaskDependencyState;
   "TaskDependencyBlocker": V1.TaskDependencyBlocker;
   "TaskDependencyBlockerReason": V1.TaskDependencyBlockerReason;
+  "TaskProject": V1.TaskProject;
   "TaskView": V1.TaskView;
   "TaskLane": V1.TaskLane;
   "AttemptBadge": V1.AttemptBadge;
@@ -57,12 +58,11 @@ export interface WireTypes {
   "ResumeCauseClass": V1.ResumeCauseClass;
   "ResumeCause": V1.ResumeCause;
   "ResumeRecord": V1.ResumeRecord;
-  "ProjectRootLookupRequest": V1.ProjectRootLookupRequest;
+  "LiaisonLookupRequest": V1.LiaisonLookupRequest;
   "RootConnection": V1.RootConnection;
   "RootResumeAvailability": V1.RootResumeAvailability;
-  "ProjectRootCandidate": V1.ProjectRootCandidate;
-  "ProjectRootLookupResponse": V1.ProjectRootLookupResponse;
-  "SupervisorStartMode": V1.SupervisorStartMode;
+  "LiaisonCandidate": V1.LiaisonCandidate;
+  "LiaisonLookupResponse": V1.LiaisonLookupResponse;
   "SupervisorStartOutcome": V1.SupervisorStartOutcome;
   "SupervisorStartResult": V1.SupervisorStartResult;
   "RunResumeResult": V1.RunResumeResult;
@@ -162,6 +162,7 @@ export interface WireOwners {
   "ReplacementPlacement[isolated_worktree]": Extract<V1.ReplacementPlacement, { "placement": "isolated_worktree" }>;
   "ReplacementPlacement[isolated_directory]": Extract<V1.ReplacementPlacement, { "placement": "isolated_directory" }>;
   "TaskDependencyBlocker": V1.TaskDependencyBlocker;
+  "TaskProject": V1.TaskProject;
   "TaskView": V1.TaskView;
   "AttemptBadge": V1.AttemptBadge;
   "DispatchTarget": V1.DispatchTarget;
@@ -185,11 +186,11 @@ export interface WireOwners {
   "AgentLaunchReceipt": V1.AgentLaunchReceipt;
   "ResumeCause": V1.ResumeCause;
   "ResumeRecord": V1.ResumeRecord;
-  "ProjectRootLookupRequest": V1.ProjectRootLookupRequest;
-  "ProjectRootCandidate": V1.ProjectRootCandidate;
-  "ProjectRootLookupResponse": V1.ProjectRootLookupResponse;
-  "ProjectRootLookupResponse[resolved]": Extract<V1.ProjectRootLookupResponse, { "status": "resolved" }>;
-  "ProjectRootLookupResponse[unavailable]": Extract<V1.ProjectRootLookupResponse, { "status": "unavailable" }>;
+  "LiaisonLookupRequest": V1.LiaisonLookupRequest;
+  "LiaisonCandidate": V1.LiaisonCandidate;
+  "LiaisonLookupResponse": V1.LiaisonLookupResponse;
+  "LiaisonLookupResponse[resolved]": Extract<V1.LiaisonLookupResponse, { "status": "resolved" }>;
+  "LiaisonLookupResponse[unavailable]": Extract<V1.LiaisonLookupResponse, { "status": "unavailable" }>;
   "SupervisorStartResult": V1.SupervisorStartResult;
   "RunResumeResult": V1.RunResumeResult;
   "RunAttachResult": V1.RunAttachResult;
@@ -369,7 +370,10 @@ export interface WireFields {
   "ReplacementPlacement[isolated_directory].directory": (Extract<V1.ReplacementPlacement, { "placement": "isolated_directory" }>)["directory"];
   "TaskDependencyBlocker.task_id": (V1.TaskDependencyBlocker)["task_id"];
   "TaskDependencyBlocker.reason": (V1.TaskDependencyBlocker)["reason"];
+  "TaskProject.key": (V1.TaskProject)["key"];
+  "TaskProject.label": (V1.TaskProject)["label"];
   "TaskView.task": (V1.TaskView)["task"];
+  "TaskView.project": (V1.TaskView)["project"];
   "TaskView.lane": (V1.TaskView)["lane"];
   "TaskView.current_run_id": (V1.TaskView)["current_run_id"];
   "TaskView.dependencies": (V1.TaskView)["dependencies"];
@@ -460,21 +464,19 @@ export interface WireFields {
   "ResumeRecord.decision_id": (V1.ResumeRecord)["decision_id"];
   "ResumeRecord.replacement_attachment_epoch": (V1.ResumeRecord)["replacement_attachment_epoch"];
   "ResumeRecord.updated_at": (V1.ResumeRecord)["updated_at"];
-  "ProjectRootLookupRequest.session_id": (V1.ProjectRootLookupRequest)["session_id"];
-  "ProjectRootLookupRequest.workspace_id": (V1.ProjectRootLookupRequest)["workspace_id"];
-  "ProjectRootLookupRequest.selected_root_id": (V1.ProjectRootLookupRequest)["selected_root_id"];
-  "ProjectRootCandidate.root_id": (V1.ProjectRootCandidate)["root_id"];
-  "ProjectRootCandidate.connection": (V1.ProjectRootCandidate)["connection"];
-  "ProjectRootCandidate.resume": (V1.ProjectRootCandidate)["resume"];
-  "ProjectRootCandidate.cause": (V1.ProjectRootCandidate)["cause"];
-  "ProjectRootCandidate.stop_confirmable": (V1.ProjectRootCandidate)["stop_confirmable"];
-  "ProjectRootCandidate.updated_at": (V1.ProjectRootCandidate)["updated_at"];
-  "ProjectRootLookupResponse[resolved].project": (Extract<V1.ProjectRootLookupResponse, { "status": "resolved" }>)["project"];
-  "ProjectRootLookupResponse[resolved].lookup_revision": (Extract<V1.ProjectRootLookupResponse, { "status": "resolved" }>)["lookup_revision"];
-  "ProjectRootLookupResponse[resolved].preferred_root_id": (Extract<V1.ProjectRootLookupResponse, { "status": "resolved" }>)["preferred_root_id"];
-  "ProjectRootLookupResponse[resolved].roots": (Extract<V1.ProjectRootLookupResponse, { "status": "resolved" }>)["roots"];
-  "ProjectRootLookupResponse[unavailable].code": (Extract<V1.ProjectRootLookupResponse, { "status": "unavailable" }>)["code"];
-  "ProjectRootLookupResponse[unavailable].message": (Extract<V1.ProjectRootLookupResponse, { "status": "unavailable" }>)["message"];
+  "LiaisonLookupRequest.session_id": (V1.LiaisonLookupRequest)["session_id"];
+  "LiaisonLookupRequest.selected_root_id": (V1.LiaisonLookupRequest)["selected_root_id"];
+  "LiaisonCandidate.root_id": (V1.LiaisonCandidate)["root_id"];
+  "LiaisonCandidate.connection": (V1.LiaisonCandidate)["connection"];
+  "LiaisonCandidate.resume": (V1.LiaisonCandidate)["resume"];
+  "LiaisonCandidate.cause": (V1.LiaisonCandidate)["cause"];
+  "LiaisonCandidate.stop_confirmable": (V1.LiaisonCandidate)["stop_confirmable"];
+  "LiaisonCandidate.updated_at": (V1.LiaisonCandidate)["updated_at"];
+  "LiaisonLookupResponse[resolved].lookup_revision": (Extract<V1.LiaisonLookupResponse, { "status": "resolved" }>)["lookup_revision"];
+  "LiaisonLookupResponse[resolved].preferred_root_id": (Extract<V1.LiaisonLookupResponse, { "status": "resolved" }>)["preferred_root_id"];
+  "LiaisonLookupResponse[resolved].roots": (Extract<V1.LiaisonLookupResponse, { "status": "resolved" }>)["roots"];
+  "LiaisonLookupResponse[unavailable].code": (Extract<V1.LiaisonLookupResponse, { "status": "unavailable" }>)["code"];
+  "LiaisonLookupResponse[unavailable].message": (Extract<V1.LiaisonLookupResponse, { "status": "unavailable" }>)["message"];
   "SupervisorStartResult.root_id": (V1.SupervisorStartResult)["root_id"];
   "SupervisorStartResult.outcome": (V1.SupervisorStartResult)["outcome"];
   "SupervisorStartResult.operation_id": (V1.SupervisorStartResult)["operation_id"];
@@ -852,7 +854,8 @@ export interface WireFieldNames {
   "ReplacementPlacement[isolated_worktree]": "base_commit";
   "ReplacementPlacement[isolated_directory]": "directory";
   "TaskDependencyBlocker": "task_id" | "reason";
-  "TaskView": "task" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt";
+  "TaskProject": "key" | "label";
+  "TaskView": "task" | "project" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt";
   "AttemptBadge": "run_id" | "attempt" | "state";
   "DispatchTarget": never;
   "DispatchTarget[setup]": "request";
@@ -875,11 +878,11 @@ export interface WireFieldNames {
   "AgentLaunchReceipt": "latch" | "nonce" | "latch_device" | "latch_inode";
   "ResumeCause": "code" | "message" | "class";
   "ResumeRecord": "operation_id" | "run_id" | "previous_attachment_epoch" | "phase" | "cause" | "decision_id" | "replacement_attachment_epoch" | "updated_at";
-  "ProjectRootLookupRequest": "session_id" | "workspace_id" | "selected_root_id";
-  "ProjectRootCandidate": "root_id" | "connection" | "resume" | "cause" | "stop_confirmable" | "updated_at";
-  "ProjectRootLookupResponse": never;
-  "ProjectRootLookupResponse[resolved]": "project" | "lookup_revision" | "preferred_root_id" | "roots";
-  "ProjectRootLookupResponse[unavailable]": "code" | "message";
+  "LiaisonLookupRequest": "session_id" | "selected_root_id";
+  "LiaisonCandidate": "root_id" | "connection" | "resume" | "cause" | "stop_confirmable" | "updated_at";
+  "LiaisonLookupResponse": never;
+  "LiaisonLookupResponse[resolved]": "lookup_revision" | "preferred_root_id" | "roots";
+  "LiaisonLookupResponse[unavailable]": "code" | "message";
   "SupervisorStartResult": "root_id" | "outcome" | "operation_id" | "resume_operation_id" | "duplicate";
   "RunResumeResult": "run_id" | "resume" | "duplicate";
   "RunAttachResult": "run_id" | "attachment" | "duplicate";
@@ -971,6 +974,7 @@ export interface WireChildNames {
   "TaskOwner.conversation": "ConversationIdentity";
   "TaskSchedule.target": "DispatchTarget";
   "TaskView.task": "Task";
+  "TaskView.project": "TaskProject";
   "TaskView.dependencies": "TaskDependencies";
   "TaskView.attempt": "AttemptBadge";
   "DispatchTarget.request": "WorkspaceSetupRequest";
@@ -985,9 +989,7 @@ export interface WireChildNames {
   "ExecutionAttachment.process_scope": "OwnedProcessScope";
   "OwnedProcessScope.member": "NativeProcessIdentity";
   "ResumeRecord.cause": "ResumeCause";
-  "ProjectRootCandidate.cause": "ResumeCause";
-  "ProjectRootLookupResponse.project": "ProjectIdentity";
-  "ProjectRootLookupResponse[resolved].project": "ProjectIdentity";
+  "LiaisonCandidate.cause": "ResumeCause";
   "RunResumeResult.resume": "ResumeRecord";
   "RunAttachResult.attachment": "ExecutionAttachment";
   "RunLocation.peer_process": "NativeProcessIdentity";
@@ -1068,9 +1070,9 @@ export interface WireTagNames {
   "ProjectSource": "kind";
   "ProjectSource[git]": "kind";
   "ProjectSource[directory]": "kind";
-  "ProjectRootLookupResponse": "status";
-  "ProjectRootLookupResponse[resolved]": "status";
-  "ProjectRootLookupResponse[unavailable]": "status";
+  "LiaisonLookupResponse": "status";
+  "LiaisonLookupResponse[resolved]": "status";
+  "LiaisonLookupResponse[unavailable]": "status";
   "SourceOutput": "kind";
   "SourceOutput[code]": "kind";
   "SourceOutput[non_code]": "kind";
@@ -1127,7 +1129,8 @@ export interface WireCheckpointFieldNames {
   "ReplacementPlacement[isolated_worktree]": "base_commit" | "placement";
   "ReplacementPlacement[isolated_directory]": "directory" | "placement";
   "TaskDependencyBlocker": "task_id" | "reason";
-  "TaskView": "task" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt";
+  "TaskProject": "key" | "label";
+  "TaskView": "task" | "project" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt";
   "AttemptBadge": "run_id" | "attempt" | "state";
   "DispatchTarget": "base_ref" | "branch" | "request" | "source_root" | "source_workspace_id" | "target" | "workspace_id";
   "DispatchTarget[setup]": "request" | "target";
@@ -1150,11 +1153,11 @@ export interface WireCheckpointFieldNames {
   "AgentLaunchReceipt": "latch" | "nonce" | "latch_device" | "latch_inode";
   "ResumeCause": "code" | "message" | "class";
   "ResumeRecord": "operation_id" | "run_id" | "previous_attachment_epoch" | "phase" | "cause" | "decision_id" | "replacement_attachment_epoch" | "updated_at";
-  "ProjectRootLookupRequest": "session_id" | "workspace_id" | "selected_root_id";
-  "ProjectRootCandidate": "root_id" | "connection" | "resume" | "cause" | "stop_confirmable" | "updated_at";
-  "ProjectRootLookupResponse": "code" | "lookup_revision" | "message" | "preferred_root_id" | "project" | "roots" | "status";
-  "ProjectRootLookupResponse[resolved]": "project" | "lookup_revision" | "preferred_root_id" | "roots" | "status";
-  "ProjectRootLookupResponse[unavailable]": "code" | "message" | "status";
+  "LiaisonLookupRequest": "session_id" | "selected_root_id";
+  "LiaisonCandidate": "root_id" | "connection" | "resume" | "cause" | "stop_confirmable" | "updated_at";
+  "LiaisonLookupResponse": "code" | "lookup_revision" | "message" | "preferred_root_id" | "roots" | "status";
+  "LiaisonLookupResponse[resolved]": "lookup_revision" | "preferred_root_id" | "roots" | "status";
+  "LiaisonLookupResponse[unavailable]": "code" | "message" | "status";
   "SupervisorStartResult": "root_id" | "outcome" | "operation_id" | "resume_operation_id" | "duplicate";
   "RunResumeResult": "run_id" | "resume" | "duplicate";
   "RunAttachResult": "run_id" | "attachment" | "duplicate";
@@ -1255,6 +1258,8 @@ export type WireOmittableField =
   | "TaskOwner.conversation"
   | "TaskSchedule.target"
   | "TaskSchedule.label"
+  | "TaskProject.key"
+  | "TaskView.project"
   | "TaskView.current_run_id"
   | "TaskView.attempt"
   | "DispatchTarget[space_worktree].branch"
@@ -1286,9 +1291,9 @@ export type WireOmittableField =
   | "ResumeRecord.cause"
   | "ResumeRecord.decision_id"
   | "ResumeRecord.replacement_attachment_epoch"
-  | "ProjectRootLookupRequest.selected_root_id"
-  | "ProjectRootCandidate.cause"
-  | "ProjectRootLookupResponse[resolved].preferred_root_id"
+  | "LiaisonLookupRequest.selected_root_id"
+  | "LiaisonCandidate.cause"
+  | "LiaisonLookupResponse[resolved].preferred_root_id"
   | "SupervisorStartResult.resume_operation_id"
   | "RunLocation.boot_id"
   | "RunLocation.peer_process"
@@ -1394,7 +1399,7 @@ export type WireListField =
   | "TaskDependencies.problems"
   | "SetupSummary.effects"
   | "SetupSummary.warnings"
-  | "ProjectRootLookupResponse[resolved].roots"
+  | "LiaisonLookupResponse[resolved].roots"
   | "SourceOutput.focused_checks"
   | "SourceOutput[code].commits"
   | "SourceOutput[code].focused_checks"

@@ -180,6 +180,7 @@
 
 /* A blocked agent while the sidebar is hidden: a dot on the sidebar toggle; the toggle's name says why. */
 .tab-attention-dot { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--blocked); box-shadow: 0 0 0 2px var(--chrome-bg); pointer-events: none; }
+.tab-attention-dot.is-waiting { background: var(--warning); }
 
 /* The active Space while the sidebar is hidden, ruled off from the tabs. */
 .tab-space-context { display: flex; min-width: 0; max-width: 240px; flex: 0 1 auto; align-items: center; gap: 6px; align-self: center; height: 24px; margin-right: 4px; padding: 0 10px 0 2px; border-right: 1px solid var(--border); color: var(--text-primary); font-size: var(--font-size-xs); font-weight: 600; white-space: nowrap; }

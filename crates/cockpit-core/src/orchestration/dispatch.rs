@@ -209,10 +209,14 @@ impl Dispatcher {
             let mut changes = dispatcher.service.subscribe();
             let mut files = dispatcher.service.changes().ok();
             let (events, mut pane_events) = tokio::sync::mpsc::channel(1);
+            let (idle_tx, mut idle_rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut idle_deadline = None;
             let mut sessions = BTreeMap::<String, JoinHandle<()>>::new();
             let mut workers = JoinSet::new();
             let mut active = std::collections::HashSet::new();
             let mut deferred = std::collections::HashSet::new();
+            let mut capacity_projects = BTreeMap::<String, (String, String)>::new();
+            let mut capacity_waits = BTreeMap::<String, tokio::time::Instant>::new();
             let mut deadlines = BTreeMap::<String, tokio::time::Instant>::new();
             let mut retirement_retries = BTreeMap::<String, tokio::time::Instant>::new();
             let mut watcher_retry = files.is_none().then(|| tokio::time::Instant::now() + Duration::from_millis(250));
@@ -238,7 +242,11 @@ impl Dispatcher {
                         watcher_retry = Some(tokio::time::Instant::now() + watcher_backoff);
                     }
                 let _ = dispatcher.service.recover_intents();
-                dispatcher.schedule_ready().await;
+                let stall_deadline = dispatcher.service.resource_stall_delay().ok().flatten()
+                    .map(|delay| tokio::time::Instant::now() + delay);
+                dispatcher.schedule_ready(&mut capacity_projects).await;
+                let capacity_deadline = dispatcher.service.capacity_stalls(
+                    dispatcher.settings.max_parallel, &capacity_projects, &mut capacity_waits).ok().flatten();
                 if let Ok(queue) = dispatcher.service.dispatch_queue() {
                     deadlines.clear();
                     for run in queue {
@@ -302,7 +310,12 @@ impl Dispatcher {
                 }
                 if active.insert("observe".into()) {
                     let dispatcher = Arc::clone(&dispatcher);
-                    workers.spawn(async move { dispatcher.observe().await; "observe".into() });
+                    let idle_tx = idle_tx.clone();
+                    workers.spawn(async move {
+                        let deadline = dispatcher.observe().await;
+                        let _ = idle_tx.send(deadline);
+                        "observe".into()
+                    });
                 }
                 else { deferred.insert("observe".into()); }
                 for run in retirements {
@@ -316,7 +329,7 @@ impl Dispatcher {
                 // publish their own changes. This avoids a self-sustaining idle
                 // observation loop when an unchanged observer completes.
                 loop {
-                    let deadline = deadlines.values().copied().chain(watcher_retry).min();
+                    let deadline = deadlines.values().copied().chain(watcher_retry).chain(stall_deadline).chain(idle_deadline).chain(capacity_deadline).min();
                     tokio::select! {
                         _ = shutdown.cancelled() => {
                             for (_, task) in sessions { task.abort(); }
@@ -325,8 +338,9 @@ impl Dispatcher {
                         },
                         _ = changes.changed() => { changes.borrow_and_update(); break; },
                         _ = filesystem_changed(&mut files) => { break; },
-                        _ = pane_events.recv() => { break; },
-                        _ = wait_deadline(deadline) => { break; },
+                        _ = pane_events.recv() => { capacity_projects.clear(); break; },
+                        Some(next) = idle_rx.recv() => { idle_deadline = next; },
+                        _ = wait_deadline(deadline) => { idle_deadline = None; break; },
                         _ = wait_deadline(retirement_retries.values().copied().min()), if !retirement_retries.is_empty() => {
                             let queue = dispatcher.service.retirement_queue().unwrap_or_default();
                             let due = due_retirement_retries(&mut retirement_retries, queue, tokio::time::Instant::now());
@@ -352,11 +366,19 @@ impl Dispatcher {
         })
     }
 
-    async fn schedule_ready(&self) {
+    async fn schedule_ready(&self, projects: &mut BTreeMap<String, (String, String)>) {
         let Ok(candidates) = self.service.schedule_candidates(self.settings.max_parallel) else { return };
         for candidate in candidates {
+            if let Some((key, _)) = projects.get(&candidate.schedule.operation_id)
+                && self.service.capacity_full(&candidate.session_id, key, self.settings.max_parallel).unwrap_or(false) { continue; }
             let result = match self.resolve_schedule_target(&candidate).await {
-                Ok(resolved) => self.service.scheduled_start(&candidate, &resolved).map(|_| ()),
+                Ok(resolved) => {
+                    if let Some(project) = &resolved.project {
+                        let label = stall_project_label(project);
+                        projects.insert(candidate.schedule.operation_id.clone(), (project.key.clone(), label));
+                    }
+                    self.service.scheduled_start(&candidate, &resolved).map(|_| ())
+                },
                 Err(error) => Err(error),
             };
             if let Err(error) = result {
@@ -372,12 +394,17 @@ impl Dispatcher {
         let target = match candidate.schedule.target.as_ref() {
             Some(target) => target,
             None => {
-                let source = root.project.as_ref().and_then(|project| project.source_workspace_id.clone())
-                    .ok_or_else(|| InspectionError::new("project_space_missing", "Scheduled task needs its root's explicit source Space"))?;
-                default_target = match root.project.as_ref().map(|project| &project.source) {
-                    Some(cockpit_protocol::orchestration::ProjectSource::Directory { root }) =>
-                        DispatchTarget::OwnedAttemptDirectory { source_root: root.clone(), source_workspace_id: Some(source) },
-                    _ => DispatchTarget::SpaceWorktree { workspace_id: source, branch: None, base_ref: None },
+                default_target = match root.project.as_ref() {
+                    Some(project) => match &project.source {
+                        cockpit_protocol::orchestration::ProjectSource::Directory { root } =>
+                            DispatchTarget::OwnedAttemptDirectory { source_root: root.clone(), source_workspace_id: project.source_workspace_id.clone() },
+                        _ => DispatchTarget::SpaceWorktree {
+                            workspace_id: project.source_workspace_id.clone().ok_or_else(||
+                                InspectionError::new("project_space_missing", "Scheduled task needs its root's explicit source Space"))?,
+                            branch: None, base_ref: None,
+                        },
+                    },
+                    None => return Err(InspectionError::new("project_space_missing", "Scheduled task needs its root's source directory")),
                 };
                 &default_target
             }
@@ -562,18 +589,22 @@ impl Dispatcher {
         Ok(Some(facts))
     }
 
-    async fn observe(&self) {
+    async fn observe(&self) -> Option<tokio::time::Instant> {
         // Queue reconciliation publishes only durable changes; unknown native
         // process evidence protects an existing holder rather than stealing it.
         let _ = self.service.reconcile_resource_queue().await;
         let _ = self.service.capture_owned_resources(&self.projects, self.herdr.as_ref()).await;
         let _ = self.service.cleanup_worker_scopes(self.herdr.as_ref()).await;
         let _ = self.service.cleanup_owned_resources(&self.projects).await;
-        let Ok(runs) = self.service.observation_runs() else { return };
+        let Ok(runs) = self.service.observation_runs() else { return None };
+        let mut idle_deadline: Option<tokio::time::Instant> = None;
         let sessions: std::collections::BTreeSet<_> = runs.iter().map(|r| r.session_id.as_str()).collect();
         for session in sessions {
             if let Ok(runtime) = self.herdr.runtime(session).await {
-                let _ = self.service.record_observation(&runtime, session);
+                if let Ok(Some(delay)) = self.service.record_observation(&runtime, session) {
+                    let deadline = tokio::time::Instant::now() + delay;
+                    idle_deadline = Some(idle_deadline.map_or(deadline, |current| current.min(deadline)));
+                }
             }
         }
         // OS evidence remains meaningful while Herdr is unavailable. Conversely
@@ -642,6 +673,7 @@ impl Dispatcher {
             }
             let _ = self.service.resume_owner(&current, &input);
         }
+        idle_deadline
     }
 
     async fn step(&self, queued: &Run) -> Result<(), InspectionError> {
@@ -926,7 +958,10 @@ impl Dispatcher {
         if let Some(source) = run.dispatch.as_ref().and_then(|dispatch| dispatch.staging_workspace_id.clone()) {
             return Ok(source);
         }
-        let source = if let Some(source) = run.setup.as_ref().and_then(|setup| setup.project_workspace_id.clone())
+        let source = if run.kind == RunKind::Supervisor && resumed_checkout_epoch(run) {
+            self.herdr.runtime(&run.session_id).await?.focused_workspace_id
+                .ok_or_else(|| InspectionError::new("staging_space_required", "Open or select a Space before resuming this liaison"))?
+        } else if let Some(source) = run.setup.as_ref().and_then(|setup| setup.project_workspace_id.clone())
             .or_else(|| run.project.as_ref().and_then(|project| project.source_workspace_id.clone())) {
             source
         } else {
@@ -980,18 +1015,9 @@ impl Dispatcher {
         let runtime = self.herdr.runtime(&run.session_id).await?;
         let retained_restart = initial_retained_restart(&self.service, run, &runtime)?;
         let workspace_id = if retained_restart {
-            let retained = setup.workspace_id.as_ref().expect("fenced retained Space");
-            let mut spaces = runtime.workspaces.iter().filter(|space| &space.workspace_id == retained);
-            if let Some(space) = spaces.next() {
-                if spaces.next().is_some()
-                    || std::fs::canonicalize(&space.cwd).ok().as_deref() != Some(std::path::Path::new(&setup.checkout_path)) {
-                    return Err(InspectionError::new("retained_space_checkout_changed", "The exact retained Space no longer has this reserved checkout"));
-                }
-                retained.clone()
-            } else {
-                // Its exited sole terminal may have removed the old Space.
-                // Create only a new placement; never recreate the checkout.
-                self.staging_space(run).await?
+            match resume_staging_choice(run, &runtime)? {
+                Some(retained) => retained,
+                None => self.staging_space(run).await?,
             }
         } else if matches!(run.target.as_ref(), Some(DispatchTarget::ExistingSpace { .. })) {
             setup.workspace_id.clone().ok_or_else(|| InspectionError::new("setup_receipt_missing", "Existing Space receipt is missing"))?
@@ -1328,7 +1354,7 @@ impl Dispatcher {
                 && self.service.record_move_intent(&run, source.clone(), &operation_id)? {
                     run = self.service.run_for_review(&run.session_id, &run.run_id)?;
                     if let Err(error) = self.herdr.move_pane_to_new_space(
-                        &run.session_id, &source, &run.label, &source.launch_tag,
+                        &run.session_id, &source, if run.kind == RunKind::Supervisor { "Supervisor" } else { &run.label }, &source.launch_tag,
                     ).await {
                         self.service.record_move_unknown(&run, as_response(error))?;
                         run = self.service.run_for_review(&run.session_id, &run.run_id)?;
@@ -1454,12 +1480,27 @@ fn owned_branch_suffix(run: &Run) -> String {
 }
 
 fn resumed_checkout_epoch(run: &Run) -> bool {
-    if run.kind != RunKind::Worker { return false; }
+    if !matches!(run.kind, RunKind::Worker | RunKind::Supervisor) { return false; }
     let (Some(resume), Some(attachment), Some(setup), Some(checkout)) =
         (&run.resume, &run.attachment, &run.setup, &run.checkout) else { return false };
     resume.replacement_attachment_epoch == Some(attachment.epoch)
         && resume.previous_attachment_epoch.and_then(|previous| previous.checked_add(1)) == Some(attachment.epoch)
         && setup.workspace_id.is_some() && setup.checkout_path == checkout.path
+}
+
+fn resume_staging_choice(run: &Run, runtime: &RuntimeView) -> Result<Option<String>, InspectionError> {
+    let setup = run.setup.as_ref().ok_or_else(|| InspectionError::new("setup_missing", "No setup receipt"))?;
+    let retained = setup.workspace_id.as_ref().ok_or_else(|| InspectionError::new("setup_receipt_missing", "Retained Space receipt is missing"))?;
+    let mut spaces = runtime.workspaces.iter().filter(|space| &space.workspace_id == retained);
+    if let Some(space) = spaces.next() {
+        if spaces.next().is_some()
+            || std::fs::canonicalize(&space.cwd).ok().as_deref() != Some(std::path::Path::new(&setup.checkout_path)) {
+            return Err(InspectionError::new("retained_space_checkout_changed", "The exact retained Space no longer has this reserved checkout"));
+        }
+        Ok(Some(retained.clone()))
+    } else {
+        Ok(None)
+    }
 }
 
 fn initial_retained_restart(
@@ -2231,6 +2272,11 @@ impl OrchestrationService {
 /// Inline launch instructions also returned by `run brief`. The credential
 /// authorizes the pending attempt; conversation identity is optional metadata.
 pub fn render_run_bootstrap(run: &Run) -> String {
+    if run.resume.as_ref().is_some_and(|resume| resume.previous_attachment_epoch.is_some()
+        && resume.replacement_attachment_epoch.is_some())
+        && run.attachment.as_ref().is_some_and(|attachment| attachment.conversation.is_some()) {
+        return "Cockpit resumed this conversation; run \"$COCKPIT_CLI_PATH\" run context --json and continue your existing work.".into();
+    }
     let cli = "\"$COCKPIT_CLI_PATH\"";
     let role = if run.kind == RunKind::Worker {
         format!("Worker: execute only your authorized task in this checkout. Read {cli} task show --self --json for canonical description/stages and {cli} task inputs --self --json for actual prerequisite Results/source/artifact references; do not infer publication or copy an old tree. Own focused whole-task checks and commits. Mark completed stages with task step-set-checked. Finish with {cli} run done --summary \"...\" --check \"contract::command::passed|failed|not_run\". For an outcome-changing decision use {cli} run report --kind needs-input --summary \"...\". Do not create or replace other workers.")
@@ -2342,5 +2388,108 @@ impl Dispatcher {
             self.service.record_hint(&hint, state, cause)?;
         }
         Ok(())
+    }
+}
+
+pub(super) fn stall_project_label(project: &cockpit_protocol::orchestration::ProjectIdentity) -> String {
+    use cockpit_protocol::orchestration::ProjectSource;
+    if let Some(label) = &project.repository_id { return label.clone(); }
+    let path = match &project.source {
+        ProjectSource::Git { common_dir } => std::path::Path::new(common_dir).parent().unwrap_or(std::path::Path::new(common_dir)),
+        ProjectSource::Directory { root } => std::path::Path::new(root),
+    };
+    path.file_name().and_then(|value| value.to_str()).unwrap_or("General").to_owned()
+}
+
+impl OrchestrationService {
+    fn capacity_full(&self, session: &str, key: &str, max: u32) -> Result<bool, InspectionError> {
+        let locked = self.store.lock()?;
+        let state = locked.read_shared()?;
+        Ok(super::mutate::runs::project_capacity_full(&state, session, key, max))
+    }
+
+    fn capacity_stalls(&self, max: u32, projects: &BTreeMap<String, (String, String)>,
+        waits: &mut BTreeMap<String, tokio::time::Instant>) -> Result<Option<tokio::time::Instant>, InspectionError> {
+        use cockpit_protocol::orchestration::{ActorRef, MessageKind};
+        use super::mutate::runs::{project_capacity_full, schedule_principal_current, schedule_ready, scheduled_project_key};
+        let locked = self.store.lock()?;
+        let mut state = locked.read()?;
+        let mut blocked = std::collections::HashSet::new();
+        let mut notices = Vec::new();
+        let mut next = None;
+        let at = tokio::time::Instant::now();
+        for root in state.runs.iter().filter(|r| r.run_id == r.root_id && r.stage == RunStage::Active) {
+            let document = locked.tasks(&root.run_id)?;
+            let graph = super::dependencies::DependencyGraph::new(&document.tasks);
+            for ownership in state.task_ownership.iter().filter(|o| o.root_id == root.run_id) {
+                let Some(schedule) = &ownership.schedule else { continue };
+                let Ok(task) = document.task(&ownership.task_id) else { continue };
+                if !schedule_principal_current(&state, root, schedule) || !schedule_ready(&state, root, task, &graph) { continue; }
+                let cached = projects.get(&schedule.operation_id);
+                let Some(key) = scheduled_project_key(&state, root, task, schedule).or_else(|| cached.map(|p| p.0.as_str())) else { continue };
+                if !project_capacity_full(&state, &root.session_id, key, max.min(root.launch_config.max_parallel)) { continue; }
+                let id = format!("capacity-stall:{}:{key}", schedule.operation_id);
+                if state.messages.iter().any(|message| message.message_id == id) { continue; }
+                blocked.insert(id.clone());
+                let deadline = *waits.entry(id.clone()).or_insert(at + Duration::from_secs(600));
+                if deadline > at {
+                    next = Some(next.map_or(deadline, |current: tokio::time::Instant| current.min(deadline)));
+                } else {
+                    let label = cached.map(|p| p.1.clone()).or_else(|| root.project.as_ref().map(stall_project_label))
+                        .unwrap_or_else(|| "General".into());
+                    notices.push((root.run_id.clone(), id, format!("Task \"{}\" ({label}) has waited over 10 minutes for project capacity; review the running work.", task.title)));
+                }
+            }
+        }
+        waits.retain(|key, _| blocked.contains(key));
+        if !notices.is_empty() {
+            for (root, id, text) in notices {
+                super::messages::append(&mut state, super::messages::AppendMessage { from: ActorRef::Dispatcher,
+                    to_run_id: &root, message_id: &id, kind: MessageKind::Observation, text: &text,
+                    in_reply_to: None, report: None, stale: false, escalated_from: None })?;
+            }
+            let revision = locked.save(&mut state)?;
+            self.revision.send_replace(revision);
+        }
+        Ok(next)
+    }
+
+    /// Only queued requests have a pending deadline; delivered causes never schedule another wake.
+    fn resource_stall_delay(&self) -> Result<Option<Duration>, InspectionError> {
+        use cockpit_protocol::orchestration::{ActorRef, MessageKind, ResourceRequestState};
+        let locked = self.store.lock()?;
+        let mut state = locked.read()?;
+        let at = time::OffsetDateTime::now_utc();
+        let mut next = None::<Duration>;
+        let mut notices = Vec::new();
+        for request in state.resource_requests.iter().filter(|r| r.state == ResourceRequestState::Queued) {
+            let key = format!("resource-stall:{}", request.request_id);
+            if state.messages.iter().any(|m| m.message_id == key) { continue; }
+            let Some(since) = super::parse_time(&request.updated_at) else { continue };
+            let remaining = (since + time::Duration::minutes(10) - at).whole_milliseconds();
+            if remaining > 0 {
+                let delay = Duration::from_millis(remaining as u64);
+                next = Some(next.map_or(delay, |current| current.min(delay)));
+                continue;
+            }
+            let Some(run) = state.runs.iter().find(|r| r.run_id == request.holder.run_id && r.stage != RunStage::Closed) else { continue };
+            if !state.runs.iter().any(|root| root.run_id == run.root_id && root.stage != RunStage::Closed) { continue; }
+            let title = run.task_id.as_ref().and_then(|id| locked.tasks(&run.root_id).ok()
+                .and_then(|doc| doc.task(id).ok().map(|task| task.title.clone())))
+                .unwrap_or_else(|| "General".into());
+            let project = run.task_id.as_ref().and_then(|id| super::projection::task_project(&state, &run.root_id, id, None))
+                .map(|project| project.label).unwrap_or_else(|| "General".into());
+            notices.push((run.root_id.clone(), key, format!("Task \"{title}\" ({project}) has waited over 10 minutes for a resource; inspect the queued request {}.", request.request_id)));
+        }
+        if !notices.is_empty() {
+            for (root, key, text) in notices {
+                super::messages::append(&mut state, super::messages::AppendMessage { from: ActorRef::Dispatcher,
+                    to_run_id: &root, message_id: &key, kind: MessageKind::Observation, text: &text,
+                    in_reply_to: None, report: None, stale: false, escalated_from: None })?;
+            }
+            let revision = locked.save(&mut state)?;
+            self.revision.send_replace(revision);
+        }
+        Ok(next)
     }
 }

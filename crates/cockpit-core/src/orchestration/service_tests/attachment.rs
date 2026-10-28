@@ -114,19 +114,18 @@ fn run_resume_identical_replay_preserves_protected_writer_and_changed_payload_co
 }
 
 #[test]
-fn supervisor_start_another_uses_immutable_project_and_replays_its_operation() {
+fn supervisor_start_creates_private_liaison_and_replays_its_operation() {
     let fixture = Fixture::new();
     let action = OrchestrationAction::SupervisorStart {
-        operation_id: id(), mode: SupervisorStartMode::Another, target: Some(target()),
-        label: Some("Explicit another coordinator".into()), selected_root_id: None,
-        expected_project_key: Some(fixture.project().key),
+        operation_id: id(), target: Some(target()),
+        label: Some("Coordinator".into()), selected_root_id: None,
     };
     let first = fixture.operator(action.clone());
     let OrchestrationActionResult::SupervisorStarted { start: first } = first.result else {
         panic!("Expected supervisor start");
     };
     assert!(!first.duplicate);
-    assert_eq!(fixture.run(&first.root_id).project, Some(fixture.project()));
+    assert_ne!(fixture.run(&first.root_id).project, Some(fixture.project()));
     assert_eq!(fixture.run(&first.root_id).attachment.as_ref().unwrap().epoch, 1);
     assert!(fixture.run(&first.root_id).checkout_claim_id.is_none());
     let before = fixture.state_bytes();
@@ -145,7 +144,7 @@ fn supervisor_start_another_uses_immutable_project_and_replays_its_operation() {
 }
 
 #[test]
-fn concurrent_reuse_starts_match_or_create_one_open_project_root() {
+fn concurrent_starts_match_or_create_one_session_liaison() {
     let fixture = Fixture::new();
     let project = fixture.project();
     let barrier = std::sync::Barrier::new(3);
@@ -165,9 +164,8 @@ fn concurrent_reuse_starts_match_or_create_one_open_project_root() {
                     OrchestrationMutationRequest {
                         session_id: SESSION.into(), expected_revision: Some(revision),
                         action: OrchestrationAction::SupervisorStart {
-                            operation_id, mode: SupervisorStartMode::ReuseOrResume, target: Some(target()),
-                            label: Some("Concurrent project coordinator".into()), selected_root_id: None,
-                            expected_project_key: Some(project.key.clone()),
+                            operation_id, target: Some(target()),
+                            label: Some("Concurrent coordinator".into()), selected_root_id: None,
                         },
                     },
                     &ResolvedMutationInput { project: Some(project), ..ResolvedMutationInput::default() },
@@ -183,7 +181,7 @@ fn concurrent_reuse_starts_match_or_create_one_open_project_root() {
     });
     assert_eq!(roots[0], roots[1]);
     assert_eq!(fixture.state().runs.iter().filter(|run| run.parent_run_id.is_none()
-        && run.stage != RunStage::Closed && run.project.as_ref() == Some(&project)).count(), 1);
+        && run.stage != RunStage::Closed && run.session_id == SESSION).count(), 1);
     assert_eq!(fixture.state().operations.iter()
         .filter(|record| record.kind == store::DurableOperationKind::SupervisorStart).count(), 2);
 }
@@ -211,43 +209,6 @@ fn semantic_registration_never_replaces_physical_process_or_checkout_claim() {
     }
 }
 
-#[test]
-fn reuse_start_prefers_selected_matching_root_then_stable_latest_open_root() {
-    let fixture = Fixture::new();
-    let first = fixture.root();
-    let second = fixture.root();
-    for root in [&first, &second] {
-        fixture.seed_run(root, |run| run.updated_at = "2026-10-10T00:00:00Z".into());
-    }
-    let state = fixture.state();
-    let latest = preferred_project_root(&state.runs, SESSION, &fixture.project().key, None).unwrap();
-    let preferred = state.runs[latest].run_id.clone();
-    // Equal timestamps have a deterministic UUID lexical preference.
-    assert_eq!(preferred.as_str(), first.as_str().min(second.as_str()));
-    let other = if preferred == first { second.clone() } else { first.clone() };
-    let selected = fixture.operator(OrchestrationAction::SupervisorStart {
-        operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
-        selected_root_id: Some(other.clone()), expected_project_key: Some(fixture.project().key),
-    });
-    let OrchestrationActionResult::SupervisorStarted { start } = selected.result else { unreachable!() };
-    assert_eq!(start.root_id, other);
-    assert_eq!(fixture.state().runs.len(), 2);
-    fixture.seed_run(&preferred, |run| run.updated_at = "2026-10-11T00:00:00Z".into());
-    let latest = fixture.operator(OrchestrationAction::SupervisorStart {
-        operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
-        selected_root_id: Some(id()), expected_project_key: Some(fixture.project().key),
-    });
-    let OrchestrationActionResult::SupervisorStarted { start } = latest.result else { unreachable!() };
-    assert_eq!(start.root_id, preferred);
-    fixture.operator(OrchestrationAction::CancelRun { run_id: preferred.clone() });
-    let open = fixture.operator(OrchestrationAction::SupervisorStart {
-        operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
-        selected_root_id: Some(preferred), expected_project_key: Some(fixture.project().key),
-    });
-    let OrchestrationActionResult::SupervisorStarted { start } = open.result else { unreachable!() };
-    assert_eq!(start.root_id, other, "Closed history is not implicitly reopened");
-    assert_eq!(fixture.state().runs.len(), 2);
-}
 
 #[test]
 fn obsolete_schema_is_rejected_without_discarding_or_rewriting_history() {
@@ -388,8 +349,8 @@ fn physical_start_observation_reuses_credential_bound_root_without_conversation_
             OrchestrationMutationRequest {
                 session_id: SESSION.into(), expected_revision: Some(fixture.state().revision),
                 action: OrchestrationAction::SupervisorStart {
-                    operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
-                    selected_root_id: Some(root.clone()), expected_project_key: Some(fixture.project().key),
+                    operation_id: id(), target: Some(target()), label: None,
+                    selected_root_id: Some(root.clone()),
                 },
             }, &ResolvedMutationInput {
                 project: Some(fixture.project()), attachment_observation: Some(observed.clone()),
@@ -489,8 +450,8 @@ fn physical_start_reuses_only_a_root_with_applied_current_epoch_attachment_bindi
         OrchestrationMutationRequest {
             session_id: SESSION.into(), expected_revision: Some(fixture.state().revision),
             action: OrchestrationAction::SupervisorStart {
-                operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
-                selected_root_id: Some(root.clone()), expected_project_key: Some(fixture.project().key),
+                operation_id: id(), target: Some(target()), label: None,
+                selected_root_id: Some(root.clone()),
             },
         }, &ResolvedMutationInput {
             project: Some(fixture.project()), attachment_observation: Some(observed.clone()),
@@ -1265,6 +1226,12 @@ async fn omp_default_resume_relaunches_root_after_saved_unsupported_block() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn pending_resume_requeues_only_supported_effect_free_prelaunch_refusal() {
+    assert_effect_free_resume_retry("harness_resume_unsupported").await;
+    assert_effect_free_resume_retry("workspace_missing").await;
+}
+
+#[cfg(target_os = "linux")]
+async fn assert_effect_free_resume_retry(error_code: &str) {
     let fixture = Fixture::new();
     let root = fixture.root();
     fixture.seed_run(&root, |run| {
@@ -1286,9 +1253,14 @@ async fn pending_resume_requeues_only_supported_effect_free_prelaunch_refusal() 
     fixture.service.record_dispatch(&root, DispatchUpdate::Step {
         step: DispatchStep::NeedsReview,
         error: Some(cockpit_protocol::ErrorResponse {
-            code: "harness_resume_unsupported".into(), message: "Previous owner did not support built-in OMP resume".into(),
+            code: error_code.into(), message: "Previous launch was refused before effects".into(),
         }),
     }).unwrap();
+    if error_code == "workspace_missing" {
+        fixture.seed_run(&root, |run| {
+            run.dispatch.as_mut().unwrap().staging_workspace_id = Some("stale-space".into());
+        });
+    }
     let stalled = fixture.run(&root);
     let attachment_before = serde_json::to_value(&stalled.attachment).unwrap();
     let credentials_before = serde_json::to_value(&fixture.state().credentials).unwrap();
@@ -1308,6 +1280,7 @@ async fn pending_resume_requeues_only_supported_effect_free_prelaunch_refusal() 
                 7 => run.attachment.as_mut().unwrap().location = original.attachment.as_ref().unwrap().location.clone(),
                 8 => dispatch.launch_attempt += 1,
                 9 => dispatch.error.as_mut().unwrap().code = "launch_outcome_unknown".into(),
+                10 if error_code == "workspace_missing" => dispatch.endpoint_identity = Some("possibly-created-endpoint".into()),
                 10 => run.launch_config.harness_kind = "unsupported-agent".into(),
                 11 => run.attachment.as_mut().unwrap().state = AttachmentState::Connecting,
                 _ => unreachable!(),
@@ -1326,6 +1299,7 @@ async fn pending_resume_requeues_only_supported_effect_free_prelaunch_refusal() 
             assert_eq!(after.dispatch.as_ref().unwrap().step, DispatchStep::SetupPending);
             assert!(after.dispatch.as_ref().unwrap().error.is_none());
             assert_eq!(after.dispatch.as_ref().unwrap().launch_attempt, stalled.dispatch.as_ref().unwrap().launch_attempt);
+            assert!(after.dispatch.as_ref().unwrap().staging_workspace_id.is_none());
             assert_eq!(serde_json::to_value(&after.attachment).unwrap(), attachment_before);
             let repeated = apply_root_recovery(&fixture, &root, &ResolvedMutationInput::default());
             assert_eq!(repeated.resume.operation_id, pending.resume.operation_id);
@@ -1338,220 +1312,6 @@ async fn pending_resume_requeues_only_supported_effect_free_prelaunch_refusal() 
     }
 }
 
-fn seed_checkout_reselection(fixture: &Fixture, root: &str) -> (CheckoutIdentity, std::path::PathBuf) {
-    let path = fixture.root.join("reselected-checkout");
-    std::fs::create_dir_all(&path).unwrap();
-    let (_, fresh) = project_identity::resolve_owned_directory(&path).unwrap();
-    fixture.create_task(root, "Keep canonical tasks across explicit checkout re-selection");
-    fixture.operator(OrchestrationAction::RunResume { run_id: root.into(), operation_id: id(), expected_attachment_epoch: Some(1), confirmed_stopped_attachment_id: None });
-    fixture.seed_run(root, |run| {
-        run.stage = RunStage::Starting;
-        run.attachment = Some(reserved_attachment(2, 2));
-        run.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
-            harness: "omp".into(), session_id: "retained-root-conversation".into(),
-        });
-        let resume = run.resume.as_mut().unwrap();
-        resume.phase = ResumePhase::Launching;
-        resume.previous_attachment_epoch = Some(1);
-        resume.replacement_attachment_epoch = Some(2);
-        resume.cause = None;
-        let mut saved = fresh.clone();
-        saved.directory_identity.device = "previous-boot-device".into();
-        run.checkout = Some(saved);
-        run.setup = Some(SetupSummary {
-            operation_id: None, generation: None, workspace_id: Some("test-space".into()),
-            checkout_path: fresh.path.clone(), repository_id: None, branch: None, base: None,
-            base_commit: None, ownership: None, effects: Vec::new(), warnings: Vec::new(),
-            project_workspace_id: None,
-        });
-        let mut refused = dispatch(DispatchStep::NeedsReview);
-        refused.launch_attempt = 2;
-        refused.error = Some(cockpit_protocol::ErrorResponse {
-            code: "checkout_identity_changed".into(), message: "Saved physical checkout no longer matches".into(),
-        });
-        run.dispatch = Some(refused);
-    });
-    let (credential, path) = credentials::stage_credential(fixture.service.base(), &fixture.run(root), JobRole::Root).unwrap();
-    fixture.seed_state(|state| {
-        for old in state.credentials.iter_mut().filter(|old| old.run_id == root) {
-            old.state = credentials::CredentialState::Revoked;
-        }
-        state.credentials.push(credential);
-    });
-    (fresh, path)
-}
-
-fn checkout_reselection_start(root: &str, project_key: &str) -> OrchestrationMutationRequest {
-    OrchestrationMutationRequest {
-        session_id: SESSION.into(), expected_revision: None,
-        action: OrchestrationAction::SupervisorStart {
-            operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()),
-            label: None, selected_root_id: Some(root.into()), expected_project_key: Some(project_key.into()),
-        },
-    }
-}
-
-#[test]
-fn explicit_root_checkout_reselection_preserves_reserved_identity_tasks_and_capability() {
-    use sha2::{Digest, Sha256};
-    let fixture = Fixture::new();
-    let root = fixture.root();
-    let (fresh, credential_path) = seed_checkout_reselection(&fixture, &root);
-    let original = fixture.state();
-    let credential_bytes = std::fs::read(&credential_path).unwrap();
-    let tasks_hash = Sha256::digest(fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap());
-    let resolved = ResolvedMutationInput {
-        project: Some(fixture.project()), reselected_checkout: Some(fresh.clone()), ..Default::default()
-    };
-    // Even an owner input carrying a fresh checkout cannot turn RunResume into re-selection.
-    fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser), OrchestrationMutationRequest {
-        session_id: SESSION.into(), expected_revision: None,
-        action: OrchestrationAction::RunResume { run_id: root.clone(), operation_id: id(), expected_attachment_epoch: Some(2), confirmed_stopped_attachment_id: None },
-    }, &resolved).unwrap();
-    let mut joined = fixture.state();
-    assert_eq!(joined.operations.len(), original.operations.len() + 1);
-    joined.operations = original.operations.clone();
-    joined.revision = original.revision;
-    let mut joined = serde_json::to_value(joined).unwrap();
-    let mut original_fields = serde_json::to_value(&original).unwrap();
-    // Joining records a machine mutation, whose generic lifecycle bookkeeping
-    // touches Run.updated_at. Every stored execution/recovery field must remain unchanged.
-    for state in [&mut joined, &mut original_fields] {
-        for run in state["runs"].as_array_mut().unwrap() {
-            run.as_object_mut().unwrap().remove("updated_at");
-        }
-    }
-    assert_eq!(joined, original_fields);
-
-    let before = fixture.run(&root);
-    let request = checkout_reselection_start(&root, &fixture.project().key);
-    let result = fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser), request.clone(), &resolved).unwrap();
-    let OrchestrationActionResult::SupervisorStarted { start } = result.result else { unreachable!() };
-    assert_eq!(start.outcome, SupervisorStartOutcome::Resuming);
-    assert_eq!(start.root_id, root);
-    assert_eq!(start.resume_operation_id.as_ref(), Some(&before.resume.as_ref().unwrap().operation_id));
-    let after = fixture.run(&root);
-    assert_eq!(after.checkout.as_ref(), Some(&fresh));
-    assert_eq!(after.dispatch.as_ref().unwrap().step, DispatchStep::SetupPending);
-    assert!(after.dispatch.as_ref().unwrap().error.is_none());
-    assert_eq!(after.dispatch.as_ref().unwrap().launch_attempt, before.dispatch.as_ref().unwrap().launch_attempt);
-    assert_eq!(serde_json::to_value(&after.attachment).unwrap(), serde_json::to_value(&before.attachment).unwrap());
-    assert_eq!(serde_json::to_value(&after.resume).unwrap(), serde_json::to_value(&before.resume).unwrap());
-    assert_eq!(serde_json::to_value(&fixture.state().credentials).unwrap(), serde_json::to_value(&original.credentials).unwrap());
-    assert_eq!(std::fs::read(&credential_path).unwrap(), credential_bytes);
-    assert_eq!(Sha256::digest(fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap()), tasks_hash);
-    let bytes = fixture.state_bytes();
-    let replay = fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser), request, &resolved).unwrap();
-    let OrchestrationActionResult::SupervisorStarted { start } = replay.result else { unreachable!() };
-    assert!(start.duplicate);
-    assert_eq!(fixture.state_bytes(), bytes);
-    assert_eq!(fixture.state().runs.len(), 1);
-}
-
-#[test]
-fn root_checkout_reselection_refusals_leave_durable_state_unchanged() {
-    let fixture = Fixture::new();
-    let root = fixture.root();
-    let (fresh, credential_path) = seed_checkout_reselection(&fixture, &root);
-    let baseline = fixture.state();
-    let credential_bytes = std::fs::read(&credential_path).unwrap();
-    for fault in 0..18 {
-        let mut input = ResolvedMutationInput {
-            project: Some(fixture.project()), reselected_checkout: Some(fresh.clone()), ..Default::default()
-        };
-        fixture.seed_state(|state| {
-            let current_revision = state.revision;
-            *state = baseline.clone();
-            state.revision = current_revision;
-            let run = &mut state.runs[run_index(&baseline, &root).unwrap()];
-            match fault {
-                0 => run.kind = RunKind::Worker,
-                1 => run.dispatch.as_mut().unwrap().launch_tag = Some("possibly-created-tab".into()),
-                2 => {
-                    let mut credential = state.credentials.iter().find(|credential|
-                        credential.state == credentials::CredentialState::Active).unwrap().clone();
-                    credential.credential_id = id();
-                    credential.attachment_epoch += 1;
-                    state.credentials.push(credential);
-                }
-                3 => state.checkout_claims.push(claims::CheckoutClaim {
-                    claim_id: id(), checkout: fresh.clone(), revision: 1, state: claims::ClaimState::Held,
-                    holder: Some(AttachmentReference {
-                        run_id: root.clone(), attachment_id: run.attachment.as_ref().unwrap().attachment_id.clone(),
-                        attachment_epoch: 2,
-                    }), transition_operation_id: None,
-                }),
-                4 => {
-                    let (_, other) = project_identity::resolve_owned_directory(&fixture.root).unwrap();
-                    let checkout = input.reselected_checkout.as_mut().unwrap();
-                    checkout.path = other.path;
-                    checkout.directory_identity = other.directory_identity;
-                }
-                5 => input.reselected_checkout.as_mut().unwrap().key = "different-key".into(),
-                6 => input.reselected_checkout.as_mut().unwrap().git = Some(CheckoutGitIdentity {
-                    common_dir: fresh.path.clone(), worktree_git_dir: fresh.path.clone(),
-                }),
-                7 => input.project.as_mut().unwrap().key = "different-project".into(),
-                8 => input.project.as_mut().unwrap().source_workspace_id = Some("other-space".into()),
-                9 => run.parent_run_id = Some(id()),
-                10 => run.checkout_claim_id = Some(id()),
-                11 => run.root_id = id(),
-                12 => run.dispatch.as_mut().unwrap().staging_workspace_id = Some("staging".into()),
-                13 => state.operations.iter_mut().find(|operation|
-                    operation.operation_id == run.resume.as_ref().unwrap().operation_id).unwrap().kind = store::DurableOperationKind::SupervisorStart,
-                14 => input.reselected_checkout.as_mut().unwrap().directory_identity.inode = "stale-observation".into(),
-                15 => run.setup.as_mut().unwrap().workspace_id = None,
-                16 => run.kind = RunKind::Adopted,
-                17 => {
-                    state.checkout_claims.push(claims::CheckoutClaim {
-                        claim_id: id(), checkout: fresh.clone(), revision: 1, state: claims::ClaimState::Released,
-                        holder: Some(AttachmentReference {
-                            run_id: root.clone(), attachment_id: run.attachment.as_ref().unwrap().attachment_id.clone(),
-                            attachment_epoch: 1,
-                        }), transition_operation_id: None,
-                    });
-                }
-                _ => unreachable!(),
-            }
-        });
-        let before = fixture.state_bytes();
-        let expected = match fault {
-            4..=6 => "checkout_reselection_identity_mismatch",
-            7 => "project_identity_conflict",
-            8 | 15 => "checkout_reselection_space_mismatch",
-            14 => "checkout_identity_changed",
-            _ => "checkout_reselection_unavailable",
-        };
-        let request = checkout_reselection_start(&root, &input.project.as_ref().unwrap().key);
-        let result = fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser), request, &input);
-        if matches!(fault, 16 | 17) {
-            assert!(result.is_ok(), "Claim-free adopted roots and released historical claims remain eligible");
-        } else {
-            assert_code(result, expected);
-            assert_eq!(fixture.state_bytes(), before, "fault {fault}");
-        }
-        assert_eq!(std::fs::read(&credential_path).unwrap(), credential_bytes);
-    }
-}
-
-#[test]
-fn explicit_root_reselection_accepts_changed_inode_at_the_same_canonical_path() {
-    let fixture = Fixture::new();
-    let root = fixture.root();
-    let (old, _) = seed_checkout_reselection(&fixture, &root);
-    std::fs::rename(&old.path, fixture.root.join("previous-root-checkout")).unwrap();
-    std::fs::create_dir(&old.path).unwrap();
-    let (_, fresh) = project_identity::resolve_owned_directory(Path::new(&old.path)).unwrap();
-    assert_eq!(fresh.path, old.path);
-    assert_eq!(fresh.key, old.key);
-    assert_ne!(fresh.directory_identity.inode, old.directory_identity.inode);
-    let input = ResolvedMutationInput {
-        project: Some(fixture.project()), reselected_checkout: Some(fresh.clone()), ..Default::default()
-    };
-    fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
-        checkout_reselection_start(&root, &fixture.project().key), &input).unwrap();
-    assert_eq!(fixture.run(&root).checkout.as_ref(), Some(&fresh));
-}
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
@@ -1605,8 +1365,8 @@ async fn authenticated_start_reuse_refreshes_root_receipts_and_rejects_stale_sta
     let start_request = || OrchestrationMutationRequest {
         session_id: SESSION.into(), expected_revision: None,
         action: OrchestrationAction::SupervisorStart {
-            operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
-            selected_root_id: Some(root.clone()), expected_project_key: Some(fixture.project().key),
+            operation_id: id(), target: Some(target()), label: None,
+            selected_root_id: Some(root.clone()),
         },
     };
     let operator = Actor::Operator(OperatorOrigin::Browser);
@@ -1697,8 +1457,8 @@ async fn authenticated_start_reuse_settles_a_blocked_recovery_even_without_a_loc
     let response = fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser),
         OrchestrationMutationRequest { session_id: SESSION.into(), expected_revision: None,
             action: OrchestrationAction::SupervisorStart {
-                operation_id: id(), mode: SupervisorStartMode::ReuseOrResume, target: Some(target()), label: None,
-                selected_root_id: Some(root.clone()), expected_project_key: Some(fixture.project().key),
+                operation_id: id(), target: Some(target()), label: None,
+                selected_root_id: Some(root.clone()),
             },
         }, &input).unwrap();
     let OrchestrationActionResult::SupervisorStarted { start } = response.result else { unreachable!() };
@@ -1866,92 +1626,6 @@ async fn credential_only_root_recovers_from_exact_native_exit_without_chat_ident
         original.attachment.as_ref().unwrap().machine_id.as_deref()).unwrap_or(false));
 }
 
-#[test]
-fn checkout_reselection_requires_every_effect_free_reserved_launch_fence() {
-    let fixture = Fixture::new();
-    let root = fixture.root();
-    seed_checkout_reselection(&fixture, &root);
-    let baseline = fixture.run(&root);
-    assert!(effect_free_reserved_resume_launch(&baseline));
-    assert!(root_checkout_reselection_pending(&baseline));
-    let location = || RunLocation {
-        boot_id: None, peer_process: None, terminal_id: Some("terminal".into()), native_session_id: None,
-        endpoint_identity: "endpoint".into(), session_id: SESSION.into(), workspace_id: "test-space".into(),
-        tab_id: "tab".into(), pane_id: "pane".into(), launch_tag: "tag".into(),
-    };
-    for fault in 0..26 {
-        let mut run = baseline.clone();
-        let dispatch = run.dispatch.as_mut().unwrap();
-        let attachment = run.attachment.as_mut().unwrap();
-        let resume = run.resume.as_mut().unwrap();
-        match fault {
-            0 => run.stage = RunStage::Active,
-            1 => resume.phase = ResumePhase::Reconciling,
-            2 => resume.run_id = id(),
-            3 => resume.replacement_attachment_epoch = Some(3),
-            4 => resume.previous_attachment_epoch = Some(0),
-            5 => resume.previous_attachment_epoch = Some(2),
-            6 => attachment.state = AttachmentState::Connecting,
-            7 => attachment.location = Some(location()),
-            8 => attachment.process = Some(NativeProcessIdentity {
-                pid: 1, start_ticks: 1, kernel_boot_id: None,
-            }),
-            9 => attachment.shell = Some(NativeShellIdentity {
-                process: NativeProcessIdentity { pid: 1, start_ticks: 1, kernel_boot_id: None },
-                executable_device: "1".into(), executable_inode: "1".into(), argv_digest: "a".repeat(64),
-            }),
-            10 => dispatch.step = DispatchStep::LaunchIntent,
-            11 => dispatch.error = None,
-            12 => dispatch.launch_attempt = 0,
-            13 => dispatch.launch_attempt += 1,
-            14 => dispatch.agent_started = true,
-            15 => dispatch.launch_tag = Some("tag".into()),
-            16 => dispatch.endpoint_identity = Some("endpoint".into()),
-            17 => dispatch.scope_unit = Some("scope".into()),
-            18 => dispatch.latch_state = Some(AgentLatchState::Unknown),
-            19 => dispatch.source_location = Some(location()),
-            20 => dispatch.move_operation_id = Some(id()),
-            21 => dispatch.staging_workspace_id = Some("staging".into()),
-            22 => run.resume = None,
-            23 => run.attachment = None,
-            24 => run.dispatch = None,
-            25 => resume.previous_attachment_epoch = None,
-            _ => unreachable!(),
-        }
-        assert!(!effect_free_reserved_resume_launch(&run), "fault {fault}");
-        assert!(!root_checkout_reselection_pending(&run), "fault {fault}");
-    }
-}
-
-#[test]
-fn root_checkout_reselection_is_an_explicit_operator_start_only() {
-    let fixture = Fixture::new();
-    let root = fixture.root();
-    let (_, _, actor) = fixture.working(&root);
-    let (fresh, _) = seed_checkout_reselection(&fixture, &root);
-    let input = ResolvedMutationInput {
-        project: Some(fixture.project()), reselected_checkout: Some(fresh), ..Default::default()
-    };
-    let mut request = checkout_reselection_start(&root, &fixture.project().key);
-    let before = fixture.state_bytes();
-    assert_code(fixture.service.mutate_resolved(&actor, request.clone(), &input), "actor_forbidden");
-    assert_eq!(fixture.state_bytes(), before);
-    for fault in 0..3 {
-        let OrchestrationAction::SupervisorStart { mode, target, selected_root_id, .. } = &mut request.action else { unreachable!() };
-        *mode = SupervisorStartMode::ReuseOrResume;
-        *target = Some(super::target());
-        *selected_root_id = Some(root.clone());
-        match fault {
-            0 => *mode = SupervisorStartMode::Another,
-            1 => *target = None,
-            2 => *selected_root_id = None,
-            _ => unreachable!(),
-        }
-        assert_code(fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser), request.clone(), &input),
-            "checkout_reselection_unavailable");
-        assert_eq!(fixture.state_bytes(), before);
-    }
-}
 
 #[cfg(target_os = "linux")]
 fn unrecorded_root(fixture: &Fixture, root: &str) -> Actor {

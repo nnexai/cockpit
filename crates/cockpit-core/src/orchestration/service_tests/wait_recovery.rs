@@ -239,10 +239,10 @@ async fn wait_watched_task_change_wakes_without_advancing_time() {
 #[tokio::test]
 async fn wait_external_service_revision_is_visible_within_wait_budget() {
     let fixture = Fixture::new();
-    fixture.root();
     let external = OrchestrationService::open(&fixture.configuration).unwrap();
     let request = wait_request(&fixture, 3_000);
-    let before = fixture.state_bytes();
+    // A fresh store has no state file until its first committed mutation.
+    let before = std::fs::read(fixture.service.base().join("state.json")).unwrap_or_default();
     let mut waiting = Box::pin(fixture.service.wait(&request));
     assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
 
@@ -255,9 +255,7 @@ async fn wait_external_service_revision_is_visible_within_wait_budget() {
                     expected_revision: Some(request.after_revision),
                     action: OrchestrationAction::SupervisorStart {
                         operation_id: id(),
-                        mode: SupervisorStartMode::Another,
                         selected_root_id: None,
-                        expected_project_key: Some(fixture.project().key),
                         target: Some(target()),
                         label: Some("External service supervisor".into()),
                     },

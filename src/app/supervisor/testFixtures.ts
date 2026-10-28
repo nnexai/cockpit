@@ -3,7 +3,7 @@ import type { OrchestrationSnapshot, Run, TaskView } from "../../protocol/genera
 export function taskFixture(id: string, overrides: Partial<TaskView> = {}): TaskView {
   return {
     task: { task_id: id, title: id, body: "Description", description: "Description", description_editable: true, description_diagnostic: null, steps: [], step_progress: { done: 0, total: 0 }, steps_diagnostic: null, depends_on: [], follow_up_of: null, relations_diagnostic: null, checked: false, line: 1, task_revision: `revision-${id}`, diagnostic: null },
-    lane: "ready", scheduled: false, attempt: null, current_run_id: null, dependencies: { state: "none", unmet: [], problems: [] }, ...overrides,
+    project: null, lane: "ready", scheduled: false, attempt: null, current_run_id: null, dependencies: { state: "none", unmet: [], problems: [] }, ...overrides,
   };
 }
 export function runFixture(overrides: Partial<Run> = {}): Run {

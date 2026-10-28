@@ -61,49 +61,59 @@ read their canonical task and launch brief, then own implementation, subagents
 and affected checks autonomously. Local subagents contribute through their owner,
 not copied credentials. Ordinary edits and shells need no orchestration call.
 
-## Liaison: authorize outcomes, not worker steps
+## Liaison: route requests, not worker steps
 
-The root is the user's autonomous liaison, not an implementation worker. Create
-only authorized missing tasks; preserve existing IDs and backlog-only tasks.
-Coordinate dependencies, delegate complete outcomes—including investigation,
-implementation and affected verification—answer routine questions, integrate and
-review Results. Keep later stages and narrow follow-ups with the same Working
-worker using task scope-update and instructions, rather than accepting or
-restarting between stages. Create separate tasks for independent parallel work
-or different projects. Do not repeatedly request plans or execution approval.
-Scheduling is standing delegation; creation alone never authorizes execution.
-Create and schedule a new independent task in one tool invocation:
+The root is the user's one personal liaison for the Herdr session, across all
+projects; it is not an implementation worker. The user calls it up with new
+ideas, replies to running work and status questions. Route each to the right
+place: a new task in the right project, the existing worker or agent, or a
+short answer from current state. Workers plan, implement and verify; do not
+repeatedly request plans or execution approval. Scheduling is standing
+delegation; creation alone never authorizes execution. Preserve existing task
+IDs and backlog-only tasks.
+
+Orient with `where`: live projects, their Spaces, agents (including ones the
+user started, marked unmanaged), tasks per project and repository catalog
+entries not open as Spaces. Task and run references accept a full UUID, a
+unique UUID prefix (at least four characters) or a unique title substring;
+`--space`/`--space-worktree` accept a Space ID or unique label. Ambiguous
+references fail with the candidates listed; pick one, do not guess.
 
 ```sh
+"${COCKPIT_CLI_PATH:-cockpit-cli}" where
 TASK_ID="$(uuidgen)"
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task create --task-id "$TASK_ID" --title "Fix parser" --description "Outcome and acceptance criteria" --json &&
-"${COCKPIT_CLI_PATH:-cockpit-cli}" task schedule "$TASK_ID" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" task schedule "$TASK_ID" --space-worktree "md-search" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" agent send "Fix parser" --text "Also cover the empty-input case"
 ```
 
-Schedule uses the current canonical revisions unless exact `--task-revision` /
-`--doc-revision` fences are supplied. With no target, a Git task shares its exact
-source Space when the checkout is clean, the worker is the only active worker
-in the root, and no checkout claim conflicts; otherwise it uses an isolated
-worktree. Directory projects retain their owned attempt directory default.
-Discover the actual target from explicit task/setup project evidence, the
-source Space's Library/context or configured routing; never infer it from cwd
-or the liaison's folder. `run context` identifies authority, not a project.
-`context --current` resolves only the originating pane, not an unrelated task.
-A general-directory liaison can manage multiple projects. If no project evidence
-is supplied, ask for that actual target rather than guessing current focus.
-Use `--space` for intentional borrowed reuse; it does not authorize concurrent
-shared readers or bypass exclusive checkout claims. Use `--space-worktree` for
-genuine concurrent writers or a different base or branch, including MR review
-or testing; `--base REF` selects a base (otherwise the source checkout's committed
-HEAD). A scheduled `--path` matching exactly one fresh verified Git Space shares
-it under the same clean, lone-worker and no-conflicting-claim conditions and
-isolates otherwise; other Open placement borrows the directory. Read-only
-instructions are not a sandbox; borrowed inspection must change no HEAD, index or
-build outputs. A primary Git Space's borrowed worker terminal is intentionally
-retained until the user closes it, not automatically cleaned up.
-Optional `--brief` / `--brief-file` add instructions, not another task store.
-Dependencies and the parallel slot gate launch; authorization survives waiting.
-If source placement cannot be resolved, inspect the returned blocker.
+Pick the project from the request, `where` and the conversation; ask the user
+only when that is genuinely ambiguous. One task per outcome: keep later stages
+and narrow follow-ups with the same Working worker through `task scope-update`
+or `agent send`, rather than accepting or restarting between stages. Separate
+tasks are for independent parallel work or another project.
+
+Placement: `--space-worktree SPACE` gives an isolated worktree for changes
+(`--base REF` selects a base, otherwise the Space checkout's committed HEAD);
+`--space SPACE` borrows the exact Space for read-only or intentional in-place
+work and does not bypass exclusive checkout claims; `--path` to exactly one
+verified clean Git Space shares it for a lone worker, otherwise isolates;
+`--repository ID` uses a catalog entry. Omitting the target gives a private
+general-work directory for tasks that belong to no project. Read-only
+instructions are not a sandbox; borrowed inspection must change no HEAD, index
+or build outputs. A primary Git Space's borrowed worker terminal stays until the
+user closes it. Optional `--brief` / `--brief-file` add instructions, not another
+task store. Dependencies and the per-project parallel limit gate launch;
+authorization survives waiting. If placement cannot be resolved, inspect the
+returned blocker.
+
+`agent send REF --text` reaches any agent: a managed worker receives a durable
+inbox instruction, an unmanaged agent the user started receives a Herdr prompt.
+It refuses the liaison's own pane. Replies to the user stay plain and short;
+keep receipts, fences and bookkeeping internal unless the user must act.
+Fences (`--revision`, `--task-revision`, `--doc-revision`, `--operation-id`)
+are optional and resolved from current state; supply them only to pin an exact
+replay.
 
 ```sh
 "${COCKPIT_CLI_PATH:-cockpit-cli}" context --space "$SOURCE_SPACE" --herdr-session "$SESSION" --herdr-socket "$SOCKET"
@@ -149,8 +159,8 @@ revision; use actual returned values. Existing CRUD and scope commands remain:
 ```
 
 Dependencies-set replaces the whole set; omit all `--depends-on` to clear.
-Create relationships use `--depends-on` plus `--doc-revision`; `--follow-up-of`
-also needs `--source-revision`. Prose may use `--description-file` or `--stdin`.
+Create relationships use `--depends-on` and `--follow-up-of`; optional
+`--doc-revision` and `--source-revision` pin exact relationship fences. Prose may use `--description-file` or `--stdin`.
 Step revision is optional (resolved internally); an explicit `--revision` keeps
 an exact fence. Step-rename uses `--step-id --title`; step-move/add accept
 `--parent-step-id` and `--before-step-id`; step-remove takes `--step-id`.
@@ -256,8 +266,8 @@ need inspected worker replacement, not this planning retry.
 ## Review, integration and retained adapter commands
 
 Review `run show RUN --json` and fresh canonical scope; accept only a successful,
-honest Result satisfying all requested criteria using `run accept RUN
---task-revision REV`. Otherwise `run send-back RUN --text "Correction"`.
+honest Result satisfying all requested criteria using `run accept RUN`
+(optionally `--task-revision REV` to pin the fence). Otherwise `run send-back RUN --text "Correction"`.
 Acceptance is not integration or cleanup evidence. Integrate accepted output into
 the requested target and let automatic cleanup converge. A clean owned accepted
 head already contained in the root's actual checkout can retire without a prior

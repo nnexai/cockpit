@@ -1,12 +1,12 @@
 import type {
   OrchestrationAction, OrchestrationMutationRequest, OrchestrationMutationResponse,
   OrchestrationSnapshotRequest, OrchestrationSnapshot, OrchestrationWaitRequest, OrchestrationWaitResponse,
-  ProjectRootLookupRequest, ProjectRootLookupResponse, CheckOutcome, Integration, SourceOutput, CleanupItem, OwnedResourceIdentity,
+  LiaisonLookupRequest, LiaisonLookupResponse, CheckOutcome, Integration, SourceOutput, CleanupItem, OwnedResourceIdentity,
 } from "../protocol/generated/v1";
 import {
   wireOrchestrationAction, wireOrchestrationMutationRequest, wireOrchestrationMutationResponse,
   wireOrchestrationSnapshotRequest, wireOrchestrationSnapshot, wireOrchestrationWaitRequest, wireOrchestrationWaitResponse,
-  wireProjectRootLookupRequest, wireProjectRootLookupResponse, type TypedWirePolicy, type WireOwners,
+  wireLiaisonLookupRequest, wireLiaisonLookupResponse, type TypedWirePolicy, type WireOwners,
 } from "../protocol/generated/validate";
 import { CockpitClientError, validateSessionId } from "./CockpitClient";
 import { parseWorkspaceSetupRequest } from "./projectProtocol";
@@ -98,7 +98,7 @@ const labels = rootMessage("Invalid orchestration", {
   OrchestrationAction: "action", OrchestrationSnapshotRequest: "snapshot request", OrchestrationSnapshot: "snapshot",
   OrchestrationMutationRequest: "mutation request", OrchestrationMutationResponse: "mutation response",
   OrchestrationActionResult: "mutation result", OrchestrationWaitRequest: "wait request", OrchestrationWaitResponse: "wait response",
-  ProjectRootLookupRequest: "project lookup request", ProjectRootLookupResponse: "project lookup response",
+  LiaisonLookupRequest: "liaison lookup request", LiaisonLookupResponse: "liaison lookup response",
 });
 const POLICY = definePolicy({
   message: failure => {
@@ -131,7 +131,7 @@ const POLICY = definePolicy({
       "CleanupFinishResult", "CleanupResourceSummary", "RunCleanupSummary", "RestorationSummary",
       "OrchestrationAction[resource_register]", "OrchestrationAction[cleanup_finish]",
       "OrchestrationActionResult[resource_registered]", "OrchestrationActionResult[cleanup_finished]",
-      "ProjectRootLookupRequest", "ProjectRootLookupResponse", "ProjectRootCandidate",
+      "LiaisonLookupRequest", "LiaisonLookupResponse", "LiaisonCandidate",
       "OrchestrationAction[supervisor_start]", "OrchestrationAction[run_attach]",
       "OrchestrationAction[worker_start]", "OrchestrationAction[task_scope_update]", "OrchestrationAction[task_schedule]", "OrchestrationAction[task_schedule_cancel]", "OrchestrationAction[worker_replace]",
       "OrchestrationAction[run_register]", "OrchestrationAction[task_unassign]",
@@ -141,7 +141,7 @@ const POLICY = definePolicy({
     // run_resume uses generated required fields plus exact keys: complete also requires
     // own optional fields, which would turn its explicit stop confirmation into a requirement.
     raw: new Set(["OrchestrationSnapshotRequest", "OrchestrationWaitRequest", "OrchestrationWaitResponse",
-      "ProjectRootLookupRequest", "ProjectRootLookupResponse"]),
+      "LiaisonLookupRequest", "LiaisonLookupResponse"]),
     absent: new Set(["TaskOwner.conversation", "TaskOwnership.schedule", "ExecutionAttachment.process_scope", "DispatchState.scope_unit",
       "DispatchState.latch", "DispatchState.latch_state", "DispatchState.source_location",
       "DispatchState.move_operation_id", "DispatchState.staging_workspace_id",
@@ -166,8 +166,8 @@ const POLICY = definePolicy({
       "OwnedAttemptDirectoryIdentity",
       "CleanupReason", "CleanupEffectReceipt", "CleanupItem", "OwnedResourceRecord", "ResourceRegister", "CleanupFinish",
       "CleanupFinishResult", "CleanupResourceSummary", "RunCleanupSummary", "RestorationSummary",
-      "ProjectRootLookupRequest", "ProjectRootLookupResponse", "ProjectRootCandidate",
-      "ErrorResponse", "RootSummary", "TaskBoard", "TaskView", "Task", "TaskStep", "TaskStepProgress", "TaskDependencies",
+      "LiaisonLookupRequest", "LiaisonLookupResponse", "LiaisonCandidate",
+      "ErrorResponse", "RootSummary", "TaskBoard", "TaskProject", "TaskView", "Task", "TaskStep", "TaskStepProgress", "TaskDependencies",
       "TaskDependencyBlocker", "SetupSummary", "DispatchState", "Annotation", "ActorRef", "Report",
       "Message", "TaskIntent", "RunObservation", "RuntimeObservation", "Attention", "UnmanagedAgent"]),
     order: {
@@ -199,7 +199,7 @@ const POLICY = definePolicy({
         Run: ["run_id", "root_id", "parent_run_id", "task_id"], DispatchState: ["launch_tag", "endpoint_identity", "scope_unit", "staging_workspace_id"],
         ProjectIdentity: ["key", "repository_id", "source_workspace_id"], CheckoutIdentity: ["key"],
         ExecutionAttachment: ["machine_id"], ConversationIdentity: ["harness", "session_id"], TaskOwnership: ["root_id", "task_id"], TaskOwner: ["run_id"], "OrchestrationActionResult[run_registered]": ["run_id"], "OrchestrationActionResult[task_unassigned]": ["task_id", "previous_run_id"], ResumeRecord: ["run_id"], ResumeCause: ["code"],
-        ProjectRootLookupRequest: ["workspace_id"], "ProjectRootLookupResponse[unavailable]": ["code"],
+        "LiaisonLookupResponse[unavailable]": ["code"],
         SupervisorStartResult: ["root_id"], RunResumeResult: ["run_id"], RunAttachResult: ["run_id"],
         TaskScopeUpdateResult: ["instruction_message_id"],
         TaskSchedule: ["principal_key"], AttemptBadge: ["run_id"], OwnedProcessScope: ["unit", "invocation_id", "machine_id", "kernel_boot_id"],
@@ -217,7 +217,7 @@ const POLICY = definePolicy({
         OwnedFilesystemIdentity: ["machine_id"], CleanupReason: ["code"],
         OwnedResourceRecord: ["root_id", "run_id", "creation_operation_id", "integration_result_id"],
         ResourceRegister: ["run_id"], CleanupFinish: ["root_id", "run_id"], RunCleanupSummary: ["run_id"],
-        "OrchestrationAction[supervisor_start]": ["selected_root_id", "expected_project_key"],
+        "OrchestrationAction[supervisor_start]": ["selected_root_id"],
         "OrchestrationAction[run_resume]": ["run_id"], "OrchestrationAction[task_unassign]": ["root_id", "task_id"],
         Message: ["message_id", "to_run_id", "in_reply_to", "escalated_from"],
         AnswerReceipt: ["message_id"], QuestionStatus: ["run_id", "question_message_id"],
@@ -238,7 +238,7 @@ const POLICY = definePolicy({
         OrchestrationSnapshotRequest: ["root_id"], OrchestrationWaitRequest: ["root_id"],
       }),
       ...refine(text, {
-        ErrorResponse: ["message"], ResumeCause: ["message"], "ProjectRootLookupResponse[unavailable]": ["message"],
+        ErrorResponse: ["message"], ResumeCause: ["message"], "LiaisonLookupResponse[unavailable]": ["message"],
         Report: ["summary", "plan"], Run: ["brief"], Annotation: ["text"], Message: ["text"],
         "RetirementState[unknown]": ["detail"],
         "OrchestrationAction[task_create]": ["description"], "OrchestrationAction[task_assign]": ["description"], "OrchestrationAction[task_update]": ["description"],
@@ -319,8 +319,8 @@ const POLICY = definePolicy({
         OwnedAttemptDirectoryIdentity: ["creation_operation_id"],
         CleanupEffectReceipt: ["effect_id"], CleanupItem: ["operation_id"],
         ResourceRegister: ["operation_id"], CleanupFinish: ["operation_id"], CleanupFinishResult: ["operation_id"],
-        ProjectRootLookupRequest: ["selected_root_id"], ProjectRootCandidate: ["root_id"],
-        "ProjectRootLookupResponse[resolved]": ["preferred_root_id"],
+        LiaisonLookupRequest: ["selected_root_id"], LiaisonCandidate: ["root_id"],
+        "LiaisonLookupResponse[resolved]": ["preferred_root_id"],
         "OrchestrationAction[supervisor_start]": ["operation_id"], "OrchestrationAction[run_resume]": ["operation_id", "confirmed_stopped_attachment_id"],
         "OrchestrationAction[run_attach]": ["operation_id", "attachment_id"], "OrchestrationAction[run_register]": ["operation_id"], "OrchestrationAction[task_unassign]": ["operation_id"], TaskOwner: ["claim_operation_id"],
         DispatchState: ["move_operation_id"],
@@ -338,12 +338,12 @@ const POLICY = definePolicy({
         Message: ["created_at", "acked_at"], AnswerReceipt: ["created_at", "acked_at"], QuestionStatus: ["asked_at"],
         RunObservation: ["state_changed_at"], "RuntimeObservation[fresh]": ["observed_at"], Attention: ["since"], UnmanagedAgent: ["state_changed_at"],
         "RetirementState[close_intent]": ["at"], "RetirementState[retired]": ["at"], "RetirementState[retained]": ["at"], "RetirementState[unknown]": ["at"],
-        ExecutionAttachment: ["updated_at"], ResumeRecord: ["updated_at"], ProjectRootCandidate: ["updated_at"],
+        ExecutionAttachment: ["updated_at"], ResumeRecord: ["updated_at"], LiaisonCandidate: ["updated_at"],
         "Integration[integrated]": ["verified_at"], ResourceRequestRecord: ["updated_at"],
         CleanupEffectReceipt: ["updated_at"], CleanupItem: ["updated_at"],
         TaskSchedule: ["scheduled_at"], OwnedProcessScope: ["captured_at"],
       }),
-      ...refine(session, { OrchestrationSnapshotRequest: ["session_id"], OrchestrationMutationRequest: ["session_id"], OrchestrationSnapshot: ["session_id"], Run: ["session_id"], RunLocation: ["session_id"], RetirementIdentity: ["session_id"], ProjectRootLookupRequest: ["session_id"], OwnedSpaceIdentity: ["session_id"] }),
+      ...refine(session, { OrchestrationSnapshotRequest: ["session_id"], OrchestrationMutationRequest: ["session_id"], OrchestrationSnapshot: ["session_id"], Run: ["session_id"], RunLocation: ["session_id"], RetirementIdentity: ["session_id"], LiaisonLookupRequest: ["session_id"], OwnedSpaceIdentity: ["session_id"] }),
       ...refine(stepTitle, { "OrchestrationAction[task_step_add]": ["title"], "OrchestrationAction[task_step_rename]": ["title"] }),
       ...refine(decimalU64, { NativeShellIdentity: ["executable_device", "executable_inode"], DirectoryIdentity: ["device", "inode"],
         OwnedFilesystemIdentity: ["device", "inode", "manifest_device", "manifest_inode"], OwnedProcessScope: ["cgroup_device", "cgroup_inode"],
@@ -445,7 +445,7 @@ const POLICY = definePolicy({
       CleanupFinishResult: { counts: cleanupCounts },
       RunCleanupSummary: { counts: cleanupCounts },
       RestorationSummary: { attachments: value => value.reattached <= value.total_attachments },
-      "ProjectRootLookupResponse[resolved]": {
+      "LiaisonLookupResponse[resolved]": {
         root_identity: value => {
           const roots = new Set<string>();
           for (const root of value.roots) {
@@ -493,5 +493,5 @@ export function matchOrchestrationSnapshot(value: unknown, request: Orchestratio
 }
 export function parseOrchestrationMutationResponse(value: unknown): OrchestrationMutationResponse { return parseWire(value, wireOrchestrationMutationResponse, POLICY); }
 export function parseOrchestrationWaitResponse(value: unknown): OrchestrationWaitResponse { return parseWire(value, wireOrchestrationWaitResponse, POLICY); }
-export function parseProjectRootLookupRequest(value: unknown): ProjectRootLookupRequest { return parseWire(value, wireProjectRootLookupRequest, POLICY); }
-export function parseProjectRootLookupResponse(value: unknown): ProjectRootLookupResponse { return parseWire(value, wireProjectRootLookupResponse, POLICY); }
+export function parseLiaisonLookupRequest(value: unknown): LiaisonLookupRequest { return parseWire(value, wireLiaisonLookupRequest, POLICY); }
+export function parseLiaisonLookupResponse(value: unknown): LiaisonLookupResponse { return parseWire(value, wireLiaisonLookupResponse, POLICY); }

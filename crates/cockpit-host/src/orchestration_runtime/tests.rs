@@ -780,25 +780,23 @@ async fn resume_dispatchless_adopted_root_requires_exact_retained_checkout_and_w
 #[tokio::test]
 async fn lookup_unavailable_is_explicit_and_never_creates_state() {
     let fixture = Fixture::new();
-    let request = ProjectRootLookupRequest {
-        session_id: "fixture".into(), workspace_id: "space".into(), selected_root_id: None,
+    let request = LiaisonLookupRequest {
+        session_id: "fixture".into(), selected_root_id: None,
     };
-    for runtime in [ObservedHerdr(None), empty_observation()] {
-        let response = lookup_project_roots(&fixture.service, &runtime, &request).await.unwrap();
-        assert!(matches!(response, ProjectRootLookupResponse::Unavailable { .. }));
-    }
+    let response = lookup_liaison(&fixture.service, &ObservedHerdr(None), &request).await.unwrap();
+    assert!(matches!(response, LiaisonLookupResponse::Unavailable { .. }));
+    let response = lookup_liaison(&fixture.service, &empty_observation(), &request).await.unwrap();
+    assert!(matches!(response, LiaisonLookupResponse::Resolved { preferred_root_id: None, .. }));
     assert!(!fixture.service.base().join("state.json").exists());
 }
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn lookup_matches_saved_project_roots_and_uses_selected_then_latest() {
+async fn lookup_selects_session_liaison_and_excludes_adopted_and_closed_roots() {
     let fixture = Fixture::new();
-    let (project, _) = resolve_directory(&fixture.root, None, Some("space".into())).await.unwrap();
     let mut selected = reviewed();
     selected.run_id = "a".into();
     selected.root_id = "a".into();
-    selected.project = Some(project.clone());
     bind_process(&mut selected, std::process::id());
     // Physical liveness, even a saved Connected flag, is not current registration.
     selected.attachment.as_mut().unwrap().state = AttachmentState::Connected;
@@ -811,26 +809,31 @@ async fn lookup_matches_saved_project_roots_and_uses_selected_then_latest() {
     closed.run_id = "closed".into();
     closed.root_id = "closed".into();
     closed.stage = RunStage::Closed;
-    let mut unavailable = selected.clone();
-    unavailable.run_id = "unavailable".into();
-    unavailable.root_id = "unavailable".into();
-    unavailable.project = None;
-    unavailable.attachment.as_mut().unwrap().location.as_mut().unwrap().workspace_id = "other-space".into();
-    fixture.publish(&[latest.clone(), selected.clone(), closed, unavailable]);
+    let mut adopted = latest.clone();
+    adopted.run_id = "adopted".into();
+    adopted.root_id = "adopted".into();
+    adopted.kind = RunKind::Adopted;
+    adopted.updated_at = "2026-10-09T00:00:00Z".into();
+    let mut other_session = latest.clone();
+    other_session.run_id = "other-session".into();
+    other_session.root_id = "other-session".into();
+    other_session.session_id = "other".into();
+    other_session.attachment.as_mut().unwrap().location.as_mut().unwrap().session_id = "other".into();
+    other_session.updated_at = "2026-10-10T00:00:00Z".into();
+    fixture.publish(&[latest.clone(), selected.clone(), closed, adopted, other_session]);
     assert!(fixture.service.recorded_runs_with_bindings("fixture").unwrap().2.is_empty());
     let before = fs::read(fixture.service.base().join("state.json")).unwrap();
     for (selected_root, preferred) in [
-        (Some("a"), "a"), (None, "b"), (Some("closed"), "b"), (Some("unavailable"), "b"),
+        (Some("a"), "a"), (None, "b"), (Some("closed"), "b"),
+        (Some("adopted"), "b"), (Some("other-session"), "b"),
     ] {
-        let request = ProjectRootLookupRequest {
-            session_id: "fixture".into(), workspace_id: "space".into(),
-            selected_root_id: selected_root.map(str::to_owned),
+        let request = LiaisonLookupRequest {
+            session_id: "fixture".into(), selected_root_id: selected_root.map(str::to_owned),
         };
-        let ProjectRootLookupResponse::Resolved {
-            project: actual, lookup_revision, preferred_root_id, roots,
-        } = lookup_project_roots(&fixture.service, &fixture.runtime(), &request).await.unwrap()
-        else { panic!("fresh local project must resolve"); };
-        assert_eq!(actual.key, project.key);
+        let LiaisonLookupResponse::Resolved {
+            lookup_revision, preferred_root_id, roots,
+        } = lookup_liaison(&fixture.service, &fixture.runtime(), &request).await.unwrap()
+        else { panic!("lookup must resolve"); };
         assert_eq!(lookup_revision, 7);
         assert_eq!(preferred_root_id.as_deref(), Some(preferred));
         assert_eq!(roots.len(), 2);
@@ -839,33 +842,16 @@ async fn lookup_matches_saved_project_roots_and_uses_selected_then_latest() {
         assert_eq!(unregistered.resume, RootResumeAvailability::Blocked);
         assert_eq!(roots.iter().find(|r| r.root_id == "b").unwrap().connection, RootConnection::Unknown);
     }
+    let request = LiaisonLookupRequest { session_id: "other".into(), selected_root_id: Some("a".into()) };
+    let LiaisonLookupResponse::Resolved { preferred_root_id, roots, .. } =
+        lookup_liaison(&fixture.service, &fixture.runtime(), &request).await.unwrap()
+    else { panic!("other session lookup must resolve"); };
+    assert_eq!(preferred_root_id.as_deref(), Some("other-session"));
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].root_id, "other-session");
     assert_eq!(before, fs::read(fixture.service.base().join("state.json")).unwrap());
 }
 
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn same_space_unknown_root_blocks_automatic_start_and_lookup_not_another() {
-    let fixture = Fixture::new();
-    let projects = fixture.projects(None);
-    fixture.publish(&[reviewed()]);
-    let request = ProjectRootLookupRequest {
-        session_id: "fixture".into(), workspace_id: "space".into(), selected_root_id: None,
-    };
-    let ProjectRootLookupResponse::Unavailable { code, .. } =
-        lookup_project_roots(&fixture.service, &fixture.runtime(), &request).await.unwrap()
-        else { panic!("unknown associated root must not be hidden as no match"); };
-    assert_eq!(code, "project_identity_unavailable");
-    let actor = Actor::Operator(OperatorOrigin::Browser);
-    let request = start_request(Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() }),
-        SupervisorStartMode::ReuseOrResume);
-    assert_eq!(resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &request)
-        .await.unwrap_err().code, "project_identity_unavailable");
-    let another = start_request(Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() }),
-        SupervisorStartMode::Another);
-    assert!(resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &another)
-        .await.unwrap().project.is_some());
-    assert_eq!(fixture.service.recorded_runs("fixture").unwrap().1.len(), 1);
-}
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
@@ -917,6 +903,10 @@ fn root_lookup_projects_effect_free_refusal_but_preserves_inflight_launch() {
             RootResumeAvailability::Blocked, RootConnection::Disconnected, Some(ResumeCauseClass::Decision)),
         ("omp", "harness_resume_unsupported", None, DispatchStep::NeedsReview,
             RootResumeAvailability::Available, RootConnection::Disconnected, None),
+        ("omp", "workspace_missing", None, DispatchStep::NeedsReview,
+            RootResumeAvailability::Available, RootConnection::Disconnected, None),
+        ("omp", "workspace_missing", Some("launch-in-flight"), DispatchStep::NeedsReview,
+            RootResumeAvailability::InProgress, RootConnection::Reconnecting, None),
         ("unknown-custom", "harness_resume_unsupported", None, DispatchStep::NeedsReview,
             RootResumeAvailability::Blocked, RootConnection::Disconnected, Some(ResumeCauseClass::Recover)),
         ("omp", "launch_configuration_invalid", None, DispatchStep::NeedsReview,
@@ -932,6 +922,9 @@ fn root_lookup_projects_effect_free_refusal_but_preserves_inflight_launch() {
         let dispatch = run.dispatch.as_mut().unwrap();
         dispatch.launch_tag = launch_tag.map(str::to_owned);
         dispatch.step = step;
+        if code == "workspace_missing" {
+            dispatch.staging_workspace_id = Some("stale-space".into());
+        }
         let before = serde_json::to_value(&run).unwrap();
         let candidate = root_candidate(&run, false);
         assert_eq!(candidate.resume, availability, "{harness}, {code}, {launch_tag:?}, {step:?}");
@@ -1042,12 +1035,12 @@ fn living_process_without_current_authenticated_attachment_is_not_connected() {
     assert_eq!(serde_json::to_value(&run).unwrap(), before);
 }
 
-fn start_request(target: Option<DispatchTarget>, mode: SupervisorStartMode) -> OrchestrationMutationRequest {
+fn start_request(target: Option<DispatchTarget>) -> OrchestrationMutationRequest {
     OrchestrationMutationRequest {
         session_id: "fixture".into(), expected_revision: None,
         action: OrchestrationAction::SupervisorStart {
-            operation_id: uuid::Uuid::new_v4().to_string(), mode, target,
-            label: None, selected_root_id: None, expected_project_key: None,
+            operation_id: uuid::Uuid::new_v4().to_string(), target,
+            label: None, selected_root_id: None,
         },
     }
 }
@@ -1080,15 +1073,11 @@ async fn setup_open_and_existing_space_resolve_same_exact_plain_directory() {
             task_name: None, focus: true,
         }},
     ] {
-        for request in [
-            start_request(Some(target.clone()), SupervisorStartMode::Another),
-            worker_start_request(target),
-        ] {
-            let resolved = resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &request)
-                .await.unwrap();
-            assert_eq!(resolved.checkout.as_ref().unwrap().path, fixture.root.to_string_lossy());
-            identities.push(resolved.project.unwrap().key);
-        }
+        let request = worker_start_request(target);
+        let resolved = resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &request)
+            .await.unwrap();
+        assert_eq!(resolved.checkout.as_ref().unwrap().path, fixture.root.to_string_lossy());
+        identities.push(resolved.project.unwrap().key);
     }
     assert!(identities.iter().all(|key| key == &identities[0]));
     let invalid_target = DispatchTarget::Setup {
@@ -1096,67 +1085,10 @@ async fn setup_open_and_existing_space_resolve_same_exact_plain_directory() {
             path: ".".into(), label: None, task_name: None, focus: false,
         },
     };
-    for invalid in [
-        start_request(Some(invalid_target.clone()), SupervisorStartMode::Another),
-        worker_start_request(invalid_target),
-    ] {
-        assert!(resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &invalid).await.is_err());
-    }
+    assert!(resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor,
+        &worker_start_request(invalid_target)).await.is_err());
 }
 
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn start_reselects_only_pending_root_from_existing_space() {
-    let fixture = Fixture::new();
-    let projects = fixture.projects(None);
-    let actor = Actor::Operator(OperatorOrigin::Browser);
-    let (project, fresh) = resolve_directory(&fixture.root, None, Some("space".into())).await.unwrap();
-    let mut pending = reserved_resume_refusal("checkout_identity_changed");
-    pending.project = Some(project);
-    let mut saved = fresh.clone();
-    saved.directory_identity.device = "previous-device".into();
-    pending.checkout = Some(saved.clone());
-    pending.target = Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() });
-    pending.setup = Some(SetupSummary {
-        operation_id: None, generation: None, workspace_id: Some("space".into()),
-        checkout_path: saved.path.clone(), repository_id: None, branch: None, base: None,
-        base_commit: None, ownership: Some(cockpit_protocol::projects::WorkspaceCheckoutOwnership::BorrowedDirectory),
-        effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
-    });
-    for (refused, existing_space, mode, reselected, expected_checkout) in [
-        (true, true, SupervisorStartMode::ReuseOrResume, true, None),
-        (true, false, SupervisorStartMode::ReuseOrResume, false, None),
-        (false, true, SupervisorStartMode::ReuseOrResume, false, Some(&saved)),
-        (true, true, SupervisorStartMode::Another, false, Some(&fresh)),
-    ] {
-        let mut run = pending.clone();
-        if !refused {
-            run.dispatch.as_mut().unwrap().error.as_mut().unwrap().code = "another_refusal".into();
-        }
-        fixture.publish(&[run.clone()]);
-        let before = fs::read(fixture.service.base().join("state.json")).unwrap();
-        let target = if existing_space {
-            DispatchTarget::ExistingSpace { workspace_id: "space".into() }
-        } else {
-            DispatchTarget::Setup { request: WorkspaceSetupRequest::Open {
-                path: fresh.path.clone(), label: None, task_name: None, focus: false,
-            }}
-        };
-        let mut request = start_request(Some(target), mode);
-        let OrchestrationAction::SupervisorStart { selected_root_id, .. } = &mut request.action
-            else { unreachable!() };
-        *selected_root_id = Some(run.run_id.clone());
-        let resolved = resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &request)
-            .await.unwrap();
-        assert_eq!(resolved.reselected_checkout.as_ref(), reselected.then_some(&fresh));
-        assert_eq!(resolved.checkout.as_ref(), expected_checkout);
-        let resume = resolve_mutation_input(&fixture.service, &projects, &fixture.runtime(), &actor, &resume_request(&run))
-            .await.unwrap();
-        assert!(resume.reselected_checkout.is_none(), "RunResume never re-selects a checkout");
-        assert_eq!(resume.checkout.as_ref(), Some(&saved));
-        assert_eq!(before, fs::read(fixture.service.base().join("state.json")).unwrap());
-    }
-}
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
@@ -1198,27 +1130,24 @@ async fn configured_create_and_space_worktree_share_project_not_source_checkout(
         }},
         DispatchTarget::SpaceWorktree { workspace_id: "space".into(), branch: None, base_ref: None },
     ] {
-        for request in [
-            start_request(Some(target.clone()), SupervisorStartMode::Another),
-            worker_start_request(target),
-        ] {
-            let resolved = resolve_mutation_input(&fixture.service, &projects, &runtime, &actor, &request).await.unwrap();
-            assert_eq!(resolved.project.unwrap().key, project.key);
-            assert!(resolved.checkout.is_none(), "eventual fresh checkout cannot be the source checkout");
-        }
+        let request = worker_start_request(target);
+        let resolved = resolve_mutation_input(&fixture.service, &projects, &runtime, &actor, &request).await.unwrap();
+        assert_eq!(resolved.project.unwrap().key, project.key);
+        assert!(resolved.checkout.is_none(), "eventual fresh checkout cannot be the source checkout");
     }
 }
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
-async fn no_target_start_binds_created_dedicated_directory_in_core() {
+async fn staging_target_start_binds_created_dedicated_directory_in_core() {
     let fixture = Fixture::new();
     let projects = fixture.projects(None);
     let actor = Actor::Operator(OperatorOrigin::Browser);
-    let request = start_request(None, SupervisorStartMode::Another);
+    let request = start_request(Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() }));
     let resolved = resolve_mutation_input(&fixture.service, &projects, &ObservedHerdr(None), &actor, &request)
         .await.unwrap();
     assert!(resolved.project.is_none());
+    assert!(resolved.checkout.is_none());
     let response = fixture.service.mutate_resolved(&actor, request, &resolved).unwrap();
     let OrchestrationActionResult::SupervisorStarted { start } = response.result else { panic!("start result"); };
     let run = fixture.service.run_for_review("fixture", &start.root_id).unwrap();
@@ -1228,6 +1157,7 @@ async fn no_target_start_binds_created_dedicated_directory_in_core() {
     assert_eq!(root, path);
     assert_ne!(root, fixture.root.to_string_lossy());
     assert_eq!(run.checkout.unwrap().path, path);
+    assert_eq!(run.dispatch.unwrap().staging_workspace_id.as_deref(), Some("space"));
 }
 
 #[cfg(target_os = "linux")]
@@ -1250,8 +1180,7 @@ async fn start_preserves_selected_unregistered_live_root_without_retargeting_or_
     // must not become permission to launch a replacement or report registration.
     fixture.publish(&[run.clone()]);
     let actor = Actor::Operator(OperatorOrigin::Browser);
-    let mut request = start_request(Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() }),
-        SupervisorStartMode::ReuseOrResume);
+    let mut request = start_request(Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() }));
     let OrchestrationAction::SupervisorStart { selected_root_id, .. } = &mut request.action
         else { unreachable!() };
     *selected_root_id = Some(run.run_id.clone());

@@ -386,6 +386,61 @@ fn validate_prompt_receipt(result: &Value, request: &AgentPromptRequest) -> Resu
     Ok(())
 }
 
+impl HerdrCliAdapter {
+    /// Submit once to the observed unmanaged agent. A receipt confirms terminal
+    /// submission, not model consumption; an uncertain dispatch is never retried.
+    pub async fn prompt_unmanaged_agent(
+        &self, session_id: &str, observed: &RuntimeView, target: &RuntimePane, text: &str,
+    ) -> Result<(), InspectionError> {
+        if text.trim().is_empty() || text.len() > 4096 || text.chars().any(char::is_control) {
+            return Err(InspectionError::new("invalid_prompt_request", "Prompt must be bounded printable text"));
+        }
+        // Process-detected agents may report no name; terminal, kind and session still pin the occupant.
+        let name = target.agent_name.as_deref().filter(|s| !s.is_empty());
+        let kind = target.agent_kind.as_deref().filter(|s| !s.is_empty())
+            .ok_or_else(|| InspectionError::new("stale_identity", "Agent kind is unavailable"))?;
+        let terminal = target.terminal_id.as_deref().filter(|s| !s.is_empty())
+            .ok_or_else(|| InspectionError::new("stale_identity", "Agent terminal is unavailable"))?;
+        let fresh = self.runtime(session_id).await?;
+        let mut matches = fresh.panes.iter().filter(|pane| pane.pane_id == target.pane_id);
+        let pane = matches.next().ok_or_else(|| InspectionError::new("stale_identity", "Agent pane is absent"))?;
+        if matches.next().is_some() || fresh.endpoint_identity != observed.endpoint_identity
+            || fresh.boot_id != observed.boot_id || fresh.peer_process != observed.peer_process
+            || pane.workspace_id != target.workspace_id || pane.tab_id != target.tab_id
+            || pane.terminal_id.as_deref() != Some(terminal)
+            || fresh.panes.iter().filter(|p| p.terminal_id.as_deref() == Some(terminal)).count() != 1
+            || pane.agent_name.as_deref().filter(|s| !s.is_empty()) != name || pane.agent_kind.as_deref() != Some(kind)
+            || pane.native_session_id != target.native_session_id
+            || pane.native_session_file != target.native_session_file {
+            return Err(InspectionError::new("stale_identity", "Agent occupant changed"));
+        }
+        if pane.launch_pending || !matches!(pane.agent_status.as_deref(), Some("idle" | "done")) {
+            return Err(InspectionError::new("herdr_prompt_deferred", "Agent is pending, busy or blocked"));
+        }
+        let (result, _) = self.socket_request_with_identity(
+            session_id, "agent.prompt", json!({"target": target.pane_id, "text": text}),
+            Some(&observed.endpoint_identity),
+        ).await.map_err(|error| {
+            if error.code == "agent_blocked" { error } else {
+                InspectionError::new("herdr_outcome_unknown", "Agent prompt outcome is unknown; inspect before retrying")
+            }
+        })?;
+        let agent = &result["agent"];
+        let omp_path = observed_omp_session_path(agent);
+        if result["type"].as_str() != Some("agent_prompted")
+            || agent["pane_id"].as_str() != Some(target.pane_id.as_str())
+            || agent["terminal_id"].as_str() != Some(terminal)
+            || agent["workspace_id"].as_str() != Some(target.workspace_id.as_str())
+            || agent["tab_id"].as_str() != Some(target.tab_id.as_str())
+            || agent["name"].as_str().filter(|s| !s.is_empty()) != name || agent["agent"].as_str() != Some(kind)
+            || target.native_session_id.as_ref().is_some_and(|id| observed_session_id(agent, omp_path).as_ref() != Some(id))
+            || target.native_session_file.as_deref().is_some_and(|path| omp_path != Some(path)) {
+            return Err(InspectionError::new("herdr_outcome_unknown", "agent.prompt did not acknowledge the selected occupant"));
+        }
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl OrchestrationHerdr for HerdrCliAdapter {
     async fn session_changes(&self, session_id: &str) -> Result<cockpit_core::SessionSubscription, InspectionError> {

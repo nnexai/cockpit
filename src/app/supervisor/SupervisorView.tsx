@@ -4,6 +4,7 @@ import { SupervisorTasks, taskLanes } from "./SupervisorTasks";
 import { SupervisorGraph } from "./SupervisorGraph";
 import { TaskHistoryDetail } from "./TaskHistoryDetail";
 import { taskHistory } from "./taskHistory";
+import { groupTasks } from "./taskProjects";
 import "./supervisor.css";
 
 /** Optional overview; the normal terminal remains mounted as the conversation. */
@@ -12,6 +13,9 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
   snapshot: OrchestrationSnapshot | null; rootId: string | null; fresh: boolean;
 }) {
   const [mode, setMode] = useState<"tasks" | "graph">("tasks");
+  const [project, setProject] = useState<string | null>(null);
+  const groups = useMemo(() => groupTasks(tasks, runs), [tasks, runs]);
+  const activeProject = project !== null && groups.some(group => group.key === project) ? project : null;
   const [selected, setSelected] = useState<{ taskId: string; rowKey: string } | null>(null);
   const overview = useRef<HTMLElement>(null), conversation = useRef<HTMLButtonElement>(null), closeDetail = useRef<HTMLButtonElement>(null);
   const focusIntent = useRef<"back" | "origin" | "conversation" | null>("conversation");
@@ -72,7 +76,13 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
     <header><button type="button" className="liaison-conversation" ref={conversation} onClick={onClose}>‹ Conversation</button><h1>Overview</h1><div role="group" aria-label="Overview view"><button type="button" aria-pressed={mode === "tasks"} onClick={() => setMode("tasks")}>Board</button><button type="button" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>Graph</button></div><span className={waiting ? "liaison-waiting" : "liaison-task-status"}>{waiting ? "● waiting for you" : status ?? summary}</span></header>
     <div className="liaison-overview-body">
       <div className="liaison-overview-content">
-        {mode === "tasks" ? <SupervisorTasks tasks={tasks} runs={runs} selectedKey={selectedKey} onOpen={open} /> : <SupervisorGraph tasks={tasks} selectedKey={selectedKey} onOpen={open} />}
+        {mode === "tasks" ? <>
+          {groups.length > 1 ? <div className="liaison-project-filter" role="group" aria-label="Project">
+            <button type="button" aria-pressed={activeProject === null} onClick={() => setProject(null)}>All {groups.some(group => group.open) ? <span>{groups.reduce((sum, group) => sum + group.open, 0)}</span> : null}</button>
+            {groups.map(group => <button type="button" key={group.key} aria-pressed={activeProject === group.key} onClick={() => setProject(group.key)}>{group.label} {group.open ? <span>{group.open}</span> : null}</button>)}
+          </div> : null}
+          <SupervisorTasks tasks={tasks} runs={runs} selectedKey={selectedKey} onOpen={open} project={activeProject} />
+        </> : <SupervisorGraph tasks={tasks} selectedKey={selectedKey} onOpen={open} />}
       </div>
       {selected && view ? <aside className="liaison-overview-detail" aria-label="Task history">
         <header><button type="button" className="liaison-detail-back" ref={closeDetail} aria-label="Close task history" onClick={goBack}>✕ Close</button></header>

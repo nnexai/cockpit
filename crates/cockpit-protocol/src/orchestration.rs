@@ -168,8 +168,14 @@ pub enum TaskDependencyBlockerReason {
     Ambiguous,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct TaskProject {
+    pub key: Option<String>,
+    pub label: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct TaskView {
     pub task: Task,
+    pub project: Option<TaskProject>,
     pub lane: TaskLane,
     pub current_run_id: Option<String>,
     pub dependencies: TaskDependencies,
@@ -493,9 +499,8 @@ pub struct ResumeRecord {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
-pub struct ProjectRootLookupRequest {
+pub struct LiaisonLookupRequest {
     pub session_id: String,
-    pub workspace_id: String,
     pub selected_root_id: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -514,7 +519,7 @@ pub enum RootResumeAvailability {
     Blocked,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct ProjectRootCandidate {
+pub struct LiaisonCandidate {
     pub root_id: String,
     pub connection: RootConnection,
     pub resume: RootResumeAvailability,
@@ -526,21 +531,14 @@ pub struct ProjectRootCandidate {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "status", rename_all = "snake_case")]
 #[ts(tag = "status", rename_all = "snake_case")]
-pub enum ProjectRootLookupResponse {
+pub enum LiaisonLookupResponse {
     Resolved {
-        project: ProjectIdentity,
         #[ts(type = "number")]
         lookup_revision: u64,
         preferred_root_id: Option<String>,
-        roots: Vec<ProjectRootCandidate>,
+        roots: Vec<LiaisonCandidate>,
     },
     Unavailable { code: String, message: String },
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-pub enum SupervisorStartMode {
-    ReuseOrResume,
-    Another,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -1392,11 +1390,9 @@ pub enum OrchestrationAction {
     // roots
     SupervisorStart {
         operation_id: String,
-        mode: SupervisorStartMode,
         target: Option<DispatchTarget>,
         label: Option<String>,
         selected_root_id: Option<String>,
-        expected_project_key: Option<String>,
     },
     RunResume {
         run_id: String,

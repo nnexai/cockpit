@@ -79,6 +79,7 @@ pub struct OrchestrationConfiguration {
     /// None enables the OMP hook; an empty argv disables it.
     #[serde(default)]
     pub hook_args: Option<Vec<String>>,
+    /// Maximum non-closed workers per project key within a Herdr session.
     #[serde(default = "default_max_parallel")]
     pub max_parallel: u32,
     #[serde(default)]

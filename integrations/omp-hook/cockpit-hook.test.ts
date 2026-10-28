@@ -28,6 +28,7 @@ function fixture(batches: unknown[][] = [[message(1)]], idle = true) {
   let sessionId = "actual-session";
   const handlers: Record<string, (event: unknown, context: HookContext) => void> = {};
   const timers = new Map<unknown, () => void>();
+  const delays: number[] = [];
   const signals: AbortSignal[] = [];
   const calls: string[][] = [];
   const environments: NodeJS.ProcessEnv[] = [];
@@ -40,7 +41,7 @@ function fixture(batches: unknown[][] = [[message(1)]], idle = true) {
     agent: { kind: "main" as "main" | "sub" }, cwd: root,
     sessionManager: { getSessionId: () => sessionId, getSessionFile: () => join(root, "not-yet-created-session.jsonl") },
     isIdle: () => idle, hasPendingMessages: () => false,
-    setTimeout(callback: () => void, _ms: number) { const id = {}; timers.set(id, callback); return id; },
+    setTimeout(callback: () => void, ms: number) { const id = {}; delays.push(ms); timers.set(id, callback); return id; },
     clearTimer(id: unknown) { timers.delete(id); },
   };
   const api = {
@@ -69,7 +70,7 @@ function fixture(batches: unknown[][] = [[message(1)]], idle = true) {
   });
   bindHook(api, run, env);
   return {
-    ctx, env, calls, environments, sends, signals, credentials, api, handlers,
+    ctx, env, calls, environments, sends, signals, credentials, api, handlers, delays,
     waiting: waiting.promise, stopped: stopped.promise, restarted: restarted.promise,
     emit(event: string) { handlers[event]?.({}, ctx); },
     changeSession(id: string) { sessionId = id; },
@@ -121,13 +122,28 @@ describe("optional public OMP Cockpit hook", () => {
     expect(() => capturedMessages({ messages: [message(1)] }, "run-one")).toThrow();
   });
 
-  it("splits all UTF-8 bodies into bounded recoverable untrusted fragments", () => {
+  it("splits large compact digests into bounded recoverable untrusted fragments", () => {
     const messages = [{ ...message(1), text: "👩‍💻".repeat(8000) }];
     const parts = frames(messages);
     expect(parts.length).toBeGreaterThan(1);
     for (const part of parts) expect(Buffer.byteLength(part)).toBeLessThanOrEqual(16 * 1024);
-    const json = parts.map(part => part.split(/--- BEGIN UNTRUSTED JSON FRAGMENT \d+\/\d+ ---\n/)[1].split(/\n--- END UNTRUSTED JSON FRAGMENT/)[0]).join("");
-    expect(JSON.parse(json)).toEqual(messages);
+    const digest = parts.map(part => part.split(/--- BEGIN UNTRUSTED DATA \d+\/\d+ ---\n/)[1].split(/\n--- END UNTRUSTED DATA/)[0]).join("");
+    expect(digest).toContain(JSON.stringify(messages[0].text));
+    expect(digest).toContain('"message_id":"message-1"');
+  });
+
+  it("renders compact result details without duplicating summary or null fields", () => {
+    const result = { ...message(1, "report"), from: { type: "run", run_id: "worker" },
+      context: { task_id: "task", task_title: "Build", project: { label: "App" }, run_label: "Worker" },
+      text: "Ready for review", in_reply_to: null,
+      report: { kind: "result", summary: "Ready for review", outcome: "succeeded",
+        source_output: { type: "non_code", artifacts: ["artifact"] } } };
+    const rendered = frames([result]).join("");
+    expect(rendered).toContain('[result] task "Build" (App) from Worker: Ready for review');
+    expect(rendered.match(/Ready for review/g)).toHaveLength(1);
+    expect(rendered).toContain('"outcome":"succeeded"');
+    expect(rendered).toContain('"artifacts":["artifact"]');
+    expect(rendered).not.toContain('"in_reply_to"');
   });
 
   it("preserves oversized canonical bootstrap without truncation", () => {
@@ -147,6 +163,7 @@ describe("optional public OMP Cockpit hook", () => {
     expect(f.env.COCKPIT_SESSION_ID).toBe("actual-session");
     expect(f.calls[0]).toEqual(["run", "context", "--json"]);
     expect(f.sends).toHaveLength(1);
+    expect(f.delays).toContain(1500);
     f.flush();
     expect(f.sends).toHaveLength(2);
     expect(f.sends[1].options).toEqual({ attribution: "agent" });

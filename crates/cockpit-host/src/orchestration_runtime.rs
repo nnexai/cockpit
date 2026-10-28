@@ -4,7 +4,7 @@ use cockpit_core::{
     library::LibraryService,
     orchestration::{
         Actor, OrchestrationService, ResolvedMutationInput, effect_free_reserved_resume_launch,
-        is_project_root_candidate, preferred_project_root, root_checkout_reselection_pending,
+        is_liaison_candidate, preferred_liaison,
         dispatch::{Dispatcher, DispatcherSettings, resume_supported},
         herdr::{OrchestrationHerdr, RuntimeView, RuntimeWorkspace},
         project_identity::{self, replacement_consumers_preflight, resolve_directory},
@@ -124,11 +124,11 @@ impl OrchestrationRuntime {
             .await
             .map_err(|error| InspectionError::new("orchestration_runtime_failed", error.to_string()))?
     }
-    pub async fn project_root_lookup(
+    pub async fn liaison_lookup(
         &self,
-        request: &ProjectRootLookupRequest,
-    ) -> Result<ProjectRootLookupResponse, InspectionError> {
-        lookup_project_roots(self.service.as_ref(), self.herdr.as_ref(), request).await
+        request: &LiaisonLookupRequest,
+    ) -> Result<LiaisonLookupResponse, InspectionError> {
+        lookup_liaison(self.service.as_ref(), self.herdr.as_ref(), request).await
     }
     pub async fn wait(
         &self,
@@ -254,49 +254,13 @@ async fn resolve_physical_mutation_input(
             }
             Ok(resolved)
         }
-        OrchestrationAction::SupervisorStart {
-            target: Some(target), mode, selected_root_id, ..
-        } => {
-            let mut resolved = resolve_start_target(projects, herdr, &request.session_id, target).await?;
-            if *mode == SupervisorStartMode::ReuseOrResume {
-                let (_, runs) = service.recorded_runs(&request.session_id)?;
-                if let Some(workspace_id) = resolved.project.as_ref().and_then(|p| p.source_workspace_id.as_deref())
-                    && unknown_root_in_space(&runs, &request.session_id, workspace_id)
-                {
-                    return Err(unreconciled_project());
-                }
-                if let Some(index) = preferred_project_root(
-                    &runs, &request.session_id,
-                    &resolved.project.as_ref().expect("resolved start project").key,
-                    selected_root_id.as_deref(),
-                ) {
-                    let observed = resolve_resume_input(service, herdr, &runs[index]).await?;
-                    resolved.attachment_observation = observed.attachment_observation;
-                    resolved.writer_exit_proof = observed.writer_exit_proof;
-                    resolved.root_main_recovery = observed.root_main_recovery;
-                    resolved.root_attachment_expected = observed.root_attachment_expected;
-                    resolved.observation_cause = observed.observation_cause;
-                    if root_checkout_reselection_pending(&runs[index]) {
-                        // Only an explicit existing-Space Start can re-select a
-                        // refused root checkout; ordinary resume retains it.
-                        resolved.reselected_checkout = if matches!(target, DispatchTarget::ExistingSpace { .. }) {
-                            resolved.checkout.take()
-                        } else {
-                            None
-                        };
-                        resolved.checkout = None;
-                    } else {
-                        // Reuse/resume retains the root's original checkout,
-                        // not another Space's checkout for the same project.
-                        resolved.checkout = observed.checkout;
-                    }
-                }
+        OrchestrationAction::SupervisorStart { selected_root_id, .. } => {
+            let (_, runs) = service.recorded_runs(&request.session_id)?;
+            if let Some(index) = preferred_liaison(&runs, &request.session_id, selected_root_id.as_deref()) {
+                resolve_resume_input(service, herdr, &runs[index]).await
+            } else {
+                Ok(ResolvedMutationInput::default())
             }
-            Ok(resolved)
-        }
-        // Core creates and binds the dedicated directory in the start transaction.
-        OrchestrationAction::SupervisorStart { target: None, .. } => {
-            Ok(ResolvedMutationInput::default())
         }
         OrchestrationAction::RunAdopt { location, .. } => {
             if !matches!(actor, Actor::Operator(_)) {
@@ -440,22 +404,6 @@ fn authoritative_workspace<'a>(
     Ok(workspace)
 }
 
-fn unknown_root_in_space(runs: &[Run], session: &str, workspace_id: &str) -> bool {
-    runs.iter().any(|run| run.session_id == session && run.parent_run_id.is_none()
-        && run.run_id == run.root_id && run.stage != RunStage::Closed && run.project.is_none()
-        && matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)
-        && (run.attachment.as_ref().and_then(|a| a.location.as_ref())
-                .is_some_and(|location| location.workspace_id == workspace_id)
-            || run.setup.as_ref().and_then(|setup| setup.project_workspace_id.as_deref()) == Some(workspace_id)
-            || matches!(run.target.as_ref(),
-                Some(DispatchTarget::ExistingSpace { workspace_id: saved }
-                    | DispatchTarget::SpaceWorktree { workspace_id: saved, .. }) if saved == workspace_id)))
-}
-
-fn unreconciled_project() -> InspectionError {
-    InspectionError::new("project_identity_unavailable",
-        "An existing open supervisor for this exact Space has unresolved project identity; reconcile that root before starting another automatically")
-}
 
 async fn resolve_resume_input(
     service: &OrchestrationService,
@@ -586,38 +534,26 @@ fn exact_saved_pane(runtime: &RuntimeView, run: &Run) -> bool {
             && !pane.launch_pending)
 }
 
-pub async fn lookup_project_roots(
+pub async fn lookup_liaison(
     service: &OrchestrationService,
     herdr: &dyn OrchestrationHerdr,
-    request: &ProjectRootLookupRequest,
-) -> Result<ProjectRootLookupResponse, InspectionError> {
-    let resolved = async {
-        let runtime = herdr.runtime(&request.session_id).await?;
-        let workspace = authoritative_workspace(&runtime, &request.workspace_id)?;
-        resolve_directory(Path::new(&workspace.cwd), None, Some(request.workspace_id.clone())).await
-    }.await;
-    let (project, _) = match resolved {
-        Ok(identity) => identity,
-        Err(error) => return Ok(ProjectRootLookupResponse::Unavailable {
-            code: error.code, message: error.message,
-        }),
-    };
-    let (revision, runs, bindings) = service.recorded_runs_with_bindings(&request.session_id)?;
-    if unknown_root_in_space(&runs, &request.session_id, &request.workspace_id) {
-        let error = unreconciled_project();
-        return Ok(ProjectRootLookupResponse::Unavailable { code: error.code, message: error.message });
+    request: &LiaisonLookupRequest,
+) -> Result<LiaisonLookupResponse, InspectionError> {
+    if let Err(error) = herdr.runtime(&request.session_id).await {
+        return Ok(LiaisonLookupResponse::Unavailable { code: error.code, message: error.message });
     }
-    let preferred_root_id = preferred_project_root(
-        &runs, &request.session_id, &project.key, request.selected_root_id.as_deref(),
+    let (revision, runs, bindings) = service.recorded_runs_with_bindings(&request.session_id)?;
+    let preferred_root_id = preferred_liaison(
+        &runs, &request.session_id, request.selected_root_id.as_deref(),
     ).map(|index| runs[index].run_id.clone());
     let roots = runs.iter().filter(|run|
-        is_project_root_candidate(run, &request.session_id, &project.key)
+        is_liaison_candidate(run, &request.session_id)
     ).map(|run| root_candidate(run, run.attachment.as_ref().is_some_and(|a|
         bindings.get(&run.run_id).is_some_and(|bound| bound.0 == a.attachment_id && bound.1 == a.epoch)))).collect();
-    Ok(ProjectRootLookupResponse::Resolved { project, lookup_revision: revision, preferred_root_id, roots })
+    Ok(LiaisonLookupResponse::Resolved { lookup_revision: revision, preferred_root_id, roots })
 }
 
-fn root_candidate(run: &Run, modern_binding: bool) -> ProjectRootCandidate {
+fn root_candidate(run: &Run, modern_binding: bool) -> LiaisonCandidate {
     let live = run.attachment.as_ref().filter(|attachment| attachment.state != AttachmentState::Revoked)
         .and_then(|attachment| attachment.process.as_ref().map(|process|
             same_machine_process_running(process, attachment.machine_id.as_deref())));
@@ -631,7 +567,8 @@ fn root_candidate(run: &Run, modern_binding: bool) -> ProjectRootCandidate {
         .filter(|_| effect_free_reserved_resume_launch(run))
         .and_then(|_| run.dispatch.as_ref()?.error.as_ref());
     let retryable_refusal = refused_launch.is_some_and(|error|
-        error.code == "harness_resume_unsupported" && resume_supported(&run.launch_config));
+        (error.code == "harness_resume_unsupported" && resume_supported(&run.launch_config))
+            || (error.code == "workspace_missing" && run.kind == RunKind::Supervisor));
     let resume = if incompatible_live { RootResumeAvailability::Blocked }
     else if refused_launch.is_some() {
         if retryable_refusal { RootResumeAvailability::Available }
@@ -655,7 +592,7 @@ fn root_candidate(run: &Run, modern_binding: bool) -> ProjectRootCandidate {
             _ => RootConnection::Unknown,
         }
     };
-    ProjectRootCandidate {
+    LiaisonCandidate {
         root_id: run.run_id.clone(), connection, resume,
         stop_confirmable: project_identity::root_stop_confirmable(run),
         cause: if incompatible_live { Some(ResumeCause {

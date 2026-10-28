@@ -69,7 +69,6 @@ fn task_creation_preserves_identity_prose_and_exact_relationship_fences() {
     assert_eq!(error.code, "caller_mismatch");
 
     for args in [
-        vec!["create", "--title", "x", "--depends-on", "other"],
         vec![
             "create",
             "--title",
@@ -329,13 +328,10 @@ fn management_requires_explicit_targets_and_exact_revision_arguments() {
     for command in ["accept", "send-back", "cancel", "reconcile", "resume"] {
         assert!(TestCli::try_parse_from(["test", "run", command]).is_err());
     }
-    for (command, flag) in [("accept", "--task-revision"), ("send-back", "--text")] {
-        assert!(TestCli::try_parse_from(["test", "run", command, "worker"]).is_err());
-        assert!(TestCli::try_parse_from(["test", "run", command, "worker", flag, "exact"]).is_ok());
-        assert!(TestCli::try_parse_from([
-            "test", "run", command, "worker", flag, "exact", "--operator",
-        ]).is_ok());
-    }
+    assert!(TestCli::try_parse_from(["test", "run", "accept", "worker"]).is_ok());
+    assert!(TestCli::try_parse_from(["test", "run", "accept", "worker", "--task-revision", "exact"]).is_ok());
+    assert!(TestCli::try_parse_from(["test", "run", "send-back", "worker"]).is_err());
+    assert!(TestCli::try_parse_from(["test", "run", "send-back", "worker", "--text", "exact", "--operator"]).is_ok());
     assert!(TestCli::try_parse_from(["test", "run", "cancel", "worker"]).is_ok());
     assert!(TestCli::try_parse_from([
         "test", "run", "message", "worker", "--kind", "answer", "--text", "Use the owned fixture.",
@@ -557,13 +553,7 @@ fn scope_update_preserves_live_run_exact_fences_and_optional_prose() {
     let encoded = serde_json::to_value(parsed_task_action(&flags).unwrap()).unwrap();
     assert_eq!(encoded["title"], "New scope");
     assert!(encoded["description"].is_null());
-    for required in ["--operation-id", "--run", "--revision", "--doc-revision"] {
-        let mut flags = prefix.to_vec();
-        let index = flags.iter().position(|flag| *flag == required).unwrap();
-        flags.drain(index..index + 2);
-        flags.extend(["--title", "New scope"]);
-        assert!(parsed_task_action(&flags).is_err(), "{required} is required");
-    }
+    assert!(TestCli::try_parse_from(["test", "task", "scope-update", "task", "--title", "New scope"]).is_ok());
 }
 
 #[test]
@@ -626,8 +616,8 @@ fn literal_inputs_and_main_session_evidence_are_discoverable() {
 fn durable_lifecycle_commands_preserve_explicit_operation_payloads() {
     let id = "81375f7e-a83a-4313-a415-39cc81ef24c2";
     let cases = [
-        (vec!["start", "--operation-id", id, "--mode", "reuse-or-resume", "--space", "space",
-            "--selected-root-id", "root", "--expected-project-key", "project"], "supervisor_start"),
+        (vec!["start", "--operation-id", id, "--space", "space",
+            "--selected-root-id", "root"], "supervisor_start"),
         (vec!["resume", "run", "--operation-id", id,
             "--expected-attachment-epoch", "7"], "run_resume"),
         (vec!["register", "--operation-id", id], "run_register"),
@@ -645,10 +635,8 @@ fn durable_lifecycle_commands_preserve_explicit_operation_payloads() {
         assert!(encoded.get("auth").is_none());
         assert!(encoded.get("secret").is_none());
         if expected == "supervisor_start" {
-            assert_eq!(encoded["mode"], "reuse_or_resume");
             assert_eq!(encoded["target"]["workspace_id"], "space");
             assert_eq!(encoded["selected_root_id"], "root");
-            assert_eq!(encoded["expected_project_key"], "project");
         }
         if expected == "run_resume" {
             assert_eq!(encoded["expected_attachment_epoch"], 7);
@@ -658,7 +646,6 @@ fn durable_lifecycle_commands_preserve_explicit_operation_payloads() {
     }
     for flags in [
         vec!["start", "--mode", "another"],
-        vec!["start", "--operation-id", id],
         vec!["resume", "run"],
         vec!["register"],
     ] {
@@ -697,19 +684,18 @@ fn supervisor_start_preserves_all_project_placements_and_no_focus() {
         vec![],
     ] {
         let TestCommand::Run(args) = TestCli::try_parse_from(
-            ["test", "run", "start", "--operation-id", "operation", "--mode", "another"]
+            ["test", "run", "start", "--operation-id", "operation"]
                 .into_iter().chain(target),
         ).unwrap().command else { panic!("expected run"); };
         let super::super::args::RunOperation::Mutation(action) =
             args.command.operation(&args.common).unwrap() else { panic!("expected mutation"); };
         let encoded = serde_json::to_value(action).unwrap();
-        assert_eq!(encoded["mode"], "another");
         if let Some(request) = encoded["target"].get("request") {
             assert_eq!(request["focus"], false);
         }
     }
     assert!(TestCli::try_parse_from([
-        "test", "run", "start", "--operation-id", "operation", "--mode", "another",
+        "test", "run", "start", "--operation-id", "operation",
         "--space", "space", "--path", "/tmp/project",
     ]).is_err());
 }

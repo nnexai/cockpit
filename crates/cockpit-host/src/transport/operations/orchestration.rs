@@ -9,7 +9,7 @@ use cockpit_protocol::orchestration::{
     OperatorOrigin, OrchestrationMutationRequest, OrchestrationMutationResponse,
     OrchestrationSnapshot, OrchestrationSnapshotRequest, OrchestrationWaitRequest,
     OrchestrationWaitResponse,
-    ProjectRootLookupRequest, ProjectRootLookupResponse,
+    LiaisonLookupRequest, LiaisonLookupResponse,
 };
 use serde::Deserialize;
 
@@ -80,14 +80,14 @@ pub fn mutation_input() -> impl FnOnce(MutationInput) -> Result<OrchestrationMut
     }
 }
 
-type ProjectRootLookupInput = (Path<String>, Result<Json<ProjectRootLookupRequest>, JsonRejection>);
+type LiaisonLookupInput = (Path<String>, Result<Json<LiaisonLookupRequest>, JsonRejection>);
 
-pub fn project_root_lookup_input() -> impl FnOnce(ProjectRootLookupInput) -> Result<ProjectRootLookupRequest, OperationError> {
+pub fn liaison_lookup_input() -> impl FnOnce(LiaisonLookupInput) -> Result<LiaisonLookupRequest, OperationError> {
     |(path, body)| {
-        let (session_id, request): (String, ProjectRootLookupRequest) =
+        let (session_id, request): (String, LiaisonLookupRequest) =
             http_input::session_body(
                 Reject("invalid_session_id", "Session ID is invalid"),
-                Reject("invalid_orchestration_request", "Expected a project root lookup request"),
+                Reject("invalid_orchestration_request", "Expected a liaison lookup request"),
             )((path, body))?;
         if request.session_id != session_id {
             return Err(OperationError::rejected(
@@ -98,12 +98,12 @@ pub fn project_root_lookup_input() -> impl FnOnce(ProjectRootLookupInput) -> Res
     }
 }
 
-pub async fn orchestration_project_root_lookup(
+pub async fn orchestration_liaison_lookup(
     runtime: &OrchestrationRuntime,
     _transport: Transport,
-    request: ProjectRootLookupRequest,
-) -> Result<ProjectRootLookupResponse, OperationError> {
-    runtime.project_root_lookup(&request).await.map_err(Into::into)
+    request: LiaisonLookupRequest,
+) -> Result<LiaisonLookupResponse, OperationError> {
+    runtime.liaison_lookup(&request).await.map_err(Into::into)
 }
 
 pub async fn orchestration_snapshot(
@@ -142,18 +142,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn project_lookup_fences_path_session_and_unknown_fields() {
-        let request = ProjectRootLookupRequest {
+    fn liaison_lookup_fences_path_session_and_unknown_fields() {
+        let request = LiaisonLookupRequest {
             session_id: "session".into(),
-            workspace_id: "space".into(),
             selected_root_id: None,
         };
-        let matched = project_root_lookup_input()((Path("session".into()), Ok(Json(request.clone()))));
+        let matched = liaison_lookup_input()((Path("session".into()), Ok(Json(request.clone()))));
         assert!(matched.is_ok());
-        let mismatched = project_root_lookup_input()((Path("other".into()), Ok(Json(request))));
+        let mismatched = liaison_lookup_input()((Path("other".into()), Ok(Json(request))));
         assert!(mismatched.is_err());
-        assert!(serde_json::from_value::<ProjectRootLookupRequest>(serde_json::json!({
-            "session_id": "session", "workspace_id": "space", "selected_root_id": null,
+        assert!(serde_json::from_value::<LiaisonLookupRequest>(serde_json::json!({
+            "session_id": "session", "selected_root_id": null,
             "project_key": "caller-asserted",
         })).is_err());
     }

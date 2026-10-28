@@ -47,6 +47,10 @@ describe("shortcut registry", () => {
     expect(directCommandForEvent(chord({ key: "`", code: "Backquote", ctrlKey: true }))).toBe("quick-terminal");
     expect(directCommandForEvent(chord({ key: "A", shiftKey: true, ctrlKey: true }))).toBe("ask-agent");
     expect(directCommandForEvent(chord({ key: "A", shiftKey: true, metaKey: true }))).toBe("ask-agent");
+    expect(formatShortcut("liaison", "other")).toBe("Ctrl+Shift+L");
+    expect(formatShortcut("liaison", "mac")).toBe("Cmd+Shift+L");
+    expect(directCommandForEvent(chord({ key: "L", shiftKey: true, ctrlKey: true }))).toBe("liaison");
+    expect(directCommandForEvent(chord({ key: "L", shiftKey: true, metaKey: true }))).toBe("liaison");
   });
 
   it("formats keys for each platform and only lists a sequence's prefix as Ctrl+B", () => {

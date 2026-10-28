@@ -11,7 +11,7 @@ import { createNativeClient } from "./native";
 import {
   matchOrchestrationSnapshot, parseOrchestrationAction, parseOrchestrationMutationRequest,
   parseOrchestrationMutationResponse, parseOrchestrationSnapshot, parseOrchestrationSnapshotRequest,
-  parseOrchestrationWaitRequest, parseOrchestrationWaitResponse, parseProjectRootLookupRequest, parseProjectRootLookupResponse,
+  parseOrchestrationWaitRequest, parseOrchestrationWaitResponse, parseLiaisonLookupRequest, parseLiaisonLookupResponse,
 } from "./orchestrationProtocol";
 
 const hash = "a".repeat(64);
@@ -47,8 +47,8 @@ const resume: ResumeRecord = {
   decision_id: null, replacement_attachment_epoch: null, updated_at: at,
 };
 const startAction: Extract<OrchestrationAction, { action: "supervisor_start" }> = {
-  action: "supervisor_start", operation_id: assignmentTaskId, mode: "reuse_or_resume",
-  target: null, label: null, selected_root_id: null, expected_project_key: null,
+  action: "supervisor_start", operation_id: assignmentTaskId,
+  target: null, label: null, selected_root_id: null,
 };
 const workerStartAction: Extract<OrchestrationAction, { action: "worker_start" }> = {
   action: "worker_start", operation_id: assignmentTaskId, root_id: prerequisiteId, task_id: parentStepId,
@@ -197,7 +197,7 @@ const snapshot: OrchestrationSnapshot = {
   session_id: "session", revision: 2, tasks_token: hash,
   roots: [{ root_id: "root", label: "Supervisor", kind: "supervisor", open_runs: 1, needs_you: 1 }],
   board: { root_id: "root", path: "/tasks/root.md", doc_revision: hash, unidentified_items: 0,
-    diagnostics: [{ code: "task_id_duplicate", message: "Duplicate" }], tasks: [{ task, lane: "working", current_run_id: "run", dependencies, scheduled: false, attempt: null }] },
+    diagnostics: [{ code: "task_id_duplicate", message: "Duplicate" }], tasks: [{ task, project: { key: "repo", label: "Repository" }, lane: "working", current_run_id: "run", dependencies, scheduled: false, attempt: null }] },
   runs: [{
     session_id: "session", brief: "Implement the assigned task", run_id: "run", kind: "worker", label: "Worker", root_id: "root",
     parent_run_id: "root", task_id: "task", attempt: 1, task_revision_at_start: hash, stage: "working", close_reason: null,
@@ -327,6 +327,16 @@ describe("orchestration protocol boundary", () => {
       brief: "Implement when ready", cleanup_policy: "owned_when_safe" as const, label: null, scheduled_at: at };
     const dto = { ...snapshot, task_ownership: [{ ...snapshot.task_ownership[0]!, schedule }] };
     expect(parseOrchestrationSnapshot(dto).task_ownership[0]!.schedule).toEqual(schedule);
+    for (const project of [null, { key: null, label: "Local" }, { key: "repo", label: "Repository" }]) {
+      const view = { ...snapshot.board!.tasks[0]!, project };
+      expect(parseOrchestrationSnapshot({ ...snapshot, board: { ...snapshot.board!, tasks: [view] } })
+        .board!.tasks[0]!.project).toEqual(project);
+    }
+    for (const project of [{ key: 1, label: "Local" }, { key: null, label: 1 }, { key: null, label: "Local", extra: true }]) {
+      const view = { ...snapshot.board!.tasks[0]!, project };
+      expect(() => parseOrchestrationSnapshot({ ...snapshot, board: { ...snapshot.board!, tasks: [view] } }))
+        .toThrow(CockpitClientError);
+    }
     for (const state of ["starting", "running", "stalled"] as const) {
       const badge = { run_id: "run", attempt: 2, state };
       const view = { ...snapshot.board!.tasks[0]!, scheduled: true, attempt: badge };
@@ -1084,10 +1094,10 @@ describe("orchestration protocol boundary", () => {
     }
     expect(parseOrchestrationAction({ action: "run_resume", run_id: "run", operation_id: assignmentTaskId,
       expected_attachment_epoch: null })).toBeDefined();
-    expect(parseOrchestrationAction({ ...startAction, mode: "another", selected_root_id: "root", expected_project_key: project.key })).toBeDefined();
+    expect(parseOrchestrationAction({ ...startAction, selected_root_id: "root" })).toBeDefined();
     for (const invalid of [
-      { ...startAction, mode: "unknown" }, { ...startAction, selected_root_id: "" },
-      { ...startAction, expected_project_key: "" }, { ...startAction, expected_project_key: "é".repeat(257) },
+      { ...startAction, mode: "another" }, { ...startAction, selected_root_id: "" },
+      { ...startAction, expected_project_key: project.key },
       { action: "run_resume", run_id: "run", operation_id: assignmentTaskId, expected_attachment_epoch: null, mode: "unknown", decision_id: null },
       { action: "run_resume", run_id: "", operation_id: assignmentTaskId, expected_attachment_epoch: null },
       { action: "run_resume", run_id: "run", operation_id: assignmentTaskId, expected_attachment_epoch: null, mode: "replace_existing", decision_id: "bad" },
@@ -1113,32 +1123,33 @@ describe("orchestration protocol boundary", () => {
     }
   });
 
-  it("decodes strict project lookup records with honest unavailable and disconnected states", () => {
-    const request = { session_id: "session", workspace_id: "space", selected_root_id: assignmentTaskId };
-    const resolved = { status: "resolved", project, lookup_revision: 2, preferred_root_id: assignmentTaskId,
+  it("decodes strict liaison lookup records with honest unavailable and disconnected states", () => {
+    const request = { session_id: "session", selected_root_id: assignmentTaskId };
+    const resolved = { status: "resolved", lookup_revision: 2, preferred_root_id: assignmentTaskId,
       roots: [{ root_id: assignmentTaskId, connection: "disconnected", resume: "blocked", stop_confirmable: false, cause: resume.cause, updated_at: at }] };
     const unavailable = { status: "unavailable", code: "project_unavailable", message: "Directory identity could not be verified" };
-    expect(parseProjectRootLookupRequest(request)).toEqual(request);
-    expect(parseProjectRootLookupRequest({ ...request, selected_root_id: null })).toBeDefined();
+    expect(parseLiaisonLookupRequest(request)).toEqual(request);
+    expect(parseLiaisonLookupRequest({ ...request, selected_root_id: null })).toBeDefined();
+    expect(() => parseLiaisonLookupResponse({ ...resolved, project })).toThrow(CockpitClientError);
     for (const response of [resolved, unavailable]) {
-      expect(parseProjectRootLookupResponse(response)).toEqual(response);
+      expect(parseLiaisonLookupResponse(response)).toEqual(response);
       for (const path of fieldPaths(response)) {
-        expect(() => parseProjectRootLookupResponse(replaceField(response, path, undefined, true))).toThrow(CockpitClientError);
-        expect(() => parseProjectRootLookupResponse(replaceField(response, path, {}))).toThrow(CockpitClientError);
+        expect(() => parseLiaisonLookupResponse(replaceField(response, path, undefined, true))).toThrow(CockpitClientError);
+        expect(() => parseLiaisonLookupResponse(replaceField(response, path, {}))).toThrow(CockpitClientError);
       }
       for (const ownerPath of [[], ...fieldPaths(response)]) {
         const owner = ownerPath.reduce<unknown>((value, key) => (value as Record<string | number, unknown>)[key], response);
         if (owner === null || typeof owner !== "object" || Array.isArray(owner)) continue;
-        expect(() => parseProjectRootLookupResponse(replaceField(response, ownerPath, { ...owner, auth: "private" }))).toThrow(CockpitClientError);
+        expect(() => parseLiaisonLookupResponse(replaceField(response, ownerPath, { ...owner, auth: "private" }))).toThrow(CockpitClientError);
       }
     }
     for (const path of fieldPaths(request)) {
-      expect(() => parseProjectRootLookupRequest(replaceField(request, path, undefined, true))).toThrow(CockpitClientError);
+      expect(() => parseLiaisonLookupRequest(replaceField(request, path, undefined, true))).toThrow(CockpitClientError);
     }
-    for (const invalid of [{ ...request, session_id: "../session" }, { ...request, workspace_id: "" },
+    for (const invalid of [{ ...request, session_id: "../session" }, { ...request, workspace_id: "space" },
       { ...request, selected_root_id: "" }, { ...request, selected_root_id: "root" },
       { ...request, selected_root_id: "not-a-uuid" }, { ...request, auth: "private" }]) {
-      expect(() => parseProjectRootLookupRequest(invalid)).toThrow(CockpitClientError);
+      expect(() => parseLiaisonLookupRequest(invalid)).toThrow(CockpitClientError);
     }
     for (const [path, value] of [
       [["lookup_revision"], Number.MAX_SAFE_INTEGER + 1], [["lookup_revision"], -1],
@@ -1147,22 +1158,22 @@ describe("orchestration protocol boundary", () => {
       [["roots", 0, "root_id"], "root"], [["roots", 0, "root_id"], "not-a-uuid"],
       [["roots", 0, "resume"], "retry_anyway"], [["roots", 0, "updated_at"], "yesterday"],
       [["roots", 0, "cause", "code"], ""], [["roots", 0, "cause", "message"], "é".repeat(8193)],
-    ] as const) expect(() => parseProjectRootLookupResponse(replaceField(resolved, [...path], value))).toThrow(CockpitClientError);
+    ] as const) expect(() => parseLiaisonLookupResponse(replaceField(resolved, [...path], value))).toThrow(CockpitClientError);
     for (const connection of ["connected", "reconnecting", "disconnected", "unknown"]) {
       for (const availability of ["available", "in_progress", "blocked"]) {
-        expect(parseProjectRootLookupResponse({ ...resolved, preferred_root_id: null,
+        expect(parseLiaisonLookupResponse({ ...resolved, preferred_root_id: null,
           roots: [{ ...resolved.roots[0]!, connection, resume: availability, cause: null }] })).toBeDefined();
       }
     }
-    expect(parseProjectRootLookupResponse({ ...resolved, roots: [], preferred_root_id: null, lookup_revision: Number.MAX_SAFE_INTEGER })).toBeDefined();
-    expect(() => parseProjectRootLookupResponse({ ...resolved, roots: [] })).toThrow(CockpitClientError);
-    expect(() => parseProjectRootLookupResponse({ ...resolved, roots: [resolved.roots[0]!, resolved.roots[0]!] })).toThrow(CockpitClientError);
-    expect(() => parseProjectRootLookupResponse({ ...resolved, preferred_root_id: null,
+    expect(parseLiaisonLookupResponse({ ...resolved, roots: [], preferred_root_id: null, lookup_revision: Number.MAX_SAFE_INTEGER })).toBeDefined();
+    expect(() => parseLiaisonLookupResponse({ ...resolved, roots: [] })).toThrow(CockpitClientError);
+    expect(() => parseLiaisonLookupResponse({ ...resolved, roots: [resolved.roots[0]!, resolved.roots[0]!] })).toThrow(CockpitClientError);
+    expect(() => parseLiaisonLookupResponse({ ...resolved, preferred_root_id: null,
       roots: [resolved.roots[0]!, { ...resolved.roots[0]!, connection: "connected" }] })).toThrow(CockpitClientError);
     const second = { ...resolved.roots[0]!, root_id: prerequisiteId };
-    expect(parseProjectRootLookupResponse({ ...resolved, roots: [resolved.roots[0]!, second], preferred_root_id: prerequisiteId })).toBeDefined();
-    expect(() => parseProjectRootLookupResponse({ ...unavailable, code: "" })).toThrow(CockpitClientError);
-    expect(() => parseProjectRootLookupResponse({ ...unavailable, message: "bad\0cause" })).toThrow(CockpitClientError);
+    expect(parseLiaisonLookupResponse({ ...resolved, roots: [resolved.roots[0]!, second], preferred_root_id: prerequisiteId })).toBeDefined();
+    expect(() => parseLiaisonLookupResponse({ ...unavailable, code: "" })).toThrow(CockpitClientError);
+    expect(() => parseLiaisonLookupResponse({ ...unavailable, message: "bad\0cause" })).toThrow(CockpitClientError);
   });
 
   it("preserves canonical body, editable prose, raw checks and effective checklist/dependency facts", () => {

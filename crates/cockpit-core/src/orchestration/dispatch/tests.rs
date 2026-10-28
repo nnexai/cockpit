@@ -244,6 +244,74 @@ fn test_attachment(run: &mut Run) -> &mut cockpit_protocol::orchestration::Execu
     })
 }
 
+#[test]
+fn endpoint_observation_deduplicates_across_endpoint_changes_per_epoch() {
+    let mut fixture = ReviewFixture::new(RunStage::Working);
+    fixture.worker_task(None);
+    let mut observed = runtime();
+    for endpoint in ["restart-one", "restart-two", "restart-three"] {
+        observed.endpoint_identity = endpoint.into();
+        fixture.service.record_observation(&observed, "test-session").unwrap();
+    }
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert_eq!(state.messages.iter().filter(|m| m.message_id.contains(":endpoint_changed:")).count(), 1);
+    drop(state);
+    fixture.change(|run| run.attachment.as_mut().unwrap().epoch += 1);
+    fixture.service.record_observation(&observed, "test-session").unwrap();
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert_eq!(state.messages.iter().filter(|m| m.message_id.contains(":endpoint_changed:")).count(), 2);
+}
+
+#[test]
+fn idle_worker_notice_waits_for_deadline_and_survives_state_timestamp_changes() {
+    use cockpit_protocol::orchestration::{ActorRef, MessageKind};
+    let mut fixture = ReviewFixture::new(RunStage::Working);
+    fixture.worker_task(None);
+    let mut observed = runtime();
+    observed.panes[0].state_changed_at = Some(now());
+    assert!(fixture.service.record_observation(&observed, "test-session").unwrap().is_some());
+    assert!(fixture.service.store.lock().unwrap().read().unwrap().messages.is_empty());
+    observed.panes[0].state_changed_at = Some("2000-01-01T00:00:00Z".into());
+    fixture.service.record_observation(&observed, "test-session").unwrap();
+    observed.panes[0].state_changed_at = Some("2001-01-01T00:00:00Z".into());
+    fixture.service.record_observation(&observed, "test-session").unwrap();
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert_eq!(state.messages.iter().filter(|m| matches!(m.from, ActorRef::Dispatcher)
+        && m.kind == MessageKind::Observation && m.message_id.contains(":idle_without_report:")).count(), 1);
+}
+
+#[test]
+fn queued_resource_stall_waits_ten_minutes_and_notifies_once() {
+    use cockpit_protocol::orchestration::{AttachmentReference, ResourceRequestRecord, ResourceRequestState, ResourceSourceIdentity};
+    let mut fixture = ReviewFixture::new(RunStage::Working);
+    fixture.worker_task(None);
+    let run = fixture.current().1;
+    let attachment = run.attachment.as_ref().unwrap();
+    let locked = fixture.service.store.lock().unwrap();
+    let mut state = locked.read().unwrap();
+    state.resource_requests.push(ResourceRequestRecord {
+        request_id: uuid::Uuid::new_v4().to_string(), sequence: 1, resource_key: "/output".into(),
+        source_identity: ResourceSourceIdentity { checkout_key: "checkout".into(), source_commit: "a".repeat(40),
+            source_tree: "b".repeat(40), input_configuration: "inputs".into(), toolchain_fingerprint: "toolchain".into() },
+        holder: AttachmentReference { run_id: run.run_id.clone(), attachment_id: attachment.attachment_id.clone(), attachment_epoch: attachment.epoch },
+        state: ResourceRequestState::Queued, build_processes: vec![], machine_id: "machine".into(),
+        blocked_reason: None, updated_at: now(),
+    });
+    locked.save(&mut state).unwrap();
+    drop(locked);
+    assert!(fixture.service.resource_stall_delay().unwrap().is_some());
+    assert!(fixture.service.store.lock().unwrap().read().unwrap().messages.is_empty());
+    let locked = fixture.service.store.lock().unwrap();
+    let mut state = locked.read().unwrap();
+    state.resource_requests[0].updated_at = "2000-01-01T00:00:00Z".into();
+    locked.save(&mut state).unwrap();
+    drop(locked);
+    assert!(fixture.service.resource_stall_delay().unwrap().is_none());
+    fixture.service.resource_stall_delay().unwrap();
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert_eq!(state.messages.iter().filter(|m| m.message_id.starts_with("resource-stall:")).count(), 1);
+}
+
 struct ReviewFixture {
     root: PathBuf,
     service: Arc<OrchestrationService>,
@@ -690,93 +758,6 @@ async fn dispatch_reservation_refuses_changed_inode_without_rotating_epoch_or_cl
     }
 }
 
-#[tokio::test]
-async fn explicitly_reselected_root_dispatch_reuses_reserved_credential_and_exact_checkout_fence() {
-    use super::super::{Actor, ResolvedMutationInput, credentials, project_identity};
-    use cockpit_protocol::orchestration::{AttachmentState, OperatorOrigin, OrchestrationAction,
-        OrchestrationMutationRequest, ResumePhase, SupervisorStartMode};
-    let fixture = ReviewFixture::new(RunStage::Starting);
-    let path = fixture.root.join("checkout");
-    std::fs::create_dir_all(&path).unwrap();
-    let (project, fresh) = project_identity::resolve_directory(&path, None, Some("space".into())).await.unwrap();
-    let operator = Actor::Operator(OperatorOrigin::Browser);
-    fixture.service.mutate_resolved(&operator, OrchestrationMutationRequest {
-        session_id: "test-session".into(), expected_revision: None,
-        action: OrchestrationAction::RunResume { run_id: fixture.run.run_id.clone(), operation_id: uuid::Uuid::new_v4().to_string(), expected_attachment_epoch: Some(1), confirmed_stopped_attachment_id: None },
-    }, &ResolvedMutationInput::default()).unwrap();
-    fixture.change(|run| {
-        run.project = Some(project.clone());
-        let mut saved = fresh.clone();
-        saved.directory_identity.device = "previous-boot-device".into();
-        run.checkout = Some(saved);
-        run.target = Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() });
-        run.setup = Some(SetupSummary {
-            operation_id: None, generation: None, workspace_id: Some("space".into()),
-            checkout_path: fresh.path.clone(), repository_id: None, branch: None, base: None,
-            base_commit: None, ownership: None, effects: vec![], warnings: vec![], project_workspace_id: None,
-        });
-        let attachment = test_attachment(run);
-        attachment.epoch = 2;
-        attachment.launch_attempt = 2;
-        attachment.state = AttachmentState::Reserved;
-        attachment.location = None;
-        attachment.process = None;
-        attachment.shell = None;
-        attachment.process_scope = None;
-        let resume = run.resume.as_mut().unwrap();
-        resume.phase = ResumePhase::Launching;
-        resume.previous_attachment_epoch = Some(1);
-        resume.replacement_attachment_epoch = Some(2);
-        resume.cause = None;
-        let mut dispatch = crate::orchestration::dispatch(DispatchStep::NeedsReview);
-        dispatch.launch_attempt = 2;
-        dispatch.error = Some(cockpit_protocol::ErrorResponse {
-            code: "checkout_identity_changed".into(), message: "Saved physical checkout no longer matches".into(),
-        });
-        run.dispatch = Some(dispatch);
-    });
-    let stalled = fixture.current().1;
-    let (credential, credential_path) = credentials::stage_credential(fixture.service.base(), &stalled, super::super::JobRole::Root).unwrap();
-    {
-        let locked = fixture.service.store.lock().unwrap();
-        let mut state = locked.read().unwrap();
-        state.credentials.push(credential);
-        locked.save(&mut state).unwrap();
-    }
-    let credential_bytes = std::fs::read(&credential_path).unwrap();
-    let before = fixture.service.store.lock().unwrap().read().unwrap();
-    let refused = fixture.service.reserve_dispatch_launch(&stalled, project.clone(), fresh.clone(), None, None).unwrap_err();
-    assert_eq!(refused.code, "checkout_identity_changed");
-    assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(), serde_json::to_value(&before).unwrap());
-    fixture.service.mutate_resolved(&operator, OrchestrationMutationRequest {
-        session_id: "test-session".into(), expected_revision: None,
-        action: OrchestrationAction::SupervisorStart {
-            operation_id: uuid::Uuid::new_v4().to_string(), mode: SupervisorStartMode::ReuseOrResume,
-            target: Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() }), label: None,
-            selected_root_id: Some(stalled.run_id.clone()), expected_project_key: Some(project.key.clone()),
-        },
-    }, &ResolvedMutationInput {
-        project: Some(project.clone()), reselected_checkout: Some(fresh.clone()), ..Default::default()
-    }).unwrap();
-    let reselected = fixture.current().1;
-    let (reserved, path) = fixture.service.reserve_dispatch_launch(&reselected, project.clone(), fresh.clone(), None, None).unwrap();
-    assert_eq!(path, credential_path);
-    assert_eq!(std::fs::read(&path).unwrap(), credential_bytes);
-    assert_eq!(reserved.checkout.as_ref(), Some(&fresh));
-    assert_eq!(serde_json::to_value(&reserved.attachment).unwrap(), serde_json::to_value(&stalled.attachment).unwrap());
-    assert_eq!(reserved.resume.as_ref().unwrap().operation_id, stalled.resume.as_ref().unwrap().operation_id);
-    let state = fixture.service.store.lock().unwrap().read().unwrap();
-    assert_eq!(serde_json::to_value(&state.credentials).unwrap(), serde_json::to_value(&before.credentials).unwrap());
-    assert!(state.checkout_claims.is_empty());
-    // Re-selection is not a standing identity exemption: later physical drift still refuses.
-    std::fs::rename(&fresh.path, fixture.root.join("previous-checkout")).unwrap();
-    std::fs::create_dir(&fresh.path).unwrap();
-    let (project, changed) = project_identity::resolve_directory(std::path::Path::new(&fresh.path), None, project.source_workspace_id).await.unwrap();
-    let error = fixture.service.reserve_dispatch_launch(&reserved, project, changed, None, None).unwrap_err();
-    assert_eq!(error.code, "checkout_identity_changed");
-    assert_eq!(serde_json::to_value(fixture.service.store.lock().unwrap().read().unwrap()).unwrap(), serde_json::to_value(state).unwrap());
-    assert_eq!(std::fs::read(&path).unwrap(), credential_bytes);
-}
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn root_main_exit_proof_is_same_boot_and_independent_of_worker_consumers() {
@@ -2180,6 +2161,10 @@ fn same_chat_resume_substitutes_only_the_whole_opaque_session_argument() {
         previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
         phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now(),
     });
+    let reminder = render_run_bootstrap(&run);
+    assert!(reminder.contains("resumed this conversation"));
+    assert!(!reminder.contains("work brief"));
+    assert_eq!(reminder.lines().count(), 1);
     assert_eq!(launch_args(&run).unwrap(), [
         "--custom-resume", "opaque/chat ; $(literal)", "literal-{session_id}",
     ]);
@@ -2436,7 +2421,8 @@ fn retained_space_restart_requires_exact_resumed_epoch_and_journalled_retained_l
     assert!(matches!(run.target.as_ref(), Some(DispatchTarget::SpaceWorktree { workspace_id, .. }) if workspace_id == "source-space"));
     let mut root = run.clone();
     root.kind = RunKind::Supervisor;
-    assert!(!resumed_checkout_epoch(&root), "this correction must not reinterpret root non-destructive resumption");
+    assert!(resumed_checkout_epoch(&root), "supervisors retain the same checkout across a resumed epoch");
+    assert!(restarts_in_retained_space(&root));
     for mismatch in ["epoch", "previous", "checkout", "source", "move", "unbound"] {
         let mut changed = run.clone();
         match mismatch {
@@ -2450,6 +2436,82 @@ fn retained_space_restart_requires_exact_resumed_epoch_and_journalled_retained_l
         }
         assert!(!restarts_in_retained_space(&changed), "{mismatch}");
     }
+}
+
+#[tokio::test]
+async fn resumed_supervisor_uses_retained_space_or_fresh_focused_staging() {
+    use cockpit_protocol::orchestration::{ResumePhase, ResumeRecord};
+    use crate::orchestration::herdr::RuntimeWorkspace;
+
+    for retained_open in [false, true] {
+        let fixture = ReviewFixture::new(RunStage::Starting);
+        let (_, checkout) = super::super::project_identity::resolve_owned_directory(&fixture.root).unwrap();
+        fixture.change(|run| {
+            run.kind = RunKind::Supervisor;
+            run.checkout = Some(checkout.clone());
+            run.setup = Some(SetupSummary {
+                operation_id: None, generation: None, workspace_id: Some("retained-space".into()),
+                checkout_path: checkout.path.clone(), repository_id: None, branch: None, base: None,
+                base_commit: None, ownership: None, effects: Vec::new(), warnings: Vec::new(),
+                project_workspace_id: Some("stale-source".into()),
+            });
+            run.target = Some(DispatchTarget::ExistingSpace { workspace_id: "retained-space".into() });
+            run.attachment.as_mut().unwrap().epoch = 2;
+            run.resume = Some(ResumeRecord {
+                operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
+                previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+                phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now(),
+            });
+            run.dispatch = Some(crate::orchestration::dispatch(DispatchStep::SetupPending));
+        });
+        let run = fixture.current().1;
+        assert!(resumed_checkout_epoch(&run));
+        let mut observed = runtime();
+        if retained_open {
+            observed.workspaces.push(RuntimeWorkspace {
+                workspace_id: "retained-space".into(), label: "Retained".into(),
+                cwd: checkout.path.clone(),
+            });
+        }
+        let choice = resume_staging_choice(&run, &observed).unwrap();
+        assert_eq!(choice.as_deref(), retained_open.then_some("retained-space"));
+        let adapter = Arc::new(CountingHerdr::new(observed, false, false));
+        let dispatcher = fixture.dispatcher(adapter);
+        let staging = match choice {
+            Some(retained) => retained,
+            None => dispatcher.staging_space(&run).await.unwrap(),
+        };
+        assert_eq!(staging, if retained_open { "retained-space" } else { "space" });
+        let mut staged = fixture.current().1;
+        if !retained_open {
+            assert_eq!(staged.dispatch.as_ref().unwrap().staging_workspace_id.as_deref(), Some(staging.as_str()));
+        }
+        // LaunchIntent journals the selected staging Space and launch tag.
+        let dispatch = staged.dispatch.as_mut().unwrap();
+        dispatch.staging_workspace_id = Some(staging);
+        dispatch.launch_tag = Some("new-epoch".into());
+        assert_eq!(restarts_in_retained_space(&staged), retained_open,
+            "only a launch in the retained Space skips moving and rebinding");
+    }
+}
+
+#[test]
+fn resumed_space_choice_rejects_changed_or_ambiguous_retained_checkout() {
+    let fixture = ReviewFixture::new(RunStage::Starting);
+    let (_, checkout) = super::super::project_identity::resolve_owned_directory(&fixture.root).unwrap();
+    let mut run = fixture.run.clone();
+    run.setup = Some(SetupSummary {
+        operation_id: None, generation: None, workspace_id: Some("space".into()),
+        checkout_path: checkout.path.clone(), repository_id: None, branch: None, base: None,
+        base_commit: None, ownership: None, effects: Vec::new(), warnings: Vec::new(),
+        project_workspace_id: None,
+    });
+    let mut observed = runtime();
+    assert_eq!(resume_staging_choice(&run, &observed).unwrap_err().code, "retained_space_checkout_changed");
+    observed.workspaces[0].cwd = checkout.path;
+    assert_eq!(resume_staging_choice(&run, &observed).unwrap().as_deref(), Some("space"));
+    observed.workspaces.push(observed.workspaces[0].clone());
+    assert_eq!(resume_staging_choice(&run, &observed).unwrap_err().code, "retained_space_checkout_changed");
 }
 
 #[tokio::test]
@@ -2617,6 +2679,27 @@ async fn path_schedule_fixture(mode: &str) -> (ReviewFixture, Arc<Dispatcher>) {
     locked.save(&mut state).unwrap();
     drop(locked);
     (fixture, dispatcher)
+}
+
+#[tokio::test]
+async fn capacity_stall_is_delayed_and_deduplicated() {
+    let (fixture, dispatcher) = path_schedule_fixture("git").await;
+    let candidates = fixture.service.schedule_candidates(4).unwrap();
+    let first = dispatcher.resolve_schedule_target(&candidates[0]).await.unwrap();
+    let second = dispatcher.resolve_schedule_target(&candidates[1]).await.unwrap();
+    let project = second.project.as_ref().unwrap();
+    let projects = BTreeMap::from([(candidates[1].schedule.operation_id.clone(),
+        (project.key.clone(), project.repository_id.clone().unwrap_or_else(|| "Project".into())))]);
+    fixture.service.scheduled_start(&candidates[0], &first).unwrap().unwrap();
+    let mut waits = BTreeMap::new();
+    let deadline = fixture.service.capacity_stalls(1, &projects, &mut waits).unwrap().unwrap();
+    assert!(deadline > tokio::time::Instant::now());
+    assert!(!fixture.service.store.lock().unwrap().read().unwrap().messages.iter().any(|m| m.message_id.starts_with("capacity-stall:")));
+    for value in waits.values_mut() { *value = tokio::time::Instant::now(); }
+    fixture.service.capacity_stalls(1, &projects, &mut waits).unwrap();
+    fixture.service.capacity_stalls(1, &projects, &mut waits).unwrap();
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert_eq!(state.messages.iter().filter(|m| m.message_id.starts_with("capacity-stall:")).count(), 1);
 }
 
 #[tokio::test]

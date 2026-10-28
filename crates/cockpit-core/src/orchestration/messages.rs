@@ -25,6 +25,42 @@ pub struct InboxKindCount {
     pub count: u64,
 }
 
+#[derive(serde::Serialize)]
+pub struct InboxMessageContext {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<TaskProject>,
+}
+
+impl super::OrchestrationService {
+    /// Enrich one captured batch from durable state without a Herdr snapshot.
+    pub fn inbox_message_context(&self, caller: &AgentCaller, messages: &[Message])
+        -> Result<std::collections::BTreeMap<String, InboxMessageContext>, InspectionError> {
+        let locked = self.store.lock()?;
+        let state = locked.read_shared()?;
+        let job = validate_caller(&state, caller)?;
+        let recipient = &state.runs[job.run_index];
+        let document = locked.tasks(&recipient.root_id)?;
+        let mut contexts = std::collections::BTreeMap::new();
+        for message in messages.iter().filter(|m| m.to_run_id == recipient.run_id) {
+            let ActorRef::Run { run_id } = &message.from else { continue };
+            let Some(run) = state.runs.iter().find(|run| run.run_id == *run_id && run.root_id == recipient.root_id) else { continue };
+            let task_id = run.task_id.clone();
+            let task_title = task_id.as_ref().and_then(|id| document.task(id).ok()).map(|task| task.title.clone());
+            let project = task_id.as_ref().and_then(|id| super::projection::task_project(&state, &run.root_id, id, None));
+            contexts.insert(message.message_id.clone(), InboxMessageContext {
+                run_label: Some(run.label.clone()), task_id, task_title, project,
+            });
+        }
+        Ok(contexts)
+    }
+}
+
 // Deliberately omit text, report summaries/plans, and all runtime/task records.
 #[derive(serde::Deserialize)]
 pub(crate) struct InboxMessage {

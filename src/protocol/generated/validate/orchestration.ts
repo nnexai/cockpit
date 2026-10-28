@@ -171,8 +171,14 @@ export const wireTaskDependencyBlocker: WireDescriptor<V1.TaskDependencyBlocker>
 
 export const wireTaskDependencyBlockerReason: WireDescriptor<V1.TaskDependencyBlockerReason> = literal<V1.TaskDependencyBlockerReason>("TaskDependencyBlockerReason", ["unchecked", "missing", "ambiguous"]);
 
+export const wireTaskProject: WireDescriptor<V1.TaskProject> = struct<V1.TaskProject>("TaskProject", {
+  "key": req(nullable(str), { fill: null }),
+  "label": req(str),
+});
+
 export const wireTaskView: WireDescriptor<V1.TaskView> = struct<V1.TaskView>("TaskView", {
   "task": req(named(() => wireTask)),
+  "project": req(nullable(named(() => wireTaskProject)), { fill: null }),
   "lane": req(named(() => wireTaskLane)),
   "current_run_id": req(nullable(str), { fill: null }),
   "dependencies": req(named(() => wireTaskDependencies)),
@@ -357,9 +363,8 @@ export const wireResumeRecord: WireDescriptor<V1.ResumeRecord> = struct<V1.Resum
   "updated_at": req(str),
 });
 
-export const wireProjectRootLookupRequest: WireDescriptor<V1.ProjectRootLookupRequest> = struct<V1.ProjectRootLookupRequest>("ProjectRootLookupRequest", {
+export const wireLiaisonLookupRequest: WireDescriptor<V1.LiaisonLookupRequest> = struct<V1.LiaisonLookupRequest>("LiaisonLookupRequest", {
   "session_id": req(str),
-  "workspace_id": req(str),
   "selected_root_id": req(nullable(str), { fill: null }),
 });
 
@@ -367,7 +372,7 @@ export const wireRootConnection: WireDescriptor<V1.RootConnection> = literal<V1.
 
 export const wireRootResumeAvailability: WireDescriptor<V1.RootResumeAvailability> = literal<V1.RootResumeAvailability>("RootResumeAvailability", ["available", "in_progress", "blocked"]);
 
-export const wireProjectRootCandidate: WireDescriptor<V1.ProjectRootCandidate> = struct<V1.ProjectRootCandidate>("ProjectRootCandidate", {
+export const wireLiaisonCandidate: WireDescriptor<V1.LiaisonCandidate> = struct<V1.LiaisonCandidate>("LiaisonCandidate", {
   "root_id": req(str),
   "connection": req(named(() => wireRootConnection)),
   "resume": req(named(() => wireRootResumeAvailability)),
@@ -376,20 +381,17 @@ export const wireProjectRootCandidate: WireDescriptor<V1.ProjectRootCandidate> =
   "updated_at": req(str),
 });
 
-export const wireProjectRootLookupResponse: WireDescriptor<V1.ProjectRootLookupResponse> = tagged<V1.ProjectRootLookupResponse, "status">("ProjectRootLookupResponse", "status", {
+export const wireLiaisonLookupResponse: WireDescriptor<V1.LiaisonLookupResponse> = tagged<V1.LiaisonLookupResponse, "status">("LiaisonLookupResponse", "status", {
   "resolved": {
-    "project": req(named(() => wireProjectIdentity)),
     "lookup_revision": req(u53),
     "preferred_root_id": req(nullable(str), { fill: null }),
-    "roots": req(list(named(() => wireProjectRootCandidate))),
+    "roots": req(list(named(() => wireLiaisonCandidate))),
   },
   "unavailable": {
     "code": req(str),
     "message": req(str),
   },
 });
-
-export const wireSupervisorStartMode: WireDescriptor<V1.SupervisorStartMode> = literal<V1.SupervisorStartMode>("SupervisorStartMode", ["reuse_or_resume", "another"]);
 
 export const wireSupervisorStartOutcome: WireDescriptor<V1.SupervisorStartOutcome> = literal<V1.SupervisorStartOutcome>("SupervisorStartOutcome", ["reused", "resuming", "created"]);
 
@@ -1073,11 +1075,9 @@ export const wireOrchestrationAction: WireDescriptor<V1.OrchestrationAction> = t
   },
   "supervisor_start": {
     "operation_id": req(str),
-    "mode": req(named(() => wireSupervisorStartMode)),
     "target": req(nullable(named(() => wireDispatchTarget)), { fill: null }),
     "label": req(nullable(str), { fill: null }),
     "selected_root_id": req(nullable(str), { fill: null }),
-    "expected_project_key": req(nullable(str), { fill: null }),
   },
   "run_resume": {
     "run_id": req(str),

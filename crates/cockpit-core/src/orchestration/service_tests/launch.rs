@@ -328,6 +328,33 @@ fn dispatch_events(fixture: &Fixture, root: &str, event: &str) -> Vec<Message> {
 }
 
 #[test]
+fn captured_message_context_uses_durable_task_and_project() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let supervisor = fixture.launch_and_bind(&root);
+    let task = fixture.create_task(&root, "Digest task");
+    let worker = fixture.start(&root, &task);
+    let locked = fixture.service.store.lock().unwrap();
+    let mut state = locked.read().unwrap();
+    messages::append(&mut state, messages::AppendMessage {
+        from: ActorRef::Run { run_id: worker.clone() }, to_run_id: &root, message_id: "digest-test",
+        kind: MessageKind::Observation, text: "ready", in_reply_to: None, report: None,
+        stale: false, escalated_from: None,
+    }).unwrap();
+    locked.save(&mut state).unwrap();
+    let messages = state.messages.clone();
+    drop(locked);
+    let Actor::Agent(caller) = supervisor else { unreachable!() };
+    let contexts = fixture.service.inbox_message_context(&caller, &messages).unwrap();
+    let context = contexts.get("digest-test").unwrap();
+    assert_eq!(context.run_label.as_deref(), Some(fixture.run(&worker).label.as_str()));
+    assert_eq!(context.task_id.as_deref(), Some(task.task_id.as_str()));
+    assert_eq!(context.task_title.as_deref(), Some("Digest task"));
+    assert_eq!(context.project.as_ref().map(|project| project.label.clone()),
+        projection::task_project(&fixture.state(), &root, &task.task_id, None).map(|project| project.label));
+}
+
+#[test]
 fn dispatch_failure_wakes_root_once_with_typed_next_steps() {
     let fixture = Fixture::new();
     let root = fixture.root();
@@ -355,9 +382,9 @@ fn dispatch_failure_wakes_root_once_with_typed_next_steps() {
     assert_eq!(dispatch_events(&fixture, &root, "dispatch_failure").len(), 1);
     fixture.apply(&supervisor, OrchestrationAction::InboxPull { after_seq: 0, limit: 100 }).unwrap();
     fixture.service.record_dispatch(&worker, failure()).unwrap();
-    assert_eq!(dispatch_events(&fixture, &root, "dispatch_failure").len(), 2);
+    assert_eq!(dispatch_events(&fixture, &root, "dispatch_failure").len(), 1);
     fixture.service.record_dispatch(&root, failure()).unwrap();
-    assert_eq!(dispatch_events(&fixture, &root, "dispatch_failure").len(), 2);
+    assert_eq!(dispatch_events(&fixture, &root, "dispatch_failure").len(), 1);
     let reopened = OrchestrationService::open(&fixture.configuration).unwrap();
     let reopened_state = {
         let locked = reopened.store.lock().unwrap();
@@ -726,9 +753,8 @@ fn diagnostic_root_result_keeps_real_schedule_reuse_and_recovery_consumers_avail
             OrchestrationMutationRequest {
                 session_id: SESSION.into(), expected_revision: Some(fixture.state().revision),
                 action: OrchestrationAction::SupervisorStart {
-                    operation_id: id(), mode: SupervisorStartMode::ReuseOrResume,
+                    operation_id: id(),
                     target: Some(target()), label: None, selected_root_id: None,
-                    expected_project_key: Some(fixture.project().key),
                 },
             }, &ResolvedMutationInput {
                 project: Some(fixture.project()), attachment_observation: Some(observation),

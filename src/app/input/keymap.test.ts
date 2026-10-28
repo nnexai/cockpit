@@ -209,6 +209,8 @@ describe("direct quick chords", () => {
     [{ key: "`", code: "Backquote", ctrlKey: true }, "quick-terminal"],
     [{ key: "A", code: "KeyA", ctrlKey: true, shiftKey: true }, "ask-agent"],
     [{ key: "A", code: "KeyA", metaKey: true, shiftKey: true }, "ask-agent"],
+    [{ key: "L", code: "KeyL", ctrlKey: true, shiftKey: true }, "liaison"],
+    [{ key: "L", code: "KeyL", metaKey: true, shiftKey: true }, "liaison"],
   ] as const)("routes %s from a terminal to %s", (keys, command) => {
     const target = mount('<div class="terminal-host"><textarea></textarea></div>', "textarea");
     const { route, runCommand, armed } = harness();
@@ -218,6 +220,21 @@ describe("direct quick chords", () => {
     expect(event.stopPropagation).toHaveBeenCalledOnce();
     expect(runCommand).toHaveBeenCalledExactlyOnceWith(command);
     expect(armed()).toBe(false);
+  });
+
+  it("routes the liaison chord ahead of an armed prefix and ignores repeats and modals", () => {
+    const { route, runCommand, armed } = harness();
+    route(ctrlB());
+    route(keyEvent({ key: "L", ctrlKey: true, shiftKey: true }));
+    expect(runCommand).toHaveBeenCalledExactlyOnceWith("liaison");
+    expect(armed()).toBe(false);
+    route(keyEvent({ key: "L", ctrlKey: true, shiftKey: true, repeat: true }));
+    expect(runCommand).toHaveBeenCalledOnce();
+    const modal = harness(true);
+    const event = keyEvent({ key: "L", ctrlKey: true, shiftKey: true });
+    modal.route(event);
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(modal.runCommand).not.toHaveBeenCalled();
   });
 
   it("consumes repeats without running the command again and leaves modal input alone", () => {

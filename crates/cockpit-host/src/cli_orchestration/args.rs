@@ -4,7 +4,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use cockpit_protocol::{
     orchestration::{
         DispatchTarget, MessageKind, OrchestrationAction, ReportKind, ReportOutcome,
-        TaskStepScope, WorkerCleanupPolicy, SupervisorStartMode,
+        TaskStepScope, WorkerCleanupPolicy,
     },
     projects::{WorkspaceRecoveryAction, WorkspaceSetupRequest},
 };
@@ -66,19 +66,6 @@ pub(super) enum ProtocolCommand {
 }
 
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub(super) enum StartModeArg {
-    ReuseOrResume,
-    Another,
-}
-impl From<StartModeArg> for SupervisorStartMode {
-    fn from(mode: StartModeArg) -> Self {
-        match mode {
-            StartModeArg::ReuseOrResume => Self::ReuseOrResume,
-            StartModeArg::Another => Self::Another,
-        }
-    }
-}
 
 #[derive(Debug, Args)]
 pub(super) struct DescriptionArgs {
@@ -204,8 +191,8 @@ pub(super) enum TaskCommand {
         after_long_help = "Choose --task-id once and retain it. create does not launch a worker.
 After any uncertain submission, inspect task show with that same ID in the
 same root before retrying; never append a second task with a new ID.
-Relationships require doc_revision from task list --json; follow-up also
-needs source_revision from task show SOURCE --json (task.task_revision)."
+Relationship document revisions are resolved when omitted; follow-up needs
+source_revision from task show SOURCE --json (task.task_revision)."
     )]
     Create {
         /// Stable caller UUID; generated once when omitted and reported before submission.
@@ -216,26 +203,26 @@ needs source_revision from task show SOURCE --json (task.task_revision)."
         title: String,
         #[command(flatten)]
         description: DescriptionArgs,
-        /// Prerequisite UUID; repeat for each prerequisite (requires exact document revision).
-        #[arg(long, requires = "doc_revision")]
+        /// Prerequisite task reference; repeat for each prerequisite.
+        #[arg(long)]
         depends_on: Vec<String>,
         /// Follow-up source UUID; provenance only, not an implicit prerequisite.
-        #[arg(long, requires_all = ["doc_revision", "source_revision"])]
+        #[arg(long, requires = "source_revision")]
         follow_up_of: Option<String>,
-        /// Exact root document revision from task list --json.
+        /// Optional exact root document revision; resolved when omitted.
         #[arg(long)]
         doc_revision: Option<String>,
         /// Exact follow-up source task revision from task show.
         #[arg(long, requires = "follow_up_of")]
         source_revision: Option<String>,
     },
-    /// Update title/prose only with an exact task fence; preserves metadata and steps.
+    /// Update title/prose with a current or explicit task fence.
     Update {
         /// Canonical task UUID from task list.
         task: String,
-        /// Exact task.task_revision from task show TASK --json.
+        /// Optional exact task revision; resolved when omitted.
         #[arg(long)]
-        revision: String,
+        revision: Option<String>,
         /// New task title; omit to preserve the current title.
         #[arg(long)]
         title: Option<String>,
@@ -246,18 +233,18 @@ needs source_revision from task show SOURCE --json (task.task_revision)."
     ScopeUpdate {
         /// Canonical task UUID owned by the selected live worker.
         task: String,
-        /// Stable caller-chosen operation UUID; retain the exact payload after uncertainty.
+        /// Optional operation UUID; generated and printed when omitted.
         #[arg(long)]
-        operation_id: String,
-        /// Exact live worker run UUID; never inferred from focus.
+        operation_id: Option<String>,
+        /// Optional live worker reference; defaults to the task's current Working run.
         #[arg(long)]
-        run: String,
-        /// Exact task.task_revision from task show TASK --json.
+        run: Option<String>,
+        /// Optional exact task revision; resolved when omitted.
         #[arg(long)]
-        revision: String,
-        /// Exact root doc_revision from task list --json.
+        revision: Option<String>,
+        /// Optional exact document revision; resolved when omitted.
         #[arg(long)]
-        doc_revision: String,
+        doc_revision: Option<String>,
         #[arg(long)]
         title: Option<String>,
         #[command(flatten)]
@@ -401,7 +388,7 @@ impl TaskCommand {
                 OrchestrationAction::TaskUpdate {
                     root_id,
                     task_id: task,
-                    expected_task_revision: revision,
+                    expected_task_revision: revision_fence(revision)?,
                     title,
                     description,
                 }
@@ -416,8 +403,10 @@ impl TaskCommand {
                     ));
                 }
                 OrchestrationAction::TaskScopeUpdate {
-                    operation_id, root_id, task_id: task, run_id: run,
-                    expected_task_revision: revision, expected_doc_revision: doc_revision,
+                    operation_id: submission_id(operation_id, "Operation")?, root_id, task_id: task,
+                    run_id: run.ok_or_else(|| CliError::usage("Scope update needs a current worker"))?,
+                    expected_task_revision: revision_fence(revision)?,
+                    expected_doc_revision: revision_fence(doc_revision)?,
                     title, description,
                 }
             }
@@ -702,13 +691,11 @@ pub(super) enum RecoveryArg {
 
 #[derive(Debug, Subcommand)]
 pub(super) enum RunCommand {
-    /// Start with an explicit reuse/resume or distinct-root intent.
+    /// Reuse/resume the session liaison, or create it.
     Start {
         #[arg(long)]
         operation_id: String,
-        #[arg(long, value_enum)]
-        mode: StartModeArg,
-        /// Explicit project placement; omission uses the dedicated supervisor folder.
+        /// Optional transport staging Space; the liaison uses its own directory.
         #[arg(long, conflicts_with_all = ["repository", "path", "space_worktree"])]
         space: Option<String>,
         #[arg(long, conflicts_with_all = ["space", "path", "space_worktree"])]
@@ -727,8 +714,6 @@ pub(super) enum RunCommand {
         label: Option<String>,
         #[arg(long)]
         selected_root_id: Option<String>,
-        #[arg(long)]
-        expected_project_key: Option<String>,
     },
     /// Reconcile attachment state without replacing a live writer.
     Resume {
@@ -817,9 +802,9 @@ operation's outcome is uncertain; never repeat it blindly."
     Accept {
         /// Strict descendant worker with a reviewed successful Result.
         run: String,
-        /// Exact current task.task_revision from task show TASK --json.
+        /// Optional exact task revision; resolved when omitted.
         #[arg(long)]
-        task_revision: String,
+        task_revision: Option<String>,
     },
     /// Send a descendant worker's result back with actionable review feedback.
     SendBack {
@@ -1010,6 +995,26 @@ list/ack are low-level recovery; a wait cursor is never an ACK cursor."
 
 
 #[derive(Debug, Args)]
+pub(crate) struct WhereArgs {
+    #[command(flatten)]
+    pub(super) common: OrchestrationArgs,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentArgs {
+    #[command(flatten)]
+    pub(super) common: OrchestrationArgs,
+    #[command(subcommand)]
+    pub(super) command: AgentCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum AgentCommand {
+    /// Send a durable instruction or prompt a live unmanaged agent.
+    Send { reference: String, #[arg(long)] text: String },
+}
+
+#[derive(Debug, Args)]
 pub(crate) struct RouteArgs {
     #[command(flatten)]
     pub(super) common: OrchestrationArgs,
@@ -1043,8 +1048,8 @@ pub(super) enum RunOperation {
 impl RunCommand {
     pub(super) fn operation(self, common: &OrchestrationArgs) -> Result<RunOperation, CliError> {
         let action = match self {
-            Self::Start { operation_id, mode, space, repository, path, space_worktree,
-                branch, base, checkout_path, label, selected_root_id, expected_project_key } => {
+            Self::Start { operation_id, space, repository, path, space_worktree,
+                branch, base, checkout_path, label, selected_root_id } => {
                 let target = match (space, repository, path, space_worktree) {
                     (Some(workspace_id), None, None, None) => Some(DispatchTarget::ExistingSpace { workspace_id }),
                     (None, Some(repository_id), None, None) => Some(DispatchTarget::Setup {
@@ -1065,7 +1070,7 @@ impl RunCommand {
                     _ => return Err(CliError::usage("start requires one explicit placement, or no placement options")),
                 };
                 OrchestrationAction::SupervisorStart {
-                    operation_id, mode: mode.into(), target, label, selected_root_id, expected_project_key,
+                    operation_id, target, label, selected_root_id,
                 }
             },
             Self::Resume { run, operation_id, expected_attachment_epoch, confirm_stopped_attachment } =>
@@ -1089,7 +1094,7 @@ impl RunCommand {
             Self::WorkerStart(args) => return Ok(RunOperation::WorkerStart(args)),
             Self::Accept { run, task_revision } => OrchestrationAction::Accept {
                 run_id: run,
-                expected_task_revision: task_revision,
+                expected_task_revision: revision_fence(task_revision)?,
             },
             Self::SendBack { run, text } => OrchestrationAction::SendBack {
                 run_id: run,

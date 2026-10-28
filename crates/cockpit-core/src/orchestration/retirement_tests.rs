@@ -435,6 +435,7 @@ fn unknown_attention_is_visible_for_closed_runs_and_retention_is_not_recovery() 
                     current_run_id: None,
                     scheduled: false,
                     attempt: None,
+                    project: None,
                     dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: Vec::new(), problems: Vec::new() },
                 }).collect(),
             }

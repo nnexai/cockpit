@@ -2,7 +2,7 @@ import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./not
 import {
   matchOrchestrationSnapshot, parseOrchestrationSnapshotRequest, parseOrchestrationMutationRequest, 
   parseOrchestrationMutationResponse, parseOrchestrationWaitRequest, parseOrchestrationWaitResponse,
-  parseProjectRootLookupRequest, parseProjectRootLookupResponse,
+  parseLiaisonLookupRequest, parseLiaisonLookupResponse,
 } from "./orchestrationProtocol";
 import {
   matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest, parseWidgetRemoveResponse, 
@@ -112,14 +112,14 @@ const operations: OperationTable = {
       };
     },
   },
-  orchestrationProjectRootLookup: {
+  orchestrationLiaisonLookup: {
     encode(_backend, value) {
-      const body = parseProjectRootLookupRequest(value);
+      const body = parseLiaisonLookupRequest(value);
       return {
-        operation: "orchestration project root lookup",
-        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/project-roots`, json: () => body },
-        tauri: { command: "orchestration_project_root_lookup", args: () => ({ request: body }) },
-        parse: parseProjectRootLookupResponse,
+        operation: "orchestration liaison lookup",
+        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/liaison`, json: () => body },
+        tauri: { command: "orchestration_liaison_lookup", args: () => ({ request: body }) },
+        parse: parseLiaisonLookupResponse,
       };
     },
   },

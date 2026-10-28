@@ -51,6 +51,8 @@ const ROOT_HELP: &str = "Agent workflows:
   cockpit-cli run --help         Results, review, integration and retained adapters
   cockpit-cli inbox --help       next captures/ACKs internally; no model ACK ceremony
   cockpit-cli route --help       Read configured project-routing evidence
+  cockpit-cli where --help       Live project, Space and agent routing
+  cockpit-cli agent --help       Send to a managed or unmanaged agent
   cockpit-cli skills --help      Read or explicitly install portable CLI skills
   cockpit-cli library --help     Save to the Library and select in the current Space
   cockpit-cli tags --help        List, add or remove tags of the current Space
@@ -140,6 +142,12 @@ Output is JSON automatically; no --json flag.")]
     /// Resolve configured artifact-to-project routing without guessing focus.
     #[command(after_long_help = cli_orchestration::ROUTE_HELP)]
     Route(cli_orchestration::RouteArgs),
+    /// Inspect live projects, Spaces, agents and tasks.
+    #[command(after_long_help = cli_orchestration::WHERE_HELP)]
+    Where(cli_orchestration::WhereArgs),
+    /// Send an instruction or prompt to an agent.
+    #[command(after_long_help = cli_orchestration::AGENT_HELP)]
+    Agent(cli_orchestration::AgentArgs),
     /// Read and edit durable Space Notes outside repositories and the Library.
     #[command(after_long_help = notes_cli::NOTES_HELP)]
     Notes(notes_cli::NotesArgs),
@@ -579,7 +587,7 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
         Command::Contain(_) => unreachable!("contain is a launch-only exec helper"),
         Command::AgentExec(_) => unreachable!("agent-exec is a launch-only waiting exec helper"),
         Command::Context(args) => run_context(args).await,
-        Command::Orchestration(_) | Command::Task(_) | Command::Run(_) | Command::Inbox(_) | Command::Route(_) =>
+        Command::Orchestration(_) | Command::Task(_) | Command::Run(_) | Command::Inbox(_) | Command::Route(_) | Command::Where(_) | Command::Agent(_) =>
             unreachable!("orchestration commands preserve their structured error contract"),
     }
 }
@@ -1180,6 +1188,8 @@ async fn main() -> ExitCode {
         Command::Run(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Inbox(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Route(args) => args.run().await.map(|()| 0).map_err(CliError::from),
+        Command::Where(args) => args.run().await.map(|()| 0).map_err(CliError::from),
+        Command::Agent(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Notes(args) => return ExitCode::from(notes_cli::run(args).await),
         Command::Tags(args) => return ExitCode::from(tags_cli::run(args).await),
         Command::Skills(args) => return ExitCode::from(skills_cli::run(args).await),

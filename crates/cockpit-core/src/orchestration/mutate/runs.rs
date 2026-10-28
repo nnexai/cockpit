@@ -9,57 +9,13 @@ pub(in crate::orchestration) fn supervisor_start(
 ) -> Result<Applied, InspectionError> {
     use super::super::store::DurableOperationKind;
     let OrchestrationAction::SupervisorStart {
-        operation_id, mode, target, label, selected_root_id, expected_project_key,
+        operation_id, target: staging_target, label, selected_root_id,
     } = &action else { unreachable!() };
     operator(ctx.actor)?;
     if let Some(result) = super::resume::replay(ctx, operation_id, DurableOperationKind::SupervisorStart, &action)? {
         return Ok(Applied::Document(result));
     }
-    let mut resolved_project = ctx.resolved.and_then(|r| r.project.clone());
-    if target.is_some() && resolved_project.is_none() {
-        return Err(error("project_identity_unavailable", "Start requires a host-resolved project identity"));
-    }
-    if expected_project_key.as_ref().is_some_and(|key| resolved_project.as_ref().is_none_or(|p| &p.key != key)) {
-        return Err(error("project_identity_conflict", "The focused project changed before Start"));
-    }
-    if let Some(checkout) = ctx.resolved.and_then(|r| r.checkout.as_ref()) {
-        project_identity::revalidate_checkout(checkout)?;
-    }
-    if let Some(checkout) = ctx.resolved.and_then(|r| r.reselected_checkout.as_ref()) {
-        project_identity::revalidate_checkout(checkout)?;
-        let index = selected_root_id.as_deref().map(|run_id| scoped_index(ctx.state, ctx.session_id, run_id)).transpose()?
-            .ok_or_else(|| error("checkout_reselection_unavailable", "Re-selection requires an explicitly selected root"))?;
-        let run = &ctx.state.runs[index];
-        if *mode != SupervisorStartMode::ReuseOrResume || !root_checkout_reselection_pending(run)
-            || !matches!(target, Some(DispatchTarget::ExistingSpace { .. })) {
-            return Err(error("checkout_reselection_unavailable", "Only a claim-free root waiting on a changed checkout can be re-selected"));
-        }
-        if resolved_project.as_ref().map(|project| &project.key) != run.project.as_ref().map(|project| &project.key) {
-            return Err(error("project_identity_conflict", "Re-selection must retain the root project"));
-        }
-        if let Some(DispatchTarget::ExistingSpace { workspace_id }) = target
-            && resolved_project.as_ref().and_then(|project| project.source_workspace_id.as_ref()) != Some(workspace_id) {
-            return Err(error("checkout_reselection_space_mismatch", "Re-selection must originate in the root's retained Space"));
-        }
-    }
-    if *mode == SupervisorStartMode::ReuseOrResume {
-        if let Some(workspace_id) = resolved_project.as_ref().and_then(|p| p.source_workspace_id.as_deref()) {
-            let unresolved = ctx.state.runs.iter().any(|run| run.session_id == ctx.session_id
-                && run.parent_run_id.is_none() && run.stage != RunStage::Closed
-                && matches!(run.kind, RunKind::Supervisor | RunKind::Adopted) && run.project.is_none()
-                && (run.attachment.as_ref().and_then(|a| a.location.as_ref()).is_some_and(|l| l.workspace_id == workspace_id)
-                    || run.setup.as_ref().and_then(|s| s.project_workspace_id.as_deref()) == Some(workspace_id)
-                    || match run.target.as_ref() {
-                        Some(DispatchTarget::ExistingSpace { workspace_id: source })
-                        | Some(DispatchTarget::SpaceWorktree { workspace_id: source, .. }) => source == workspace_id,
-                        _ => false,
-                    }));
-            if unresolved {
-                return Err(error("project_identity_unavailable", "An associated open root requires owner project reconciliation before reuse"));
-            }
-        }
-        if let Some(project) = &resolved_project
-            && let Some(index) = preferred_project_root(&ctx.state.runs, ctx.session_id, &project.key, selected_root_id.as_deref()) {
+    if let Some(index) = preferred_liaison(&ctx.state.runs, ctx.session_id, selected_root_id.as_deref()) {
                 let run = &ctx.state.runs[index];
                 let root_id = run.run_id.clone();
                 let observed_connected = has_current_binding(ctx.state, run)
@@ -88,7 +44,7 @@ pub(in crate::orchestration) fn supervisor_start(
                 } else {
                     let resume_id = id();
                     let epoch = ctx.state.runs[index].attachment.as_ref().map(|a| a.epoch);
-                    super::resume::resume_from_start(ctx, OrchestrationAction::RunResume { run_id: root_id.clone(), operation_id: resume_id.clone(), expected_attachment_epoch: epoch, confirmed_stopped_attachment_id: None })?;
+                    super::resume::resume(ctx, OrchestrationAction::RunResume { run_id: root_id.clone(), operation_id: resume_id.clone(), expected_attachment_epoch: epoch, confirmed_stopped_attachment_id: None })?;
                     let effective = ctx.state.runs[index].resume.as_ref().map(|r| r.operation_id.clone()).unwrap_or(resume_id);
                     (SupervisorStartOutcome::Resuming, Some(effective))
                 };
@@ -98,31 +54,27 @@ pub(in crate::orchestration) fn supervisor_start(
                 super::resume::record(ctx, operation_id.clone(), DurableOperationKind::SupervisorStart, &action,
                     root_id, result.clone(), Vec::new())?;
                 return Ok(Applied::Machine(result));
-            }
     }
     let run_id = id();
     let label = label.clone().unwrap_or_else(|| "Supervisor".into());
     bounded(&label, 256)?;
-    let mut checkout = ctx.resolved.and_then(|r| r.checkout.clone());
-    let target = match target.clone() {
-        Some(target) => unfocused(target),
-        None => {
-            let path = prepare_project_root(&ctx.service.store.base().join("supervisors").join(&run_id))?;
-            let (project, directory) = project_identity::resolve_owned_directory(&path)?;
-            resolved_project = Some(project);
-            checkout = Some(directory);
-            DispatchTarget::Setup { request: WorkspaceSetupRequest::Open {
-                path: path.to_string_lossy().into_owned(), label: Some(label.clone()), task_name: None, focus: false,
-            }}
-        }
-    };
+    let path = prepare_project_root(&ctx.service.store.base().join("supervisors").join(&run_id))?;
+    let (project, directory) = project_identity::resolve_owned_directory(&path)?;
+    let target = DispatchTarget::Setup { request: WorkspaceSetupRequest::Open {
+        path: path.to_string_lossy().into_owned(), label: Some(label.clone()), task_name: None, focus: false,
+    }};
     let mut run = new_run(&run_id, ctx.session_id, RunKind::Supervisor, label, &run_id, RunLineage::default(), 1);
     run.launch_config = ctx.service.launch_config.clone();
     run.target = Some(target);
-    run.project = resolved_project;
-    run.checkout = checkout;
+    run.project = Some(project);
+    run.checkout = Some(directory);
     run.stage = RunStage::Starting;
-    run.dispatch = Some(dispatch(DispatchStep::SetupPending));
+    let mut dispatch_state = dispatch(DispatchStep::SetupPending);
+    dispatch_state.staging_workspace_id = match staging_target {
+        Some(DispatchTarget::ExistingSpace { workspace_id } | DispatchTarget::SpaceWorktree { workspace_id, .. }) => Some(workspace_id.clone()),
+        _ => None,
+    };
+    run.dispatch = Some(dispatch_state);
     run.brief = supervisor_guidance().into();
     ctx.state.runs.push(run);
     let result = OrchestrationActionResult::SupervisorStarted { start: SupervisorStartResult {
@@ -581,7 +533,7 @@ fn unfocused(mut target: DispatchTarget) -> DispatchTarget {
     target
 }
 
-fn schedule_principal_current(state: &OrchestrationState, root: &Run, schedule: &TaskSchedule) -> bool {
+pub(in crate::orchestration) fn schedule_principal_current(state: &OrchestrationState, root: &Run, schedule: &TaskSchedule) -> bool {
     let operator_schedule = schedule.principal_key == "operator";
     root.stage == RunStage::Active && (operator_schedule || has_current_binding(state, root))
         && state.operations.iter().any(|receipt| receipt.operation_id == schedule.operation_id
@@ -592,13 +544,31 @@ fn schedule_principal_current(state: &OrchestrationState, root: &Run, schedule: 
             && matches!(&receipt.result, Some(OrchestrationActionResult::TaskScheduled { .. })))
 }
 
-fn schedule_ready(state: &OrchestrationState, root: &Run, task: &Task,
-    graph: &dependencies::DependencyGraph<'_>, max_parallel: u32) -> bool {
+pub(in crate::orchestration) fn project_capacity_full(state: &OrchestrationState, session_id: &str, project_key: &str, max_parallel: u32) -> bool {
+    state.runs.iter().filter(|run| run.session_id == session_id && run.kind == RunKind::Worker
+        && run.stage != RunStage::Closed && run.project.as_ref().is_some_and(|project| project.key == project_key))
+        .count() >= max_parallel as usize
+}
+
+pub(in crate::orchestration) fn schedule_ready(state: &OrchestrationState, root: &Run, task: &Task,
+    graph: &dependencies::DependencyGraph<'_>) -> bool {
     !task.checked && matches!(graph.evaluate(task).state, TaskDependencyState::None | TaskDependencyState::Satisfied)
         && !state.runs.iter().any(|run| run.root_id == root.run_id
             && run.task_id.as_deref() == Some(task.task_id.as_str()) && run.stage != RunStage::Closed)
-        && state.runs.iter().filter(|run| run.root_id == root.run_id && run.kind == RunKind::Worker
-            && run.stage != RunStage::Closed).count() < max_parallel as usize
+}
+
+pub(in crate::orchestration) fn scheduled_project_key<'a>(
+    state: &'a OrchestrationState, root: &'a Run, task: &Task, schedule: &TaskSchedule,
+) -> Option<&'a str> {
+    if schedule.target.is_none() {
+        root.project.as_ref().map(|project| project.key.as_str())
+    } else {
+        state.runs.iter().filter(|run| run.root_id == root.run_id
+            && run.task_id.as_deref() == Some(task.task_id.as_str())
+            && run.created_at >= schedule.scheduled_at)
+            .max_by_key(|run| run.attempt)
+            .and_then(|run| run.project.as_ref().map(|project| project.key.as_str()))
+    }
 }
 pub(in crate::orchestration) fn lone_share_allowed(state: &OrchestrationState, root_id: &str, checkout: &CheckoutIdentity) -> bool {
     !state.runs.iter().any(|run| run.root_id == root_id && run.kind == RunKind::Worker && run.stage != RunStage::Closed)
@@ -648,7 +618,10 @@ impl OrchestrationService {
                 let Some(schedule) = &ownership.schedule else { continue };
                 let Ok(task) = document.task(&ownership.task_id) else { continue };
                 if !schedule_principal_current(&state, root, schedule)
-                    || !schedule_ready(&state, root, task, &graph, max_parallel.min(root.launch_config.max_parallel)) { continue; }
+                    || !schedule_ready(&state, root, task, &graph) { continue; }
+                let known_key = scheduled_project_key(&state, root, task, schedule);
+                if known_key.is_some_and(|key| project_capacity_full(&state, &root.session_id, key,
+                    max_parallel.min(root.launch_config.max_parallel))) { continue; }
                 candidates.push(ScheduleCandidate { session_id: root.session_id.clone(), root_id: root.run_id.clone(),
                     task_id: task.task_id.clone(), schedule: schedule.clone(), next_attempt: next_attempt(&state, &root.run_id, &task.task_id)? });
             }
@@ -682,8 +655,10 @@ impl OrchestrationService {
         let document = locked.tasks(&candidate.root_id)?;
         let task = document.task(&candidate.task_id)?;
         let graph = dependencies::DependencyGraph::new(&document.tasks);
-        if !schedule_ready(&state, root, task, &graph, root.launch_config.max_parallel)
-            || next_attempt(&state, &candidate.root_id, &candidate.task_id)? != candidate.next_attempt { return Ok(None); }
+        if !schedule_ready(&state, root, task, &graph)
+            || next_attempt(&state, &candidate.root_id, &candidate.task_id)? != candidate.next_attempt
+            || resolved.project.as_ref().is_some_and(|project| project_capacity_full(
+                &state, &candidate.session_id, &project.key, root.launch_config.max_parallel)) { return Ok(None); }
         if resolved.shared_by_default {
             let valid_source = match (&resolved.normalized_target, &schedule.target, &resolved.project, &resolved.checkout) {
                 (Some(DispatchTarget::ExistingSpace { workspace_id }), target, Some(project), Some(checkout)) => {
@@ -727,12 +702,14 @@ impl OrchestrationService {
             (None, None) => {
                 let project = root.project.as_ref()
                     .ok_or_else(|| error("schedule_source_unresolved", "Default placement requires the liaison's original project"))?;
-                let source_workspace_id = project.source_workspace_id.clone()
-                    .ok_or_else(|| error("schedule_source_unresolved", "Default placement requires the liaison's actual project Space"))?;
                 match &project.source {
-                    ProjectSource::Git { .. } => DispatchTarget::SpaceWorktree { workspace_id: source_workspace_id, branch: None, base_ref: None },
+                    ProjectSource::Git { .. } => {
+                        let source_workspace_id = project.source_workspace_id.clone()
+                            .ok_or_else(|| error("schedule_source_unresolved", "Default placement requires the liaison's actual project Space"))?;
+                        DispatchTarget::SpaceWorktree { workspace_id: source_workspace_id, branch: None, base_ref: None }
+                    }
                     ProjectSource::Directory { root } => DispatchTarget::OwnedAttemptDirectory {
-                        source_root: root.clone(), source_workspace_id: Some(source_workspace_id),
+                        source_root: root.clone(), source_workspace_id: project.source_workspace_id.clone(),
                     },
                 }
             },
@@ -767,10 +744,6 @@ impl OrchestrationService {
             candidate.root_id.clone(), OrchestrationActionResult::WorkerStarted { start: start.clone() }, provenance)?;
         let receipt = ctx.state.operations.last_mut().expect("recorded scheduled attempt");
         receipt.principal_key = schedule.principal_key;
-        messages::append(ctx.state, messages::AppendMessage { from: ActorRef::Dispatcher, to_run_id: &candidate.root_id,
-            message_id: &format!("scheduled-start-{operation_id}"), kind: MessageKind::Observation,
-            text: "Scheduled task dependencies are satisfied; its authorized attempt is queued.",
-            in_reply_to: None, report: None, stale: false, escalated_from: None })?;
         let revision = locked.save(ctx.state)?;
         self.revision.send_replace(revision);
         Ok(Some(start))
@@ -862,5 +835,57 @@ impl OrchestrationService {
         let task = document.task(task_id)?;
         dependencies::DependencyGraph::new(&document.tasks).require(task)?;
         materialized_inputs(&input_snapshot(&state, &locked, &expected.session_id, &expected.root_id, task_id)?, project, facts)
+    }
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+    use cockpit_protocol::orchestration::ProjectSource;
+
+    fn run(id: &str, session: &str, root: &str, project: Option<&str>, kind: RunKind, stage: RunStage) -> Run {
+        let mut run = new_run(id, session, kind, id.into(), root, RunLineage::default(), 1);
+        run.stage = stage;
+        run.project = project.map(|key| ProjectIdentity {
+            key: key.into(),
+            source: ProjectSource::Directory { root: key.into() },
+            repository_id: None,
+            source_workspace_id: None,
+        });
+        run
+    }
+
+    #[test]
+    fn capacity_counts_non_closed_workers_across_roots_in_the_session() {
+        let stages = [RunStage::Queued, RunStage::Starting, RunStage::Working, RunStage::Reported, RunStage::Active];
+        let runs = stages.into_iter().enumerate().map(|(index, stage)| {
+            run(&format!("worker-{index}"), "session", if index % 2 == 0 { "root-a" } else { "root-b" },
+                Some("project"), RunKind::Worker, stage)
+        }).collect();
+        let state = OrchestrationState { runs, ..Default::default() };
+
+        assert!(project_capacity_full(&state, "session", "project", 5));
+        assert!(!project_capacity_full(&state, "session", "project", 6));
+    }
+
+    #[test]
+    fn capacity_excludes_other_sessions_projects_closed_and_non_workers() {
+        let state = OrchestrationState {
+            runs: vec![
+                run("matching", "session", "root-a", Some("project"), RunKind::Worker, RunStage::Working),
+                run("other-session", "other", "root-b", Some("project"), RunKind::Worker, RunStage::Working),
+                run("other-project", "session", "root-b", Some("other"), RunKind::Worker, RunStage::Working),
+                run("no-project", "session", "root-b", None, RunKind::Worker, RunStage::Working),
+                run("closed", "session", "root-b", Some("project"), RunKind::Worker, RunStage::Closed),
+                run("supervisor", "session", "root-b", Some("project"), RunKind::Supervisor, RunStage::Active),
+                run("adopted", "session", "root-b", Some("project"), RunKind::Adopted, RunStage::Active),
+            ],
+            ..Default::default()
+        };
+
+        assert!(project_capacity_full(&state, "session", "project", 1));
+        assert!(!project_capacity_full(&state, "session", "project", 2));
+        assert!(!project_capacity_full(&state, "missing-session", "project", 1));
+        assert!(!project_capacity_full(&state, "session", "missing-project", 1));
     }
 }
