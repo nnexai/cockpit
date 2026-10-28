@@ -2580,19 +2580,27 @@ async fn path_schedule_fixture(mode: &str) -> (ReviewFixture, Arc<Dispatcher>) {
     let mut document = String::new();
     let locked = fixture.service.store.lock().unwrap();
     let mut state = locked.read().unwrap();
+    if mode == "default" || mode == "explicit_worktree" {
+        let mut source_project = project.clone();
+        source_project.source_workspace_id = Some("source-space".into());
+        state.runs.iter_mut().find(|run| run.run_id == fixture.run.run_id).unwrap().project = Some(source_project);
+    }
+    state.runs.iter_mut().find(|run| run.run_id == fixture.run.run_id).unwrap().launch_config.max_parallel = 4;
     state.credentials.push(super::super::credentials::test_job_credential(&fixture.run, super::super::JobRole::Root).0);
     for label in ["First independent task", "Second independent task"] {
         let task_id = uuid::Uuid::new_v4().to_string();
         document.push_str(&format!("- [ ] {label} <!-- cockpit-task: {task_id} -->\n"));
         let operation_id = uuid::Uuid::new_v4().to_string();
         let schedule = TaskSchedule { operation_id: operation_id.clone(), principal_key: "root-source-fixture".into(),
-            target: Some(if mode == "explicit_space" {
+            target: if mode == "default" { None } else { Some(if mode == "explicit_space" {
                 DispatchTarget::ExistingSpace { workspace_id: "source-space".into() }
+            } else if mode == "explicit_worktree" {
+                DispatchTarget::SpaceWorktree { workspace_id: "source-space".into(), branch: None, base_ref: None }
             } else {
                 DispatchTarget::Setup { request: WorkspaceSetupRequest::Open {
                     path: checkout.to_string_lossy().into_owned(), label: None, task_name: None, focus: false,
                 } }
-            }), brief: "Execute independently".into(), cleanup_policy: cockpit_protocol::orchestration::WorkerCleanupPolicy::OwnedWhenSafe,
+            }) }, brief: "Execute independently".into(), cleanup_policy: cockpit_protocol::orchestration::WorkerCleanupPolicy::OwnedWhenSafe,
             label: None, scheduled_at: now() };
         state.operations.push(DurableOperationRecord { operation_id: operation_id.clone(),
             actor_run_id: Some(fixture.run.run_id.clone()), principal_key: schedule.principal_key.clone(),
@@ -2612,39 +2620,155 @@ async fn path_schedule_fixture(mode: &str) -> (ReviewFixture, Arc<Dispatcher>) {
 }
 
 #[tokio::test]
-async fn path_to_verified_git_space_schedules_two_isolated_attempts_with_original_source_context() {
-    let (fixture, dispatcher) = path_schedule_fixture("git").await;
-    let candidates = fixture.service.schedule_candidates(4).unwrap();
-    assert_eq!(candidates.len(), 2);
-    let mut checkouts = Vec::new();
-    let mut branches = Vec::new();
-    for candidate in candidates {
-        let resolved = dispatcher.resolve_schedule_target(&candidate).await.unwrap();
-        assert!(resolved.checkout.is_none(), "The borrowed source cannot become the worker's writable checkout");
-        assert_eq!(resolved.project.as_ref().unwrap().source_workspace_id.as_deref(), Some("source-space"));
-        let start = fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap();
-        let run = fixture.service.run_for_review(&candidate.session_id, &start.run_id).unwrap();
-        assert!(matches!(&run.target, Some(DispatchTarget::SpaceWorktree { workspace_id, .. }) if workspace_id == "source-space"));
-        dispatcher.plan(&run).await.unwrap();
-        let planned = fixture.service.run_for_review(&candidate.session_id, &start.run_id).unwrap();
-        assert_eq!(planned.dispatch.as_ref().unwrap().step, DispatchStep::SetupPending);
-        let setup = planned.setup.unwrap();
-        assert_eq!(setup.project_workspace_id.as_deref(), Some("source-space"));
-        assert_eq!(setup.ownership, Some(WorkspaceCheckoutOwnership::OwnedWorktree));
-        assert!(setup.checkout_path.starts_with(&fixture.config.worktree_root));
-        assert_ne!(setup.checkout_path, fixture.root.join("repositories/primary").to_string_lossy());
-        assert!(planned.checkout.is_none(), "Setup planning has not claimed or modified the borrowed source");
-        checkouts.push(setup.checkout_path);
-        branches.push(setup.branch.unwrap());
-    }
-    assert_ne!(checkouts[0], checkouts[1]);
-    assert_ne!(branches[0], branches[1]);
-    let state = fixture.service.store.lock().unwrap().read().unwrap();
-    assert!(state.task_ownership.iter().all(|record| matches!(&record.schedule.as_ref().unwrap().target,
-        Some(DispatchTarget::Setup { request: WorkspaceSetupRequest::Open { .. } }))),
-        "Normalization applies only to this freshly verified attempt, not the durable authorization");
+async fn existing_space_root_plan_preserves_explicit_source_through_launch_reservation() {
+    let (fixture, dispatcher) = path_schedule_fixture("default").await;
+    fixture.change(|run| {
+        run.stage = RunStage::Starting;
+        run.target = Some(DispatchTarget::ExistingSpace { workspace_id: "source-space".into() });
+        run.attachment = None;
+        run.setup = None;
+        run.dispatch = Some(crate::orchestration::dispatch(DispatchStep::SetupPending));
+    });
+    let root = fixture.current().1;
+    dispatcher.plan(&root).await.unwrap();
+    let planned = fixture.current().1;
+    let setup = planned.setup.as_ref().unwrap();
+    assert_eq!(setup.project_workspace_id.as_deref(), Some("source-space"));
+    let (project, checkout) = super::super::project_identity::resolve_directory(
+        std::path::Path::new(&setup.checkout_path), setup.repository_id.clone(), setup.project_workspace_id.clone(),
+    ).await.unwrap();
+    let (reserved, _) = fixture.service.reserve_dispatch_launch(&planned, project, checkout, None, None).unwrap();
+    assert_eq!(reserved.project.unwrap().source_workspace_id.as_deref(), Some("source-space"));
 }
 
+#[tokio::test]
+async fn lone_source_is_shared_and_stale_second_resolution_retries_isolated() {
+    for mode in ["git", "default"] {
+        let (fixture, dispatcher) = path_schedule_fixture(mode).await;
+        let candidates = fixture.service.schedule_candidates(4).unwrap();
+        assert_eq!(candidates.len(), 2);
+        let first = dispatcher.resolve_schedule_target(&candidates[0]).await.unwrap();
+        let stale = dispatcher.resolve_schedule_target(&candidates[1]).await.unwrap();
+        assert!(first.shared_by_default && stale.shared_by_default);
+        assert!(first.checkout.is_some());
+        assert!(matches!(&first.normalized_target, Some(DispatchTarget::ExistingSpace { workspace_id }) if workspace_id == "source-space"));
+        let start = fixture.service.scheduled_start(&candidates[0], &first).unwrap().unwrap();
+        let run = fixture.service.run_for_review(&candidates[0].session_id, &start.run_id).unwrap();
+        assert!(matches!(&run.target, Some(DispatchTarget::ExistingSpace { workspace_id }) if workspace_id == "source-space"));
+        let before = fixture.service.store.lock().unwrap().read().unwrap().runs.len();
+        assert_eq!(fixture.service.scheduled_start(&candidates[1], &stale).unwrap_err().code, "schedule_placement_changed");
+        assert_eq!(fixture.service.store.lock().unwrap().read().unwrap().runs.len(), before);
+        let isolated = dispatcher.resolve_schedule_target(&candidates[1]).await.unwrap();
+        assert!(!isolated.shared_by_default);
+        let second = fixture.service.scheduled_start(&candidates[1], &isolated).unwrap().unwrap();
+        let run = fixture.service.run_for_review(&candidates[1].session_id, &second.run_id).unwrap();
+        assert!(matches!(&run.target, Some(DispatchTarget::SpaceWorktree { workspace_id, .. }) if workspace_id == "source-space"));
+        dispatcher.plan(&run).await.unwrap();
+        let planned = fixture.service.run_for_review(&candidates[1].session_id, &second.run_id).unwrap();
+        assert_eq!(planned.setup.unwrap().ownership, Some(WorkspaceCheckoutOwnership::OwnedWorktree));
+    }
+}
+
+#[tokio::test]
+async fn dirty_and_explicit_placements_do_not_implicitly_share() {
+    for mode in ["git", "default", "explicit_worktree", "explicit_space"] {
+        let (fixture, dispatcher) = path_schedule_fixture(mode).await;
+        if mode == "git" || mode == "default" {
+            std::fs::write(fixture.root.join("repositories/primary/untracked"), "user work").unwrap();
+        }
+        let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+        let resolved = dispatcher.resolve_schedule_target(&candidate).await.unwrap();
+        assert!(!resolved.shared_by_default);
+        let start = fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap();
+        let run = fixture.service.run_for_review(&candidate.session_id, &start.run_id).unwrap();
+        if mode == "explicit_space" {
+            assert!(matches!(run.target, Some(DispatchTarget::ExistingSpace { .. })));
+        } else {
+            assert!(matches!(run.target, Some(DispatchTarget::SpaceWorktree { .. })));
+        }
+    }
+}
+
+#[tokio::test]
+async fn protected_claim_forces_isolation_and_claim_race_rejects_publication() {
+    use super::super::claims::{CheckoutClaim, ClaimState};
+    for claim_state in [ClaimState::Reserved, ClaimState::Held, ClaimState::Quiescing, ClaimState::Conflict, ClaimState::Released] {
+        let (fixture, dispatcher) = path_schedule_fixture("default").await;
+        let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+        let initially_shared = dispatcher.resolve_schedule_target(&candidate).await.unwrap();
+        let checkout = initially_shared.checkout.clone().unwrap();
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.checkout_claims.push(CheckoutClaim { claim_id: uuid::Uuid::new_v4().to_string(), checkout,
+            revision: 1, state: claim_state, holder: None, transition_operation_id: None });
+        locked.save(&mut state).unwrap();
+        drop(locked);
+        if claim_state != ClaimState::Released {
+            let before = fixture.service.store.lock().unwrap().read().unwrap().runs.len();
+            assert_eq!(fixture.service.scheduled_start(&candidate, &initially_shared).unwrap_err().code, "schedule_placement_changed");
+            assert_eq!(fixture.service.store.lock().unwrap().read().unwrap().runs.len(), before);
+        }
+        let current = dispatcher.resolve_schedule_target(&candidate).await.unwrap();
+        assert_eq!(current.shared_by_default, claim_state == ClaimState::Released);
+        if claim_state != ClaimState::Released {
+            let start = fixture.service.scheduled_start(&candidate, &current).unwrap().unwrap();
+            let run = fixture.service.run_for_review(&candidate.session_id, &start.run_id).unwrap();
+            assert!(matches!(run.target, Some(DispatchTarget::SpaceWorktree { .. })));
+        }
+    }
+}
+
+#[tokio::test]
+async fn changed_checkout_identity_rejects_stale_shared_resolution() {
+    let (fixture, dispatcher) = path_schedule_fixture("default").await;
+    let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    let mut resolved = dispatcher.resolve_schedule_target(&candidate).await.unwrap();
+    resolved.checkout.as_mut().unwrap().directory_identity.inode = "stale".into();
+    let before = fixture.service.store.lock().unwrap().read().unwrap().runs.len();
+    assert_eq!(fixture.service.scheduled_start(&candidate, &resolved).unwrap_err().code, "schedule_placement_changed");
+    assert_eq!(fixture.service.store.lock().unwrap().read().unwrap().runs.len(), before);
+}
+
+
+#[tokio::test]
+async fn dirty_after_resolution_is_rejected_under_publication_lock() {
+    let (fixture, dispatcher) = path_schedule_fixture("default").await;
+    let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    let resolved = dispatcher.resolve_schedule_target(&candidate).await.unwrap();
+    assert!(resolved.shared_by_default);
+    std::fs::write(fixture.root.join("repositories/primary/user-file"), "work").unwrap();
+    let before = fixture.service.store.lock().unwrap().read().unwrap().runs.len();
+    assert_eq!(fixture.service.scheduled_start(&candidate, &resolved).unwrap_err().code, "schedule_placement_changed");
+    assert_eq!(fixture.service.store.lock().unwrap().read().unwrap().runs.len(), before);
+    let retry = dispatcher.resolve_schedule_target(&candidate).await.unwrap();
+    assert!(!retry.shared_by_default);
+}
+
+#[tokio::test]
+async fn implicit_shared_launch_gate_rechecks_cleanliness_without_dependencies_and_after_schedule_removal() {
+    for mode in ["default", "explicit_space"] {
+        let (fixture, dispatcher) = path_schedule_fixture(mode).await;
+        let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+        let resolved = dispatcher.resolve_schedule_target(&candidate).await.unwrap();
+        let checkout = resolved.checkout.clone().unwrap();
+        let project = resolved.project.clone().unwrap();
+        let start = fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap();
+        let run = fixture.service.run_for_review(&candidate.session_id, &start.run_id).unwrap();
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.task_ownership.iter_mut().find(|owner| owner.task_id == candidate.task_id).unwrap().schedule = None;
+        locked.save(&mut state).unwrap();
+        drop(locked);
+        assert!(dispatcher.actual_launch_input_facts(&run, &project, &checkout).await.is_ok());
+        std::fs::write(fixture.root.join("repositories/primary/user-file"), "work").unwrap();
+        let result = dispatcher.actual_launch_input_facts(&run, &project, &checkout).await;
+        if mode == "default" {
+            assert_eq!(result.unwrap_err().code, "schedule_shared_checkout_dirty");
+        } else {
+            assert!(result.is_ok(), "explicit borrowing retains its existing semantics");
+        }
+    }
+}
 #[tokio::test]
 async fn path_schedule_preserves_directory_ambiguous_and_unverified_git_space_boundaries() {
     for mode in ["directory", "ambiguous", "foreign_inventory", "explicit_space"] {

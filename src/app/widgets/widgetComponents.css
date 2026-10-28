@@ -1,0 +1,133 @@
+/* Cockpit widget components (cw-*). Canonical copy; the host injects it after the base style.
+ * Scoping: every selector starts with .cw or :where(.cw); there are no html, body, :root or
+ * bare .cw-x selectors, so a document without .cw is unchanged. Component rules use
+ * :where(.cw) (specificity 0), so an author `.cw-title { ... }` or `.cw .cw-title { ... }`
+ * placed later overrides them. Spacing uses grid gap on .cw, not margins, so nothing
+ * fights component margin resets.
+ * No @import, url(), fonts, animation or script. Dark by default; light is opt-in via
+ * <main class="cw" data-cw-theme="light">.
+ * Coupling: .cw reclaims the host base body padding (16px 32px 40px, widgetDocument.ts);
+ * keep the negative margin below in sync with it. */
+
+.cw {
+  --cw-bg: #0c1016; --cw-surface: #161d27; --cw-raised: #1b2431;
+  --cw-border: #2b3543; --cw-control: #5a6a80;
+  --cw-text: #cdd6f4; --cw-text-2: #bac2de; --cw-muted: #a6adc8;
+  --cw-accent: #89b4fa; --cw-focus: #89b4fa;
+  --cw-ok: #a6e3a1; --cw-warn: #f9e2af; --cw-bad: #f38ba8; --cw-info: #89b4fa;
+  --cw-font: "IBM Plex Sans", "Noto Sans", sans-serif;
+  --cw-mono: "IosevkaTerm Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace;
+  container-type: inline-size;
+  display: grid; align-content: start; gap: 16px;
+  min-height: 100vh; margin: -16px -32px -40px;
+  padding: 16px clamp(12px, 3vw, 20px) 32px;
+  background: var(--cw-bg); color: var(--cw-text);
+  font: 14px/1.5 var(--cw-font); overflow-wrap: anywhere;
+}
+.cw[data-cw-theme="light"] {
+  color-scheme: light;
+  --cw-bg: #f7f8fa; --cw-surface: #ffffff; --cw-raised: #eef1f5;
+  --cw-border: #d5dbe4; --cw-control: #7b8698;
+  --cw-text: #1f2633; --cw-text-2: #3a4558; --cw-muted: #566174;
+  --cw-accent: #1f5fbf; --cw-focus: #1f5fbf;
+  --cw-ok: #1a7f37; --cw-warn: #9a6700; --cw-bad: #c0243f; --cw-info: #1f5fbf;
+}
+:where(.cw), :where(.cw) *, :where(.cw) *::before, :where(.cw) *::after { box-sizing: border-box; }
+:where(.cw) > * { min-width: 0; max-width: 56rem; }
+:where(.cw) :is(a, button, summary, [tabindex]):focus-visible { outline: 2px solid var(--cw-focus); outline-offset: 2px; border-radius: 2px; }
+
+/* Title block: kicker -> title -> chips */
+:where(.cw) .cw-head { display: grid; gap: 6px; }
+:where(.cw) .cw-kicker { margin: 0; color: var(--cw-muted); font: 600 .6875rem/1.4 var(--cw-mono); }
+:where(.cw) .cw-title { margin: 0; color: var(--cw-text); font-size: 1.1875rem; font-weight: 600; line-height: 1.3; text-wrap: balance; }
+:where(.cw) .cw-meta { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+:where(.cw) .cw-crumbs { display: flex; flex-wrap: wrap; gap: 0 6px; margin: 0; padding: 0; list-style: none; color: var(--cw-muted); font-size: .75rem; }
+:where(.cw) .cw-crumbs > li + li::before { content: "\203A"; margin-right: 6px; }
+
+/* Tone: text is always present; colour and shape are additive. Works on chip and callout. */
+:where(.cw) .cw-ok { --cw-tone: var(--cw-ok); --cw-shape: circle(50%); }
+:where(.cw) .cw-warn { --cw-tone: var(--cw-warn); --cw-shape: polygon(50% 0, 100% 100%, 0 100%); }
+:where(.cw) .cw-bad { --cw-tone: var(--cw-bad); --cw-shape: inset(0); }
+:where(.cw) .cw-info { --cw-tone: var(--cw-info); --cw-shape: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+:where(.cw) .cw-dim { --cw-tone: var(--cw-muted); --cw-shape: circle(50%); }
+:where(.cw) .cw-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow: hidden; padding: 1px 8px; border: 1px solid color-mix(in srgb, var(--cw-tone, var(--cw-muted)) 45%, var(--cw-border)); border-radius: 999px; background: color-mix(in srgb, var(--cw-tone, var(--cw-muted)) 12%, transparent); color: var(--cw-text); font-size: .75rem; line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
+:where(.cw) .cw-chip::before { content: ""; flex: none; width: 7px; height: 7px; background: var(--cw-tone, var(--cw-muted)); clip-path: var(--cw-shape, circle(50%)); }
+
+/* Facts: one column narrow, label/value pairs wide, two pairs per row wider. */
+:where(.cw) .cw-facts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px 16px; margin-block: 0; padding: 10px 0; border-block: 1px solid var(--cw-border); font-size: .8125rem; }
+:where(.cw) .cw-facts dt { margin-top: 6px; color: var(--cw-muted); font-size: .6875rem; }
+:where(.cw) .cw-facts dt:first-child { margin-top: 0; }
+:where(.cw) .cw-facts dd { min-width: 0; margin: 0; }
+@container (min-width: 30rem) {
+  :where(.cw) .cw-facts { grid-template-columns: max-content minmax(0, 1fr); }
+  :where(.cw) .cw-facts dt { margin-top: 0; font-size: inherit; }
+}
+@container (min-width: 44rem) {
+  :where(.cw) .cw-facts { grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); }
+}
+
+/* Groups */
+:where(.cw) .cw-sec > h2 { margin: 0 0 6px; color: var(--cw-muted); font-size: .75rem; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+:where(.cw) .cw-fold > summary { padding: 4px 0; color: var(--cw-text-2); cursor: pointer; }
+:where(.cw) .cw-toc { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .8125rem; }
+
+/* Prose (Jira description, Confluence page body) */
+:where(.cw) .cw-body { max-width: 72ch; }
+:where(.cw) .cw-body > :first-child { margin-top: 0; }
+:where(.cw) .cw-body > :last-child { margin-bottom: 0; }
+:where(.cw) .cw-body :is(h2, h3, h4) { margin: 1.25em 0 .4em; color: var(--cw-text); font-weight: 600; line-height: 1.3; }
+:where(.cw) .cw-body h2 { font-size: 1rem; }
+:where(.cw) .cw-body h3 { font-size: .9375rem; }
+:where(.cw) .cw-body h4 { color: var(--cw-text-2); font-size: .875rem; }
+:where(.cw) .cw-body :is(p, ul, ol, blockquote, pre) { margin-block: .6em; }
+:where(.cw) .cw-body :is(ul, ol) { padding-left: 1.4em; }
+:where(.cw) .cw-body li + li { margin-top: .2em; }
+:where(.cw) .cw-body blockquote { margin-inline: 0; padding-left: 12px; border-left: 2px solid var(--cw-control); color: var(--cw-text-2); }
+:where(.cw) a, :where(.cw) .cw-link { color: var(--cw-accent); text-underline-offset: 2px; }
+:where(.cw) code, :where(.cw) .cw-code { padding: 0 4px; border-radius: 3px; background: var(--cw-surface); font: .8125em var(--cw-mono); }
+:where(.cw) pre { max-width: 100%; margin: 0; padding: 10px 12px; overflow: auto; border: 1px solid var(--cw-border); border-radius: 4px; background: var(--cw-surface); }
+:where(.cw) pre code { padding: 0; background: none; font-size: .8125rem; }
+:where(.cw) .cw-scroll { max-width: 100%; overflow: auto; }
+:where(.cw) table { border-collapse: collapse; }
+:where(.cw) :is(th, td) { padding: 4px 8px; border: 1px solid var(--cw-border); text-align: left; vertical-align: top; }
+:where(.cw) th { background: var(--cw-surface); color: var(--cw-text-2); font-weight: 600; }
+
+/* Rows (linked issues, child pages, subtasks) */
+:where(.cw) .cw-list { margin: 0; padding: 0; list-style: none; border: 1px solid var(--cw-border); border-radius: 4px; background: var(--cw-surface); }
+:where(.cw) .cw-list > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; padding: 7px 10px; }
+:where(.cw) .cw-list > li + li { border-top: 1px solid var(--cw-border); }
+:where(.cw) .cw-list .cw-grow { flex: 1 1 12rem; min-width: 0; }
+:where(.cw) .cw-key { flex: none; color: var(--cw-muted); font: 600 .75rem var(--cw-mono); }
+
+/* Comment card */
+:where(.cw) .cw-note { border: 1px solid var(--cw-border); border-radius: 4px; background: var(--cw-surface); }
+:where(.cw) .cw-note + .cw-note { margin-top: 8px; }
+:where(.cw) .cw-note > header { display: flex; flex-wrap: wrap; gap: 2px 8px; padding: 6px 10px; border-bottom: 1px solid var(--cw-border); color: var(--cw-muted); font-size: .75rem; }
+:where(.cw) .cw-note > header > b { color: var(--cw-text); font-weight: 600; }
+:where(.cw) .cw-note > :not(header) { margin: 8px 10px; }
+
+/* Callout (Confluence info/note/warning/tip panels, Jira blockers) */
+:where(.cw) .cw-callout { padding: 8px 12px; border-left: 3px solid var(--cw-tone, var(--cw-accent)); border-radius: 0 4px 4px 0; background: color-mix(in srgb, var(--cw-tone, var(--cw-accent)) 9%, transparent); }
+:where(.cw) .cw-callout > :first-child { margin-top: 0; }
+:where(.cw) .cw-callout > :last-child { margin-bottom: 0; }
+
+/* Optional selection buttons (script supplied by the author, see spec) */
+:where(.cw) .cw-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+:where(.cw) .cw-btn { min-height: 28px; padding: 3px 10px; border: 1px solid var(--cw-control); border-radius: 4px; background: var(--cw-surface); color: var(--cw-text); font: inherit; font-size: .8125rem; cursor: pointer; }
+:where(.cw) .cw-btn:hover:not(:disabled) { background: var(--cw-raised); }
+:where(.cw) .cw-btn[aria-pressed="true"] { border-color: var(--cw-accent); background: color-mix(in srgb, var(--cw-accent) 16%, var(--cw-surface)); }
+:where(.cw) .cw-btn:disabled { cursor: default; opacity: .55; }
+:where(.cw) .cw-status { min-height: 1.5em; margin: 0; color: var(--cw-muted); font-size: .75rem; }
+:where(.cw) .cw-status[data-state="error"] { color: var(--cw-bad); }
+
+/* Narrow frames */
+@container (max-width: 30rem) {
+  :where(.cw) .cw-title { font-size: 1.0625rem; }
+  :where(.cw) .cw-chip { white-space: normal; }
+  :where(.cw) .cw-body :is(ul, ol) { padding-left: 1.2em; }
+}
+
+@media (forced-colors: active) {
+  :where(.cw) :is(.cw-chip, .cw-btn, .cw-callout) { border-color: CanvasText; }
+  :where(.cw) .cw-chip::before { background: CanvasText; }
+}

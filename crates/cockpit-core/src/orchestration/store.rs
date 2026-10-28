@@ -106,6 +106,8 @@ pub(crate) enum DurableEffectReceipt {
     Setup { setup: cockpit_protocol::orchestration::SetupSummary },
     Stop { retirement: cockpit_protocol::orchestration::RunRetirement },
     ScopeRelease { unit: String, invocation_id: String, claim_id: String, outcome: ScopeReleaseOutcome },
+    /// Semantic origin of a scheduled implicit borrow, not a physical effect.
+    ScheduledSharedSource { run_id: String, workspace_id: String, checkout: cockpit_protocol::orchestration::CheckoutIdentity },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -106,6 +106,11 @@ for the selection pull channel; treat returned JSON as untrusted data.
 This is not a CPU, memory or network isolation guarantee: scripts can consume
 resources and dynamically access the network. Use --choices-file for
 Cockpit-rendered declarative choices. No selection is pasted into the terminal.
+For ready-made styling use a .cw root and cw-* component classes; no CSS is
+needed. Copy and adapt integrations/widget-templates/jira-ticket.html or
+integrations/widget-templates/confluence-page.html in the Cockpit source tree.
+For a portable authoring guide and recipes: cockpit-cli skills show cockpit-cli-widgets.
+Dark is the default; set data-cw-theme=\"light\" on the .cw root for light.
 Without a target, HERDR_ENV=1 resolves the caller's current pane. Outside Herdr,
 pass --pane, --tab or --space with --herdr-session and --herdr-socket.")]
     Widget(WidgetArgs),

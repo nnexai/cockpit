@@ -1275,6 +1275,29 @@ fn schedule_normalization_cannot_override_explicit_space_or_unverified_source() 
 }
 
 #[test]
+fn lone_share_requires_closed_workers_and_no_cross_root_overlapping_claims() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Prior worker");
+    let worker = fixture.start(&root, &task);
+    let mut state = fixture.state();
+    let checkout = CheckoutIdentity { key: "source".into(), path: "/repo/source".into(), git: None,
+        directory_identity: DirectoryIdentity { device: "1".into(), inode: "2".into() } };
+    let allowed = |state: &_| mutate::runs::lone_share_allowed(state, &root, &checkout);
+    assert!(!allowed(&state));
+    state.runs.iter_mut().find(|run| run.run_id == worker).unwrap().stage = RunStage::Closed;
+    assert!(allowed(&state));
+    let mut nested = checkout.clone();
+    nested.key = "other".into();
+    nested.path = "/repo/source/nested".into();
+    state.checkout_claims.push(claims::CheckoutClaim { claim_id: id(), checkout: nested, revision: 1,
+        state: claims::ClaimState::Conflict, holder: None, transition_operation_id: None });
+    assert!(!allowed(&state));
+    state.checkout_claims.last_mut().unwrap().state = claims::ClaimState::Released;
+    assert!(allowed(&state));
+}
+
+#[test]
 fn dependency_schedule_queues_until_acceptance_rechecks_fresh_graph_and_is_idempotent() {
     let fixture = Fixture::new();
     let root = fixture.root();

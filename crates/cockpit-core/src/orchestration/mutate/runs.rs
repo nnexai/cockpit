@@ -600,6 +600,40 @@ fn schedule_ready(state: &OrchestrationState, root: &Run, task: &Task,
         && state.runs.iter().filter(|run| run.root_id == root.run_id && run.kind == RunKind::Worker
             && run.stage != RunStage::Closed).count() < max_parallel as usize
 }
+pub(in crate::orchestration) fn lone_share_allowed(state: &OrchestrationState, root_id: &str, checkout: &CheckoutIdentity) -> bool {
+    !state.runs.iter().any(|run| run.root_id == root_id && run.kind == RunKind::Worker && run.stage != RunStage::Closed)
+        && !state.checkout_claims.iter().any(|claim| claim.state != claims::ClaimState::Released
+            && claims::checkouts_conflict(&claim.checkout, checkout))
+}
+
+impl OrchestrationService {
+    pub(in crate::orchestration) fn scheduled_lone_share_allowed(&self, root_id: &str, checkout: &CheckoutIdentity) -> Result<bool, InspectionError> {
+        let locked = self.store.lock()?;
+        let state = locked.read_shared()?;
+        Ok(lone_share_allowed(&state, root_id, checkout))
+    }
+    pub(in crate::orchestration) fn scheduled_shared_checkout(&self, run: &Run) -> Result<Option<CheckoutIdentity>, InspectionError> {
+        use super::super::store::{DurableEffectReceipt, DurableOperationKind};
+        let locked = self.store.lock()?;
+        let state = locked.read_shared()?;
+        for operation in state.operations.iter().filter(|operation| operation.kind == DurableOperationKind::WorkerStart
+            && operation.root_id == run.root_id
+            && matches!(&operation.result, Some(OrchestrationActionResult::WorkerStarted { start })
+                if start.run_id == run.run_id && start.operation_id == operation.operation_id && start.attempt == run.attempt))
+        {
+            for receipt in &operation.effect_receipts {
+                if let DurableEffectReceipt::ScheduledSharedSource { run_id, workspace_id, checkout } = receipt {
+                    if run_id != &run.run_id || !matches!(&run.target, Some(DispatchTarget::ExistingSpace { workspace_id: target }) if target == workspace_id) {
+                        return Err(error("schedule_placement_changed", "Scheduled shared source provenance no longer matches its attempt"));
+                    }
+                    return Ok(Some(checkout.clone()));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
 
 impl OrchestrationService {
     /// Read the durable execution queue once; no model turn or physical effect.
@@ -650,7 +684,34 @@ impl OrchestrationService {
         let graph = dependencies::DependencyGraph::new(&document.tasks);
         if !schedule_ready(&state, root, task, &graph, root.launch_config.max_parallel)
             || next_attempt(&state, &candidate.root_id, &candidate.task_id)? != candidate.next_attempt { return Ok(None); }
+        if resolved.shared_by_default {
+            let valid_source = match (&resolved.normalized_target, &schedule.target, &resolved.project, &resolved.checkout) {
+                (Some(DispatchTarget::ExistingSpace { workspace_id }), target, Some(project), Some(checkout)) => {
+                    let authorized = match target {
+                        None => candidate.schedule.target.is_none() && root.project.as_ref().is_some_and(|source|
+                            source.source_workspace_id.as_ref() == Some(workspace_id) && source.key == project.key),
+                        Some(DispatchTarget::Setup { request: cockpit_protocol::projects::WorkspaceSetupRequest::Open { path, .. } }) =>
+                            matches!(&candidate.schedule.target, Some(DispatchTarget::Setup {
+                                request: cockpit_protocol::projects::WorkspaceSetupRequest::Open { path: observed, .. },
+                            }) if observed == path)
+                                && std::fs::canonicalize(path).ok().is_some_and(|resolved_path| resolved_path.starts_with(&checkout.path)),
+                        _ => false,
+                    };
+                    authorized && project.repository_id.is_some() && project.source_workspace_id.as_ref() == Some(workspace_id)
+                        && matches!((&project.source, &checkout.git),
+                            (ProjectSource::Git { common_dir }, Some(git)) if common_dir == &git.common_dir)
+                        && project_identity::revalidate_checkout(checkout).is_ok()
+                        && lone_share_allowed(&state, &candidate.root_id, checkout)
+                        && super::super::dispatch::clean_schedule_checkout_locked(&checkout.path)
+                }
+                _ => false,
+            };
+            if !valid_source {
+                return Err(error("schedule_placement_changed", "Shared source or exclusive placement changed; resolve the schedule again"));
+            }
+        }
         let mut target = match (resolved.normalized_target.clone(), schedule.target.clone()) {
+            (Some(target @ DispatchTarget::ExistingSpace { .. }), _) if resolved.shared_by_default => target,
             (Some(target @ DispatchTarget::SpaceWorktree { .. }), Some(DispatchTarget::Setup {
                 request: cockpit_protocol::projects::WorkspaceSetupRequest::Open { path, .. },
             })) if matches!(&candidate.schedule.target, Some(DispatchTarget::Setup {
@@ -695,8 +756,15 @@ impl OrchestrationService {
         let start = create_attempt(&mut ctx, AttemptRequest { operation_id: &operation_id,
             root_id: &candidate.root_id, task_id: &candidate.task_id, target, brief: &schedule.brief,
             cleanup_policy: schedule.cleanup_policy, label: schedule.label.as_deref(), generation })?;
+        let provenance = if resolved.shared_by_default {
+            let DispatchTarget::ExistingSpace { workspace_id } = resolved.normalized_target.as_ref().expect("validated shared target") else { unreachable!() };
+            vec![super::super::store::DurableEffectReceipt::ScheduledSharedSource {
+                run_id: start.run_id.clone(), workspace_id: workspace_id.clone(),
+                checkout: resolved.checkout.clone().expect("validated shared checkout"),
+            }]
+        } else { Vec::new() };
         super::resume::record(&mut ctx, operation_id.clone(), DurableOperationKind::WorkerStart, &action,
-            candidate.root_id.clone(), OrchestrationActionResult::WorkerStarted { start: start.clone() }, Vec::new())?;
+            candidate.root_id.clone(), OrchestrationActionResult::WorkerStarted { start: start.clone() }, provenance)?;
         let receipt = ctx.state.operations.last_mut().expect("recorded scheduled attempt");
         receipt.principal_key = schedule.principal_key;
         messages::append(ctx.state, messages::AppendMessage { from: ActorRef::Dispatcher, to_run_id: &candidate.root_id,

@@ -2,6 +2,18 @@
 
 These are historical observations, not proof of the current checkout. Each named original source occurrence is reproduced verbatim, including mixed current-rule/result paragraphs, obsolete wording, dates and limitations. Current architecture, rules and source owners live in the root documents. Undated cohorts retain source context rather than an invented run date.
 
+## Agent launch, worker reuse and widget components (2026-10-28)
+
+Full workspace tests passed (1,835 tests; nine ignored), as did all 1,499 frontend tests, TypeScript checking, the production frontend build and explicit CLI/native builds. Existing ts-rs, deprecated AsyncFd, dead-code and Vite chunk-size diagnostics were not suppressed. Two obsolete Quick Terminal pixel-layout/wiring tests were removed rather than repinned.
+
+Disposable supervisor session `polish-tz_kz9ip` proved implicit clean, unclaimed placement in the original Space/checkout without another worktree; a concurrent task received a separate owned Space/worktree. A Working scope update retained the first worker's run, generation, Space and checkout. Real launch exposed missing explicit root-Space provenance, which was corrected before the passing run. Independent concurrency review found a stale-cleanliness admission risk; private per-attempt provenance and publication/reservation/latch cleanliness checks address it, including when no code dependencies exist.
+
+The production browser build in `polish-5kpvbhwa` rendered Jira and Confluence recipes at 1,172 px and 332 px frame widths with equal document/viewport widths, native comment disclosure and fragment navigation. Author CSS overrides and a non-component widget retained their styling. The frame remained opaque to the host and reported no browser errors.
+
+Private Niri/WebKit native UI verification compared a newly configured login-shell pane with Quick Terminal: profile marker, selected cwd and TERM matched, and dismissal ended the scratch shell. With a restricted host PATH, actual Quick Ask dialogs launched synthetic OMP, Pi, Claude and Copilot executables in new tabs, preserving prompts, selected cwd and the shared discovered PATH; the initialized-shell OMP took precedence over its inactive-NVM duplicate. This proves launch plumbing, not provider authentication/model execution or macOS Finder behavior. macOS itself remains unverified.
+
+Native evidence is under `/tmp/cockpit-request-smoke/0f719d11-e7c6-4eeb-a456-6bab6cdc3071/1d0395187d194ac08e7d140be48d52e2/`; supervisor evidence is under `/tmp/cpol-tz_kz9ip/evidence/`. Earlier failed probes remain recorded. Synthetic actors exited cooperatively and registered fixture processes stopped with exact lifecycle receipts. Exhaustive cleanup remained Unknown because protected `/proc` entries and escaped-consumer ownership were unproven; no force cleanup, persistent-session change or installation was attempted.
+
 ## Adaptive compact sidebar (2026-10-26)
 
 Implemented the approved compact sidebar with permanent meaningful Git counters on the name line, a separate fitted tag line only for tagged Spaces, and full tags/secondary detail on confirmed selection. Agent rows keep their tab suffix and urgent state while expanding secondary detail only when selected.

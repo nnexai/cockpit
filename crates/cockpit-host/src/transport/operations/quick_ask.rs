@@ -6,7 +6,7 @@ fn check_session(session_id: &str) -> Result<(), OperationError> {
     if valid_session_id(session_id) { Ok(()) } else { Err(OperationError::rejected("invalid_session_id", "Invalid session id")) }
 }
 pub async fn availability(service: &CockpitService, _: Transport, (): ()) -> Result<QuickAskAvailability, OperationError> {
-    Ok(service.quick_ask()?.availability())
+    Ok(service.quick_ask()?.availability().await)
 }
 pub async fn ask(service: &CockpitService, _: Transport, (session_id, request): (String, QuickAskRequest)) -> Result<QuickAskLocation, OperationError> {
     check_session(&session_id)?;

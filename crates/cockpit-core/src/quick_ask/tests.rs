@@ -28,7 +28,7 @@ impl QuickAskHerdr for Fake {
         Ok(QuickAskBinding { session_id: session_id.into(), endpoint_identity: "endpoint".into(), server_instance: server_instance.into(), space_id: space_id.into() })
     }
 
-    async fn create_tab(&self, binding: &QuickAskBinding, cwd: &str, label: &str, kind: &str, prompt: &str) -> Result<QuickAskLocation, InspectionError> {
+    async fn create_tab(&self, binding: &QuickAskBinding, cwd: &str, label: &str, kind: &str, prompt: &str, _path: &str) -> Result<QuickAskLocation, InspectionError> {
         self.calls.lock().unwrap().push(vec!["create".into(), binding.session_id.clone(), binding.server_instance.clone(), binding.space_id.clone(), cwd.into(), label.into(), kind.into(), prompt.into()]);
         if self.create_error { return Err(InspectionError::new("create_failed", "creation failed")); }
         Ok(QuickAskLocation { space_id: binding.space_id.clone(), tab_id: "tab".into(), pane_id: "pane".into(), terminal_id: "terminal".into(), tab_label: label.into() })
@@ -113,4 +113,76 @@ async fn adapter_failures_propagate_without_retry() {
     let service = QuickAskService::new(adapter.clone());
     assert_eq!(service.ask("session", request("question")).await.unwrap_err().code, "create_failed");
     assert_eq!(adapter.calls.lock().unwrap().len(), 2);
+}
+
+#[cfg(unix)]
+mod discovery {
+    use super::*;
+    use std::{fs, os::unix::fs::PermissionsExt, path::{Path, PathBuf}};
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(format!("quick-ask-discovery-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&root).unwrap();
+            Self(root)
+        }
+        fn executable(&self, relative: &str, contents: &str) -> PathBuf {
+            let path = self.0.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, contents).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+    }
+
+    #[tokio::test]
+    async fn shell_probe_frames_path_through_startup_noise() {
+        let fixture = Fixture::new();
+        let shell = fixture.executable("shell", "#!/bin/sh\nprintf 'noise\\000wrong\\000\\n'\nPATH=/initialized/bin:/usr/bin\nexport PATH\n/bin/sh -c \"$2\"\nprintf 'trailing noise\\n'\n");
+        assert_eq!(shell_path(&shell, "/fallback".into()).await, OsString::from("/initialized/bin:/usr/bin"));
+    }
+
+    #[tokio::test]
+    async fn shell_probe_rejects_failed_unframed_and_oversized_output() {
+        let fixture = Fixture::new();
+        let fallback = OsString::from("/fallback");
+        let failed = fixture.executable("failed", "#!/bin/sh\n/bin/sh -c \"$2\"\nexit 1\n");
+        let unframed = fixture.executable("unframed", "#!/bin/sh\nprintf 'not a path\\000'\n");
+        let oversized = fixture.executable("oversized", "#!/bin/sh\n/usr/bin/head -c 65537 /dev/zero\n/bin/sh -c \"$2\"\n");
+        for shell in [failed.as_path(), unframed.as_path(), oversized.as_path(), Path::new("/no-such-quick-ask-shell")] {
+            assert_eq!(shell_path(shell, fallback.clone()).await, fallback);
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_probe_times_out() {
+        let fixture = Fixture::new();
+        let shell = fixture.executable("slow", "#!/bin/sh\nexec /bin/sleep 10\n");
+        let fallback = OsString::from("/fallback");
+        assert_eq!(shell_path(&shell, fallback.clone()).await, fallback);
+    }
+
+    #[test]
+    fn inactive_nvm_versions_fill_only_missing_clients_in_numeric_order() {
+        let fixture = Fixture::new();
+        for name in [
+            "active/omp", "versions/node/v24.9.0/bin/node", "versions/node/v24.9.0/bin/pi",
+            "versions/node/v24.15.0/bin/node", "versions/node/v24.15.0/bin/omp",
+            "versions/node/v24.15.0/bin/pi", "versions/node/v24.15.0/bin/claude",
+            "versions/node/v23.1.0/bin/node", "versions/node/v23.1.0/bin/copilot",
+            "versions/node/v25.0.0/bin/copilot", "versions/node/v099.0.0/bin/node",
+            "versions/node/v099.0.0/bin/copilot",
+        ] { fixture.executable(name, "#!/bin/sh\nexit 0\n"); }
+        let active = fixture.0.join("active");
+        let newer = fixture.0.join("versions/node/v24.15.0/bin");
+        let older = fixture.0.join("versions/node/v23.1.0/bin");
+        let path = include_nvm_clients(active.as_os_str().to_os_string(), &fixture.0);
+        assert_eq!(std::env::split_paths(&path).collect::<Vec<_>>(), vec![active, newer, older]);
+        for client in ["omp", "pi", "claude", "copilot"] { assert!(executable_found(client, &path)); }
+        assert!(!executable_found("codex", &path));
+    }
 }

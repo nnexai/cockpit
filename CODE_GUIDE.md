@@ -100,7 +100,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Change | Current owner |
 | --- | --- |
 | Configuration roots/limits | `crates/cockpit-core/src/config.rs`; `crates/cockpit-core/src/config/roots.rs`; `crates/cockpit-core/src/config/limits.rs` |
-| Quick ask validation, launch arguments and tab label | `crates/cockpit-core/src/quick_ask.rs`; `crates/cockpit-core/src/quick_ask/herdr.rs` |
+| Quick ask validation, cached initialized shell PATH/NVM discovery and launch arguments | `crates/cockpit-core/src/quick_ask.rs`; `crates/cockpit-herdr/src/cli/quick_ask.rs` |
 | Project facade/defaults/plan / unique automatic orchestration branches | `crates/cockpit-core/src/projects/mod.rs`; `crates/cockpit-core/src/projects/defaults.rs`; `crates/cockpit-core/src/projects/plan.rs` (`plan_orchestration`, shared private `plan_impl`; ordinary `plan` unchanged) |
 | Project execute/reconcile/teardown | `crates/cockpit-core/src/projects/execute.rs`; `crates/cockpit-core/src/projects/reconcile.rs`; `crates/cockpit-core/src/projects/teardown.rs` |
 | Accepted Git integration identity bridge | `crates/cockpit-core/src/project_teardown.rs` (`integrated_owned_head`); canonical source/target project keys bridge through recorded Git common-dir to exact owned raw repository/common-dir keys |
@@ -128,7 +128,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Comment delivery | `crates/cockpit-core/src/comments/` |
 | Comment paste batch/payload send checks | `crates/cockpit-core/src/comments/paste.rs`; `crates/cockpit-core/src/comments/paste/send.rs` |
 | Widget facade/target/store | `crates/cockpit-core/src/widget.rs`; `crates/cockpit-core/src/widget/target.rs`; `crates/cockpit-core/src/widget/store.rs` |
-| Widget HTML/choice preflight | `crates/cockpit-core/src/widget/preflight.rs`; `crates/cockpit-core/src/widget/choices.rs`; `src/app/widgets/` |
+| Widget HTML/choice preflight and injected component styles | `crates/cockpit-core/src/widget/preflight.rs`; `crates/cockpit-core/src/widget/choices.rs`; `src/app/widgets/widgetDocument.ts`; `src/app/widgets/widgetComponents.css`; recipes in `integrations/widget-templates/` |
 
 ### Library, sources and providers
 
@@ -346,6 +346,10 @@ Shared terminal creation in `src/app/terminal/cockpitTerminal.ts` installs xterm
 Tab Browser action → core tab association/service → private owner runtime → supervised Node/CDP helper attached to the CLI-managed Chromium session → bounded relay → transport-local stream → shared decoder → Browser hooks/frame presenter. `browser-runtime/browser-user-agent.cjs` owns the narrow running-version HeadlessChrome substitution policy; it is not general anti-bot/media parity. Fresh-open/default URL and prerequisites are in [configuration](docs/configuration.md); lifetime/reset/cleanup/delivery guards are in [DECISIONS](DECISIONS.md).
 
 Widget CLI show → bounded file/stdin/choices preflight → fresh source/target authorization → owner-memory widget store → ordered summaries/content/selection streams → tab dock → opaque script-only iframe bridge → validated retained selection. Widgets do not use Chromium capture. Limits, source/revision/nonce checks, fragment anchors, focus, tombstones and selection uncertainty remain in [DECISIONS](DECISIONS.md).
+
+Widget documents inject `src/app/widgets/widgetComponents.css` after the base style and before author styles. Wrap content in `.cw`; compose `cw-head`, `cw-title`, `cw-meta`, `cw-chip`, `cw-facts`, `cw-body`, `cw-sec`, `cw-fold`, `cw-list`, `cw-note`, `cw-callout`, `cw-scroll`, `cw-code`, `cw-link`, `cw-actions` and `cw-btn` as needed, with `cw-ok`, `cw-warn`, `cw-bad`, `cw-info` or `cw-dim` tones. Dark is the default; set `data-cw-theme="light"` on `.cw` for light styling. Copy the static [Jira ticket](integrations/widget-templates/jira-ticket.html) or [Confluence page](integrations/widget-templates/confluence-page.html) recipe and publish with `cockpit-cli widget show --id jira-preview --title 'Jira ticket' --file integrations/widget-templates/jira-ticket.html`. These examples do not fetch data or run scripts; authors supply content and retain responsibility for trusted HTML. Escape provider strings (`&`, `<`, `>`) before embedding them in HTML.
+
+The installed CLI also bundles the widget authoring guide: `cockpit-cli skills show cockpit-cli-widgets`.
 
 ### Durable Notes and portable guides
 

@@ -393,6 +393,7 @@ impl Dispatcher {
                 ..Default::default() });
         }
         let mut normalized_target = None;
+        let mut shared_by_default = false;
         let (project, checkout, git_source) = match target {
             DispatchTarget::ExistingSpace { workspace_id }
             | DispatchTarget::SpaceWorktree { workspace_id, .. } => {
@@ -413,7 +414,17 @@ impl Dispatcher {
                     && !matches!(&project.source, cockpit_protocol::orchestration::ProjectSource::Git { common_dir } if common_dir == &repository.common_dir) {
                         return Err(InspectionError::new("repository_identity_conflict", "Source Space repository changed"));
                     }
-                let checkout = matches!(target, DispatchTarget::ExistingSpace { .. }).then_some(checkout);
+                if candidate.schedule.target.is_none()
+                    && matches!(&project.source, cockpit_protocol::orchestration::ProjectSource::Git { .. })
+                    && root.project.as_ref().is_some_and(|expected| expected.key == project.key
+                        && expected.source_workspace_id.as_ref() == Some(workspace_id))
+                    && self.service.scheduled_lone_share_allowed(&candidate.root_id, &checkout)?
+                    && clean_schedule_checkout(&checkout.path).await
+                {
+                    normalized_target = Some(DispatchTarget::ExistingSpace { workspace_id: workspace_id.clone() });
+                    shared_by_default = true;
+                }
+                let checkout = (shared_by_default || matches!(target, DispatchTarget::ExistingSpace { .. })).then_some(checkout);
                 (project, checkout, Some(space.cwd.clone()))
             }
             DispatchTarget::Setup { request } => {
@@ -453,10 +464,18 @@ impl Dispatcher {
                                 if verified_checkout == checkout
                                     && verified_project.key == project.key
                                 {
-                                    normalized_target = Some(DispatchTarget::SpaceWorktree {
-                                        workspace_id: space.workspace_id.clone(), branch: None, base_ref: None,
-                                    });
-                                    (verified_project, None, Some(source))
+                                    if self.service.scheduled_lone_share_allowed(&candidate.root_id, &verified_checkout)?
+                                        && clean_schedule_checkout(&verified_checkout.path).await
+                                    {
+                                        normalized_target = Some(DispatchTarget::ExistingSpace { workspace_id: space.workspace_id.clone() });
+                                        shared_by_default = true;
+                                        (verified_project, Some(verified_checkout), Some(source))
+                                    } else {
+                                        normalized_target = Some(DispatchTarget::SpaceWorktree {
+                                            workspace_id: space.workspace_id.clone(), branch: None, base_ref: None,
+                                        });
+                                        (verified_project, None, Some(source))
+                                    }
                                 } else {
                                     (project, Some(checkout), Some(source))
                                 }
@@ -497,14 +516,22 @@ impl Dispatcher {
             }
             (Some(base), verified)
         };
-        Ok(super::ResolvedMutationInput { project: Some(project), checkout, normalized_target,
+        Ok(super::ResolvedMutationInput { project: Some(project), checkout, normalized_target, shared_by_default,
             schedule_inputs: Some(super::ScheduleInputFacts { snapshot: inputs, base_commit, verified_code_runs }),
             ..Default::default() })
     }
 
     async fn actual_launch_input_facts(
-        &self, run: &Run, project: &cockpit_protocol::orchestration::ProjectIdentity, checkout: &str,
+        &self, run: &Run, project: &cockpit_protocol::orchestration::ProjectIdentity,
+        checkout: &cockpit_protocol::orchestration::CheckoutIdentity,
     ) -> Result<Option<super::ScheduleInputFacts>, InspectionError> {
+        if let Some(source) = self.service.scheduled_shared_checkout(run)? {
+            if source != *checkout || !clean_schedule_checkout(&checkout.path).await {
+                return Err(InspectionError::new("schedule_shared_checkout_dirty",
+                    "The implicitly shared checkout changed or is no longer clean; inspect the attempt and resolve placement again"));
+            }
+        }
+        let checkout = checkout.path.as_str();
         let Some(snapshot) = self.service.launch_input_requirements(run)? else { return Ok(None) };
         let required: Vec<_> = snapshot.accepted_sources.iter().filter(|source|
             matches!(&source.source_output, cockpit_protocol::orchestration::SourceOutput::Code { repository_key, .. }
@@ -786,7 +813,7 @@ impl Dispatcher {
                         format!("Run \"${{COCKPIT_CLI_PATH:-cockpit-cli}}\" context --current to read the existing Library selections and repository paths of this project Space ({workspace_id}); read those paths in place without copying selections or files"),
                     ],
                     warnings: vec![],
-                    project_workspace_id: None,
+                    project_workspace_id: Some(workspace_id.clone()),
                 }
             }
             DispatchTarget::SpaceWorktree { workspace_id, branch, base_ref } => {
@@ -994,13 +1021,18 @@ impl Dispatcher {
                 cockpit_protocol::orchestration::ProjectSource::Directory { root } if root == &setup.checkout_path)) {
             super::project_identity::resolve_owned_directory(&dedicated)?
         } else {
+            let source_workspace_id = setup.project_workspace_id.clone().or_else(|| match &run.target {
+                Some(DispatchTarget::ExistingSpace { workspace_id })
+                    if setup.workspace_id.as_ref() == Some(workspace_id) => Some(workspace_id.clone()),
+                _ => None,
+            });
             super::project_identity::resolve_directory(std::path::Path::new(&setup.checkout_path),
-                setup.repository_id.clone(), setup.project_workspace_id.clone()).await?
+                setup.repository_id.clone(), source_workspace_id).await?
         };
         // Freeze the actual checkout's baseline with its writer/credential
         // receipt, after real setup and before any agent launch. Retrying an
         // existing receipt must never recapture a later HEAD or a mutable ref.
-        let input_facts = self.actual_launch_input_facts(run, &project, &checkout.path).await?;
+        let input_facts = self.actual_launch_input_facts(run, &project, &checkout).await?;
         let base_commit = match input_facts.as_ref().and_then(|facts| facts.base_commit.as_ref()) {
             Some(base) => Some(base.clone()),
             None => setup_base_commit(setup, &checkout).await?,
@@ -1365,7 +1397,7 @@ impl Dispatcher {
         }
         let project = run.project.as_ref().ok_or_else(|| InspectionError::new("project_missing", "Placed actor lost its source project"))?;
         let checkout = run.checkout.as_ref().ok_or_else(|| InspectionError::new("checkout_missing", "Placed actor lost its starting checkout"))?;
-        let input_facts = self.actual_launch_input_facts(&run, project, &checkout.path).await?;
+        let input_facts = self.actual_launch_input_facts(&run, project, checkout).await?;
         let Some(intent) = self.service.record_latch_release_intent(&run, input_facts.as_ref())? else { return Ok(()) };
         match crate::process_scope::release_latch(&latch, &env) {
             Ok(()) => { self.service.record_latch_released(&intent)?; }
@@ -1490,6 +1522,21 @@ fn restarts_in_retained_space(run: &Run) -> bool {
     resumed_checkout_epoch(run) && run.dispatch.as_ref().is_some_and(|dispatch|
         dispatch.launch_tag.is_some() && dispatch.move_operation_id.is_none()
             && dispatch.staging_workspace_id.as_ref() == run.setup.as_ref().and_then(|setup| setup.workspace_id.as_ref()))
+}
+
+pub(super) async fn clean_schedule_checkout(path: &str) -> bool {
+    matches!(tokio::time::timeout(Duration::from_secs(5), crate::space_git::git_output(
+        std::path::Path::new(path), &["status", "--porcelain=v1", "-z", "--untracked-files=normal"],
+    )).await, Ok(Ok(output)) if output.status.success() && output.stdout.is_empty())
+}
+
+// Scheduled publication is synchronous and holds the durable lock. Run the
+// same bounded Git probe on a separate runtime rather than nesting runtimes.
+pub(super) fn clean_schedule_checkout_locked(path: &str) -> bool {
+    std::thread::scope(|scope| scope.spawn(|| {
+        tokio::runtime::Builder::new_current_thread().enable_all().build()
+            .ok().is_some_and(|runtime| runtime.block_on(clean_schedule_checkout(path)))
+    }).join().unwrap_or(false))
 }
 
 async fn immutable_schedule_base(path: &str, reference: &str) -> Result<String, InspectionError> {

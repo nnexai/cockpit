@@ -25,8 +25,17 @@ pub(crate) const TASK_HELP: &str = r#"Canonical tasks live in the root's Markdow
 3. create does not start a worker. Choose a stable --task-id UUID; the CLI
    prints the ID to stderr before submitting (and generates one if omitted).
    After an unknown outcome, task show that ID; never create with a new ID.
-   Normal delegation is create, then task schedule TASK_ID. Schedule defaults
-   to an owned isolated Git worktree, including for read-only research.
+   Delegate a complete outcome, including investigation, implementation and
+   verification: create, then task schedule TASK_ID. Continue later stages
+   with the same Working worker using scope-update and instructions, rather
+   than accepting or restarting between stages. Separate tasks are for
+   independent parallel work or different projects.
+   With no target, Git scheduling shares the exact source Space if its checkout
+   is clean, this is the root's only active worker, and no checkout claim
+   conflicts; otherwise it uses an isolated worktree. Directory defaults stay
+   owned attempt directories. --space intentionally borrows; --space-worktree
+   isolates for concurrent writers or a different base/branch. A borrowed
+   primary Git Space worker tab is retained until the user closes it.
 4. Choose stable UUIDs for new steps; use task show --self for existing steps.
    Checklist edits capture the current task revision internally; --revision
    preserves an explicit fence. Dependencies replace the full prerequisite
@@ -43,7 +52,7 @@ Examples:
   cockpit-cli task show TASK_ID --json
   cockpit-cli task inputs --self --json
   cockpit-cli task create --task-id UUID --title "Fix flaky test" --description-file brief.md
-  cockpit-cli task schedule TASK_ID --space-worktree SOURCE_SPACE_ID
+  cockpit-cli task schedule TASK_ID
   cockpit-cli task update TASK_ID --revision TASK_REVISION --description-file description.md
   cockpit-cli task scope-update TASK_ID --operation-id UUID --run RUN_ID --revision TASK_REVISION --doc-revision DOC_REVISION --description-file description.md
   cockpit-cli task step-add TASK_ID --revision TASK_REVISION --step-id UUID --title "Write regression test"
@@ -69,7 +78,7 @@ Caller and authority:
     cockpit-cli task --operator --root ROOT_ID update TASK_ID --revision TASK_REVISION --title "Correct scope"
     cockpit-cli run --operator --root ROOT_ID worker-replace RUN_ID --reason "Attempt stalled"
   Root or explicit operator schedule queues dependency-blocked work without launching early:
-    cockpit-cli task schedule TASK_ID --space-worktree SPACE_ID
+    cockpit-cli task schedule TASK_ID
     cockpit-cli task schedule-cancel TASK_ID
     cockpit-cli task restart TASK_ID --reason "Attempt stalled"
   Cancellation clears scheduling only. Replacement revokes semantic authority
@@ -127,7 +136,7 @@ Examples:
   cockpit-cli run context --json
   cockpit-cli run brief --json
   cockpit-cli task create --task-id UUID --title "Bounded outcome" --description-file brief.md
-  cockpit-cli task schedule TASK_ID --space-worktree SOURCE_SPACE_ID
+  cockpit-cli task schedule TASK_ID
   cockpit-cli run worker-replace RUN_ID --reason "Attempt stalled"
   cockpit-cli run done --summary "Completed" --check "contract::focused command::passed"
   cockpit-cli run report --kind needs-input --summary "Which outcome?"
@@ -189,12 +198,13 @@ Errors: {"code","message"} JSON on stderr, exit 1."#;
 
 const WORKER_START_HELP: &str = r#"Adapter-only immediate start; normal delegation is task create, then task schedule.
 Read the canonical task and inspect the explicit source project before starting.
-Choose exactly one target: --space-worktree for owned isolated Git placement,
-including read-only research; --repository for catalog setup; --path for borrowed
-Open placement; --space for deliberate borrowed reuse, not a shared-reader claim.
-Read-only instructions create neither a sandbox nor concurrent-reader capability;
-borrowed inspection must not change HEAD, index or build outputs. A borrowed worker
-in a primary Git Space is intentionally retained, not automatically closed.
+Choose exactly one target: --space for intentional borrowed reuse;
+--space-worktree for owned isolated Git placement when concurrent writers or a
+different base/branch need isolation; --repository for catalog setup; --path
+for borrowed Open placement. Read-only instructions create neither a sandbox
+nor concurrent-reader capability; borrowed inspection must not change HEAD,
+index or build outputs. A borrowed worker in a primary Git Space is intentionally
+retained until the user closes its tab, not automatically closed.
 --space-worktree inherits the source checkout's committed HEAD without --base.
 Never substitute cwd, current pane or the supervisor's Space for the task project.
 

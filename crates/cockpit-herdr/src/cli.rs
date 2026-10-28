@@ -45,6 +45,10 @@ use cockpit_protocol::v1::{
     PaneMoveDestination, PaneSplitDirection,
 };
 use config::valid_session_name;
+#[cfg(unix)]
+pub(crate) use config::terminal_shell_config;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use config::terminal_shell_config_from;
 pub use config::{ConfigError, HerdrCliConfig};
 #[cfg(test)]
 use operations::pane_move_destination;
@@ -781,23 +785,7 @@ impl HerdrCliAdapter {
         if let Some(path) = self.config.socket() {
             return Ok(path.to_owned());
         }
-        let config_dir = std::env::var_os("HERDR_CONFIG_DIR")
-            .or_else(|| {
-                std::env::var_os("HERDR_CONFIG_PATH").and_then(|path| {
-                    PathBuf::from(path)
-                        .parent()
-                        .map(|parent| parent.as_os_str().to_owned())
-                })
-            })
-            .or_else(|| {
-                std::env::var_os("XDG_CONFIG_HOME")
-                    .map(|p| PathBuf::from(p).join("herdr").into_os_string())
-            })
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(|p| PathBuf::from(p).join(".config/herdr").into_os_string())
-            })
-            .map(PathBuf::from)
+        let config_dir = config::herdr_config_dir()
             .ok_or_else(|| {
                 InspectionError::new(
                     "endpoint_unavailable",

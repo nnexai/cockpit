@@ -88,6 +88,12 @@ pub(super) const BUNDLED: &[BundledSkill] = &[
             "../../../../../integrations/agent-skills/cockpit-cli-orchestration/SKILL.md"
         ),
     },
+    BundledSkill {
+        name: "cockpit-cli-widgets",
+        content: include_str!(
+            "../../../../../integrations/agent-skills/cockpit-cli-widgets/SKILL.md"
+        ),
+    },
 ];
 
 fn skill(name: &str) -> Result<&'static BundledSkill, InspectionError> {

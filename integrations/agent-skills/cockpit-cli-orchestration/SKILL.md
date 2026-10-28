@@ -65,10 +65,14 @@ not copied credentials. Ordinary edits and shells need no orchestration call.
 
 The root is the user's autonomous liaison, not an implementation worker. Create
 only authorized missing tasks; preserve existing IDs and backlog-only tasks.
-Coordinate dependencies, delegate, answer routine questions, integrate and review
-Results. Do not repeatedly request plans or execution approval. Scheduling is
-standing delegation; creation alone never authorizes execution. Create and
-schedule a new independent task in one tool invocation:
+Coordinate dependencies, delegate complete outcomes—including investigation,
+implementation and affected verification—answer routine questions, integrate and
+review Results. Keep later stages and narrow follow-ups with the same Working
+worker using task scope-update and instructions, rather than accepting or
+restarting between stages. Create separate tasks for independent parallel work
+or different projects. Do not repeatedly request plans or execution approval.
+Scheduling is standing delegation; creation alone never authorizes execution.
+Create and schedule a new independent task in one tool invocation:
 
 ```sh
 TASK_ID="$(uuidgen)"
@@ -77,23 +81,26 @@ TASK_ID="$(uuidgen)"
 ```
 
 Schedule uses the current canonical revisions unless exact `--task-revision` /
-`--doc-revision` fences are supplied. Placement defaults to an owned isolated
-worktree from the task's source Space, including read-only Git research.
+`--doc-revision` fences are supplied. With no target, a Git task shares its exact
+source Space when the checkout is clean, the worker is the only active worker
+in the root, and no checkout claim conflicts; otherwise it uses an isolated
+worktree. Directory projects retain their owned attempt directory default.
 Discover the actual target from explicit task/setup project evidence, the
 source Space's Library/context or configured routing; never infer it from cwd
 or the liaison's folder. `run context` identifies authority, not a project.
 `context --current` resolves only the originating pane, not an unrelated task.
 A general-directory liaison can manage multiple projects. If no project evidence
 is supplied, ask for that actual target rather than guessing current focus.
-Prefer `--space-worktree` for Git workers so owned terminals can retire after
-acceptance. Scheduled `--path` matching exactly one fresh verified Git Space
-isolates from it; otherwise Open placement borrows the directory. `--space` is
-deliberate advanced borrowed reuse, not concurrent shared-reader capability.
-Read-only instructions are not a sandbox and do not bypass exclusive checkout
-claims; borrowed inspection must change no HEAD, index or build outputs. A primary
-Git Space's borrowed worker terminal is intentionally retained until the user
-closes it. Review/testing an MR is writer work: use `--space-worktree`, optionally
-with `--base REF` (otherwise the source checkout's committed HEAD).
+Use `--space` for intentional borrowed reuse; it does not authorize concurrent
+shared readers or bypass exclusive checkout claims. Use `--space-worktree` for
+genuine concurrent writers or a different base or branch, including MR review
+or testing; `--base REF` selects a base (otherwise the source checkout's committed
+HEAD). A scheduled `--path` matching exactly one fresh verified Git Space shares
+it under the same clean, lone-worker and no-conflicting-claim conditions and
+isolates otherwise; other Open placement borrows the directory. Read-only
+instructions are not a sandbox; borrowed inspection must change no HEAD, index or
+build outputs. A primary Git Space's borrowed worker terminal is intentionally
+retained until the user closes it, not automatically cleaned up.
 Optional `--brief` / `--brief-file` add instructions, not another task store.
 Dependencies and the parallel slot gate launch; authorization survives waiting.
 If source placement cannot be resolved, inspect the returned blocker.
@@ -102,7 +109,7 @@ If source placement cannot be resolved, inspect the returned blocker.
 "${COCKPIT_CLI_PATH:-cockpit-cli}" context --space "$SOURCE_SPACE" --herdr-session "$SESSION" --herdr-socket "$SOCKET"
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task list --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task show "$TASK_ID" --json
-"${COCKPIT_CLI_PATH:-cockpit-cli}" task schedule "$TASK_ID" --space-worktree "$SOURCE_SPACE" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" task schedule "$TASK_ID" --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task schedule-cancel "$TASK_ID" --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task restart "$TASK_ID" --reason "Interrupted attempt" --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run worker-replace "$RUN_ID" --reason "Unresponsive attempt" --json

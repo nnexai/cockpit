@@ -62,7 +62,7 @@ impl QuickAskHerdr for HerdrCliAdapter {
         Ok(QuickAskBinding { session_id: session_id.into(), endpoint_identity, server_instance: server_instance.into(), space_id: space_id.into() })
     }
 
-    async fn create_tab(&self, b: &QuickAskBinding, cwd: &str, label: &str, kind: &str, prompt: &str) -> Result<QuickAskLocation, InspectionError> {
+    async fn create_tab(&self, b: &QuickAskBinding, cwd: &str, label: &str, kind: &str, prompt: &str, path: &str) -> Result<QuickAskLocation, InspectionError> {
         if !matches!(kind, "omp" | "pi" | "claude" | "copilot" | "codex" | "opencode") {
             return Err(error("quick_ask_invalid_agent", "Unsupported agent"));
         }
@@ -78,12 +78,13 @@ impl QuickAskHerdr for HerdrCliAdapter {
         // No shell is involved. The env executable discards the server's inherited
         // environment before starting the agent. Only non-secret environment values are copied.
         let mut command = vec!["/usr/bin/env".to_owned(), "-i".to_owned()];
-        for key in ["HOME", "PATH", "TERM", "LANG", "LC_ALL", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "TMPDIR"] {
+        for key in ["HOME", "TERM", "LANG", "LC_ALL", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "TMPDIR"] {
             if let Some(value) = std::env::var_os(key) {
                 let value = value.into_string().map_err(|_| error("quick_ask_environment_unverified", "A required environment value is not UTF-8"))?;
                 command.push(format!("{key}={value}"));
             }
         }
+        command.push(format!("PATH={path}"));
         command.push(kind.to_owned());
         append_initial_prompt(&mut command, kind, prompt)?;
         let (result, _) = self.socket_request_with_identity(&b.session_id, "layout.apply",

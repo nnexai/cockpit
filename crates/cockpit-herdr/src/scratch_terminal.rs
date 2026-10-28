@@ -8,6 +8,12 @@ pub(crate) fn open(_: &TerminalOpenRequest, _: &str) -> Result<TerminalSession, 
 
 #[cfg(unix)]
 pub(crate) fn open(request: &TerminalOpenRequest, cwd: &str) -> Result<TerminalSession, InspectionError> {
+    let (shell, login) = crate::cli::terminal_shell_config();
+    open_with_shell(request, cwd, shell, login, &[])
+}
+
+#[cfg(unix)]
+fn open_with_shell(request: &TerminalOpenRequest, cwd: &str, shell: std::ffi::OsString, login: bool, environment: &[(&str, &str)]) -> Result<TerminalSession, InspectionError> {
     use base64::{Engine, engine::general_purpose::STANDARD};
     use cockpit_protocol::v1::{TerminalCommand, TerminalOwnershipState, TerminalStreamMessage};
     use pty_process::{Command, Size};
@@ -22,9 +28,14 @@ pub(crate) fn open(request: &TerminalOpenRequest, cwd: &str) -> Result<TerminalS
     let failure = |error: &dyn std::fmt::Display| InspectionError::new("scratch_terminal_failed", error.to_string());
     let (pty, pts) = pty_process::open().map_err(|e| failure(&e))?;
     pty.resize(Size::new(request.rows, request.cols)).map_err(|e| failure(&e))?;
-    let shell = std::env::var_os("SHELL").filter(|s| Path::new(s).is_absolute()).unwrap_or_else(|| "/bin/sh".into());
-    let mut child = Command::new(shell).current_dir(path).env("TERM", "xterm-256color")
-        .kill_on_drop(true).spawn(pts).map_err(|e| failure(&e))?;
+    let mut command = Command::new(&shell).current_dir(path).env("TERM", "xterm-256color")
+        .envs(environment.iter().copied()).kill_on_drop(true);
+    if login {
+        let mut argv0 = std::ffi::OsString::from("-");
+        argv0.push(Path::new(&shell).file_name().unwrap_or(&shell));
+        command = command.arg0(argv0);
+    }
+    let mut child = command.spawn(pts).map_err(|e| failure(&e))?;
     let stream_id = format!("scratch-{}-{}", std::process::id(), NEXT_ID.fetch_add(1, Ordering::Relaxed));
     let session_id = request.session_id.clone();
     let pane_id = request.pane_id.clone();
@@ -148,6 +159,39 @@ mod tests {
             mode: TerminalMode::Control, takeover: false, cols: 80, rows: 24,
             cell_width_px: 0, cell_height_px: 0,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn configured_login_shell_reads_profile_and_preserves_cwd() {
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-scratch-profile-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".bash_profile"), "export COCKPIT_SCRATCH_PROFILE=profile_loaded\n").unwrap();
+        let config = root.join("config.toml");
+        std::fs::write(&config, "[terminal]\ndefault_shell = \"/bin/bash\"\nshell_mode = \"login\"\n").unwrap();
+        let (shell, login) = crate::cli::terminal_shell_config_from(Some(&config), Some("/bin/sh".into()));
+        let home = root.to_str().unwrap();
+        let mut terminal = open_with_shell(&request(), home, shell, login, &[("HOME", home)]).unwrap();
+        terminal.commands.send(TerminalCommand::input_text(
+            "printf 'PROFILE=%s\\n' \"$COCKPIT_SCRATCH_PROFILE\"; pwd; exit\n"
+        )).await.unwrap();
+        let output = timeout(Duration::from_secs(10), async {
+            let mut output = Vec::new();
+            while let Some(message) = terminal.messages.recv().await {
+                match message {
+                    TerminalStreamMessage::Frame { bytes, .. } => output.extend(STANDARD.decode(bytes).unwrap()),
+                    TerminalStreamMessage::Closed { .. } => return String::from_utf8_lossy(&output).into_owned(),
+                    _ => {}
+                }
+            }
+            panic!("stream ended without closed")
+        }).await.unwrap();
+        assert!(output.contains("PROFILE=profile_loaded"), "{output}");
+        assert!(output.contains(home), "{output}");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

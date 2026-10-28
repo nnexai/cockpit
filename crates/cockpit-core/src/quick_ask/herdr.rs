@@ -14,5 +14,5 @@ pub struct QuickAskBinding {
 pub trait QuickAskHerdr: Send + Sync {
     async fn bind(&self, session_id: &str, server_instance: &str, space_id: &str) -> Result<QuickAskBinding, InspectionError>;
     /// Create a tab that launches the harness with an explicitly sanitized environment and initial prompt.
-    async fn create_tab(&self, binding: &QuickAskBinding, cwd: &str, label: &str, kind: &str, prompt: &str) -> Result<QuickAskLocation, InspectionError>;
+    async fn create_tab(&self, binding: &QuickAskBinding, cwd: &str, label: &str, kind: &str, prompt: &str, path: &str) -> Result<QuickAskLocation, InspectionError>;
 }

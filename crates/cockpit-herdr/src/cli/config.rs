@@ -82,6 +82,42 @@ impl HerdrCliConfig {
     }
 }
 
+/// The same config location used by the local Herdr server.
+pub(crate) fn herdr_config_dir() -> Option<PathBuf> {
+    std::env::var_os("HERDR_CONFIG_DIR")
+        .or_else(|| std::env::var_os("HERDR_CONFIG_PATH").and_then(|path| {
+            PathBuf::from(path).parent().map(|parent| parent.as_os_str().to_owned())
+        }))
+        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(|p| PathBuf::from(p).join("herdr").into_os_string()))
+        .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".config/herdr").into_os_string()))
+        .map(PathBuf::from)
+}
+
+#[cfg(unix)]
+pub(crate) fn terminal_shell_config() -> (std::ffi::OsString, bool) {
+    let path = std::env::var_os("HERDR_CONFIG_PATH").map(PathBuf::from)
+        .or_else(|| herdr_config_dir().map(|dir| dir.join("config.toml")));
+    terminal_shell_config_from(path.as_deref(), std::env::var_os("SHELL"))
+}
+
+#[cfg(unix)]
+pub(crate) fn terminal_shell_config_from(path: Option<&Path>, fallback: Option<std::ffi::OsString>) -> (std::ffi::OsString, bool) {
+    let terminal = path.and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|content| toml::from_str::<toml::Value>(&content).ok())
+        .and_then(|config| config.get("terminal").cloned());
+    let shell = terminal.as_ref().and_then(|t| t.get("default_shell"))
+        .and_then(toml::Value::as_str).map(str::trim).filter(|s| !s.is_empty())
+        .map(std::ffi::OsString::from)
+        .or_else(|| fallback.filter(|s| !s.is_empty()))
+        .unwrap_or_else(|| "/bin/sh".into());
+    let login = match terminal.as_ref().and_then(|t| t.get("shell_mode")).and_then(toml::Value::as_str) {
+        Some("login") => true,
+        Some("non_login") => false,
+        _ => cfg!(target_os = "macos"),
+    };
+    (shell, login)
+}
+
 fn nonempty(value: Option<&String>) -> Option<String> {
     value.filter(|value| !value.trim().is_empty()).cloned()
 }
@@ -148,6 +184,20 @@ mod tests {
     use std::path::PathBuf;
 
     use super::HerdrCliConfig;
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_shell_settings_respect_modes_and_fallbacks() {
+        let path = std::env::temp_dir().join(format!("cockpit-shell-config-{}-{}.toml",
+            std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::write(&path, "[terminal]\ndefault_shell = \"nu\"\nshell_mode = \"non_login\"\n").unwrap();
+        assert_eq!(super::terminal_shell_config_from(Some(&path), Some("/bin/sh".into())), ("nu".into(), false));
+        std::fs::write(&path, "[terminal]\ndefault_shell = \"\"\nshell_mode = \"login\"\n").unwrap();
+        assert_eq!(super::terminal_shell_config_from(Some(&path), Some("fish".into())), ("fish".into(), true));
+        std::fs::write(&path, "[terminal]\nshell_mode = \"auto\"\n").unwrap();
+        assert_eq!(super::terminal_shell_config_from(Some(&path), None), ("/bin/sh".into(), cfg!(target_os = "macos")));
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn rejects_a_socket_without_a_selected_session() {

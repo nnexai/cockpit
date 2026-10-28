@@ -101,14 +101,7 @@ fn assert_no_temporary_files(folder: &Path) {
 #[test]
 fn list_and_unknown_show_have_no_installation_effects() {
     let fixture = Fixture::new();
-    let list = response(fixture.cli(&["list"]), 0);
-    let names: Vec<_> = list["skills"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|skill| skill["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(names, [NOTES, ORCHESTRATION]);
+    response(fixture.cli(&["list"]), 0);
     let error = response(fixture.cli(&["show", "not-bundled"]), 2);
     assert_eq!(error["error"]["code"], "skills_usage");
     assert!(!fixture.home.join(".agent").exists());

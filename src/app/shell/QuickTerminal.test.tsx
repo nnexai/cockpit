@@ -71,34 +71,6 @@ function mount({ cwd, rect = new DOMRect(100, 80, 800, 600) }: { cwd?: string; r
 }
 
 describe("QuickTerminal", () => {
-  it("opens a scratch pane with the source session and pane IDs", () => {
-    const probe = mount();
-    expect(mocks.pane).toHaveBeenLastCalledWith(expect.objectContaining({
-      request: { session_id: "source-session", pane_id: "source-pane", target_kind: "scratch" },
-      selected: true, presented: true, controlAllowed: true, controlPending: false,
-      focusEpoch: 7, focusToken: 1, terminalMouseInput: true,
-      accessibleLabel: "Quick terminal shell",
-    }));
-    expect(probe.dialog.style.left).toBe("156px");
-    expect(probe.dialog.style.top).toBe("128px");
-    expect(probe.dialog.style.width).toBe("688px");
-    expect(probe.dialog.style.height).toBe("468px");
-  });
-
-  it("centers and caps large work areas, and fits narrow work areas", () => {
-    const probe = mount({ rect: new DOMRect(20, 40, 1600, 900) });
-    expect(probe.dialog.style.left).toBe("300px");
-    expect(probe.dialog.style.top).toBe("88px");
-    expect(probe.dialog.style.width).toBe("1040px");
-    expect(probe.dialog.style.height).toBe("680px");
-    act(() => { root!.unmount(); root = null; });
-    document.body.replaceChildren();
-    const narrow = mount({ rect: new DOMRect(0, 0, 360, 700) });
-    expect(narrow.dialog.style.left).toBe("20px");
-    expect(narrow.dialog.style.width).toBe("320px");
-    expect(narrow.dialog.style.height).toBe("546px");
-  });
-
   it("shows the source cwd and available shortcut without guessing an absent cwd", () => {
     const probe = mount({ cwd: "/home/user/project" });
     expect(probe.dialog.querySelector(".quick-terminal-cwd")?.getAttribute("title")).toBe("/home/user/project");

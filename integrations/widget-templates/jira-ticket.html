@@ -1,0 +1,36 @@
+<title>PROJ-123 Fix login redirect loop</title>
+<main class="cw">
+  <header class="cw-head">
+    <p class="cw-kicker">PROJ-123 · Bug · Web Platform</p>
+    <h1 class="cw-title">Fix login redirect loop</h1>
+    <ul class="cw-meta">
+      <li class="cw-chip cw-info">In Progress</li>
+      <li class="cw-chip cw-bad">High</li>
+    </ul>
+  </header>
+  <dl class="cw-facts">
+    <dt>Assignee</dt><dd>Casey Maintainer</dd>
+    <dt>Reporter</dt><dd>Sam Reporter</dd>
+    <dt>Updated</dt><dd>2026-10-27 14:05</dd>
+    <dt>Labels</dt><dd>auth, regression</dd>
+    <dt>URL</dt><dd><code>https://example.atlassian.net/browse/PROJ-123</code></dd>
+  </dl>
+  <div class="cw-body">
+    <p>Signed-in users are redirected between <code>/login</code> and <code>/home</code> until the browser aborts.</p>
+  </div>
+  <section class="cw-sec">
+    <h2>Acceptance</h2>
+    <ul class="cw-body"><li>Login lands on the requested page.</li><li>No redirect after session refresh.</li></ul>
+  </section>
+  <section class="cw-sec">
+    <h2>Linked</h2>
+    <ul class="cw-list">
+      <li><span class="cw-key">PROJ-120</span><span class="cw-grow">Session cookie SameSite change</span><span class="cw-chip cw-ok">Done</span></li>
+      <li><span class="cw-key">PROJ-125</span><span class="cw-grow">Add redirect e2e test</span><span class="cw-chip cw-dim">To Do</span></li>
+    </ul>
+  </section>
+  <details class="cw-sec cw-fold">
+    <summary>Comments (1)</summary>
+    <article class="cw-note"><header><b>Sam Reporter</b><span>2026-10-26 09:12</span></header><p>Reproduces only with a stale cookie.</p></article>
+  </details>
+</main>

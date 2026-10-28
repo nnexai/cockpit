@@ -589,12 +589,12 @@ pub(super) struct LaunchArgs {
     #[arg(long)]
     pub(super) repository: Option<String>,
     #[arg(long)]
-    /// Open placement; schedule isolates a uniquely matched Git Space, otherwise borrows.
+    /// Open path; schedule shares a uniquely verified Git Space if clean, lone and without conflicting claims, isolates it otherwise; other paths are borrowed.
     pub(super) path: Option<String>,
     #[arg(long)]
-    /// Deliberate borrowed reuse; no shared-reader capability or teardown ownership.
+    /// Intentional borrowed Space reuse; no shared-reader capability or teardown ownership.
     pub(super) space: Option<String>,
-    /// Create an isolated owned worktree from the source Space.
+    /// Create an isolated owned worktree for concurrent writers or a different base or branch.
     #[arg(long)]
     pub(super) space_worktree: Option<String>,
     #[arg(long, conflicts_with_all = ["path", "space"], requires = "target")]
@@ -684,7 +684,7 @@ impl WorkerStartArgs {
         let launch = self.launch.read()?;
         let task_revision = self.task_revision.ok_or_else(|| CliError::usage("WorkerStart needs an internally resolved task revision"))?;
         let doc_revision = self.doc_revision.ok_or_else(|| CliError::usage("WorkerStart needs an internally resolved document revision"))?;
-        let target = launch.target.ok_or_else(|| CliError::usage("worker-start requires explicit project placement; task schedule defaults to an owned worktree"))?;
+        let target = launch.target.ok_or_else(|| CliError::usage("worker-start requires explicit project placement; task schedule can choose placement automatically"))?;
         let operation_id = submission_id(self.operation_id, "Operation")?;
         eprintln!("Task revision: {task_revision}\nDocument revision: {doc_revision}");
         Ok(OrchestrationAction::WorkerStart {

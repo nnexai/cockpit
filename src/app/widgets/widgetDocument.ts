@@ -1,3 +1,5 @@
+import widgetComponents from "./widgetComponents.css?raw";
+
 const WIDGET_CSP = "default-src 'none'; script-src http: https: data: blob: 'unsafe-inline'; style-src http: https: data: blob: 'unsafe-inline'; img-src http: https: data: blob:; font-src http: https: data: blob:; media-src http: https: data: blob:; connect-src http: https: ws: wss: data: blob:; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
 const MAX_SELECTION_BYTES = 16 * 1024;
 
@@ -127,6 +129,8 @@ export function widgetDocument(html: string, bridge: {
   })();`;
   const style = document.createElement("style");
   style.textContent = 'html { color-scheme: dark; } body { margin: 0; padding: 16px 32px 40px; background: #0C1016; color: #D8DEE8; font: 14px/22px "IBM Plex Sans", "Noto Sans", sans-serif; overflow-wrap: anywhere; } pre { overflow: auto; } table { border-collapse: collapse; } th, td { padding: 4px 8px; border: 1px solid #2A3340; }';
-  document.head.prepend(charset, policy, script, style);
+  const components = document.createElement("style");
+  components.textContent = widgetComponents;
+  document.head.prepend(charset, policy, script, style, components);
   return `<!doctype html>${document.documentElement.outerHTML}`;
 }
