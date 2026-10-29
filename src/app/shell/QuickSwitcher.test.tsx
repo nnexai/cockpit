@@ -3,7 +3,10 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QuickSwitcher } from "./QuickSwitcher";
-import type { SwitchRow } from "./quickSwitch";
+import { switchRows, switchSearchText, type SwitchRow } from "./quickSwitch";
+import { rankFuzzyMatches } from "../input/fileNavigation";
+import type { Agent } from "../sidebar/spaceTree";
+import type { WidgetSummary } from "../../protocol/generated/v1";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 afterEach(() => document.body.replaceChildren());
@@ -67,5 +70,23 @@ it("draws a gray dot for a no-agent Space while preserving the unknown-agent rin
     const rows = probe.host.querySelectorAll(".switcher-row");
     expect(rows[0].querySelector(".sb-glyph.is-none circle")?.getAttribute("r")).toBe("2.75");
     expect(rows[1].querySelector(".sb-glyph.is-unknown circle")?.getAttribute("r")).toBe("8.25");
+  } finally { probe.unmount(); }
+});
+
+it("includes live and closed widgets and searches the visible agent title", () => {
+  const agent = { name: "Worker", title: "Investigating latency", pane_id: "pane", space_id: "space", tab_id: "tab", status: "working", state_change_seq: 1, focused: false } as Agent;
+  const live = { key: { session_id: "session", tab_id: "tab", id: "live" }, space_id: "space", title: "Live chart" } as WidgetSummary;
+  const closed = { ...live, key: { ...live.key, id: "closed" }, title: "Closed chart" };
+  const rows = switchRows({ spaces: [], tabs: [], agents: [agent], widgets: [live], closedWidgets: [closed], currentSpaceId: null, currentPaneId: null, live: true, busy: false });
+  expect(rows.find(item => item.kind === "agent")?.meta).toContain("Investigating latency");
+  expect(rankFuzzyMatches("Investigating latency", rows, switchSearchText).map(item => item.kind)).toEqual(["agent"]);
+  expect(rows.filter(item => item.kind.includes("widget")).map(item => [item.kind, item.primary, item.meta])).toEqual([
+    ["widget", "Live chart", "Widget"], ["closed-widget", "Closed chart", "Closed widget"],
+  ]);
+  const probe = mount(rows);
+  try {
+    const closedRow = Array.from(probe.host.querySelectorAll("button[role=option]")).find(button => button.textContent?.includes("Closed chart")) as HTMLButtonElement;
+    act(() => closedRow.click());
+    expect(probe.onChoose).toHaveBeenCalledWith({ kind: "closed-widget", id: JSON.stringify(["session", "tab", "closed"]) });
   } finally { probe.unmount(); }
 });

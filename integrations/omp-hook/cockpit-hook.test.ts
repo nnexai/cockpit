@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { bindHook, bootstrapFrames, capturedMessages, frames, meaningful } from "./cockpit-hook";
+import { bindHook, bootstrapFrames, capturedMessages, frames } from "./cockpit-hook";
 
 vi.mock("node:child_process", () => ({ spawn: vi.fn() }));
 
@@ -79,34 +79,17 @@ function fixture(batches: unknown[][] = [[message(1)]], idle = true) {
 }
 
 describe("optional public OMP Cockpit hook", () => {
-  it("silently captures progress, initialization and already-bootstrapped briefs", () => {
-    expect(capturedMessages({ messages: [message(1, "report", { kind: "progress" }), message(2, "report", { kind: "initialized" }), message(3, "work_brief")] })).toEqual([]);
-    for (const kind of ["instruction", "answer", "cancel_request", "observation"]) expect(meaningful(message(1, kind))).toBe(true);
-    for (const kind of ["needs_input", "result"]) expect(meaningful(message(1, "report", { kind }))).toBe(true);
+  it("trusts the CLI deliverable capture without a second classification", () => {
+    const delivered = [message(1, "observation"), message(2, "report", { kind: "needs_input" })];
+    expect(capturedMessages({ messages: delivered })).toEqual(delivered);
   });
 
-  it("silently captures a recorded root self-answer but delivers other answers", () => {
-    const selfAnswer = { ...message(1, "answer"), from: { type: "run", run_id: "run-one" }, in_reply_to: "human-question" };
-    expect(capturedMessages({ run_id: "run-one", messages: [selfAnswer] }, "run-one")).toEqual([]);
-    expect(meaningful({ ...selfAnswer, from: { type: "operator" } })).toBe(true);
-    expect(meaningful({ ...selfAnswer, from: { type: "run", run_id: "liaison-parent" } })).toBe(true);
-  });
-
-  it("does not schedule model turns for root-authored NeedsInput or Result", async () => {
-    // A root has no parent: report.rs defaults the durable recipient to its own run.
-    const selfReports = ["needs_input", "result"].map((kind, index) => ({
-      ...message(index + 1, "report", { kind }), from: { type: "run", run_id: "run-one" },
-    }));
-    const f = fixture(selfReports.map(report => [report]));
-    f.env.COCKPIT_BOOTSTRAP_ARGV = "1";
-    f.emit("session_start"); await f.waiting; f.flush();
-    expect(f.sends).toEqual([]);
-    const spool = join(f.credentials, readdirSync(f.credentials)[0]);
-    expect(readdirSync(spool)).toEqual([]);
-    for (const report of selfReports) {
-      expect(meaningful({ ...report, from: { type: "run", run_id: "worker-attempt" } })).toBe(true);
-    }
-    f.emit("session_shutdown");
+  it("omits unknown task context from dispatcher banners", () => {
+    const notice = { ...message(1, "observation"), from: { type: "dispatcher" } };
+    expect(frames([notice])[0]).toContain("[observation] from dispatcher: body-1");
+    expect(frames([notice])[0]).not.toContain("unknown project");
+    expect(frames([{ ...notice, context: { task_title: "Ship it", project: { label: "App" } } }])[0])
+      .toContain('[observation] task "Ship it" (App) from dispatcher: body-1');
   });
 
   it("rejects malformed capture and report envelopes", () => {
@@ -157,11 +140,13 @@ describe("optional public OMP Cockpit hook", () => {
   });
 
   it("registers actual identity, coalesces bursts, and starts prompts only when idle", async () => {
-    const f = fixture([[message(1)], [message(2)], [message(2)], [message(3, "report", { kind: "progress" })]]);
+    // The real CLI filters progress before writing the capture.
+    const f = fixture([[message(1)], [message(2)], [message(2)], []]);
     f.emit("session_start");
     await f.waiting;
     expect(f.env.COCKPIT_SESSION_ID).toBe("actual-session");
     expect(f.calls[0]).toEqual(["run", "context", "--json"]);
+    expect(f.calls.some(args => args[0] === "inbox" && args[1] === "next" && args.includes("--deliverable"))).toBe(true);
     expect(f.sends).toHaveLength(1);
     expect(f.delays).toContain(1500);
     f.flush();

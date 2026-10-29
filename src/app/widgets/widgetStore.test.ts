@@ -20,7 +20,7 @@ function fixture() {
   const events: Array<(event: WidgetEvent) => void> = [], failures: Array<() => void> = [];
   const client = { subscribeWidgets: vi.fn(async (onEvent: (event: WidgetEvent) => void, onError: () => void) => { events.push(onEvent); failures.push(onError); return { report, close }; }),
     widgetRemove: vi.fn(async () => ({ result: "removed" })),
-    widgetContent: vi.fn(async (request: WidgetContentRequest) => ({ ...request, sha256: "a".repeat(64), body: { type: "html", document: "<p>statistics</p>" }, selection: null })) } as unknown as CockpitClient;
+    widgetContent: vi.fn(async (request: WidgetContentRequest) => ({ ...request, sha256: "a".repeat(64), body: { type: "html", document: "<p>statistics</p>", choices: null }, selection: null })) } as unknown as CockpitClient;
   const actions: LayoutAction[] = [];
   const ctx: LeafCtx = { client, sessionId: "session", serverInstance: "server", clientId: "client", getState: () => state,
     dispatch(action) { actions.push(action); state = layoutReducer(state, action).state; } };

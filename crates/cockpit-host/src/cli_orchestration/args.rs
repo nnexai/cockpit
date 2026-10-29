@@ -949,7 +949,7 @@ pub(super) enum InboxCommand {
     Next {
         #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=3600))]
         wait: u64,
-        /// Silently capture Progress/Initialized; return only meaningful boundary messages.
+        /// Return decision-relevant messages; housekeeping remains available via inbox list.
         #[arg(long)]
         deliverable: bool,
         /// Private new capture file; atomically fsync payload before acknowledging.
@@ -976,7 +976,7 @@ Native delivery receipts do not grant work authority or prove resumed work."
         #[arg(long)]
         through: u64,
     },
-    /// Wait read-only for pending mail; returns counts/kinds/sequence, never bodies.
+    /// Wait read-only for decision-relevant mail; returns counts/kinds/sequence, never bodies.
     #[command(
         after_long_help = "Read-only counts/kinds/through_seq, never message bodies or a Read receipt.
 Ordinary consumers use inbox next, which captures and ACKs internally.

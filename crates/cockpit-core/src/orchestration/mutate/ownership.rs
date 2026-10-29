@@ -9,6 +9,11 @@ pub(super) fn register(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -
     let job = credentials::validate_registration(ctx.state, caller)?;
     let index = job.run_index;
     let run = &ctx.state.runs[index];
+    if run.resume.as_ref().is_some_and(|resume| resume.fresh_conversation == Some(true)
+        && caller.conversation.is_some() && resume.previous_conversation.is_some()
+        && caller.conversation == resume.previous_conversation) {
+        return Err(error("fresh_conversation_required", "The fresh supervisor must register a different conversation"));
+    }
     let root_id = run.root_id.clone();
     if let Some(task_id) = &run.task_id
         && ctx.locked.tasks(&root_id)?.task(task_id)?.checked {

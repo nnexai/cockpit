@@ -8,8 +8,9 @@ import { runtimeSource } from "../layout/reconcile";
 import { setupParentFor, type SetupParent } from "../projects/SetupDialog";
 import type { LibrarySpace } from "../library/libraryState";
 import type { Space } from "../sidebar/spaceTree";
+import { plainError } from "./plainErrors";
 
-export type StatusError = { message: string; code?: string };
+export type StatusError = { message: string; code?: string; detail?: string };
 export type SessionSnapshot = SessionSnapshotResponse;
 export type Tab = SessionSnapshot["tabs"][number];
 export type Pane = SessionSnapshot["panes"][number];
@@ -18,7 +19,9 @@ export type Selection = { spaceId: string | null; tabId: string | null; paneId: 
 export function describeError(error: unknown, fallback: string): StatusError {
   if (error instanceof Error) {
     const typed = error as Error & { code?: unknown; operationCode?: unknown };
-    return { message: typed.message || fallback, code: typeof typed.operationCode === "string" ? typed.operationCode : typeof typed.code === "string" ? typed.code : undefined };
+    const code = typeof typed.operationCode === "string" ? typed.operationCode : typeof typed.code === "string" ? typed.code : undefined;
+    const described = plainError(code, typed.message || fallback);
+    return { message: described.text, code, detail: described.detail };
   }
   return { message: fallback };
 }

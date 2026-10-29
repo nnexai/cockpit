@@ -33,7 +33,7 @@ pub use mutate::integration::OutputFacts;
 pub use mutate::resume::effect_free_reserved_resume_launch;
 pub use resource_queue::ResourceSourceFacts;
 pub use cleanup::ResourceRegistrationFacts;
-pub use messages::{latest_progress_sequences, inbox_counts, InboxCounts, InboxKindCount, InboxMessageContext};
+pub use messages::{latest_progress_sequences, inbox_counts, inbox_meaningful, InboxCounts, InboxKindCount, InboxMessageContext};
 pub use credentials::{JobAuth, JobRole, SecretBytes, read_job_auth};
 pub use claims::{RootMainRecoveryProof, WriterExitProof};
 use mutate::{Applied, MutationCtx};
@@ -483,7 +483,7 @@ impl OrchestrationService {
         if !state.operations.iter().any(|r| r.operation_id == operation_id) { return Ok(None); }
         let Admission { caller, .. } = admit(&mut state, actor, request)?;
         match &request.action {
-            OrchestrationAction::SupervisorStart { .. } => { operator(actor)?; }
+            OrchestrationAction::SupervisorStart { .. } | OrchestrationAction::RunStartFreshSupervisor { .. } => { operator(actor)?; }
             OrchestrationAction::WorkerStart { .. } | OrchestrationAction::TaskScopeUpdate { .. }
             | OrchestrationAction::TaskSchedule { .. } | OrchestrationAction::TaskScheduleCancel { .. }
             | OrchestrationAction::WorkerReplace { .. } => {
@@ -589,6 +589,7 @@ impl OrchestrationService {
             | OrchestrationAction::SendBack { run_id, .. }
             | OrchestrationAction::CancelRun { run_id }
             | OrchestrationAction::RunResume { run_id, .. }
+            | OrchestrationAction::RunStartFreshSupervisor { run_id, .. }
             | OrchestrationAction::ReconcileRun { run_id, .. } => Some(run_id.clone()),
             _ => None,
         };
@@ -839,7 +840,14 @@ impl OrchestrationService {
                     let project = run.task_id.as_ref().and_then(|id| projection::task_project(&state, &run.root_id, id, None))
                         .map(|project| project.label).unwrap_or_else(|| "General".into());
                     format!("Task \"{title}\" ({project}) is idle without a report; check with its worker.")
-                } else { diagnostic.to_owned() };
+                } else {
+                    match diagnostic {
+                        "endpoint_changed" => "The worker's runtime endpoint changed; reconnect to the original endpoint before inspecting it.".to_owned(),
+                        "exited_without_report" => "The worker's terminal disappeared without a result; inspect the attempt and decide how to proceed.".to_owned(),
+                        "runtime_blocked" => "The worker appears blocked without a question; check with the worker to find out what it needs.".to_owned(),
+                        _ => unreachable!(),
+                    }
+                };
                 messages::append(&mut state, messages::AppendMessage { from: ActorRef::Dispatcher, to_run_id: &recipient, message_id: &key, kind: MessageKind::Observation, text: &text, in_reply_to: None, report: None, stale: false, escalated_from: (recipient != original).then(|| original.to_owned()) })?;
                 changed = true;
             }
@@ -1123,6 +1131,7 @@ fn durable_operation(action: &OrchestrationAction) -> Option<(&str, store::Durab
     let operation = match action {
         OrchestrationAction::SupervisorStart { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::SupervisorStart),
         OrchestrationAction::RunResume { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::RunResume),
+        OrchestrationAction::RunStartFreshSupervisor { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::RunResume),
         OrchestrationAction::RunAttach { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::RunAttach),
         OrchestrationAction::RunRegister { operation_id } => (operation_id.as_str(), DurableOperationKind::RunRegister),
         OrchestrationAction::TaskUnassign { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::TaskUnassign),
@@ -1144,7 +1153,7 @@ fn durable_operation(action: &OrchestrationAction) -> Option<(&str, store::Durab
 
 fn allows_stale_machine_revision(action: &OrchestrationAction) -> bool {
     matches!(action, OrchestrationAction::SupervisorStart { .. }
-        | OrchestrationAction::RunResume { .. } | OrchestrationAction::RunAttach { .. }
+        | OrchestrationAction::RunResume { .. } | OrchestrationAction::RunStartFreshSupervisor { .. } | OrchestrationAction::RunAttach { .. }
         | OrchestrationAction::RunRegister { .. } | OrchestrationAction::TaskUnassign { .. }
         | OrchestrationAction::WorkerStart { .. }
         | OrchestrationAction::TaskSchedule { .. } | OrchestrationAction::TaskScheduleCancel { .. }

@@ -137,7 +137,6 @@ export interface WireTypes {
   "RunObservation": V1.RunObservation;
   "RuntimeObservation": V1.RuntimeObservation;
   "AttentionKind": V1.AttentionKind;
-  "Attention": V1.Attention;
 }
 
 export interface WireOwners {
@@ -267,7 +266,6 @@ export interface WireOwners {
   "RuntimeObservation": V1.RuntimeObservation;
   "RuntimeObservation[fresh]": Extract<V1.RuntimeObservation, { "status": "fresh" }>;
   "RuntimeObservation[unavailable]": Extract<V1.RuntimeObservation, { "status": "unavailable" }>;
-  "Attention": V1.Attention;
 }
 
 export interface WireFields {
@@ -459,6 +457,9 @@ export interface WireFields {
   "ResumeRecord.operation_id": (V1.ResumeRecord)["operation_id"];
   "ResumeRecord.run_id": (V1.ResumeRecord)["run_id"];
   "ResumeRecord.previous_attachment_epoch": (V1.ResumeRecord)["previous_attachment_epoch"];
+  "ResumeRecord.fresh_conversation": (V1.ResumeRecord)["fresh_conversation"];
+  "ResumeRecord.previous_conversation": (V1.ResumeRecord)["previous_conversation"];
+  "ResumeRecord.session_namespace": (V1.ResumeRecord)["session_namespace"];
   "ResumeRecord.phase": (V1.ResumeRecord)["phase"];
   "ResumeRecord.cause": (V1.ResumeRecord)["cause"];
   "ResumeRecord.decision_id": (V1.ResumeRecord)["decision_id"];
@@ -471,6 +472,7 @@ export interface WireFields {
   "LiaisonCandidate.resume": (V1.LiaisonCandidate)["resume"];
   "LiaisonCandidate.cause": (V1.LiaisonCandidate)["cause"];
   "LiaisonCandidate.stop_confirmable": (V1.LiaisonCandidate)["stop_confirmable"];
+  "LiaisonCandidate.fresh_available": (V1.LiaisonCandidate)["fresh_available"];
   "LiaisonCandidate.updated_at": (V1.LiaisonCandidate)["updated_at"];
   "LiaisonLookupResponse[resolved].lookup_revision": (Extract<V1.LiaisonLookupResponse, { "status": "resolved" }>)["lookup_revision"];
   "LiaisonLookupResponse[resolved].preferred_root_id": (Extract<V1.LiaisonLookupResponse, { "status": "resolved" }>)["preferred_root_id"];
@@ -825,11 +827,6 @@ export interface WireFields {
   "RuntimeObservation[fresh].observed_at": (Extract<V1.RuntimeObservation, { "status": "fresh" }>)["observed_at"];
   "RuntimeObservation[fresh].runs": (Extract<V1.RuntimeObservation, { "status": "fresh" }>)["runs"];
   "RuntimeObservation[unavailable].error": (Extract<V1.RuntimeObservation, { "status": "unavailable" }>)["error"];
-  "Attention.kind": (V1.Attention)["kind"];
-  "Attention.run_id": (V1.Attention)["run_id"];
-  "Attention.task_id": (V1.Attention)["task_id"];
-  "Attention.message_seq": (V1.Attention)["message_seq"];
-  "Attention.since": (V1.Attention)["since"];
 }
 
 export interface WireFieldNames {
@@ -877,9 +874,9 @@ export interface WireFieldNames {
   "OwnedProcessScope": "kind" | "unit" | "invocation_id" | "control_group" | "cgroup_device" | "cgroup_inode" | "machine_id" | "kernel_boot_id" | "member" | "captured_at";
   "AgentLaunchReceipt": "latch" | "nonce" | "latch_device" | "latch_inode";
   "ResumeCause": "code" | "message" | "class";
-  "ResumeRecord": "operation_id" | "run_id" | "previous_attachment_epoch" | "phase" | "cause" | "decision_id" | "replacement_attachment_epoch" | "updated_at";
+  "ResumeRecord": "operation_id" | "run_id" | "previous_attachment_epoch" | "fresh_conversation" | "previous_conversation" | "session_namespace" | "phase" | "cause" | "decision_id" | "replacement_attachment_epoch" | "updated_at";
   "LiaisonLookupRequest": "session_id" | "selected_root_id";
-  "LiaisonCandidate": "root_id" | "connection" | "resume" | "cause" | "stop_confirmable" | "updated_at";
+  "LiaisonCandidate": "root_id" | "connection" | "resume" | "cause" | "stop_confirmable" | "fresh_available" | "updated_at";
   "LiaisonLookupResponse": never;
   "LiaisonLookupResponse[resolved]": "lookup_revision" | "preferred_root_id" | "roots";
   "LiaisonLookupResponse[unavailable]": "code" | "message";
@@ -959,7 +956,6 @@ export interface WireFieldNames {
   "RuntimeObservation": never;
   "RuntimeObservation[fresh]": "endpoint_identity" | "observed_at" | "runs";
   "RuntimeObservation[unavailable]": "error";
-  "Attention": "kind" | "run_id" | "task_id" | "message_seq" | "since";
 }
 
 export interface WireChildNames {
@@ -988,6 +984,7 @@ export interface WireChildNames {
   "ExecutionAttachment.shell": "NativeShellIdentity";
   "ExecutionAttachment.process_scope": "OwnedProcessScope";
   "OwnedProcessScope.member": "NativeProcessIdentity";
+  "ResumeRecord.previous_conversation": "ConversationIdentity";
   "ResumeRecord.cause": "ResumeCause";
   "LiaisonCandidate.cause": "ResumeCause";
   "RunResumeResult.resume": "ResumeRecord";
@@ -1152,9 +1149,9 @@ export interface WireCheckpointFieldNames {
   "OwnedProcessScope": "kind" | "unit" | "invocation_id" | "control_group" | "cgroup_device" | "cgroup_inode" | "machine_id" | "kernel_boot_id" | "member" | "captured_at";
   "AgentLaunchReceipt": "latch" | "nonce" | "latch_device" | "latch_inode";
   "ResumeCause": "code" | "message" | "class";
-  "ResumeRecord": "operation_id" | "run_id" | "previous_attachment_epoch" | "phase" | "cause" | "decision_id" | "replacement_attachment_epoch" | "updated_at";
+  "ResumeRecord": "operation_id" | "run_id" | "previous_attachment_epoch" | "fresh_conversation" | "previous_conversation" | "session_namespace" | "phase" | "cause" | "decision_id" | "replacement_attachment_epoch" | "updated_at";
   "LiaisonLookupRequest": "session_id" | "selected_root_id";
-  "LiaisonCandidate": "root_id" | "connection" | "resume" | "cause" | "stop_confirmable" | "updated_at";
+  "LiaisonCandidate": "root_id" | "connection" | "resume" | "cause" | "stop_confirmable" | "fresh_available" | "updated_at";
   "LiaisonLookupResponse": "code" | "lookup_revision" | "message" | "preferred_root_id" | "roots" | "status";
   "LiaisonLookupResponse[resolved]": "lookup_revision" | "preferred_root_id" | "roots" | "status";
   "LiaisonLookupResponse[unavailable]": "code" | "message" | "status";
@@ -1234,7 +1231,6 @@ export interface WireCheckpointFieldNames {
   "RuntimeObservation": "endpoint_identity" | "error" | "observed_at" | "runs" | "status";
   "RuntimeObservation[fresh]": "endpoint_identity" | "observed_at" | "runs" | "status";
   "RuntimeObservation[unavailable]": "error" | "status";
-  "Attention": "kind" | "run_id" | "task_id" | "message_seq" | "since";
 }
 
 export type WireOmittableField =
@@ -1288,11 +1284,15 @@ export type WireOmittableField =
   | "ExecutionAttachment.machine_id"
   | "ExecutionAttachment.process_scope"
   | "ResumeRecord.previous_attachment_epoch"
+  | "ResumeRecord.fresh_conversation"
+  | "ResumeRecord.previous_conversation"
+  | "ResumeRecord.session_namespace"
   | "ResumeRecord.cause"
   | "ResumeRecord.decision_id"
   | "ResumeRecord.replacement_attachment_epoch"
   | "LiaisonLookupRequest.selected_root_id"
   | "LiaisonCandidate.cause"
+  | "LiaisonCandidate.fresh_available"
   | "LiaisonLookupResponse[resolved].preferred_root_id"
   | "SupervisorStartResult.resume_operation_id"
   | "RunLocation.boot_id"
@@ -1372,12 +1372,13 @@ export type WireOmittableField =
   | "RunObservation.pane_id"
   | "RunObservation.agent_status"
   | "RunObservation.state_changed_at"
-  | "Attention.run_id"
-  | "Attention.task_id"
-  | "Attention.message_seq"
   | never;
 
 export type WireOptionalField =
+  | "ResumeRecord.fresh_conversation"
+  | "ResumeRecord.previous_conversation"
+  | "ResumeRecord.session_namespace"
+  | "LiaisonCandidate.fresh_available"
   | never;
 
 export type WireListField =

@@ -1078,7 +1078,11 @@ impl Dispatcher {
         let tag = format!("ck-{}-{}-{}", run.run_id.get(..8).unwrap_or(&run.run_id), run.attempt, launch_attempt);
         let mut args = launch_args(run)?;
         if run.launch_config.harness_kind == "omp" && run.launch_config.command == "omp" {
-            let directory = self.service.base().join("agent-sessions").join(&run.run_id);
+            let mut directory = self.service.base().join("agent-sessions").join(&run.run_id);
+            if let Some(namespace) = run.resume.as_ref().and_then(|resume| resume.session_namespace.as_deref()) {
+                super::tasks_md::validate_uuid(namespace)?;
+                directory.push(namespace);
+            }
             std::fs::create_dir_all(&directory)
                 .map_err(|error| InspectionError::new("agent_session_directory", error.to_string()))?;
             args.extend(["--session-dir".into(), path_text(&directory)?]);
@@ -1688,6 +1692,9 @@ pub fn resume_supported(config: &cockpit_protocol::projects::OrchestrationConfig
 }
 
 fn launch_args(run: &Run) -> Result<Vec<String>, InspectionError> {
+    if run.resume.as_ref().is_some_and(|resume| resume.fresh_conversation == Some(true)) {
+        return Ok(run.launch_config.extra_args.clone());
+    }
     let previous = run.resume.as_ref().and_then(|resume|
         resume.previous_attachment_epoch.filter(|_| resume.replacement_attachment_epoch.is_some()));
     if previous.is_none() { return Ok(run.launch_config.extra_args.clone()); }
@@ -2217,7 +2224,8 @@ impl OrchestrationService {
             // Bootstrap is part of the direct-process argv, never terminal typing.
             if !run.launch_config.inbox_prompt_hints || !super::has_current_binding(&state, run) { continue; }
             let through_seq = state.messages.iter().filter(|message| message.to_run_id == run.run_id
-                && message.stage == cockpit_protocol::orchestration::DeliveryStage::Stored)
+                && message.stage == cockpit_protocol::orchestration::DeliveryStage::Stored
+                && super::messages::inbox_meaningful(message))
                 .map(|message| message.seq).max().unwrap_or(0);
             if through_seq == 0 { continue; }
             let existing = state.inbox_hints.iter().find(|hint| hint.run_id == run.run_id
@@ -2281,8 +2289,8 @@ impl OrchestrationService {
 /// Inline launch instructions also returned by `run brief`. The credential
 /// authorizes the pending attempt; conversation identity is optional metadata.
 pub fn render_run_bootstrap(run: &Run) -> String {
-    if run.resume.as_ref().is_some_and(|resume| resume.previous_attachment_epoch.is_some()
-        && resume.replacement_attachment_epoch.is_some())
+    if run.resume.as_ref().is_some_and(|resume| resume.fresh_conversation != Some(true)
+        && resume.previous_attachment_epoch.is_some() && resume.replacement_attachment_epoch.is_some())
         && run.attachment.as_ref().is_some_and(|attachment| attachment.conversation.is_some()) {
         return "Cockpit resumed this conversation; run \"$COCKPIT_CLI_PATH\" run context --json and continue your existing work.".into();
     }

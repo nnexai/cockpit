@@ -4,6 +4,7 @@ import type {
   WorkspaceTeardownRecoveryList,
 } from "../../protocol/generated/v1";
 import { ModalSection } from "../input/ModalSection";
+import { describeError, type StatusError } from "../shell/model";
 import { TeardownDialog, type TeardownClient } from "./TeardownDialog";
 import "./setup.css";
 
@@ -18,9 +19,6 @@ export type TeardownRecoveryPanelProps = {
   onClose: () => void;
 };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : "Could not load pending cleanup.";
-}
 
 function stateLabel(recovery: WorkspaceTeardownRecovery): string {
   switch (recovery.state) {
@@ -37,7 +35,7 @@ function stateLabel(recovery: WorkspaceTeardownRecovery): string {
 export function TeardownRecoveryPanel({ client, sessionId, open, onClose }: TeardownRecoveryPanelProps) {
   const titleId = useId();
   const [list, setList] = useState<WorkspaceTeardownRecoveryList | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<StatusError | null>(null);
   const [selected, setSelected] = useState<WorkspaceTeardownRecovery | null>(null);
   const [refresh, setRefresh] = useState(0);
 
@@ -48,7 +46,7 @@ export function TeardownRecoveryPanel({ client, sessionId, open, onClose }: Tear
     setError(null);
     void client.workspaceTeardownRecoveries(sessionId)
       .then((next) => { if (active) setList(next); })
-      .catch((reason: unknown) => { if (active) setError(errorMessage(reason)); });
+      .catch((reason: unknown) => { if (active) setError(describeError(reason, "Could not load pending cleanup.")); });
     return () => { active = false; };
   }, [client, open, refresh, selected, sessionId]);
 
@@ -68,7 +66,7 @@ export function TeardownRecoveryPanel({ client, sessionId, open, onClose }: Tear
       <header className="setup-header"><div><span className="setup-eyebrow">Task cleanup</span><h2 id={titleId}>Pending cleanup</h2><p>These records remain available after a Space closes or the app restarts.</p></div><button type="button" className="setup-close" onClick={onClose}>Close</button></header>
       <main className="setup-body"><section className="setup-step-content">
         {!list && !error ? <p className="setup-empty">Loading durable cleanup records…</p> : null}
-        {error ? <p className="setup-error" role="alert">{error}</p> : null}
+        {error ? <p className="setup-error" role="alert" title={error.detail}>{error.message}</p> : null}
         {list?.recoveries.length === 0 ? <p className="setup-empty">No pending cleanup records.</p> : null}
         {list?.recoveries.map((recovery) => <div className="setup-plan-summary" key={recovery.operation_id}>
           <div className="setup-summary-row"><span>Checkout</span><code>{recovery.checkout_path}</code></div>

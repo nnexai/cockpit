@@ -117,6 +117,8 @@ body.is-pane-dragging .widget-choices,
 .widget-warnings ul { margin: 6px 0 0; padding-left: 18px; overflow-wrap: anywhere; }
 
 .widget-choices { flex: 1 1 0; min-width: 0; min-height: 0; overflow: auto; padding: 16px; }
+.widget-dock-choices { flex: 0 1 auto; max-height: 45%; min-height: 0; overflow: auto; border-top: 1px solid var(--border); }
+.widget-dock-choices .widget-choices { overflow: visible; }
 .widget-choices fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .widget-choices legend { padding: 0; margin-bottom: 12px; font-size: var(--font-size-sm); font-weight: 500; }
 .widget-choice { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-control); cursor: pointer; }

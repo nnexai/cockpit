@@ -616,12 +616,104 @@ fn restoration_resume(run: &Run, phase: ResumePhase) -> ResumeRecord {
         operation_id: format!("resume-{}", run.run_id),
         run_id: run.run_id.clone(),
         previous_attachment_epoch: run.attachment.as_ref().map(|attachment| attachment.epoch),
+        fresh_conversation: None, previous_conversation: None, session_namespace: None,
         phase,
         cause: None,
         decision_id: None,
         replacement_attachment_epoch: None,
         updated_at: run.updated_at.clone(),
     }
+}
+
+#[test]
+fn fresh_supervisor_fences_only_root_and_replays_without_another_launch() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    fixture.setup(&root);
+    fixture.seed_run(&root, |run| {
+        run.launch_config.harness_kind = "omp".into();
+        run.launch_config.command = "omp".into();
+        run.launch_config.extra_args.clear();
+    });
+    let old_actor = fixture.launch_and_bind(&root);
+    let task = fixture.create_task(&root, "Preserve this task");
+    let worker = fixture.start(&root, &task);
+    fixture.setup(&worker);
+    let worker_actor = fixture.launch_and_bind(&worker);
+    fixture.seed_run(&root, |run| run.resume = Some(restoration_resume(run, ResumePhase::Blocked)));
+    let old = fixture.run(&root);
+    let old_epoch = old.attachment.as_ref().unwrap().epoch;
+    let task_bytes = fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap();
+    let worker_before = serde_json::to_value(fixture.run(&worker)).unwrap();
+    let claims_before = serde_json::to_value(&fixture.state().checkout_claims).unwrap();
+    let action = OrchestrationAction::RunStartFreshSupervisor {
+        run_id: root.clone(), operation_id: id(), expected_attachment_epoch: old_epoch,
+    };
+    let first = fixture.operator(action.clone());
+    let OrchestrationActionResult::RunResumed { resume } = first.result else { panic!("expected resume"); };
+    assert_eq!(resume.resume.phase, ResumePhase::Launching);
+    assert_eq!(resume.resume.fresh_conversation, Some(true));
+    assert_eq!(resume.resume.previous_conversation, old.attachment.as_ref().unwrap().conversation);
+    assert!(resume.resume.session_namespace.is_some());
+    let current = fixture.run(&root);
+    let attachment = current.attachment.as_ref().unwrap();
+    assert_eq!(attachment.epoch, old_epoch + 1);
+    assert!(attachment.location.is_none() && attachment.conversation.is_none() && attachment.process.is_none());
+    assert_eq!(serde_json::to_value(fixture.run(&worker)).unwrap(), worker_before);
+    assert_eq!(serde_json::to_value(&fixture.state().checkout_claims).unwrap(), claims_before);
+    assert_eq!(fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap(), task_bytes);
+    assert!(fixture.apply(&old_actor, OrchestrationAction::RunRegister { operation_id: id() }).is_err());
+    assert!(fixture.apply(&worker_actor, OrchestrationAction::RunRegister { operation_id: id() }).is_ok());
+    let replay = fixture.operator(action.clone());
+    let OrchestrationActionResult::RunResumed { resume: replay } = replay.result else { panic!("expected replay"); };
+    assert!(replay.duplicate);
+    assert_eq!(replay.resume.operation_id, resume.resume.operation_id);
+    assert_eq!(fixture.run(&root).attachment.unwrap().attachment_id, attachment.attachment_id);
+    let mut changed = action;
+    let OrchestrationAction::RunStartFreshSupervisor { expected_attachment_epoch, .. } = &mut changed else { unreachable!() };
+    *expected_attachment_epoch += 1;
+    assert_eq!(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), changed).unwrap_err().code, "operation_conflict");
+    let stale = OrchestrationAction::RunStartFreshSupervisor {
+        run_id: root.clone(), operation_id: id(), expected_attachment_epoch: old_epoch,
+    };
+    assert_eq!(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), stale).unwrap_err().code, "attachment_conflict");
+    let mut fresh_actor = fixture.launch_tab(&root);
+    fixture.service.record_launch_pending(&fixture.run(&root)).unwrap();
+    let Actor::Agent(caller) = &mut fresh_actor else { unreachable!() };
+    caller.conversation = old.attachment.as_ref().unwrap().conversation.clone();
+    assert_eq!(fixture.apply(&fresh_actor, OrchestrationAction::RunRegister { operation_id: id() }).unwrap_err().code,
+        "fresh_conversation_required");
+    let Actor::Agent(caller) = &mut fresh_actor else { unreachable!() };
+    caller.conversation = Some(ConversationIdentity { harness: "omp".into(), session_id: id() });
+    fixture.apply(&fresh_actor, OrchestrationAction::RunRegister { operation_id: id() }).unwrap();
+}
+
+#[test]
+fn fresh_supervisor_rejects_agents_workers_and_unsettled_launches() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    fixture.setup(&root);
+    fixture.seed_run(&root, |run| {
+        run.launch_config.harness_kind = "omp".into();
+        run.launch_config.command = "omp".into();
+        run.launch_config.extra_args.clear();
+    });
+    let actor = fixture.launch_and_bind(&root);
+    fixture.seed_run(&root, |run| run.resume = Some(restoration_resume(run, ResumePhase::Blocked)));
+    let action = OrchestrationAction::RunStartFreshSupervisor {
+        run_id: root.clone(), operation_id: id(), expected_attachment_epoch: fixture.run(&root).attachment.unwrap().epoch,
+    };
+    assert_eq!(fixture.apply(&actor, action.clone()).unwrap_err().code, "actor_forbidden");
+    fixture.seed_run(&root, |run| run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchUnknown);
+    let before = fixture.state_bytes();
+    assert!(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), action).is_err());
+    assert_eq!(fixture.state_bytes(), before);
+    let task = fixture.create_task(&root, "Worker");
+    let worker = fixture.start(&root, &task);
+    let action = OrchestrationAction::RunStartFreshSupervisor {
+        run_id: worker.clone(), operation_id: id(), expected_attachment_epoch: fixture.run(&worker).attachment.unwrap().epoch,
+    };
+    assert!(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), action).is_err());
 }
 
 fn restoration_resource(run: &Run, cleanup_state: CleanupState) -> OwnedResourceRecord {
@@ -1179,6 +1271,7 @@ async fn omp_default_resume_relaunches_root_after_saved_unsupported_block() {
             run.resume = Some(ResumeRecord {
                 operation_id: blocked_operation.clone(), run_id: root.clone(),
                 previous_attachment_epoch: Some(attachment.epoch), replacement_attachment_epoch: None,
+                fresh_conversation: None, previous_conversation: None, session_namespace: None,
                 phase: ResumePhase::Blocked,
                 cause: Some(ResumeCause { code: "harness_resume_unsupported".into(),
                     message: "Saved harness had no same-conversation resume arguments".into(), class: ResumeCauseClass::Recover }),

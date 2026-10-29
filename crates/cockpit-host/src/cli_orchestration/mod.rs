@@ -1,4 +1,4 @@
-mod agent_send;
+pub(crate) mod agent_send;
 mod args;
 mod caller;
 mod context;

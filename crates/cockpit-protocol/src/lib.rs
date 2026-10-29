@@ -43,6 +43,7 @@ pub use v1::{
     SpaceGitSource, SpaceGitCheckout, SpaceGitUpstream, SpaceGitAction, SpaceGitActionRequest,
     SpaceGitActionResponse, SpaceGitActionOutcome, SpaceGitRefusal,
     ServiceStatus, SpaceServiceStatus, SpaceServiceStatusRequest, SpaceServiceStatusResponse,
+    SpaceCpuPane, SpaceCpuStatusRequest, SpaceCpuProcess, SpaceCpuStatus, SpaceCpuStatusResponse,
     SpaceTags, SpaceTagsResponse, SpaceTagChangeRequest,
     AgentAttentionMark, AgentAttentionLast, AgentAttentionCompletion, AgentAttentionStamp,
     AgentAttentionRecord, AgentAttentionRefusal, AgentAttentionResponse, AgentAttentionObservation,

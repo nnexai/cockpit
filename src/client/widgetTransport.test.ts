@@ -24,6 +24,37 @@ class WidgetSocket implements BrowserWebSocket {
 
 afterEach(() => vi.useRealTimers());
 
+it.each(["browser", "native"])("lists the closed widget shelf through %s", async kind => {
+  const fetch = vi.fn(async (_input: string, _init?: RequestInit) => new Response(JSON.stringify({ widgets: [] })));
+  const invoke = vi.fn<NativeInvoke>(async () => ({ widgets: [] }));
+  const client = kind === "browser" ? createBrowserClient(fetch) : createNativeClient(invoke);
+  await expect(client.widgetShelfList({})).resolves.toEqual({ widgets: [] });
+  if (kind === "browser") {
+    expect(fetch.mock.calls[0][0]).toBe("/api/v1/widgets/shelf/list");
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({});
+  } else {
+    expect(invoke).toHaveBeenCalledWith("cockpit_widget_shelf_list", { request: {} });
+  }
+});
+
+it.each(["browser", "native"])("reopens only the requested %s shelf widget", async kind => {
+  const summary = {
+    key, space_id: "space-1", title: "Chart", revision: 2, created_seq: 1,
+    kind: "choices", presentation: "choices", content: { sha256: "a".repeat(64), bytes: 10, from: "file", name: "choices.json" },
+    warnings: [], source: null, arrival: "own_tab", resolved_from: "current_pane", change: "reopened",
+    created_at_ms: 1000, updated_at_ms: 2000, selection: null,
+  };
+  const fetch = vi.fn(async (_input: string, _init?: RequestInit) => new Response(JSON.stringify(summary)));
+  const invoke = vi.fn<NativeInvoke>(async () => summary);
+  const client = kind === "browser" ? createBrowserClient(fetch) : createNativeClient(invoke);
+  await expect(client.widgetShelfReopen({ key })).resolves.toMatchObject({ key });
+  if (kind === "browser") {
+    expect(fetch.mock.calls[0][0]).toBe("/api/v1/widgets/shelf/reopen");
+    expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual({ key });
+  } else expect(invoke).toHaveBeenCalledWith("cockpit_widget_shelf_reopen", { request: { key } });
+  await expect(client.widgetShelfReopen({ key: { ...key, id: "other" } })).rejects.toMatchObject({ code: "malformed_response" });
+});
+
 describe("widget transport security and identity", () => {
   it("retains gateway origin-denial and native stale-selection codes", async () => {
     const browser = createBrowserClient(async () => new Response(JSON.stringify({ code: "request_origin_required", message: "Origin required" }), { status: 400 }));
@@ -34,7 +65,7 @@ describe("widget transport security and identity", () => {
   });
 
   it.each(["browser", "native"])("rejects %s content from another key or revision", async (kind) => {
-    const body = { key: { ...key, id: "other" }, revision: 2, sha256: "a".repeat(64), body: { type: "html", document: "<p>active widget</p>" }, selection: null };
+    const body = { key: { ...key, id: "other" }, revision: 2, sha256: "a".repeat(64), body: { type: "html", document: "<p>active widget</p>", choices: null }, selection: null };
     const client = kind === "browser"
       ? createBrowserClient(async () => new Response(JSON.stringify(body)))
       : createNativeClient(async () => body);
@@ -81,7 +112,7 @@ describe("widget transport security and identity", () => {
     };
     const body = {
       key, revision: 2, sha256: "a".repeat(64),
-      body: { type: "html", document: '<script>window.cockpit.select("clicked")</script>' }, selection,
+      body: { type: "html", document: '<script>window.cockpit.select("clicked")</script>', choices: null }, selection,
     };
     const client = kind === "browser"
       ? createBrowserClient(async () => new Response(JSON.stringify(body)))

@@ -55,12 +55,14 @@ export function Agents({ snapshot, attention, live, spaces, tabs, selectedPaneId
     const pending = agent.pane_id === pendingPaneId;
     const selected = agent.pane_id === selectedPaneId && !pending;
     const flag = row.flag === "unseen" ? "Unseen" : row.flag === "done" ? "Done" : row.flag === "blocked" ? "Blocked" : null;
-    const description = [location, agent.name, status.word, row.unseen ? row.display === "working" ? "earlier result not seen" : "not seen" : null].filter(Boolean).join(", ");
+    const purpose = agent.title?.trim();
+    const purposeLine = purpose && ![agent.name, location, spaceLabel, tabLabel].some(value => value?.trim().toLocaleLowerCase() === purpose.toLocaleLowerCase()) ? purpose : null;
+    const description = [location, agent.name, status.word, purposeLine, row.unseen ? row.display === "working" ? "earlier result not seen" : "not seen" : null].filter(Boolean).join(", ");
     const title = [description, row.unseen && row.display === "done" && agent.status !== "done" ? "Completion retained until seen" : null, row.completionAt ? `Completed ${row.completionAt}${row.inferred ? " (inferred)" : ""}` : null].filter(Boolean).join(" · ");
     const note = attention.notes.get(agent.pane_id);
     return <div className="agent-row-group" key={row.key}>
       <button type="button" data-row-id={row.key} tabIndex={roving.tabIndexFor(row.key)} className={`agent-row state-${status.className}${selected ? " is-selected" : ""}${pending ? " is-pending" : ""}`} onPointerDown={() => { pointer.current = row.key; }} onClick={event => { if (event.detail !== 0 && pointer.current !== row.key) return; pointer.current = null; onSelect(row); }} title={title} aria-label={description} aria-current={selected ? "true" : undefined} aria-busy={pending || undefined}>
-        <StateGlyph shape={status.shape} /><span className="agent-details"><span className="agent-line">{location ? <span className="agent-location">{location}</span> : <span className="agent-sub">{status.word} · {agent.name}</span>}{flag && !selected ? <span className="agent-flag">{flag}</span> : null}</span>{location && selected ? <span className="agent-sub">{status.word} · {agent.name}{flag ? ` · ${flag}` : ""}</span> : null}</span>
+        <StateGlyph shape={status.shape} /><span className="agent-details"><span className="agent-line">{location ? <span className="agent-location">{location}</span> : <span className="agent-sub">{status.word} · {agent.name}</span>}{flag && !selected ? <span className="agent-flag">{flag}</span> : null}</span>{location && selected ? <span className="agent-sub">{status.word} · {agent.name}{flag ? ` · ${flag}` : ""}</span> : null}{purposeLine ? <span className="agent-purpose">{purposeLine}</span> : null}</span>
       </button>
       {note ? <p className="agent-row-note" role="status">{note}</p> : null}
     </div>;

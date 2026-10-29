@@ -998,8 +998,8 @@ impl OrchestrationService {
             if state.messages.iter().any(|message| matches!(message.from, ActorRef::Dispatcher)
                 && message.message_id == message_id) { return None; }
             let action = cleanup_hold_action(&why.code);
-            let text = format!("Cleanup held for attempt {} ({:?}, resource {}): {} [{}]. {}",
-                resource.run_id, resource.kind, resource.resource_id, why.message, why.code, action);
+            let text = format!("Cleanup is on hold for attempt {} ({:?}, resource {}): {}. {}",
+                resource.run_id, resource.kind, resource.resource_id, why.message.trim_end_matches('.'), action);
             Some((resource.root_id.clone(), message_id, text))
         }).collect();
         for (root_id, message_id, text) in holds {

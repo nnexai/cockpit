@@ -7,6 +7,7 @@ use cockpit_protocol::{
         SessionListResponse, SessionSnapshotResponse, SpaceGitActionRequest,
         SpaceGitActionResponse, SpaceGitStatusResponse, StatusResponse,
         SpaceServiceStatusRequest, SpaceServiceStatusResponse,
+        SpaceCpuStatusRequest, SpaceCpuStatusResponse,
         SpaceTagChangeRequest, SpaceTagsResponse,
     },
 };
@@ -27,6 +28,79 @@ pub async fn status(
     (): (),
 ) -> Result<StatusResponse, OperationError> {
     Ok(service.status().await)
+}
+
+pub const UPDATE_SOURCE_ROOT: &str = env!("COCKPIT_SOURCE_ROOT");
+
+#[derive(serde::Serialize)]
+pub struct UpdateStatus {
+    pub installed_commit: Option<String>,
+    pub source_path: &'static str,
+    pub commits_behind_main: Option<u64>,
+}
+
+pub async fn update_status(
+    _service: &CockpitService,
+    _transport: Transport,
+    (): (),
+) -> Result<UpdateStatus, OperationError> {
+    const ROOT: &str = UPDATE_SOURCE_ROOT;
+    let build = option_env!("COCKPIT_BUILD_COMMIT");
+    let git = |args: Vec<String>| async move {
+        let run = |program: &str| {
+            let mut command = tokio::process::Command::new(program);
+            command.current_dir(ROOT).args(&args);
+            command
+        };
+        match run("git").output().await {
+            Ok(output) => Some(output),
+            Err(_) => run("/usr/bin/git").output().await.ok(),
+        }
+    };
+    let count = if cfg!(target_os = "linux") && std::path::Path::new(ROOT).join("scripts/restart-native.py").is_file() {
+        if let Some(build) = build {
+            git(vec!["rev-list".into(), "--count".into(), format!("{build}..main")]).await
+                .filter(|output| output.status.success())
+                .and_then(|output| String::from_utf8(output.stdout).ok())
+                .and_then(|count| count.trim().parse().ok())
+        } else { None }
+    } else { None };
+    Ok(UpdateStatus { installed_commit: build.map(str::to_owned), source_path: ROOT, commits_behind_main: count })
+}
+
+pub async fn update_install(
+    service: &CockpitService,
+    _transport: Transport,
+    (session_id, space_id): (String, String),
+) -> Result<cockpit_protocol::quick_ask::QuickAskLocation, OperationError> {
+    if !valid_session_id(&session_id) || !valid_resource_id(&space_id) {
+        return Err(OperationError::rejected("invalid_update_target", "Invalid session or Space id"));
+    }
+    if !cfg!(target_os = "linux") {
+        return Err(OperationError::rejected("update_unavailable", "Native update installation is available only on Linux"));
+    }
+    let root = std::path::Path::new(UPDATE_SOURCE_ROOT);
+    if !root.is_absolute() || !root.is_dir() || !root.join("scripts/restart-native.py").is_file() {
+        return Err(OperationError::rejected("update_unavailable", "The source checkout is unavailable"));
+    }
+    let bytes = tokio::fs::read(root.join(".herdr/actions.json")).await
+        .map_err(|_| OperationError::rejected("update_unavailable", "The update action is unavailable"))?;
+    let config: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| OperationError::rejected("update_unavailable", "The update action configuration is invalid"))?;
+    let actions = config["actions"].as_array().ok_or_else(|| OperationError::rejected("update_unavailable", "The update action configuration is invalid"))?;
+    let mut matches = actions.iter().filter(|action| action["id"] == "cockpit-install-restart");
+    let action = matches.next().ok_or_else(|| OperationError::rejected("update_unavailable", "The update action is unavailable"))?;
+    if matches.next().is_some() || action["mode"] != "tab" || action["cwd"] != "worktree" {
+        return Err(OperationError::rejected("update_unavailable", "The update action configuration is invalid"));
+    }
+    let command: Vec<String> = serde_json::from_value(action["command"].clone())
+        .map_err(|_| OperationError::rejected("update_unavailable", "The update action command is invalid"))?;
+    if command.is_empty() || command.iter().any(|arg| arg.contains('\0')) || command[0].is_empty() {
+        return Err(OperationError::rejected("update_unavailable", "The update action command is invalid"));
+    }
+    let label = action["tabLabel"].as_str().filter(|label| !label.is_empty())
+        .ok_or_else(|| OperationError::rejected("update_unavailable", "The update action label is invalid"))?;
+    service.quick_ask()?.install_update(&session_id, &space_id, UPDATE_SOURCE_ROOT, &command, label).await.map_err(Into::into)
 }
 
 pub async fn quota_status(
@@ -93,6 +167,24 @@ pub async fn space_service_status(
         .space_service_status(&session_id, &request)
         .await
         .map_err(Into::into)
+}
+
+pub async fn space_cpu_status(
+    service: &CockpitService, _transport: Transport,
+    (session_id, request): (String, SpaceCpuStatusRequest),
+) -> Result<SpaceCpuStatusResponse, OperationError> {
+    if !valid_session_id(&session_id) {
+        return Err(OperationError::rejected("invalid_session_id", "Invalid session id"));
+    }
+    let mut ids = std::collections::HashSet::new();
+    if request.server_instance.is_empty() || request.server_instance.len() > 256
+        || request.server_instance.chars().any(char::is_control)
+        || request.panes.len() > SPACE_SERVICE_STATUS_MAX_PANES
+        || request.panes.iter().any(|p| !valid_resource_id(&p.pane_id) || !valid_resource_id(&p.space_id) || !valid_resource_id(&p.terminal_id) || !ids.insert(&p.pane_id))
+    {
+        return Err(OperationError::rejected("invalid_space_cpu_status_request", "Expected bounded CPU sampling pane set"));
+    }
+    service.space_cpu_status(&session_id, &request).await.map_err(Into::into)
 }
 
 pub async fn space_tags(

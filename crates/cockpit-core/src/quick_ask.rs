@@ -143,6 +143,10 @@ impl QuickAskService {
         let path = self.path().await;
         QuickAskAvailability { agents: HARNESS.iter().map(|(h, _, exe)| QuickAskAgentAvailability { harness: *h, executable: (*exe).into(), found: executable_found(exe, path) }).collect() }
     }
+    pub async fn install_update(&self, session_id: &str, space_id: &str, cwd: &str, command: &[String], label: &str) -> Result<QuickAskLocation, InspectionError> {
+        self.adapter.install_update(session_id, space_id, cwd, command, label).await
+    }
+
 
     pub async fn ask(&self, session_id: &str, request: QuickAskRequest) -> Result<QuickAskLocation, InspectionError> {
         crate::validate_session_id(session_id)?;

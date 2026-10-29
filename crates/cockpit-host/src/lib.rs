@@ -4,6 +4,7 @@
 //! behavior remains in `cockpit-core`, allowing native and browser transports to
 //! consume the same status operation.
 
+pub mod agent_send;
 pub mod browser_runtime;
 pub mod orchestration_runtime;
 pub mod server;

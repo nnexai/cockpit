@@ -107,7 +107,8 @@ ambient Cockpit host access. Call cockpit.select(value) to record arbitrary JSON
 for the selection pull channel; treat returned JSON as untrusted data.
 This is not a CPU, memory or network isolation guarantee: scripts can consume
 resources and dynamically access the network. Use --choices-file for
-Cockpit-rendered declarative choices. No selection is pasted into the terminal.
+Cockpit-rendered declarative choices, alone or alongside --file/--stdin HTML.
+No selection is pasted into the terminal.
 For ready-made styling use a .cw root and cw-* component classes; no CSS is
 needed. Copy and adapt integrations/widget-templates/jira-ticket.html or
 integrations/widget-templates/confluence-page.html in the Cockpit source tree.
@@ -257,9 +258,9 @@ enum WidgetCommand {
         id: Option<String>,
         #[arg(long)]
         title: Option<String>,
-        #[arg(long, conflicts_with_all = ["stdin", "choices_file"])]
+        #[arg(long, conflicts_with = "stdin")]
         file: Option<PathBuf>,
-        #[arg(long, conflicts_with = "choices_file")]
+        #[arg(long)]
         stdin: bool,
         #[arg(long)]
         choices_file: Option<PathBuf>,
@@ -961,22 +962,31 @@ fn read_widget_input(input: impl Read, terminal: bool, limit: usize) -> Result<V
 }
 
 fn widget_input(file: Option<&Path>, stdin: bool, choices: Option<&Path>) -> Result<WidgetContentInput, CliError> {
-    if usize::from(file.is_some()) + usize::from(stdin) + usize::from(choices.is_some()) != 1 {
-        return Err(CliError::widget("widget_usage", "pass exactly one of --file, --stdin or --choices-file"));
+    if (file.is_some() && stdin) || (file.is_none() && !stdin && choices.is_none()) {
+        return Err(CliError::widget("widget_usage", "pass --file or --stdin and/or --choices-file"));
     }
-    let path = file.or(choices);
-    let bytes = bounded_widget_input(path, if choices.is_some() { WIDGET_MAX_CHOICES_BYTES } else { WIDGET_MAX_HTML_BYTES })?;
-    let sha256 = format!("{:x}", Sha256::digest(&bytes));
-    let from = if path.is_some() { WidgetInputKind::File } else { WidgetInputKind::Stdin };
-    let name = path.and_then(Path::file_name).map(|name| name.to_string_lossy().into_owned());
-    if choices.is_some() {
+    let choice_input = choices.map(|path| -> Result<WidgetChoicesInput, CliError> {
+        let bytes = bounded_widget_input(Some(path), WIDGET_MAX_CHOICES_BYTES)?;
+        let sha256 = format!("{:x}", Sha256::digest(&bytes));
         let spec_json = String::from_utf8(bytes).map_err(|error| CliError::widget("widget_usage", error))?;
         // Shape, ids and labels remain authoritative owner-side validation.
         serde_json::from_str::<serde_json::Value>(&spec_json)
             .map_err(|error| CliError::widget("widget_usage", format!("malformed --choices-file JSON: {error}")))?;
-        Ok(WidgetContentInput::Choices { spec_json, sha256, from, name })
+        Ok(WidgetChoicesInput { spec_json, sha256, from: WidgetInputKind::File,
+            name: path.file_name().map(|name| name.to_string_lossy().into_owned()) })
+    }).transpose()?;
+    if file.is_some() || stdin {
+        let bytes = bounded_widget_input(file, WIDGET_MAX_HTML_BYTES)?;
+        Ok(WidgetContentInput::Html {
+            content_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            sha256: format!("{:x}", Sha256::digest(&bytes)),
+            from: if file.is_some() { WidgetInputKind::File } else { WidgetInputKind::Stdin },
+            name: file.and_then(Path::file_name).map(|name| name.to_string_lossy().into_owned()),
+            choices: choice_input,
+        })
     } else {
-        Ok(WidgetContentInput::Html { content_base64: base64::engine::general_purpose::STANDARD.encode(&bytes), sha256, from, name })
+        let choice = choice_input.expect("choices required without HTML");
+        Ok(WidgetContentInput::Choices { spec_json: choice.spec_json, sha256: choice.sha256, from: choice.from, name: choice.name })
     }
 }
 
@@ -1321,12 +1331,18 @@ mod tests {
         }
         for flags in [
             vec!["--file", "a.html", "--stdin"],
-            vec!["--file", "a.html", "--choices-file", "a.json"],
-            vec!["--stdin", "--choices-file", "a.json"],
         ] {
             assert_eq!(Cli::try_parse_from(
                 ["cockpit", "widget", "show", "--id", "preview"].into_iter().chain(flags)
             ).unwrap_err().kind(), clap::error::ErrorKind::ArgumentConflict);
+        }
+        for flags in [
+            vec!["--file", "a.html", "--choices-file", "a.json"],
+            vec!["--stdin", "--choices-file", "a.json"],
+        ] {
+            assert!(Cli::try_parse_from(
+                ["cockpit", "widget", "show", "--id", "preview"].into_iter().chain(flags)
+            ).is_ok());
         }
         // Space is a membership check, not another mutually exclusive locator.
         for flags in [
@@ -1347,7 +1363,7 @@ mod tests {
             assert_eq!(error.text, "error: widget_usage: --id is required");
         }
         let error = run_widget(widget_args(&["show", "--id", "preview"])).await.unwrap_err();
-        assert_eq!(error.text, "error: widget_usage: pass exactly one of --file, --stdin or --choices-file");
+        assert_eq!(error.text, "error: widget_usage: pass --file or --stdin and/or --choices-file");
         let error = run_widget(widget_args(&["selection", "--id", "preview", "--timeout", "10"])).await.unwrap_err();
         assert_eq!(error.exit, 2);
         assert_eq!(error.text, "error: widget_usage: --timeout requires --wait");
@@ -1453,14 +1469,36 @@ mod tests {
         let wire = serde_json::to_string(&payload).unwrap();
         assert!(!wire.contains(root.0.to_str().unwrap()));
         match payload {
-            WidgetContentInput::Html { content_base64, sha256, from, name } => {
+            WidgetContentInput::Html { content_base64, sha256, from, name, choices } => {
                 assert_eq!(base64::engine::general_purpose::STANDARD.decode(content_base64).unwrap(), bytes);
                 assert_eq!(sha256, format!("{:x}", Sha256::digest(bytes)));
                 assert_eq!(from, WidgetInputKind::File);
                 assert_eq!(name.as_deref(), Some("preview.html"));
+                assert!(choices.is_none());
             }
             _ => panic!("HTML input changed kind"),
         }
+    }
+
+    #[test]
+    fn widget_html_and_choices_are_independent_snapshots() {
+        let root = WidgetTestDir::new();
+        let html = root.file("page.html", b"<p>Context</p>");
+        let json = br#"{"choices":[{"id":"yes","label":"Yes"}]}"#;
+        let choices = root.file("choices.json", json);
+        let input = widget_input(Some(&html), false, Some(&choices)).unwrap();
+        match input {
+            WidgetContentInput::Html { content_base64, choices: Some(spec), .. } => {
+                assert_eq!(base64::engine::general_purpose::STANDARD.decode(content_base64).unwrap(), b"<p>Context</p>");
+                assert_eq!(spec.spec_json.as_bytes(), json);
+                assert_eq!(spec.sha256, format!("{:x}", Sha256::digest(json)));
+                assert_eq!(spec.from, WidgetInputKind::File);
+                assert_eq!(spec.name.as_deref(), Some("choices.json"));
+            }
+            _ => panic!("expected HTML with choices"),
+        }
+        std::fs::write(&choices, b"{").unwrap();
+        assert!(widget_input(Some(&html), false, Some(&choices)).unwrap_err().text.contains("malformed --choices-file JSON"));
     }
 
     #[test]

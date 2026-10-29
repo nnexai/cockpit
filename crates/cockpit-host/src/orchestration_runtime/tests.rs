@@ -890,6 +890,7 @@ fn reserved_resume_refusal(code: &str) -> Run {
     run.resume = Some(ResumeRecord {
         operation_id: "resume".into(), run_id: run.run_id.clone(),
         previous_attachment_epoch: Some(1), phase: ResumePhase::Launching,
+        fresh_conversation: None, previous_conversation: None, session_namespace: None,
         cause: None, decision_id: None, replacement_attachment_epoch: Some(2),
         updated_at: run.updated_at.clone(),
     });
@@ -962,6 +963,7 @@ fn root_lookup_offers_retry_only_for_stale_unsupported_omp_resume() {
         run.resume = Some(ResumeRecord {
             operation_id: "resume".into(), run_id: run.run_id.clone(),
             previous_attachment_epoch: Some(1), phase: ResumePhase::Blocked,
+            fresh_conversation: None, previous_conversation: None, session_namespace: None,
             cause: Some(ResumeCause {
                 code: code.into(),
                 message: "Current attachment and claim are preserved".into(),
@@ -990,6 +992,7 @@ fn root_lookup_preserves_guarded_refusal_without_inventing_connection() {
     run.resume = Some(ResumeRecord {
         operation_id: "resume".into(), run_id: run.run_id.clone(),
         previous_attachment_epoch: Some(1), phase: ResumePhase::Blocked,
+        fresh_conversation: None, previous_conversation: None, session_namespace: None,
         cause: Some(ResumeCause {
             code: "same_boot_replacement_unsupported".into(),
             message: "Current attachment and claim are preserved".into(),
@@ -1023,6 +1026,7 @@ fn living_process_without_current_authenticated_attachment_is_not_connected() {
     run.resume = Some(ResumeRecord {
         operation_id: "resume".into(), run_id: run.run_id.clone(),
         previous_attachment_epoch: Some(1), phase: ResumePhase::Blocked,
+        fresh_conversation: None, previous_conversation: None, session_namespace: None,
         cause: Some(ResumeCause {
             code: "harness_resume_unsupported".into(),
             message: "Configured harness has no supported same-conversation resume arguments".into(),
@@ -1219,7 +1223,7 @@ async fn start_preserves_selected_unregistered_live_root_without_retargeting_or_
     let before = fs::read(fixture.service.base().join("state.json")).unwrap();
     let offline = OrchestrationRuntime {
         service: Arc::new(OrchestrationService::open(&ProjectConfiguration::for_tests(&fixture.root)).unwrap()),
-        projects: Arc::new(projects), herdr: Arc::new(ObservedHerdr(None)),
+        projects: Arc::new(projects), herdr: Arc::new(ObservedHerdr(None)), agent_send_adapter: None,
         dispatcher: Mutex::new(None), task: Mutex::new(None), shutdown: CancellationToken::new(),
     };
     let replayed = offline.mutate(OperatorOrigin::Browser, request).await.unwrap();
@@ -1582,6 +1586,7 @@ async fn confirmed_resume_observes_missing_container_without_implicit_operator_t
     run.resume = Some(ResumeRecord {
         operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
         previous_attachment_epoch: Some(1), phase: ResumePhase::Blocked, cause: Some(cause),
+        fresh_conversation: None, previous_conversation: None, session_namespace: None,
         decision_id: None, replacement_attachment_epoch: None, updated_at: run.updated_at.clone(),
     });
     assert!(root_candidate(&run, false).stop_confirmable);

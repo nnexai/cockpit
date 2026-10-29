@@ -88,6 +88,8 @@ pub(super) fn apply(
             runs::supervisor_start(ctx, action),
         action @ OrchestrationAction::RunResume { .. } =>
             resume::resume(ctx, action),
+        action @ OrchestrationAction::RunStartFreshSupervisor { .. } =>
+            resume::start_fresh_supervisor(ctx, action),
         action @ OrchestrationAction::RunAttach { .. } =>
             resume::attach(ctx, action),
         action @ OrchestrationAction::RunRegister { .. } => ownership::register(ctx, action),

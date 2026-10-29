@@ -153,6 +153,31 @@ async fn durable_inbox_wait_wakes_on_message_without_reading_or_acknowledging_bo
     assert_eq!(tokio::time::Instant::now(), started);
 }
 
+#[tokio::test]
+async fn housekeeping_is_silent_but_remains_in_inbox_after_ack() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let actor = fixture.root_actor(&root);
+    let Actor::Agent(caller) = &actor else { unreachable!() };
+    let after = fixture.state().messages.iter().filter(|message| message.to_run_id == root)
+        .map(|message| message.seq).max().unwrap_or(0);
+    fixture.seed_state(|state| {
+        messages::append(state, messages::AppendMessage {
+            from: ActorRef::Dispatcher, to_run_id: &root, message_id: "cleanup:resource:integration_pending",
+            kind: MessageKind::Observation, text: "Cleanup awaits integration.", in_reply_to: None,
+            report: None, stale: false, escalated_from: None,
+        }).unwrap();
+    });
+    assert!(!fixture.service.wait_inbox(caller, after, Duration::ZERO).await.unwrap().pending);
+    let pulled = fixture.apply(&actor, OrchestrationAction::InboxPull { after_seq: 0, limit: 100 }).unwrap();
+    let OrchestrationActionResult::Inbox { messages, read_through_seq } = pulled.result else { panic!("expected inbox") };
+    assert!(messages.iter().any(|message| message.text == "Cleanup awaits integration."));
+    fixture.apply(&actor, OrchestrationAction::InboxAck { through_seq: read_through_seq }).unwrap();
+    let pulled = fixture.apply(&actor, OrchestrationAction::InboxPull { after_seq: after, limit: 100 }).unwrap();
+    let OrchestrationActionResult::Inbox { messages, .. } = pulled.result else { panic!("expected inbox") };
+    assert_eq!(messages[0].stage, DeliveryStage::Acked);
+}
+
 // Polling once establishes a deterministic pending-read barrier without letting
 // Tokio auto-advance the paused clock. The real wait registers its own wakers.
 async fn poll_wait_once<F: Future>(

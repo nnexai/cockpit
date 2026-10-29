@@ -15,4 +15,7 @@ pub trait QuickAskHerdr: Send + Sync {
     async fn bind(&self, session_id: &str, server_instance: &str, space_id: &str) -> Result<QuickAskBinding, InspectionError>;
     /// Create a tab that launches the harness with an explicitly sanitized environment and initial prompt.
     async fn create_tab(&self, binding: &QuickAskBinding, cwd: &str, label: &str, kind: &str, prompt: &str, path: &str) -> Result<QuickAskLocation, InspectionError>;
+    async fn install_update(&self, _session_id: &str, _space_id: &str, _cwd: &str, _command: &[String], _label: &str) -> Result<QuickAskLocation, InspectionError> {
+        Err(InspectionError::new("update_unavailable", "Update installation is unavailable"))
+    }
 }

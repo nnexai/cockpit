@@ -106,6 +106,8 @@ enum WireRequest {
     WidgetSelection(WidgetSelectionRequest),
     WidgetContent(WidgetContentRequest),
     WidgetRemove(WidgetRemoveRequest),
+    WidgetShelfList(WidgetShelfListRequest),
+    WidgetShelfReopen(WidgetShelfReopenRequest),
     WidgetSelect(WidgetSelectRequest),
     WidgetWindowReport { window_id: String, report: WidgetWindowReport },
     WidgetEvents,
@@ -132,6 +134,8 @@ enum WireResponse {
     WidgetSelection(WidgetSelectionResponse),
     WidgetContent(WidgetContent),
     WidgetRemoved(WidgetRemoveResponse),
+    WidgetShelfListed(WidgetShelfListResponse),
+    WidgetShelfReopened(WidgetSummary),
     WidgetSelected(WidgetSelectResponse),
     WidgetReported,
     WidgetSubscribed { window_id: String },
@@ -632,6 +636,20 @@ impl BrowserRuntime {
         }
     }
 
+    pub async fn widget_shelf_list(&self, request: WidgetShelfListRequest) -> Result<WidgetShelfListResponse, InspectionError> {
+        match self.request(WireRequest::WidgetShelfList(request)).await? {
+            WireResponse::WidgetShelfListed(response) => Ok(response),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_shelf_reopen(&self, request: WidgetShelfReopenRequest) -> Result<WidgetSummary, InspectionError> {
+        match self.request(WireRequest::WidgetShelfReopen(request)).await? {
+            WireResponse::WidgetShelfReopened(response) => Ok(response),
+            _ => Err(invalid_response()),
+        }
+    }
+
     pub async fn widget_select(&self, request: WidgetSelectRequest) -> Result<WidgetSelectResponse, InspectionError> {
         match self.request(WireRequest::WidgetSelect(request)).await? {
             WireResponse::WidgetSelected(response) => Ok(response),
@@ -796,6 +814,8 @@ async fn dispatch(
         WireRequest::WidgetSelection(request) => widget_service(widgets)?.selection(request).await.map(WireResponse::WidgetSelection),
         WireRequest::WidgetContent(request) => widget_service(widgets)?.content(request).map(WireResponse::WidgetContent),
         WireRequest::WidgetRemove(request) => widget_service(widgets)?.remove(request).map(WireResponse::WidgetRemoved),
+        WireRequest::WidgetShelfList(request) => widget_service(widgets)?.shelf_list(request).map(WireResponse::WidgetShelfListed),
+        WireRequest::WidgetShelfReopen(request) => widget_service(widgets)?.shelf_reopen(request).map(WireResponse::WidgetShelfReopened),
         WireRequest::WidgetSelect(request) => widget_service(widgets)?.select(request).map(WireResponse::WidgetSelected),
         WireRequest::WidgetWindowReport { window_id, report } => {
             widget_service(widgets)?.report_window(&window_id, report)?;

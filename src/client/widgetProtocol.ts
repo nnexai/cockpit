@@ -1,13 +1,13 @@
 import type {
   WidgetBody, WidgetChoicesSpec, WidgetContent, WidgetContentRequest, WidgetEvent, WidgetKey,
   WidgetRemoveRequest, WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse,
-  WidgetSelectionResponse, WidgetSummary, WidgetWindowReport,
+  WidgetSelectionResponse, WidgetShelfListResponse, WidgetShelfReopenRequest, WidgetSummary, WidgetWindowReport,
 } from "../protocol/generated/v1";
 import {
   wireWidgetBody, wireWidgetChoicesSpec, wireWidgetContent, wireWidgetContentRequest,
   wireWidgetEvent, wireWidgetKey, wireWidgetRemoveRequest, wireWidgetRemoveResponse,
   wireWidgetSelectRequest, wireWidgetSelectResponse, wireWidgetSelectionResponse,
-  wireWidgetSummary, wireWidgetWindowReport, type TypedWirePolicy,
+  wireWidgetShelfListResponse, wireWidgetShelfReopenRequest, wireWidgetSummary, wireWidgetWindowReport, type TypedWirePolicy,
 } from "../protocol/generated/validate";
 import { CockpitClientError } from "./CockpitClient";
 import { constantMessage, definePolicy, parseWire } from "./wire";
@@ -64,7 +64,7 @@ const WIDGET = definePolicy({
   message: constantMessage("Invalid widget protocol response"),
   wire: {
     exact: new Set(["WidgetChoicesSpec", "WidgetChoice"]),
-    nullish: new Set(["WidgetChoicesSpec.prompt", "WidgetChoice.detail"]),
+    nullish: new Set(["WidgetChoicesSpec.prompt", "WidgetChoice.detail", "WidgetBody[html].choices"]),
     raw: new Set(["WidgetSummary.warnings"]),
     lengths: { "WidgetSummary.warnings": { max: 32 }, "WidgetChoicesSpec.choices": { min: 1, max: 20 } },
     fields: {
@@ -118,6 +118,8 @@ export function parseWidgetSelectRequest(value: unknown): WidgetSelectRequest { 
 export function parseWidgetSelectResponse(value: unknown): WidgetSelectResponse { return parseWire(value, wireWidgetSelectResponse, WIDGET); }
 export function parseWidgetWindowReport(value: unknown): WidgetWindowReport { return parseWire(value, wireWidgetWindowReport, WIDGET); }
 export function parseWidgetSelectionResponse(value: unknown): WidgetSelectionResponse { return parseWire(value, wireWidgetSelectionResponse, WIDGET); }
+export function parseWidgetShelfListResponse(value: unknown): WidgetShelfListResponse { return parseWire(value, wireWidgetShelfListResponse, WIDGET); }
+export function parseWidgetShelfReopenRequest(value: unknown): WidgetShelfReopenRequest { return parseWire(value, wireWidgetShelfReopenRequest, WIDGET); }
 
 export function matchWidgetContent(value: unknown, request: WidgetContentRequest): WidgetContent {
   const content = parseWidgetContent(value);

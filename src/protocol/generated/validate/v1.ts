@@ -156,6 +156,37 @@ export const wireSpaceServiceStatusResponse: WireDescriptor<V1.SpaceServiceStatu
   "services": req(list(named(() => wireSpaceServiceStatus))),
 });
 
+export const wireSpaceCpuPane: WireDescriptor<V1.SpaceCpuPane> = struct<V1.SpaceCpuPane>("SpaceCpuPane", {
+  "pane_id": req(str),
+  "terminal_id": req(str),
+  "space_id": req(str),
+});
+
+export const wireSpaceCpuStatusRequest: WireDescriptor<V1.SpaceCpuStatusRequest> = struct<V1.SpaceCpuStatusRequest>("SpaceCpuStatusRequest", {
+  "server_instance": req(str),
+  "panes": req(list(named(() => wireSpaceCpuPane))),
+});
+
+export const wireSpaceCpuProcess: WireDescriptor<V1.SpaceCpuProcess> = struct<V1.SpaceCpuProcess>("SpaceCpuProcess", {
+  "pid": req(u32),
+  "name": req(str),
+  "percent": req(f64),
+});
+
+export const wireSpaceCpuStatus: WireDescriptor<V1.SpaceCpuStatus> = struct<V1.SpaceCpuStatus>("SpaceCpuStatus", {
+  "space_id": req(str),
+  "percent": req(f64),
+  "active": req(bool),
+  "top_process": req(nullable(named(() => wireSpaceCpuProcess)), { fill: null }),
+});
+
+export const wireSpaceCpuStatusResponse: WireDescriptor<V1.SpaceCpuStatusResponse> = struct<V1.SpaceCpuStatusResponse>("SpaceCpuStatusResponse", {
+  "session_id": req(str),
+  "server_instance": req(str),
+  "available": req(bool),
+  "spaces": req(list(named(() => wireSpaceCpuStatus))),
+});
+
 export const wireSpaceTags: WireDescriptor<V1.SpaceTags> = struct<V1.SpaceTags>("SpaceTags", {
   "space_id": req(str),
   "tags": req(list(str)),

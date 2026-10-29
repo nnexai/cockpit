@@ -110,7 +110,11 @@ describe("widget protocol events", () => {
 describe("widget bodies and content identity", () => {
   it("preserves active HTML scripts and normalizes omitted optional choice fields", () => {
     const document = '<script>window.cockpit.select({ answer: 42 })</script>';
-    expect(parseWidgetBody({ type: "html", document })).toEqual({ type: "html", document });
+    expect(parseWidgetBody({ type: "html", document })).toEqual({ type: "html", document, choices: null });
+    expect(parseWidgetBody({ type: "html", document, choices: { choices: [{ id: "yes", label: "Yes" }] } })).toEqual({
+      type: "html", document, choices: { prompt: null, choices: [{ id: "yes", label: "Yes", detail: null }] },
+    });
+    rejects(parseWidgetBody, { type: "html", document, choices: { choices: [] } });
     expect(parseWidgetBody({ type: "choices", spec: { choices: [{ id: "yes", label: "Yes" }] } })).toEqual({
       type: "choices", spec: { prompt: null, choices: [{ id: "yes", label: "Yes", detail: null }] },
     });
@@ -118,7 +122,7 @@ describe("widget bodies and content identity", () => {
 
   it("counts HTML bytes rather than UTF-16 code units", () => {
     const document = "é".repeat(512 * 1024);
-    expect(parseWidgetBody({ type: "html", document })).toEqual({ type: "html", document });
+    expect(parseWidgetBody({ type: "html", document })).toEqual({ type: "html", document, choices: null });
     rejects(parseWidgetBody, { type: "html", document: `${document}é` });
     rejects(parseWidgetBody, { type: "active", document: "<p>Presentation is not body kind</p>" });
   });

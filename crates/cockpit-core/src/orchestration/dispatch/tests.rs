@@ -2159,6 +2159,7 @@ fn same_chat_resume_substitutes_only_the_whole_opaque_session_argument() {
     run.resume = Some(ResumeRecord {
         operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
         previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+        fresh_conversation: None, previous_conversation: None, session_namespace: None,
         phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now(),
     });
     let reminder = render_run_bootstrap(&run);
@@ -2189,6 +2190,9 @@ fn same_chat_resume_substitutes_only_the_whole_opaque_session_argument() {
     run.launch_config.resume_args = Some(vec!["{session_id}".into()]);
     run.attachment.as_mut().unwrap().conversation = None;
     assert_eq!(launch_args(&run).unwrap_err().code, "resume_session_unavailable");
+    run.resume.as_mut().unwrap().fresh_conversation = Some(true);
+    assert_eq!(launch_args(&run).unwrap(), ["--fresh-only"]);
+    assert!(!render_run_bootstrap(&run).contains("resumed this conversation"));
 }
 
 #[test]
@@ -2409,6 +2413,7 @@ fn retained_space_restart_requires_exact_resumed_epoch_and_journalled_retained_l
     run.resume = Some(ResumeRecord {
         operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
         previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+        fresh_conversation: None, previous_conversation: None, session_namespace: None,
         phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now(),
     });
     run.dispatch = Some(crate::orchestration::dispatch(DispatchStep::SetupPending));
@@ -2460,6 +2465,7 @@ async fn resumed_supervisor_uses_retained_space_or_fresh_focused_staging() {
             run.resume = Some(ResumeRecord {
                 operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
                 previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+                fresh_conversation: None, previous_conversation: None, session_namespace: None,
                 phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now(),
             });
             run.dispatch = Some(crate::orchestration::dispatch(DispatchStep::SetupPending));
@@ -2541,6 +2547,7 @@ fn in_place_supervisor_restart_proves_its_server_from_the_previous_launch_receip
         run.resume = Some(ResumeRecord {
             operation_id: operation_id.clone(), run_id: run.run_id.clone(),
             previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+            fresh_conversation: None, previous_conversation: None, session_namespace: None,
             phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now(),
         });
         run.dispatch = Some(crate::orchestration::dispatch(DispatchStep::SetupPending));

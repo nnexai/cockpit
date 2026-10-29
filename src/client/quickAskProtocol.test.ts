@@ -45,4 +45,16 @@ describe("quick ask protocol", () => {
     const invoke = vi.fn(async () => ({ ...location, pane_id: null }));
     await expect(createNativeClient(invoke).quickAsk("session-1", request)).rejects.toMatchObject({ code: "malformed_response" });
   });
+  it("dispatches update installation with a fenced Space on both transports", async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(location), { status: 200 }));
+    const invoke = vi.fn(async () => location);
+    await expect(createBrowserClient(fetcher).updateInstall("session-1", "space-1")).resolves.toEqual(location);
+    const [url, options] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toContain("/api/v1/sessions/session-1/update-install");
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(String(options.body))).toBe("space-1");
+    await expect(createNativeClient(invoke).updateInstall("session-1", "space-1")).resolves.toEqual(location);
+    expect(invoke).toHaveBeenCalledWith("cockpit_update_install", { sessionId: "session-1", spaceId: "space-1" });
+    await expect(createNativeClient(vi.fn(async () => ({ ...location, space_id: "other" }))).updateInstall("session-1", "space-1")).rejects.toMatchObject({ code: "malformed_response" });
+  });
 });

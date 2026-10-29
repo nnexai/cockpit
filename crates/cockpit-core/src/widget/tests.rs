@@ -270,7 +270,75 @@ fn html(document: &str) -> WidgetContentInput {
         sha256: format!("{:x}", Sha256::digest(document.as_bytes())),
         from: WidgetInputKind::Stdin,
         name: None,
+        choices: None,
     }
+}
+
+#[tokio::test]
+async fn combined_html_choices_replace_and_validate_selection() {
+    let f = Fixture::new();
+    let WidgetContentInput::Choices { spec_json, sha256, from, name } = choices("Latency") else { unreachable!() };
+    let mut request = f.request("combined", "Latency");
+    let mut content = html("<p>Information</p>");
+    if let WidgetContentInput::Html { choices, .. } = &mut content {
+        *choices = Some(WidgetChoicesInput { spec_json, sha256, from, name });
+    }
+    request.content = content;
+    f.service.show(request.clone()).await.unwrap();
+    let choices_len = match &request.content {
+        WidgetContentInput::Html { choices: Some(input), .. } => input.spec_json.len(),
+        _ => unreachable!(),
+    };
+    let summary_bytes = summary_snapshot_bytes(&f.summaries()[0]).unwrap();
+    assert_eq!(f.service.store.lock().snapshot_bytes, summary_bytes + choices_len);
+    assert!(f.select("combined", 1, "unknown").is_err());
+    f.select("combined", 1, "latency").unwrap();
+    assert_eq!(f.selection("combined").await.status, WidgetSelectionStatus::Selected);
+    if let WidgetContentInput::Html { choices: Some(input), .. } = &mut request.content {
+        input.spec_json.push(' ');
+        input.sha256 = format!("{:x}", Sha256::digest(input.spec_json.as_bytes()));
+    }
+    assert_eq!(f.service.show(request).await.unwrap().result, WidgetShowResult::Replaced);
+}
+
+#[tokio::test]
+async fn removed_shelf_reopens_retained_content_and_respects_live_limit() {
+    let f = Fixture::new();
+    f.show("saved", "Latency").await;
+    f.remove("saved");
+    let shelf = f.service.shelf_list(WidgetShelfListRequest {}).unwrap();
+    assert_eq!(shelf.widgets.len(), 1);
+    assert_eq!(shelf.widgets[0].summary.key, key("saved"));
+    for i in 0..WIDGET_MAX_LIVE_PER_TAB {
+        f.advance(60_000);
+        f.show(&format!("other{i}"), "Latency").await;
+    }
+    assert_eq!(f.service.shelf_reopen(WidgetShelfReopenRequest { key: key("saved") }).unwrap_err().code, "widget_limit");
+    f.remove("other0");
+    let summary = f.service.shelf_reopen(WidgetShelfReopenRequest { key: key("saved") }).unwrap();
+    assert_eq!(summary.revision, 2);
+    assert_eq!(summary.change, WidgetChange::Reopened);
+    assert!(matches!(f.service.content(WidgetContentRequest { key: key("saved"), revision: 2 }).unwrap().body, WidgetBody::Choices { .. }));
+}
+
+#[tokio::test]
+async fn shelf_evicts_oldest_without_reviving_evicted_tombstones() {
+    let f = Fixture::new();
+    for i in 0..9 {
+        f.advance(60_000);
+        let id = format!("item{i}");
+        f.show(&id, "Latency").await;
+        f.remove(&id);
+    }
+    let shelf = f.service.shelf_list(WidgetShelfListRequest {}).unwrap();
+    assert_eq!(shelf.widgets.len(), 8);
+    assert!(!shelf.widgets.iter().any(|item| item.summary.key.id == "item0"));
+    assert!(f.service.shelf_reopen(WidgetShelfReopenRequest { key: key("item0") }).is_err());
+    let mut second = f.request("second-tab", "Latency");
+    second.address.locator = WidgetLocator::Tab { tab_id: "t2".into() };
+    f.service.show(second).await.unwrap();
+    f.service.remove(WidgetRemoveRequest { key: WidgetKey { tab_id: "t2".into(), ..key("second-tab") } }).unwrap();
+    assert_eq!(f.service.shelf_list(WidgetShelfListRequest {}).unwrap().widgets.len(), 9);
 }
 
 fn selection_request(id: &str, wait_seconds: Option<u64>) -> WidgetSelectionRequest {
@@ -369,7 +437,10 @@ async fn identical_bytes_replace_when_content_kind_changes() {
         assert_eq!(f.service.store.lock().html_bytes, expected_html_bytes);
         assert_eq!(
             f.service.store.lock().snapshot_bytes,
-            summary_snapshot_bytes(&summary).unwrap()
+            summary_snapshot_bytes(&summary).unwrap() + match &request.content {
+                WidgetContentInput::Choices { spec_json, .. } => spec_json.len(),
+                _ => 0,
+            }
         );
 
         let unchanged = f.service.show(request.clone()).await.unwrap();
@@ -523,7 +594,10 @@ async fn identical_content_clears_only_a_retained_selection_through_replacement(
         assert_eq!(f.service.store.lock().html_bytes, html_bytes);
         assert_eq!(
             f.service.store.lock().snapshot_bytes,
-            summary_snapshot_bytes(&after).unwrap()
+            summary_snapshot_bytes(&after).unwrap() + match &request.content {
+                WidgetContentInput::Choices { spec_json, .. } => spec_json.len(),
+                _ => 0,
+            }
         );
         assert!(
             f.service
@@ -1889,18 +1963,21 @@ async fn content_validation_rejects_bad_digest_encoding_utf8_ids_and_oversized_i
             sha256: "0".repeat(64),
             from: WidgetInputKind::Stdin,
             name: None,
+            choices: None,
         },
         WidgetContentInput::Html {
             content_base64: STANDARD.encode("good HTML"),
             sha256: "0".repeat(64),
             from: WidgetInputKind::Stdin,
             name: None,
+            choices: None,
         },
         WidgetContentInput::Html {
             content_base64: STANDARD.encode([0xff]),
             sha256: format!("{:x}", Sha256::digest([0xff])),
             from: WidgetInputKind::Stdin,
             name: None,
+            choices: None,
         },
     ];
     for content in invalid {
@@ -1976,7 +2053,7 @@ async fn owner_html_byte_cap_spans_tabs_and_releases_bytes_on_close_replace_and_
         })
         .unwrap()
         .body;
-    let WidgetBody::Html { document } = body else {
+    let WidgetBody::Html { document, .. } = body else {
         panic!("expected HTML body");
     };
     assert_eq!(document.len(), WIDGET_MAX_HTML_BYTES);
@@ -2010,7 +2087,13 @@ async fn owner_html_byte_cap_spans_tabs_and_releases_bytes_on_close_replace_and_
         "widget_limit"
     );
     f.remove("large2");
+    {
+        let store = f.service.store.lock();
+        assert!(store.shelf_bytes > 0);
+        assert!(store.html_bytes + store.shelf_bytes <= WIDGET_MAX_TOTAL_HTML_BYTES);
+    }
     f.service.show(request(fits + 1)).await.unwrap();
+    assert!(f.service.shelf_list(WidgetShelfListRequest {}).unwrap().widgets.is_empty());
     assert_eq!(
         f.service.show(request(fits + 2)).await.unwrap_err().code,
         "widget_limit"

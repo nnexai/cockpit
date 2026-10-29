@@ -28,6 +28,21 @@ function props(): ComponentProps<typeof Spaces> {
   };
 }
 
+it("shows sustained multicore CPU and names its top process without marking idle Spaces", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const cpu = new Map([["app", { space_id: "app", active: true, percent: 152.3, top_process: { pid: 42, name: "compiler", percent: 99.7 } }]]);
+  try {
+    await act(async () => root.render(createElement(Spaces, { ...props(), cpu })));
+    expect(host.querySelector('[data-space-id="app"] .space-cpu')?.textContent).toBe("CPU 152%");
+    const row = host.querySelector<HTMLButtonElement>('[data-row-id="app"]')!;
+    expect(row.title).toContain("compiler 100%");
+    expect(row.getAttribute("aria-label")).toContain("CPU 152%");
+    expect(host.querySelector('[data-space-id="other"] .space-cpu')).toBeNull();
+    await act(async () => root.render(createElement(Spaces, { ...props(), cpu: new Map() })));
+    expect(host.querySelector(".space-cpu")).toBeNull();
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
 it("puts service buttons in the existing roving sequence and activates only the service focus callback", async () => {
   const host = document.createElement("div");
   document.body.append(host);

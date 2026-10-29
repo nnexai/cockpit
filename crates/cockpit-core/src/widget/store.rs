@@ -33,6 +33,7 @@ impl SourceRecord {
 pub(super) struct Widget {
     pub summary: WidgetSummary,
     pub body: WidgetBody,
+    pub choices_sha256: Option<String>,
     pub source_key: String,
     pub fingerprint: Option<String>,
     pub selection: Option<WidgetSelectionResponse>,
@@ -46,6 +47,13 @@ pub(super) struct Tombstone {
     pub revision: u64,
     pub removed_at_ms: u64,
     pub source_key: String,
+}
+
+pub(super) struct ShelfItem {
+    pub tab: TabKey,
+    pub widget: Widget,
+    pub removed_at_ms: u64,
+    pub bytes: usize,
 }
 
 pub(super) struct TabWidgets {
@@ -66,6 +74,8 @@ pub(super) struct Store {
     pub tabs: HashMap<TabKey, TabWidgets>,
     pub windows: HashMap<String, WidgetWindowReport>,
     pub arrivals: HashMap<String, VecDeque<u64>>,
+    pub shelf: VecDeque<ShelfItem>,
+    pub shelf_bytes: usize,
     pub waiters: HashMap<String, Waiter>,
     pub sequence: u64,
     pub created_seq: u64,

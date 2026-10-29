@@ -490,6 +490,17 @@ pub struct ResumeRecord {
     pub run_id: String,
     #[ts(type = "number | null")]
     pub previous_attachment_epoch: Option<u64>,
+    /// This replacement starts a new conversation rather than resuming the saved one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fresh_conversation: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub previous_conversation: Option<ConversationIdentity>,
+    /// Namespace for sessions created by a fresh cutover, retained on later resumes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session_namespace: Option<String>,
     pub phase: ResumePhase,
     pub cause: Option<ResumeCause>,
     pub decision_id: Option<String>,
@@ -526,6 +537,10 @@ pub struct LiaisonCandidate {
     pub cause: Option<ResumeCause>,
     /// Resume may carry operator stop confirmation (core-computed static eligibility).
     pub stop_confirmable: bool,
+    /// Static eligibility; the action rechecks claims and checkout under lock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub fresh_available: Option<bool>,
     pub updated_at: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1403,6 +1418,12 @@ pub enum OrchestrationAction {
         /// Only for roots whose launch recorded no process identity.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         confirmed_stopped_attachment_id: Option<String>,
+    },
+    RunStartFreshSupervisor {
+        run_id: String,
+        operation_id: String,
+        #[ts(type = "number")]
+        expected_attachment_epoch: u64,
     },
     RunRegister { operation_id: String },
     TaskUnassign {

@@ -27,10 +27,10 @@ export function QuickSwitcher({ rows, hasSession, loading, live, onChoose, onDis
     setSelection(current => current.query === query && current.key === activeKey ? current : { query, key: activeKey });
   }, [query, activeKey]);
   useEffect(() => { activeRowRef.current?.scrollIntoView?.({ block: "nearest" }); }, [activeKey, query]);
-  const empty = !hasSession ? "No session selected." : loading ? "Loading Spaces and agents…"
-    : rows.length === 0 ? "No Spaces or agents in this session." : `No Spaces or agents match “${query}”.`;
+  const empty = !hasSession ? "No session selected." : loading ? "Loading Spaces, agents and widgets…"
+    : rows.length === 0 ? "No Spaces, agents or widgets in this session." : `No Spaces, agents or widgets match “${query}”.`;
   return <div className="overlay-scrim" role="presentation" onPointerDown={event => { if (event.target === event.currentTarget) onDismiss(); }}>
-    <section ref={ref} className="command-overlay quick-switcher" role="dialog" aria-modal="true" aria-label="Go to Space or agent" onKeyDown={event => {
+    <section ref={ref} className="command-overlay quick-switcher" role="dialog" aria-modal="true" aria-label="Go to Space, agent or widget" onKeyDown={event => {
       if (event.nativeEvent.isComposing) { if (event.key === "Enter" || event.key === "Escape") event.preventDefault(); return; }
       const step = event.key === "ArrowDown" || (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "n") ? 1
         : event.key === "ArrowUp" || (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "p") ? -1 : 0;
@@ -48,11 +48,11 @@ export function QuickSwitcher({ rows, hasSession, loading, live, onChoose, onDis
       }
       trapModalTab(event, ref.current);
     }}>
-      <div className="command-search-box"><UiIcon name="search" /><input ref={inputRef} className="command-search" role="combobox" aria-label="Find a Space or agent" aria-expanded="true" aria-controls={listId} aria-activedescendant={activeKey ? `${listId}-${activeKey}` : undefined} aria-autocomplete="list" autoComplete="off" placeholder="Go to Space or agent…" value={query} onChange={event => setQuery(event.target.value)} /></div>
-      {hasSession && !loading ? <div className={`switcher-status${live ? "" : " is-warning"}`} role="status">{!live ? "Herdr is not live; choosing is unavailable" : query.trim() ? `${matches.length} of ${rows.length}` : `${rows.length} Spaces and agents`}</div> : null}
-      <div id={listId} className="command-list" role="listbox" aria-label="Spaces and agents">
+      <div className="command-search-box"><UiIcon name="search" /><input ref={inputRef} className="command-search" role="combobox" aria-label="Find a Space, agent or widget" aria-expanded="true" aria-controls={listId} aria-activedescendant={activeKey ? `${listId}-${activeKey}` : undefined} aria-autocomplete="list" autoComplete="off" placeholder="Go to Space, agent or widget…" value={query} onChange={event => setQuery(event.target.value)} /></div>
+      {hasSession && !loading ? <div className={`switcher-status${live ? "" : " is-warning"}`} role="status">{!live ? "Herdr is not live; choosing is unavailable" : query.trim() ? `${matches.length} of ${rows.length}` : `${rows.length} Spaces, agents and widgets`}</div> : null}
+      <div id={listId} className="command-list" role="listbox" aria-label="Spaces, agents and widgets">
         {matches.length === 0 ? <p className="command-empty" role="status">{empty}</p> : matches.map((row, index) => {
-          const kind = row.kind === "space" ? "Space" : "Agent";
+          const kind = row.kind === "space" ? "Space" : row.kind === "agent" ? "Agent" : "Widget";
           const matched = new Set(row.matchedIndices);
           const metaStart = Array.from(row.primary).length + 1;
           return <button ref={index === active ? activeRowRef : null} id={`${listId}-${row.key}`} key={row.key} type="button" role="option" aria-selected={index === active} aria-disabled={Boolean(row.disabledReason)} aria-label={`${row.primary}, ${kind}, ${row.meta}${row.current ? ", current" : ""}${row.disabledReason ? `, unavailable: ${row.disabledReason}` : ""}`} className={`switcher-row${index === active ? " is-active" : ""}`} title={row.title} disabled={Boolean(row.disabledReason)} onFocus={() => selectIndex(index)} onMouseMove={() => { if (index !== active) selectIndex(index); }} onClick={() => { if (!row.disabledReason) onChoose({ kind: row.kind, id: row.id }); }}>

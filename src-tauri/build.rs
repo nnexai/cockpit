@@ -2,9 +2,15 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "cockpit_status",
+            "cockpit_update_status",
+            "cockpit_update_install",
+            "cockpit_power_status",
+            "cockpit_power_set_stay_awake",
+            "cockpit_power_screen_off",
             "cockpit_quota_status",
             "orchestration_snapshot",
             "orchestration_liaison_lookup",
+            "orchestration_agent_send",
             "orchestration_mutate",
             "orchestration_wait",
             "cockpit_notes_execute",
@@ -83,6 +89,7 @@ fn main() {
             "cockpit_session_snapshot",
             "cockpit_space_git_status",
             "cockpit_space_service_status",
+            "cockpit_space_cpu_status",
             "cockpit_space_tags",
             "cockpit_space_tag_change",
             "cockpit_agent_attention",

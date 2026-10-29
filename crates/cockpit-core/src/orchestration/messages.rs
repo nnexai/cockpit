@@ -48,22 +48,65 @@ impl super::OrchestrationService {
         let document = locked.tasks(&recipient.root_id)?;
         let mut contexts = std::collections::BTreeMap::new();
         for message in messages.iter().filter(|m| m.to_run_id == recipient.run_id) {
-            let ActorRef::Run { run_id } = &message.from else { continue };
-            let Some(run) = state.runs.iter().find(|run| run.run_id == *run_id && run.root_id == recipient.root_id) else { continue };
-            let task_id = run.task_id.clone();
-            let task_title = task_id.as_ref().and_then(|id| document.task(id).ok()).map(|task| task.title.clone());
-            let project = task_id.as_ref().and_then(|id| super::projection::task_project(&state, &run.root_id, id, None));
-            contexts.insert(message.message_id.clone(), InboxMessageContext {
-                run_label: Some(run.label.clone()), task_id, task_title, project,
+            let referenced = match &message.from {
+                ActorRef::Run { run_id } => Some(run_id.as_str()),
+                ActorRef::Dispatcher => message.message_id.split(':').skip(1).find(|part|
+                    state.runs.iter().any(|run| run.root_id == recipient.root_id && run.run_id == *part)),
+                _ => None,
+            };
+            let run = referenced.and_then(|id| state.runs.iter().find(|run|
+                run.run_id == id && run.root_id == recipient.root_id))
+                .or_else(|| {
+                    let resource_id = message.message_id.strip_prefix("cleanup:")?.split(':').next()?;
+                    let resource = state.owned_resources.iter().find(|resource|
+                        resource.root_id == recipient.root_id && resource.resource_id == resource_id)?;
+                    state.runs.iter().find(|run| run.run_id == resource.run_id && run.root_id == recipient.root_id)
+                });
+            let task_id = run.and_then(|run| run.task_id.clone()).or_else(|| {
+                message.message_id.split(':').skip(1).find(|part|
+                    document.task(part).is_ok()).map(str::to_owned)
             });
+            let task_title = task_id.as_ref().and_then(|id| document.task(id).ok()).map(|task| task.title.clone());
+            let project = task_id.as_ref().and_then(|id| super::projection::task_project(&state, &recipient.root_id, id, None));
+            if run.is_some() || task_title.is_some() {
+                contexts.insert(message.message_id.clone(), InboxMessageContext {
+                    run_label: run.map(|run| run.label.clone()), task_id, task_title, project,
+                });
+            }
         }
         Ok(contexts)
+    }
+}
+
+/// Conversation delivery policy. IDs are interpreted only for dispatcher observations;
+/// other senders cannot suppress their own messages by choosing a reserved ID.
+pub fn inbox_meaningful(message: &Message) -> bool {
+    meaningful_parts(&message.message_id, &message.from, &message.to_run_id, message.kind,
+        message.report.as_ref().map(|report| report.kind))
+}
+
+fn meaningful_parts(id: &str, sender: &ActorRef, recipient: &str, kind: MessageKind, report: Option<ReportKind>) -> bool {
+    if matches!(sender, ActorRef::Run { run_id } if run_id == recipient)
+        && (kind == MessageKind::Answer || kind == MessageKind::Report
+            && matches!(report, Some(ReportKind::NeedsInput | ReportKind::Result))) {
+        return false;
+    }
+    match kind {
+        MessageKind::WorkBrief | MessageKind::SupervisorBrief => false,
+        MessageKind::Report => matches!(report, Some(ReportKind::NeedsInput | ReportKind::Result)),
+        MessageKind::Observation if matches!(sender, ActorRef::Dispatcher) => {
+            !(id.starts_with("cleanup:") || id.starts_with("scope-cleanup:")
+                || id.starts_with("scheduled-") || id.starts_with("dispatch-recovered:")
+                || (id.starts_with("observation:") && id.split(':').nth(2) == Some("endpoint_changed")))
+        }
+        _ => true,
     }
 }
 
 // Deliberately omit text, report summaries/plans, and all runtime/task records.
 #[derive(serde::Deserialize)]
 pub(crate) struct InboxMessage {
+    message_id: String,
     to_run_id: String,
     seq: u64,
     from: ActorRef,
@@ -77,40 +120,33 @@ struct InboxReport { kind: ReportKind }
 #[derive(Clone, Copy)]
 struct InboxEntry<'a> {
     recipient: &'a str,
-    sender: &'a ActorRef,
+    meaningful: bool,
     seq: u64,
     kind: MessageKind,
     stage: DeliveryStage,
-    progress: bool,
 }
 
 pub fn inbox_counts(messages: &[Message], run_id: &str, after: u64) -> InboxCounts {
     count_inbox(messages.iter().map(|message| InboxEntry {
-        recipient: &message.to_run_id, sender: &message.from, seq: message.seq,
+        recipient: &message.to_run_id, meaningful: inbox_meaningful(message), seq: message.seq,
         kind: message.kind, stage: message.stage,
-        progress: message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Progress),
     }), run_id, after)
 }
 
 pub(crate) fn saved_inbox_counts(messages: &[InboxMessage], run_id: &str, after: u64) -> InboxCounts {
     count_inbox(messages.iter().map(|message| InboxEntry {
-        recipient: &message.to_run_id, sender: &message.from, seq: message.seq,
-        kind: message.kind, stage: message.stage,
-        progress: message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Progress),
+        recipient: &message.to_run_id,
+        meaningful: meaningful_parts(&message.message_id, &message.from, &message.to_run_id, message.kind,
+            message.report.as_ref().map(|report| report.kind)),
+        seq: message.seq, kind: message.kind, stage: message.stage,
     }), run_id, after)
 }
 
 fn count_inbox<'a>(messages: impl Iterator<Item = InboxEntry<'a>> + Clone, run_id: &str, after: u64) -> InboxCounts {
-    let mut latest_progress = HashMap::new();
-    for message in messages.clone().filter(|message| message.recipient == run_id && message.progress) {
-        let sender = match message.sender { ActorRef::Run { run_id } => Some(run_id.as_str()), _ => None };
-        latest_progress.insert(sender, message.seq);
-    }
-    let latest_progress: HashSet<_> = latest_progress.into_values().collect();
     let mut counts = std::collections::BTreeMap::new();
     let mut through = after;
     for message in messages.filter(|message| message.recipient == run_id && message.seq > after
-        && message.stage != DeliveryStage::Acked && (!message.progress || latest_progress.contains(&message.seq))) {
+        && message.stage != DeliveryStage::Acked && message.meaningful) {
         through = through.max(message.seq);
         let key = match message.kind {
             MessageKind::WorkBrief => "work_brief", MessageKind::SupervisorBrief => "supervisor_brief",

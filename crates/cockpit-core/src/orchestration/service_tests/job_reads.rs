@@ -52,6 +52,7 @@ fn credentialed_reads_isolate_every_projection_and_redact_own_and_sibling_launch
             if run.run_id == foreign {
                 run.resume = Some(ResumeRecord {
                     operation_id: id(), run_id: foreign.clone(), previous_attachment_epoch: Some(1),
+                    fresh_conversation: None, previous_conversation: None, session_namespace: None,
                     phase: ResumePhase::Connected, cause: None, decision_id: None,
                     replacement_attachment_epoch: None, updated_at: now(),
                 });

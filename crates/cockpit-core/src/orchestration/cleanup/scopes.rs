@@ -371,8 +371,9 @@ impl OrchestrationService {
             let epoch = expected.attachment.as_ref().map_or(0, |attachment| attachment.epoch);
             let message_id = format!("scope-cleanup:{}:{epoch}:{code}", expected.run_id);
             if !state.messages.iter().any(|saved| matches!(saved.from, ActorRef::Dispatcher) && saved.message_id == message_id) {
-                let text = format!("Cleanup held for attempt {} (checkout claim {}, attachment epoch {epoch}): {message} [{code}]. {}",
-                    expected.run_id, expected.checkout_claim_id.as_deref().unwrap_or("unproven"), cleanup_hold_action(code));
+                let text = format!("Cleanup is on hold for attempt {} (checkout claim {}, attachment epoch {epoch}): {}. {}",
+                    expected.run_id, expected.checkout_claim_id.as_deref().unwrap_or("unproven"),
+                    message.trim_end_matches('.'), cleanup_hold_action(code));
                 messages::append(&mut state, messages::AppendMessage { from: ActorRef::Dispatcher,
                     to_run_id: &expected.root_id, message_id: &message_id, kind: MessageKind::Observation,
                     text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
@@ -821,11 +822,12 @@ mod tests {
         assert!(matches!(notice.from, ActorRef::Dispatcher));
         assert_eq!(notice.kind, MessageKind::Observation);
         assert_eq!(notice.to_run_id, fixture.run.root_id);
-        assert!(notice.report.is_none(), "meaningful boundary is not a quiet Progress report");
-        assert!(notice.text.contains(&format!("Cleanup held for attempt {}", fixture.run.run_id)));
+        assert!(notice.report.is_none());
+        assert!(!messages::inbox_meaningful(notice));
+        assert!(notice.text.contains(&format!("Cleanup is on hold for attempt {}", fixture.run.run_id)));
         assert!(notice.text.contains(fixture.run.checkout_claim_id.as_deref().unwrap()));
         assert!(notice.text.contains("attachment epoch 1"));
-        assert!(notice.text.contains("[checkout_consumer_present]"));
+        assert!(!notice.text.contains("[checkout_consumer_present]"));
         assert!(state.owned_resources.is_empty());
         {
             let locked = fixture.service.store.lock().unwrap();

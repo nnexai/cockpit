@@ -97,6 +97,39 @@ pub fn liaison_lookup_input() -> impl FnOnce(LiaisonLookupInput) -> Result<Liais
         Ok(request)
     }
 }
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSendRequest {
+    pub session_id: String,
+    pub reference: String,
+    pub text: String,
+}
+
+type AgentSendInput = (Path<String>, Result<Json<AgentSendRequest>, JsonRejection>);
+
+pub fn agent_send_input() -> impl FnOnce(AgentSendInput) -> Result<AgentSendRequest, OperationError> {
+    |(path, body)| {
+        let (session_id, request): (String, AgentSendRequest) = http_input::session_body(
+            Reject("invalid_session_id", "Session ID is invalid"),
+            Reject("invalid_orchestration_request", "Expected an agent send request"),
+        )((path, body))?;
+        if request.session_id != session_id {
+            return Err(OperationError::rejected("session_mismatch", "Path and request session IDs differ"));
+        }
+        Ok(request)
+    }
+}
+
+pub async fn orchestration_agent_send(
+    runtime: &OrchestrationRuntime, transport: Transport, request: AgentSendRequest,
+) -> Result<serde_json::Value, OperationError> {
+    let origin = match transport {
+        Transport::Gateway => OperatorOrigin::Browser,
+        Transport::Native => OperatorOrigin::Native,
+    };
+    runtime.send_agent(&request.session_id, &request.reference, request.text, origin).await.map_err(Into::into)
+}
+
 
 pub async fn orchestration_liaison_lookup(
     runtime: &OrchestrationRuntime,

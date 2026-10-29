@@ -19,6 +19,26 @@ macro_rules! cockpit_operations {
                   limit = none; origin = none;
                   guard = none; status = service
             }
+            { id: update_status, ctx: service, out: $crate::transport::operations::session::UpdateStatus,
+              call: $crate::transport::operations::session::update_status,
+              native: cockpit_update_status()
+                  => $crate::transport::native_input::none(),
+              http: get "/api/v1/update-status"
+                  ()
+                  => $crate::transport::http_input::none();
+                  limit = none; origin = none;
+                  guard = none; status = service
+            }
+            { id: update_install, ctx: service, out: ::cockpit_protocol::quick_ask::QuickAskLocation,
+              call: $crate::transport::operations::session::update_install,
+              native: cockpit_update_install(session_id: ::std::string::String, space_id: ::std::string::String)
+                  => $crate::transport::native_input::typed2(),
+              http: post "/api/v1/sessions/{session_id}/update-install"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::std::string::String>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::session_sized_body($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"), $crate::transport::http_input::Reject("invalid_update_target", "Expected a Space id"));
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = method;
+                  guard = none; status = service
+            }
             { id: quota_status, ctx: service, out: ::cockpit_protocol::quota::QuotaStatusResponse,
               call: $crate::transport::operations::session::quota_status,
               native: cockpit_quota_status(request: ::cockpit_protocol::quota::QuotaStatusRequest)
@@ -66,6 +86,16 @@ macro_rules! cockpit_operations {
               http: post "/api/v1/sessions/{session_id}/space-services"
                   (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::v1::SpaceServiceStatusRequest>, ::axum::extract::rejection::JsonRejection>)
                   => $crate::transport::http_input::session_sized_body($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"), $crate::transport::http_input::Reject("invalid_space_service_status_request", "Expected a bounded JSON service-status request with valid fields"));
+                  limit = $crate::transport::limits::SPACE_SERVICE_STATUS_BYTES; origin = method;
+                  guard = none; status = service
+            }
+            { id: space_cpu_status, ctx: service, out: ::cockpit_protocol::v1::SpaceCpuStatusResponse,
+              call: $crate::transport::operations::session::space_cpu_status,
+              native: cockpit_space_cpu_status(session_id: ::std::string::String, request: ::cockpit_protocol::v1::SpaceCpuStatusRequest)
+                  => $crate::transport::native_input::typed2(),
+              http: post "/api/v1/sessions/{session_id}/space-cpu"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::v1::SpaceCpuStatusRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::session_sized_body($crate::transport::http_input::Reject("invalid_session_id", "Invalid session id"), $crate::transport::http_input::Reject("invalid_space_cpu_status_request", "Expected bounded CPU sampling request"));
                   limit = $crate::transport::limits::SPACE_SERVICE_STATUS_BYTES; origin = method;
                   guard = none; status = service
             }
@@ -285,6 +315,26 @@ macro_rules! cockpit_operations {
                   limit = $crate::transport::limits::WIDGET_BYTES; origin = route;
                   guard = first(Widget); status = service
             }
+            { id: widget_shelf_list, ctx: browser, out: ::cockpit_protocol::widget::WidgetShelfListResponse,
+              call: $crate::transport::operations::widgets::widget_shelf_list,
+              native: cockpit_widget_shelf_list(request: ::cockpit_protocol::widget::WidgetShelfListRequest)
+                  => $crate::transport::native_input::widget(),
+              http: post "/api/v1/widgets/shelf/list"
+                  (body: ::std::result::Result<::axum::Json<::cockpit_protocol::widget::WidgetShelfListRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::widget_body($crate::transport::http_input::Reject("widget_usage", "Malformed or oversized widget request"));
+                  limit = $crate::transport::limits::WIDGET_BYTES; origin = route;
+                  guard = first(Widget); status = service
+            }
+            { id: widget_shelf_reopen, ctx: browser, out: ::cockpit_protocol::widget::WidgetSummary,
+              call: $crate::transport::operations::widgets::widget_shelf_reopen,
+              native: cockpit_widget_shelf_reopen(request: ::cockpit_protocol::widget::WidgetShelfReopenRequest)
+                  => $crate::transport::native_input::widget(),
+              http: post "/api/v1/widgets/shelf/reopen"
+                  (body: ::std::result::Result<::axum::Json<::cockpit_protocol::widget::WidgetShelfReopenRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::widget_body($crate::transport::http_input::Reject("widget_usage", "Malformed or oversized widget request"));
+                  limit = $crate::transport::limits::WIDGET_BYTES; origin = route;
+                  guard = first(Widget); status = service
+            }
             { id: widget_select, ctx: browser, out: ::cockpit_protocol::widget::WidgetSelectResponse,
               call: $crate::transport::operations::widgets::widget_select,
               native: cockpit_widget_select(request: ::cockpit_protocol::widget::WidgetSelectRequest)
@@ -312,6 +362,16 @@ macro_rules! cockpit_operations {
               http: get "/api/v1/sessions/{session_id}/orchestration"
                   (path: ::axum::extract::Path<::std::string::String>, query: ::std::result::Result<::axum::extract::Query<$crate::transport::operations::orchestration::SnapshotQuery>, ::axum::extract::rejection::QueryRejection>)
                   => $crate::transport::operations::orchestration::snapshot_input();
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
+                  guard = after(Orchestration); status = service
+            }
+            { id: orchestration_agent_send, ctx: orchestration, out: ::serde_json::Value,
+              call: $crate::transport::operations::orchestration::orchestration_agent_send,
+              native: orchestration_agent_send(request: ::serde_json::Value)
+                  => $crate::transport::native_input::value($crate::transport::limits::MUTATION_BYTES, "orchestration"),
+              http: post "/api/v1/sessions/{session_id}/orchestration/agent-send"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<$crate::transport::operations::orchestration::AgentSendRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::operations::orchestration::agent_send_input();
                   limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
                   guard = after(Orchestration); status = service
             }

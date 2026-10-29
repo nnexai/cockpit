@@ -26,12 +26,20 @@ export const wireWidgetAddress: WireDescriptor<V1.WidgetAddress> = struct<V1.Wid
 
 export const wireWidgetInputKind: WireDescriptor<V1.WidgetInputKind> = literal<V1.WidgetInputKind>("WidgetInputKind", ["file", "stdin"]);
 
+export const wireWidgetChoicesInput: WireDescriptor<V1.WidgetChoicesInput> = struct<V1.WidgetChoicesInput>("WidgetChoicesInput", {
+  "spec_json": req(str),
+  "sha256": req(str),
+  "from": req(named(() => wireWidgetInputKind)),
+  "name": req(nullable(str), { fill: null }),
+});
+
 export const wireWidgetContentInput: WireDescriptor<V1.WidgetContentInput> = tagged<V1.WidgetContentInput, "type">("WidgetContentInput", "type", {
   "html": {
     "content_base64": req(str),
     "sha256": req(str),
     "from": req(named(() => wireWidgetInputKind)),
     "name": req(nullable(str), { fill: null }),
+    "choices": req(nullable(named(() => wireWidgetChoicesInput)), { fill: null }),
   },
   "choices": {
     "spec_json": req(str),
@@ -222,6 +230,7 @@ export const wireWidgetContentRequest: WireDescriptor<V1.WidgetContentRequest> =
 export const wireWidgetBody: WireDescriptor<V1.WidgetBody> = tagged<V1.WidgetBody, "type">("WidgetBody", "type", {
   "html": {
     "document": req(str),
+    "choices": req(nullable(named(() => wireWidgetChoicesSpec)), { fill: null }),
   },
   "choices": {
     "spec": req(named(() => wireWidgetChoicesSpec)),
@@ -234,6 +243,22 @@ export const wireWidgetContent: WireDescriptor<V1.WidgetContent> = struct<V1.Wid
   "sha256": req(str),
   "body": req(named(() => wireWidgetBody)),
   "selection": req(nullable(named(() => wireWidgetSelectionResponse)), { fill: null }),
+});
+
+export const wireWidgetShelfListRequest: WireDescriptor<V1.WidgetShelfListRequest> = struct<V1.WidgetShelfListRequest>("WidgetShelfListRequest", {
+});
+
+export const wireWidgetShelfEntry: WireDescriptor<V1.WidgetShelfEntry> = struct<V1.WidgetShelfEntry>("WidgetShelfEntry", {
+  "summary": req(named(() => wireWidgetSummary)),
+  "removed_at_ms": req(u53),
+});
+
+export const wireWidgetShelfListResponse: WireDescriptor<V1.WidgetShelfListResponse> = struct<V1.WidgetShelfListResponse>("WidgetShelfListResponse", {
+  "widgets": req(list(named(() => wireWidgetShelfEntry))),
+});
+
+export const wireWidgetShelfReopenRequest: WireDescriptor<V1.WidgetShelfReopenRequest> = struct<V1.WidgetShelfReopenRequest>("WidgetShelfReopenRequest", {
+  "key": req(named(() => wireWidgetKey)),
 });
 
 export const wireWidgetRemoveRequest: WireDescriptor<V1.WidgetRemoveRequest> = struct<V1.WidgetRemoveRequest>("WidgetRemoveRequest", {

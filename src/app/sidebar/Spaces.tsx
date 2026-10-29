@@ -12,6 +12,7 @@ import { useRovingList } from "./useRovingList";
 import { GitProblemNotice, SpaceGitAction as InlineGitAction } from "./SpaceGitAction";
 import { gitReadProblem, type GitActionState } from "../session/spaceGitActions";
 import type { SpaceTagsState } from "../session/spaceTags";
+import type { SpaceCpu } from "../session/spaceCpu";
 import { projectTagGroups, readSpacesView, rowTags, writeSpacesView, type TagListRow, type SpacesView } from "./spaceTagView";
 import { SpaceTagChip } from "./SpaceTagChip";
 import { SpaceTagPopover } from "./SpaceTagPopover";
@@ -28,13 +29,14 @@ type DropMark = { targetId: string; side: "before" | "after" } | null;
 /** A rejected Space mutation, shown directly under the row it concerns. */
 export type SpaceNote = { spaceId: string; id: string; message: string };
 
-export function Spaces({ spaces, tags, tagEditorRequest, editorSuspended = false, services, pendingServiceKey, onSelectService, gitStatus, gitBlocked, gitEntry, gitStatusError, onRetryGitStatus, onGitAction, onDismissGitProblem, selectedSpaceId, pendingSpaceId, editingId, busy, loading, hasSession, notes, onEdit, onSelect, onContext, onSetup, setupEnabled, mutate, focusRef }: {
+export function Spaces({ spaces, tags, tagEditorRequest, editorSuspended = false, services, cpu, pendingServiceKey, onSelectService, gitStatus, gitBlocked, gitEntry, gitStatusError, onRetryGitStatus, onGitAction, onDismissGitProblem, selectedSpaceId, pendingSpaceId, editingId, busy, loading, hasSession, notes, onEdit, onSelect, onContext, onSetup, setupEnabled, mutate, focusRef }: {
   spaces: Space[];
   tags: SpaceTagsState;
   tagEditorRequest: { spaceId: string; token: number } | null;
   editorSuspended?: boolean;
   gitStatus: ReadonlyMap<string, SpaceGitStatus>;
   services: ReadonlyMap<string, readonly SpaceServiceStatus[]>;
+  cpu?: ReadonlyMap<string, SpaceCpu>;
   pendingServiceKey: string | null;
   onSelectService(service: SpaceServiceStatus): void;
   gitBlocked?: string;
@@ -335,14 +337,17 @@ export function Spaces({ spaces, tags, tagEditorRequest, editorSuspended = false
           const readMessage = !gitStatusError ? gitReadProblem(git) : undefined;
           const readOpen = gitReadProblemId === space.id && Boolean(readMessage);
           const gitAction = <InlineGitAction status={git} entry={entry} blocked={gitBlocked} statusError={gitStatusError && (git || space.git) ? gitStatusError : undefined} onAction={action => { setGitReadProblemId(null); onGitAction(space.id, action); }} onReadProblem={readMessage ? () => setGitReadProblemId(space.id) : undefined} />;
+          const cpuStatus = cpu?.get(space.id);
+          const cpuLabel = cpuStatus?.active ? `CPU ${Math.round(cpuStatus.percent)}%${cpuStatus.top_process ? ` · ${cpuStatus.top_process.name} ${Math.round(cpuStatus.top_process.percent)}%` : ""}` : null;
           const title = [
             `${row.kind === "child" ? spaceRawName(space) : space.label} · ${word}`,
             branch ? (tracked ? `${branch} · ${position || "level"} vs ${tracked.name} (last fetch)` : branch) : checkout?.state === "detached" ? "Detached HEAD" : checkout?.state === "unavailable" ? checkout.message : null,
             checkout && checkout.state !== "unavailable" ? checkout.root : space.git?.checkout_path,
+            cpuLabel,
           ].filter(Boolean).join("\n");
           const accessibleName = [row.label, word, branch ? `branch ${branch}` : null,
             tracked ? `${tracked.ahead} ahead, ${tracked.behind} behind ${tracked.name}` : null,
-            spaceTags.length ? `tags ${spaceTags.join(", ")}` : null].filter(Boolean).join(", ");
+            spaceTags.length ? `tags ${spaceTags.join(", ")}` : null, cpuLabel].filter(Boolean).join(", ");
           const pending = pendingSpaceId === space.id;
           const selected = selectedSpaceId === space.id && !pending;
           const detail = selected ? [
@@ -390,7 +395,7 @@ export function Spaces({ spaces, tags, tagEditorRequest, editorSuspended = false
                   <div className="space-row-content" aria-hidden={undefined}>
                     <StateGlyph shape={spaceGlyphShape(status)} />
                     <span className="space-details">
-                      <span className="space-name-line"><span className="space-label">{row.label}</span>{!tagDots && tagTrigger ? <span className="space-tag-add-anchor">{tagTrigger}</span> : null}{gitAction}</span>
+                      <span className="space-name-line"><span className="space-label">{row.label}</span>{!tagDots && tagTrigger ? <span className="space-tag-add-anchor">{tagTrigger}</span> : null}{gitAction}{cpuStatus?.active ? <span className="space-cpu" aria-hidden="true">CPU {Math.round(cpuStatus.percent)}%</span> : null}</span>
                       {tagDots ? <span className="space-tag-line">{tagTrigger}</span> : null}
                       {detail ? <span className="space-detail">{detail}</span> : null}
                     </span>

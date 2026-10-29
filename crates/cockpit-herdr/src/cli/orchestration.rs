@@ -31,7 +31,7 @@ fn unknown(error: InspectionError) -> InspectionError {
     }
 }
 
-fn parse_pane_process_info(
+pub(super) fn parse_pane_process_info(
     result: &Value,
     pane_id: &str,
 ) -> Result<PaneProcessInfo, InspectionError> {
@@ -421,7 +421,8 @@ impl HerdrCliAdapter {
             session_id, "agent.prompt", json!({"target": target.pane_id, "text": text}),
             Some(&observed.endpoint_identity),
         ).await.map_err(|error| {
-            if error.code == "agent_blocked" { error } else {
+            // Herdr rejects these before sending any input, so the prompt was definitely not delivered.
+            if matches!(error.code.as_str(), "agent_blocked" | "agent_not_ready") { error } else {
                 InspectionError::new("herdr_outcome_unknown", "Agent prompt outcome is unknown; inspect before retrying")
             }
         })?;
@@ -1211,6 +1212,58 @@ mod tests {
             }
             assert_eq!(server.await.unwrap(), if matches!(case, 1..=4 | 11 | 13) { 0 } else { 1 },
                 "case {case}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unmanaged_prompt_preserves_definite_refusals_without_replay() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::net::UnixListener;
+        use super::super::HerdrCliConfig;
+
+        for (herdr_code, expected_code) in [
+            ("agent_not_ready", "agent_not_ready"),
+            ("agent_blocked", "agent_blocked"),
+            ("internal", "herdr_outcome_unknown"),
+        ] {
+            let journal = OmpJournal::new("unmanaged session");
+            let socket = journal.root.join("unmanaged-prompt.sock");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let snapshot = omp_path_snapshot(&journal.path);
+            let server = tokio::spawn(async move {
+                for _ in 0..2 {
+                    reply_to_event_test_request(&listener, "session.snapshot", &snapshot).await;
+                }
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let request: Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["method"], "agent.prompt");
+                assert_eq!(request["params"], json!({"target": "pane-a", "text": "Hello agent"}));
+                reader.into_inner().write_all(format!("{}\n", json!({
+                    "id": request["id"],
+                    "error": {"code": herdr_code, "message": "Herdr rejected prompt"},
+                })).as_bytes()).await.unwrap();
+                assert!(tokio::time::timeout(
+                    std::time::Duration::from_millis(30), listener.accept(),
+                ).await.is_err(), "agent.prompt must not be replayed for {herdr_code}");
+            });
+            let adapter = HerdrCliAdapter::new(HerdrCliConfig::from_options(
+                None, Some("fixture".into()), Some(socket),
+            ).unwrap());
+            let runtime = adapter.runtime("fixture").await.unwrap();
+            let pane = &runtime.panes[0];
+            assert_eq!(pane.agent_kind.as_deref(), Some("omp"));
+            assert!(pane.terminal_id.is_some());
+            let error = adapter.prompt_unmanaged_agent("fixture", &runtime, pane, "Hello agent")
+                .await.unwrap_err();
+            assert_eq!(error.code, expected_code, "Herdr error {herdr_code}");
+            if herdr_code != "internal" {
+                assert_eq!(error.message, "Herdr rejected prompt");
+            }
+            server.await.unwrap();
         }
     }
 

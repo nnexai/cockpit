@@ -341,6 +341,15 @@ fn captured_message_context_uses_durable_task_and_project() {
         kind: MessageKind::Observation, text: "ready", in_reply_to: None, report: None,
         stale: false, escalated_from: None,
     }).unwrap();
+    for message_id in [format!("observation:{worker}:runtime_blocked:1:1"),
+        format!("dispatch-failure:{worker}:1:1:plan:failed"),
+        format!("scheduled-task:{}", task.task_id), "dispatch-failure:missing:1:1".into()] {
+        messages::append(&mut state, messages::AppendMessage {
+            from: ActorRef::Dispatcher, to_run_id: &root, message_id: &message_id,
+            kind: MessageKind::Observation, text: "notice", in_reply_to: None, report: None,
+            stale: false, escalated_from: None,
+        }).unwrap();
+    }
     locked.save(&mut state).unwrap();
     let messages = state.messages.clone();
     drop(locked);
@@ -352,6 +361,11 @@ fn captured_message_context_uses_durable_task_and_project() {
     assert_eq!(context.task_title.as_deref(), Some("Digest task"));
     assert_eq!(context.project.as_ref().map(|project| project.label.clone()),
         projection::task_project(&fixture.state(), &root, &task.task_id, None).map(|project| project.label));
+    for id in [format!("observation:{worker}:runtime_blocked:1:1"),
+        format!("dispatch-failure:{worker}:1:1:plan:failed"), format!("scheduled-task:{}", task.task_id)] {
+        assert_eq!(contexts.get(&id).and_then(|context| context.task_title.as_deref()), Some("Digest task"));
+    }
+    assert!(!contexts.contains_key("dispatch-failure:missing:1:1"));
 }
 
 #[test]

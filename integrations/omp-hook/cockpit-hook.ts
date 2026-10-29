@@ -21,21 +21,6 @@ type API = {
 type Envelope = { message_id: string; seq: number; kind: string; report?: { kind: string } | null; [key: string]: unknown };
 type Command = (args: string[], env: NodeJS.ProcessEnv, cwd: string, signal: AbortSignal) => Promise<unknown>;
 
-export function meaningful(message: Envelope): boolean {
-  const sender = message.from;
-  if ((message.kind === "answer" || (message.kind === "report"
-    && (message.report?.kind === "needs_input" || message.report?.kind === "result")))
-    && sender && typeof sender === "object"
-    && "type" in sender && sender.type === "run" && "run_id" in sender
-    && typeof sender.run_id === "string" && sender.run_id === message.to_run_id) {
-    // Root reports and relayed human answers are already authored in this chat.
-    // Capture/ACK their durable receipts silently; never wake a root to answer itself.
-    return false;
-  }
-  return message.kind === "report"
-    ? message.report?.kind === "result" || message.report?.kind === "needs_input"
-    : ["instruction", "answer", "cancel_request", "observation"].includes(message.kind);
-}
 
 function envelope(value: unknown): value is Envelope {
   if (!value || typeof value !== "object" || !("message_id" in value) || !("seq" in value) || !("kind" in value)) return false;
@@ -57,7 +42,8 @@ export function capturedMessages(value: unknown, expectedRunId?: string): Envelo
     || value.messages.some(message => message.to_run_id !== expectedRunId))) {
     throw new Error("Cockpit capture recipient mismatch; retained for inspection");
   }
-  return value.messages.filter(meaningful);
+  // The CLI's core-owned --deliverable policy is the sole classifier.
+  return value.messages;
 }
 
 function privateDirectory(path: string): void {
@@ -148,7 +134,9 @@ export function frames(messages: Envelope[]): string[] {
     if (report && typeof report.summary === "string" && report.summary !== text && report.summary !== preview) details.summary = report.summary;
     for (const key of Object.keys(details)) if (details[key] == null || details[key] === "") delete details[key];
     const label = (value: unknown, fallback: string) => typeof value === "string" ? value.replace(/\s+/g, " ") : fallback;
-    return `[${report?.kind ?? message.kind}] task "${label(context?.task_title ?? context?.task_id, "unknown")}" (${label(context?.project?.label, context ? "General" : "unknown project")}) from ${label(context?.run_label ?? runId ?? sender?.type, "unknown")}: ${preview}\n${JSON.stringify(details)}`;
+    const task = context?.task_title ?? context?.task_id;
+    const taskClause = task ? ` task "${label(task, "")}" (${label(context?.project?.label, "General")})` : "";
+    return `[${report?.kind ?? message.kind}]${taskClause} from ${label(context?.run_label ?? runId ?? sender?.type, "unknown")}: ${preview}\n${JSON.stringify(details)}`;
   }).join("\n");
   const parts = textParts(digest);
   return parts.map((body, index) =>

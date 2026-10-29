@@ -35,6 +35,7 @@ pub enum CliProcessRole {
 pub struct OrchestrationRuntime {
     pub service: Arc<OrchestrationService>,
     herdr: Arc<dyn OrchestrationHerdr>,
+    agent_send_adapter: Option<Arc<HerdrCliAdapter>>,
     projects: Arc<ProjectService>,
     dispatcher: Mutex<Option<Dispatcher>>,
     task: Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -85,6 +86,7 @@ impl OrchestrationRuntime {
             Dispatcher::new(service.clone(), projects.clone(), library, herdr.clone(), settings);
         Ok(Self {
             service,
+            agent_send_adapter: Some(herdr.clone()),
             herdr,
             projects,
             dispatcher: Mutex::new(Some(dispatcher)),
@@ -106,6 +108,16 @@ impl OrchestrationRuntime {
         request: &OrchestrationSnapshotRequest,
     ) -> Result<OrchestrationSnapshot, InspectionError> {
         self.service.snapshot(self.herdr.as_ref(), request).await
+    }
+    pub async fn send_agent(
+        &self, session: &str, reference: &str, text: String, origin: OperatorOrigin,
+    ) -> Result<serde_json::Value, InspectionError> {
+        let adapter = self.agent_send_adapter.as_ref()
+            .ok_or_else(|| InspectionError::new("herdr_unavailable", "Agent delivery is unavailable"))?;
+        crate::agent_send::send_to_agent(
+            self.service.as_ref(), adapter.as_ref(), session, None, reference, text, origin, false, true,
+            |_, _| Ok(None),
+        ).await
     }
     pub async fn mutate(
         &self,
@@ -596,6 +608,7 @@ fn root_candidate(run: &Run, modern_binding: bool) -> LiaisonCandidate {
     LiaisonCandidate {
         root_id: run.run_id.clone(), connection, resume,
         stop_confirmable: project_identity::root_stop_confirmable(run),
+        fresh_available: Some(project_identity::fresh_root_available(run)),
         cause: if incompatible_live { Some(ResumeCause {
             code: "conversation_unregistered".into(),
             message: "The living writer has not registered its conversation with this run's capability. Its process and checkout claim are preserved.".into(),

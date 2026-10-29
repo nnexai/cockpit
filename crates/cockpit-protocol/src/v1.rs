@@ -163,6 +163,44 @@ pub struct SpaceServiceStatusResponse {
     pub session_id: String,
     pub services: Vec<SpaceServiceStatus>,
 }
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceCpuPane {
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub space_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceCpuStatusRequest {
+    pub server_instance: String,
+    pub panes: Vec<SpaceCpuPane>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+pub struct SpaceCpuProcess {
+    pub pid: u32,
+    pub name: String,
+    pub percent: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+pub struct SpaceCpuStatus {
+    pub space_id: String,
+    pub percent: f64,
+    pub active: bool,
+    pub top_process: Option<SpaceCpuProcess>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+pub struct SpaceCpuStatusResponse {
+    pub session_id: String,
+    pub server_instance: String,
+    pub available: bool,
+    pub spaces: Vec<SpaceCpuStatus>,
+}
+
 
 /// Cockpit-owned tags of current Spaces, bound to a proven Herdr server incarnation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]

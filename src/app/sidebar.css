@@ -2,7 +2,7 @@
  * The sidebar: session header, Spaces, Agents, resizer and narrow-viewport drawer.
  * Compact adaptive rows; current presentation contract lives in DECISIONS.md.
  * Grid: header mark, section labels and top-level badges start at --sb-edge; their labels at --sb-label-x.
- * Only acknowledged selection reveals detail. Hover, DOM focus and pending intent never grow rows.
+ * Space details follow acknowledged selection; agent titles remain visible. Hover, focus and pending intent never grow rows.
  */
 .sidebar {
   --sb-edge: 14px;
@@ -264,7 +264,7 @@
   text-decoration: none;
 }
 
-/* ---- compact full-bleed rows; only selected rows reveal secondary detail ---- */
+/* ---- compact full-bleed rows ---- */
 .space-row-group { display: flow-root; }
 
 .space-tree-row {
@@ -385,6 +385,17 @@
 .space-tree-child .space-row-content { padding-left: 0; }
 .space-name-line { position: relative; display: flex; min-width: 0; height: 18px; align-items: center; gap: 6px; }
 .space-name-line .space-label { flex: 1 1 auto; }
+.space-cpu {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--blocked) 16%, transparent);
+  color: var(--blocked);
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  white-space: nowrap;
+}
 .space-tag-line { display: flex; min-width: 0; }
 .space-git-action {
   position: relative;
@@ -415,6 +426,7 @@
 .space-git-action.is-explanation { cursor: help; }
 .space-git-action.is-explanation:not(.is-warning), .space-git-action.is-quiet { color: var(--text-muted); }
 .space-git-action.is-quiet { position: absolute; right: 0; opacity: 0; pointer-events: none; }
+.space-name-line:has(.space-cpu) .space-git-action.is-quiet { position: relative; right: auto; }
 .space-tree-row:hover .space-git-action.is-quiet,
 .space-tree-row:focus-within .space-git-action.is-quiet,
 .space-tree-row.is-selected .space-git-action.is-quiet,
@@ -497,6 +509,16 @@
 .space-detail { display: block; overflow: hidden; text-overflow: ellipsis; }
 /* The state word and agent are one string, `State · agent`; the separator is text. */
 .agent-sub { gap: 0; overflow: hidden; }
+.agent-purpose {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-size-2xs);
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .space-chevron {
   position: relative;

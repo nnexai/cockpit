@@ -274,15 +274,75 @@ pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> 
         record(ctx, operation_id.clone(), DurableOperationKind::RunResume, &action, root_id, result.clone(), Vec::new())?;
         return Ok(Applied::Machine(result));
     }
+    let session_namespace = ctx.state.runs[index].resume.as_ref().and_then(|resume| resume.session_namespace.clone());
     settle_current_resume(ctx.state, index);
     let resume = ResumeRecord { operation_id: operation_id.clone(), run_id: run_id.clone(), previous_attachment_epoch: old_epoch,
-        phase: ResumePhase::Reconciling, cause: None, decision_id: None, replacement_attachment_epoch: None, updated_at: now() };
+        fresh_conversation: None, previous_conversation: None, session_namespace, phase: ResumePhase::Reconciling, cause: None, decision_id: None, replacement_attachment_epoch: None, updated_at: now() };
     ctx.state.runs[index].resume = Some(resume.clone());
     record(ctx, operation_id.clone(), DurableOperationKind::RunResume, &action, root_id,
         OrchestrationActionResult::RunResumed { resume: RunResumeResult {
             run_id: run_id.clone(), resume, duplicate: false,
         }}, Vec::new())?;
     apply_observation(ctx.state, index, operation_id, ctx.resolved)?;
+    Ok(Applied::Machine(OrchestrationActionResult::RunResumed { resume: RunResumeResult {
+        run_id: run_id.clone(), resume: ctx.state.runs[index].resume.clone().expect("resume installed"), duplicate: false,
+    }}))
+}
+/// Explicit operator cutover fences only the root capability. It neither
+/// asserts process exit nor changes worker credentials or checkout claims.
+pub(super) fn start_fresh_supervisor(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
+    let OrchestrationAction::RunStartFreshSupervisor { run_id, operation_id, expected_attachment_epoch } = &action else { unreachable!() };
+    if !matches!(ctx.actor, Actor::Operator(_)) {
+        return Err(error("actor_forbidden", "Only the operator may start a fresh supervisor conversation"));
+    }
+    let index = scoped_index(ctx.state, ctx.session_id, run_id)?;
+    if let Some(result) = replay(ctx, operation_id, DurableOperationKind::RunResume, &action)? {
+        return Ok(Applied::Document(result));
+    }
+    let run = &ctx.state.runs[index];
+    let old = run.attachment.as_ref().ok_or_else(|| error("attachment_conflict", "Root attachment is missing"))?;
+    if old.epoch != *expected_attachment_epoch {
+        return Err(error("attachment_conflict", "Attachment epoch changed before fresh supervisor start"));
+    }
+    project_identity::admit_fresh_root(ctx.state, run)?;
+    let epoch = old.epoch.checked_add(1).filter(|n| *n <= MAX_SAFE_COUNTER)
+        .ok_or_else(|| error("orchestration_state_full", "Attachment epoch exhausted"))?;
+    let attempt = run.dispatch.as_ref().map(|d| d.launch_attempt).unwrap_or(old.launch_attempt).checked_add(1)
+        .ok_or_else(|| error("orchestration_state_full", "Launch attempt exhausted"))?;
+    let previous_conversation = old.conversation.clone();
+    let receipts = effects(run);
+    let adopted_setup = if run.kind == RunKind::Adopted && run.dispatch.is_none() {
+        let checkout = run.checkout.as_ref().expect("admitted adopted checkout");
+        let location = old.location.as_ref().expect("admitted root location");
+        Some((checkout.clone(), location.workspace_id.clone(), old.launch_attempt))
+    } else { None };
+    settle_current_resume(ctx.state, index);
+    for credential in &mut ctx.state.credentials {
+        if credential.run_id == *run_id { credential.state = credentials::CredentialState::Revoked; }
+    }
+    let run = &mut ctx.state.runs[index];
+    run.attachment = Some(reserved_attachment(epoch, attempt));
+    if let Some((checkout, workspace_id, previous_attempt)) = adopted_setup {
+        run.target = Some(DispatchTarget::ExistingSpace { workspace_id: workspace_id.clone() });
+        run.setup = Some(SetupSummary {
+            operation_id: None, generation: None, workspace_id: Some(workspace_id),
+            checkout_path: checkout.path, repository_id: run.project.as_ref().and_then(|project| project.repository_id.clone()),
+            branch: None, base: None, base_commit: None, ownership: None,
+            effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
+        });
+        let mut previous = dispatch(DispatchStep::Launched);
+        previous.launch_attempt = previous_attempt;
+        run.dispatch = Some(previous);
+    }
+    let resume = ResumeRecord { operation_id: operation_id.clone(), run_id: run_id.clone(),
+        previous_attachment_epoch: Some(*expected_attachment_epoch), fresh_conversation: Some(true), previous_conversation, session_namespace: Some(id()),
+        phase: ResumePhase::Launching, cause: None, decision_id: None,
+        replacement_attachment_epoch: Some(epoch), updated_at: now() };
+    run.resume = Some(resume.clone());
+    let root_id = run.root_id.clone();
+    record(ctx, operation_id.clone(), DurableOperationKind::RunResume, &action, root_id,
+        OrchestrationActionResult::RunResumed { resume: RunResumeResult { run_id: run_id.clone(), resume, duplicate: false } }, receipts)?;
+    super::reviewed::reset_launch_metadata_after_resume(ctx.state, index)?;
     Ok(Applied::Machine(OrchestrationActionResult::RunResumed { resume: RunResumeResult {
         run_id: run_id.clone(), resume: ctx.state.runs[index].resume.clone().expect("resume installed"), duplicate: false,
     }}))

@@ -1,7 +1,4 @@
-use cockpit_protocol::widget::{
-    WidgetContent, WidgetContentRequest, WidgetRemoveRequest, WidgetRemoveResponse,
-    WidgetSelectRequest, WidgetSelectResponse,
-};
+use cockpit_protocol::widget::*;
 
 use crate::{
     BrowserRuntime,
@@ -22,6 +19,14 @@ pub async fn widget_remove(
     request: WidgetRemoveRequest,
 ) -> Result<WidgetRemoveResponse, OperationError> {
     runtime.widget_remove(request).await.map_err(Into::into)
+}
+
+pub async fn widget_shelf_list(runtime: &BrowserRuntime, _transport: Transport, request: WidgetShelfListRequest) -> Result<WidgetShelfListResponse, OperationError> {
+    runtime.widget_shelf_list(request).await.map_err(Into::into)
+}
+
+pub async fn widget_shelf_reopen(runtime: &BrowserRuntime, _transport: Transport, request: WidgetShelfReopenRequest) -> Result<WidgetSummary, OperationError> {
+    runtime.widget_shelf_reopen(request).await.map_err(Into::into)
 }
 
 pub async fn widget_select(

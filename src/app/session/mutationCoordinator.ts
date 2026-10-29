@@ -3,7 +3,7 @@ import type { CockpitClient } from "../../client/CockpitClient";
 import type { CreatedPane, ResourceMutationRequest, SessionSnapshotResponse } from "../../protocol/generated/v1";
 import type { SessionAction, SessionState } from "./sessionStore";
 
-type StatusError = { message: string; code?: string };
+type StatusError = { message: string; code?: string; detail?: string };
 export type MutationOperation = {
   epoch: number;
   token: number;

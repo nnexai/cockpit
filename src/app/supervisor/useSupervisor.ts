@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { OrchestrationAction, OrchestrationActionResult, OrchestrationSnapshot } from "../../protocol/generated/v1";
 
-export type LiaisonAction = Extract<OrchestrationAction, { action: "supervisor_start" | "run_resume" }>;
+export type LiaisonAction = Extract<OrchestrationAction, { action: "supervisor_start" | "run_resume" | "run_start_fresh_supervisor" }>;
 export type MutationRequestScope = Readonly<{ stateStoreId: string; sessionId: string; rootId: string | null }>;
 export function acceptsSupervisorSnapshot(next: OrchestrationSnapshot, sessionId: string, rootId: string | null, revisionFloor: number): boolean {
   return next.session_id === sessionId && next.revision >= revisionFloor && (!rootId || next.board === null || next.board.root_id === rootId);

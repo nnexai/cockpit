@@ -1,7 +1,9 @@
+import type { WidgetSummary } from "../../protocol/generated/v1";
+import { widgetKey } from "../widgets/widgetStore";
 import { orderAgentsByHerdrPriority, spaceStatus, type Agent, type Space, type SpaceStatus } from "../sidebar/spaceTree";
 import type { Tab } from "./model";
 
-export type SwitchTarget = { kind: "space" | "agent"; id: string };
+export type SwitchTarget = { kind: "space" | "agent" | "widget" | "closed-widget"; id: string };
 export type SwitchRow = SwitchTarget & {
   key: string;
   primary: string;
@@ -12,10 +14,12 @@ export type SwitchRow = SwitchTarget & {
   disabledReason: string | null;
 };
 
-export function switchRows({ spaces, agents, tabs, currentSpaceId, currentPaneId, live, busy }: {
+export function switchRows({ spaces, agents, tabs, widgets = [], closedWidgets = [], currentSpaceId, currentPaneId, live, busy }: {
   spaces: readonly Space[];
   agents: readonly Agent[];
   tabs: readonly Tab[];
+  widgets?: readonly WidgetSummary[];
+  closedWidgets?: readonly WidgetSummary[];
   currentSpaceId: string | null;
   currentPaneId: string | null;
   live: boolean;
@@ -39,9 +43,20 @@ export function switchRows({ spaces, agents, tabs, currentSpaceId, currentPaneId
     const location = [spaceLabels.get(agent.space_id), tabLabels.get(agent.tab_id)].filter(Boolean);
     rows.push({
       kind: "agent", id: agent.pane_id, key: `agent:${agent.pane_id}:${agent.name}`, primary: agent.name || agent.title || "Agent",
-      meta: [...location, status.word].join(" · "), title: [...location, agent.pane_id].join(" · "),
+      meta: [...(agent.title && agent.title !== agent.name ? [agent.title] : []), ...location, status.word].join(" · "), title: [...location, agent.pane_id].join(" · "),
       status, current: agent.pane_id === currentPaneId, disabledReason: live ? null : "Herdr is not live",
       discriminator: `#${agent.pane_id.slice(-4)}`,
+    });
+  }
+  for (const widget of [...widgets, ...closedWidgets]) {
+    const location = [spaceLabels.get(widget.space_id), tabLabels.get(widget.key.tab_id)].filter(Boolean);
+    const status = spaceStatus("unknown");
+    status.word = closedWidgets.includes(widget) ? "Closed widget" : "Widget";
+    rows.push({
+      kind: closedWidgets.includes(widget) ? "closed-widget" : "widget", id: widgetKey(widget.key), key: `widget:${widgetKey(widget.key)}`,
+      primary: widget.title, meta: [...location, status.word].join(" · "),
+      title: [...location, widget.title].join(" · "), status, current: false,
+      disabledReason: live ? null : "Herdr is not live", discriminator: `#${widget.key.id}`,
     });
   }
   const duplicates = new Map<string, number>();

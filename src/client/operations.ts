@@ -6,7 +6,7 @@ import {
 } from "./orchestrationProtocol";
 import {
   matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest, parseWidgetRemoveResponse, 
-  parseWidgetSelectRequest, parseWidgetSelectResponse,
+  parseWidgetSelectRequest, parseWidgetSelectResponse, parseWidgetShelfListResponse, parseWidgetShelfReopenRequest, parseWidgetSummary,
 } from "./widgetProtocol";
 import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
 import {
@@ -68,6 +68,7 @@ import {
   parseBrowserCleanupStatus, parseBrowserCleanupRetryRequest, parseFocusRequest, parseFocusResponse, 
   parseResourceMutationRequest, parseResourceMutationResponse, parseSessionListResponse, 
   parseSessionSnapshotResponse, parseSpaceGitStatusResponse, parseSpaceServiceStatusRequest, parseSpaceServiceStatusResponse, parseSpaceTagsResponse, parseAgentAttentionResponse, matchSpaceGitActionResponse, parseStatusResponse,
+  parseSpaceCpuStatusRequest, parseSpaceCpuStatusResponse,
   validateSessionId, validateResourceId, type CockpitClient,
 } from "./CockpitClient";
 import type { FocusRequest, ResourceMutationRequest, SpaceGitActionRequest, SpaceTagChangeRequest, AgentAttentionChangeRequest } from "../protocol/generated/v1";
@@ -101,6 +102,39 @@ type OperationTable = { [K in OperationName]: OperationRow<K> };
 // Encoding, parser normalization, and identity matching are separate phases:
 // matches outside a transport parser must not acquire its normalization/status.
 const operations: OperationTable = {
+  updateStatus: {
+    encode() {
+      return {
+        operation: "update status",
+        http: { method: "GET", route: () => "/api/v1/update-status" },
+        tauri: { command: "cockpit_update_status", args: () => undefined },
+        parse: (value) => {
+          if (!value || typeof value !== "object") throw new Error("Invalid update status");
+          const status = value as Record<string, unknown>;
+          if (typeof status.source_path !== "string"
+            || !(status.installed_commit === null || typeof status.installed_commit === "string")
+            || !(status.commits_behind_main === null || (typeof status.commits_behind_main === "number" && Number.isSafeInteger(status.commits_behind_main) && status.commits_behind_main >= 0))) throw new Error("Invalid update status");
+          return { source_path: status.source_path, installed_commit: status.installed_commit, commits_behind_main: status.commits_behind_main };
+        },
+      };
+    },
+  },
+  updateInstall: {
+    encode(_backend, sessionId, spaceId) {
+      validateSessionId(sessionId);
+      validateResourceId(spaceId);
+      return {
+        operation: "update install",
+        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(sessionId)}/update-install`, json: () => spaceId },
+        tauri: { command: "cockpit_update_install", args: () => ({ sessionId, spaceId }) },
+        parse: parseQuickAskLocation,
+        matchIdentity: (location) => {
+          if (location.space_id !== spaceId) throw new CockpitClientError("malformed_response", "Update tab belongs to another Space");
+          return location;
+        },
+      };
+    },
+  },
   orchestrationSnapshot: {
     encode(backend, value) {
       const body = parseOrchestrationSnapshotRequest(value); const query = backend === "native" || body.root_id === null ? "" : `?root_id=${encodeURIComponent(body.root_id)}`;
@@ -120,6 +154,23 @@ const operations: OperationTable = {
         http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/liaison`, json: () => body },
         tauri: { command: "orchestration_liaison_lookup", args: () => ({ request: body }) },
         parse: parseLiaisonLookupResponse,
+      };
+    },
+  },
+  orchestrationAgentSend: {
+    encode(_backend, value) {
+      const body = { session_id: validateSessionId(value.session_id), reference: validateResourceId(value.reference), text: value.text };
+      if (typeof body.text !== "string" || !body.text.trim()) throw new CockpitClientError("malformed_response", "Agent message must not be empty");
+      return {
+        operation: "send to agent",
+        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/agent-send`, json: () => body },
+        tauri: { command: "orchestration_agent_send", args: () => ({ request: body }) },
+        parse: response => {
+          if (!response || typeof response !== "object" || !("delivery" in response)
+            || (response.delivery !== "prompted" && response.delivery !== "inbox")) {
+            throw new CockpitClientError("malformed_response", "Invalid agent delivery response");
+          }
+        },
       };
     },
   },
@@ -969,6 +1020,19 @@ const operations: OperationTable = {
       };
     },
   },
+  spaceCpuStatus: { direct: "both", nativeAbort: "read",
+    encode(_backend, sessionId, request, signal) {
+      validateSessionId(sessionId); signal?.throwIfAborted();
+      const body = parseSpaceCpuStatusRequest(request);
+      return {
+        operation: "Space CPU status",
+        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(sessionId)}/space-cpu`, json: () => body, signal: () => signal },
+        tauri: { command: "cockpit_space_cpu_status", args: () => ({ sessionId, request: body }) },
+        parse: parseSpaceCpuStatusResponse,
+        matchIdentity: (response) => { signal?.throwIfAborted(); if (response.session_id !== sessionId || response.server_instance !== body.server_instance) throw new CockpitClientError("malformed_response", "Space CPU status belongs to another session"); return response; },
+      };
+    },
+  },
   spaceTags: { direct: "both",
     encode(_backend, sessionId, signal) {
       validateSessionId(sessionId); signal?.throwIfAborted();
@@ -1102,6 +1166,31 @@ const operations: OperationTable = {
         http: { method: "POST", route: () => "/api/v1/widgets/select", json: () => parsed, signal: () => signal },
         tauri: { command: "cockpit_widget_select", args: () => ({ request: parsed }) },
         parse: parseWidgetSelectResponse,
+      };
+    },
+  },
+  widgetShelfList: { nativeAbort: "widget",
+    encode(_backend, _request, signal) {
+      return {
+        operation: "widget shelf list",
+        http: { method: "POST", route: () => "/api/v1/widgets/shelf/list", json: () => ({}), signal: () => signal },
+        tauri: { command: "cockpit_widget_shelf_list", args: () => ({ request: {} }) },
+        parse: parseWidgetShelfListResponse,
+      };
+    },
+  },
+  widgetShelfReopen: { nativeAbort: "widget",
+    encode(_backend, value, signal) {
+      const parsed = parseWidgetShelfReopenRequest(value);
+      return {
+        operation: "widget shelf reopen",
+        http: { method: "POST", route: () => "/api/v1/widgets/shelf/reopen", json: () => parsed, signal: () => signal },
+        tauri: { command: "cockpit_widget_shelf_reopen", args: () => ({ request: parsed }) },
+        parse: parseWidgetSummary,
+        matchIdentity: (response) => {
+          if (response.key.session_id !== parsed.key.session_id || response.key.tab_id !== parsed.key.tab_id || response.key.id !== parsed.key.id) throw new CockpitClientError("malformed_response", "Widget shelf response belongs to another widget");
+          return response;
+        },
       };
     },
   },

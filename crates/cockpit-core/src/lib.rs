@@ -33,6 +33,7 @@ pub mod sources;
 pub mod space_git;
 pub mod space_git_action;
 pub mod space_services;
+pub mod space_cpu;
 pub mod space_tags;
 pub mod viewer;
 pub mod widget;
@@ -114,6 +115,10 @@ pub trait HerdrAdapter: Send + Sync {
     fn session_socket_path(&self, _session_id: &str) -> Option<std::path::PathBuf> {
         None
     }
+    /// Resolve a pane's shell on membership changes, not on every sample.
+    async fn pane_shell_pid(&self, _session_id: &str, _server_instance: &str, _pane_id: &str) -> Result<Option<u32>, InspectionError> {
+        Ok(None)
+    }
     async fn inspect(&self) -> Result<HerdrCompatibility, InspectionError>;
     async fn inspect_session(
         &self,
@@ -166,6 +171,7 @@ pub struct CockpitService {
     quota: Option<Arc<quota::QuotaService>>,
     git_actions: Arc<space_git_action::SpaceGitActions>,
     space_services: Arc<space_services::SpaceServices>,
+    space_cpu: Arc<space_cpu::SpaceCpuSampler>,
 }
 
 #[derive(Default)]
@@ -239,6 +245,7 @@ impl CockpitService {
             quota: None,
             git_actions: Arc::new(space_git_action::SpaceGitActions::default()),
             space_services: Arc::new(space_services::SpaceServices::default()),
+            space_cpu: Arc::new(space_cpu::SpaceCpuSampler::default()),
         }
     }
 
@@ -484,6 +491,14 @@ impl CockpitService {
         self.ensure_live()?;
         validate_session_id(session_id)?;
         Ok(self.space_services.read(session_id, request, self.adapter.session_socket_path(session_id)).await)
+    }
+
+    pub async fn space_cpu_status(
+        &self, session_id: &str, request: &cockpit_protocol::v1::SpaceCpuStatusRequest,
+    ) -> Result<cockpit_protocol::v1::SpaceCpuStatusResponse, InspectionError> {
+        self.ensure_live()?;
+        validate_session_id(session_id)?;
+        self.space_cpu.sample(self.adapter.as_ref(), session_id, request).await
     }
 
     /// Pull fast-forward-only or push the exact configured upstream of this Space.

@@ -23,6 +23,11 @@ export interface WireTypes {
   "SpaceServiceStatus": V1.SpaceServiceStatus;
   "SpaceServiceStatusRequest": V1.SpaceServiceStatusRequest;
   "SpaceServiceStatusResponse": V1.SpaceServiceStatusResponse;
+  "SpaceCpuPane": V1.SpaceCpuPane;
+  "SpaceCpuStatusRequest": V1.SpaceCpuStatusRequest;
+  "SpaceCpuProcess": V1.SpaceCpuProcess;
+  "SpaceCpuStatus": V1.SpaceCpuStatus;
+  "SpaceCpuStatusResponse": V1.SpaceCpuStatusResponse;
   "SpaceTags": V1.SpaceTags;
   "SpaceTagsResponse": V1.SpaceTagsResponse;
   "SpaceTagChangeRequest": V1.SpaceTagChangeRequest;
@@ -96,6 +101,11 @@ export interface WireOwners {
   "SpaceServiceStatus": V1.SpaceServiceStatus;
   "SpaceServiceStatusRequest": V1.SpaceServiceStatusRequest;
   "SpaceServiceStatusResponse": V1.SpaceServiceStatusResponse;
+  "SpaceCpuPane": V1.SpaceCpuPane;
+  "SpaceCpuStatusRequest": V1.SpaceCpuStatusRequest;
+  "SpaceCpuProcess": V1.SpaceCpuProcess;
+  "SpaceCpuStatus": V1.SpaceCpuStatus;
+  "SpaceCpuStatusResponse": V1.SpaceCpuStatusResponse;
   "SpaceTags": V1.SpaceTags;
   "SpaceTagsResponse": V1.SpaceTagsResponse;
   "SpaceTagChangeRequest": V1.SpaceTagChangeRequest;
@@ -230,6 +240,22 @@ export interface WireFields {
   "SpaceServiceStatusRequest.pane_ids": (V1.SpaceServiceStatusRequest)["pane_ids"];
   "SpaceServiceStatusResponse.session_id": (V1.SpaceServiceStatusResponse)["session_id"];
   "SpaceServiceStatusResponse.services": (V1.SpaceServiceStatusResponse)["services"];
+  "SpaceCpuPane.pane_id": (V1.SpaceCpuPane)["pane_id"];
+  "SpaceCpuPane.terminal_id": (V1.SpaceCpuPane)["terminal_id"];
+  "SpaceCpuPane.space_id": (V1.SpaceCpuPane)["space_id"];
+  "SpaceCpuStatusRequest.server_instance": (V1.SpaceCpuStatusRequest)["server_instance"];
+  "SpaceCpuStatusRequest.panes": (V1.SpaceCpuStatusRequest)["panes"];
+  "SpaceCpuProcess.pid": (V1.SpaceCpuProcess)["pid"];
+  "SpaceCpuProcess.name": (V1.SpaceCpuProcess)["name"];
+  "SpaceCpuProcess.percent": (V1.SpaceCpuProcess)["percent"];
+  "SpaceCpuStatus.space_id": (V1.SpaceCpuStatus)["space_id"];
+  "SpaceCpuStatus.percent": (V1.SpaceCpuStatus)["percent"];
+  "SpaceCpuStatus.active": (V1.SpaceCpuStatus)["active"];
+  "SpaceCpuStatus.top_process": (V1.SpaceCpuStatus)["top_process"];
+  "SpaceCpuStatusResponse.session_id": (V1.SpaceCpuStatusResponse)["session_id"];
+  "SpaceCpuStatusResponse.server_instance": (V1.SpaceCpuStatusResponse)["server_instance"];
+  "SpaceCpuStatusResponse.available": (V1.SpaceCpuStatusResponse)["available"];
+  "SpaceCpuStatusResponse.spaces": (V1.SpaceCpuStatusResponse)["spaces"];
   "SpaceTags.space_id": (V1.SpaceTags)["space_id"];
   "SpaceTags.tags": (V1.SpaceTags)["tags"];
   "SpaceTagsResponse.session_id": (V1.SpaceTagsResponse)["session_id"];
@@ -493,6 +519,11 @@ export interface WireFieldNames {
   "SpaceServiceStatus": "key" | "pane_id" | "tab_id" | "title" | "status" | "port";
   "SpaceServiceStatusRequest": "server_instance" | "pane_ids";
   "SpaceServiceStatusResponse": "session_id" | "services";
+  "SpaceCpuPane": "pane_id" | "terminal_id" | "space_id";
+  "SpaceCpuStatusRequest": "server_instance" | "panes";
+  "SpaceCpuProcess": "pid" | "name" | "percent";
+  "SpaceCpuStatus": "space_id" | "percent" | "active" | "top_process";
+  "SpaceCpuStatusResponse": "session_id" | "server_instance" | "available" | "spaces";
   "SpaceTags": "space_id" | "tags";
   "SpaceTagsResponse": "session_id" | "server_instance" | "catalog" | "spaces";
   "SpaceTagChangeRequest": "space_id" | "server_instance" | "tag" | "assigned";
@@ -568,6 +599,7 @@ export interface WireChildNames {
   "SpaceGitCheckout.upstream": "SpaceGitUpstream";
   "SpaceGitCheckout[branch].upstream": "SpaceGitUpstream";
   "SpaceGitActionResponse.outcome": "SpaceGitActionOutcome";
+  "SpaceCpuStatus.top_process": "SpaceCpuProcess";
   "AgentAttentionRecord.last": "AgentAttentionLast";
   "AgentAttentionRecord.completion": "AgentAttentionCompletion";
   "AgentAttentionRecord.acked": "AgentAttentionStamp";
@@ -675,6 +707,11 @@ export interface WireCheckpointFieldNames {
   "SpaceServiceStatus": "key" | "pane_id" | "tab_id" | "title" | "status" | "port";
   "SpaceServiceStatusRequest": "server_instance" | "pane_ids";
   "SpaceServiceStatusResponse": "session_id" | "services";
+  "SpaceCpuPane": "pane_id" | "terminal_id" | "space_id";
+  "SpaceCpuStatusRequest": "server_instance" | "panes";
+  "SpaceCpuProcess": "pid" | "name" | "percent";
+  "SpaceCpuStatus": "space_id" | "percent" | "active" | "top_process";
+  "SpaceCpuStatusResponse": "session_id" | "server_instance" | "available" | "spaces";
   "SpaceTags": "space_id" | "tags";
   "SpaceTagsResponse": "session_id" | "server_instance" | "catalog" | "spaces";
   "SpaceTagChangeRequest": "space_id" | "server_instance" | "tag" | "assigned";
@@ -747,6 +784,7 @@ export type WireOmittableField =
   | "SpaceGitActionOutcome[updated].commits"
   | "SpaceServiceStatus.tab_id"
   | "SpaceServiceStatus.port"
+  | "SpaceCpuStatus.top_process"
   | "AgentAttentionRecord.completion"
   | "AgentAttentionRecord.acked"
   | "AgentAttentionResponse.refused"
@@ -795,6 +833,8 @@ export type WireListField =
   | "SpaceGitStatusResponse.spaces"
   | "SpaceServiceStatusRequest.pane_ids"
   | "SpaceServiceStatusResponse.services"
+  | "SpaceCpuStatusRequest.panes"
+  | "SpaceCpuStatusResponse.spaces"
   | "SpaceTags.tags"
   | "SpaceTagsResponse.catalog"
   | "SpaceTagsResponse.spaces"

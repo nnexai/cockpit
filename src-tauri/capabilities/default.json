@@ -8,8 +8,11 @@
   "permissions": [
     "allow-cockpit-status",
     "allow-cockpit-quota-status",
+    "allow-cockpit-update-status",
+    "allow-cockpit-update-install",
     "allow-orchestration-snapshot",
     "allow-orchestration-liaison-lookup",
+    "allow-orchestration-agent-send",
     "allow-orchestration-mutate",
     "allow-orchestration-wait",
     "allow-cockpit-widget-subscribe",
@@ -87,6 +90,7 @@
     "allow-cockpit-library-media",
     "allow-cockpit-space-git-status",
     "allow-cockpit-space-service-status",
+    "allow-cockpit-space-cpu-status",
     "allow-cockpit-space-tags",
     "allow-cockpit-space-tag-change",
     "allow-cockpit-agent-attention",
@@ -106,6 +110,9 @@
     "allow-cockpit-browser-view-subscribe",
     "allow-cockpit-browser-view-release",
     "allow-cockpit-browser-draft-recovery",
+    "allow-cockpit-power-status",
+    "allow-cockpit-power-set-stay-awake",
+    "allow-cockpit-power-screen-off",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

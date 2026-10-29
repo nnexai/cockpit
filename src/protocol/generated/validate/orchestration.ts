@@ -356,6 +356,9 @@ export const wireResumeRecord: WireDescriptor<V1.ResumeRecord> = struct<V1.Resum
   "operation_id": req(str),
   "run_id": req(str),
   "previous_attachment_epoch": req(nullable(u53), { fill: null }),
+  "fresh_conversation": opt(bool, OMIT, { fill: null, rustOmits: true }),
+  "previous_conversation": opt(named(() => wireConversationIdentity), OMIT, { fill: null, rustOmits: true }),
+  "session_namespace": opt(str, OMIT, { fill: null, rustOmits: true }),
   "phase": req(named(() => wireResumePhase)),
   "cause": req(nullable(named(() => wireResumeCause)), { fill: null }),
   "decision_id": req(nullable(str), { fill: null }),
@@ -378,6 +381,7 @@ export const wireLiaisonCandidate: WireDescriptor<V1.LiaisonCandidate> = struct<
   "resume": req(named(() => wireRootResumeAvailability)),
   "cause": req(nullable(named(() => wireResumeCause)), { fill: null }),
   "stop_confirmable": req(bool),
+  "fresh_available": opt(bool, OMIT, { fill: null, rustOmits: true }),
   "updated_at": req(str),
 });
 
@@ -1084,6 +1088,11 @@ export const wireOrchestrationAction: WireDescriptor<V1.OrchestrationAction> = t
     "operation_id": req(str),
     "expected_attachment_epoch": req(nullable(u53), { fill: null }),
     "confirmed_stopped_attachment_id": opt(nullable(str), OMIT, { fill: null, rustOmits: true }),
+  },
+  "run_start_fresh_supervisor": {
+    "run_id": req(str),
+    "operation_id": req(str),
+    "expected_attachment_epoch": req(u53),
   },
   "run_register": {
     "operation_id": req(str),

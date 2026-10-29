@@ -39,6 +39,14 @@ pub enum WidgetInputKind {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WidgetChoicesInput {
+    pub spec_json: String,
+    pub sha256: String,
+    pub from: WidgetInputKind,
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WidgetContentInput {
     Html {
@@ -46,6 +54,8 @@ pub enum WidgetContentInput {
         sha256: String,
         from: WidgetInputKind,
         name: Option<String>,
+        #[serde(default)]
+        choices: Option<WidgetChoicesInput>,
     },
     Choices {
         spec_json: String,
@@ -358,8 +368,28 @@ pub struct WidgetContentRequest {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum WidgetBody {
-    Html { document: String },
+    Html { document: String, choices: Option<WidgetChoicesSpec> },
     Choices { spec: WidgetChoicesSpec },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WidgetShelfListRequest {}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WidgetShelfEntry {
+    pub summary: WidgetSummary,
+    #[ts(type = "number")]
+    pub removed_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WidgetShelfListResponse {
+    pub widgets: Vec<WidgetShelfEntry>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WidgetShelfReopenRequest {
+    pub key: WidgetKey,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]

@@ -184,3 +184,18 @@ it("distinguishes empty all view from no session", async () => {
     expect(host.querySelector<HTMLButtonElement>(".agents-view-toggle")?.disabled).toBe(true);
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
+
+it("shows a distinct terminal title and exposes its full text, but suppresses redundant titles", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", activate: vi.fn(), seen: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const titled = { ...snapshot, agents: [{ ...snapshot.agents[0]!, title: "COOK: Unify cooking overview", status: "working" }, { ...snapshot.agents[1]!, title: " TWO " }] };
+  const props: ComponentProps<typeof Agents> = { snapshot: titled, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: vi.fn(), focusRef: { current: null }, view: "all", onViewChange: vi.fn() };
+  try {
+    await act(async () => root.render(createElement(Agents, props)));
+    const row = host.querySelector<HTMLButtonElement>('[data-row-id="a:one"]')!;
+    expect(row.querySelector(".agent-purpose")?.textContent).toBe("COOK: Unify cooking overview");
+    expect(row.title).toContain("COOK: Unify cooking overview");
+    expect(row.getAttribute("aria-label")).toContain("COOK: Unify cooking overview");
+    expect(host.querySelector('[data-row-id="b:two"] .agent-purpose')).toBeNull();
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});

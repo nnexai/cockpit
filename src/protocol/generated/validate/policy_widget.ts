@@ -5,6 +5,7 @@ export interface WireTypes {
   "WidgetLocator": V1.WidgetLocator;
   "WidgetAddress": V1.WidgetAddress;
   "WidgetInputKind": V1.WidgetInputKind;
+  "WidgetChoicesInput": V1.WidgetChoicesInput;
   "WidgetContentInput": V1.WidgetContentInput;
   "WidgetShowRequest": V1.WidgetShowRequest;
   "WidgetShowResult": V1.WidgetShowResult;
@@ -40,6 +41,10 @@ export interface WireTypes {
   "WidgetContentRequest": V1.WidgetContentRequest;
   "WidgetBody": V1.WidgetBody;
   "WidgetContent": V1.WidgetContent;
+  "WidgetShelfListRequest": V1.WidgetShelfListRequest;
+  "WidgetShelfEntry": V1.WidgetShelfEntry;
+  "WidgetShelfListResponse": V1.WidgetShelfListResponse;
+  "WidgetShelfReopenRequest": V1.WidgetShelfReopenRequest;
   "WidgetRemoveRequest": V1.WidgetRemoveRequest;
   "WidgetRemoveResult": V1.WidgetRemoveResult;
   "WidgetRemoveResponse": V1.WidgetRemoveResponse;
@@ -57,6 +62,7 @@ export interface WireOwners {
   "WidgetLocator[tab]": Extract<V1.WidgetLocator, { "type": "tab" }>;
   "WidgetLocator[space]": Extract<V1.WidgetLocator, { "type": "space" }>;
   "WidgetAddress": V1.WidgetAddress;
+  "WidgetChoicesInput": V1.WidgetChoicesInput;
   "WidgetContentInput": V1.WidgetContentInput;
   "WidgetContentInput[html]": Extract<V1.WidgetContentInput, { "type": "html" }>;
   "WidgetContentInput[choices]": Extract<V1.WidgetContentInput, { "type": "choices" }>;
@@ -86,6 +92,10 @@ export interface WireOwners {
   "WidgetBody[html]": Extract<V1.WidgetBody, { "type": "html" }>;
   "WidgetBody[choices]": Extract<V1.WidgetBody, { "type": "choices" }>;
   "WidgetContent": V1.WidgetContent;
+  "WidgetShelfListRequest": V1.WidgetShelfListRequest;
+  "WidgetShelfEntry": V1.WidgetShelfEntry;
+  "WidgetShelfListResponse": V1.WidgetShelfListResponse;
+  "WidgetShelfReopenRequest": V1.WidgetShelfReopenRequest;
   "WidgetRemoveRequest": V1.WidgetRemoveRequest;
   "WidgetRemoveResponse": V1.WidgetRemoveResponse;
   "WidgetSelectValue": V1.WidgetSelectValue;
@@ -106,6 +116,10 @@ export interface WireFields {
   "WidgetAddress.source_pane_id": (V1.WidgetAddress)["source_pane_id"];
   "WidgetAddress.locator": (V1.WidgetAddress)["locator"];
   "WidgetAddress.space_check": (V1.WidgetAddress)["space_check"];
+  "WidgetChoicesInput.spec_json": (V1.WidgetChoicesInput)["spec_json"];
+  "WidgetChoicesInput.sha256": (V1.WidgetChoicesInput)["sha256"];
+  "WidgetChoicesInput.from": (V1.WidgetChoicesInput)["from"];
+  "WidgetChoicesInput.name": (V1.WidgetChoicesInput)["name"];
   "WidgetContentInput.sha256": (V1.WidgetContentInput)["sha256"];
   "WidgetContentInput.from": (V1.WidgetContentInput)["from"];
   "WidgetContentInput.name": (V1.WidgetContentInput)["name"];
@@ -113,6 +127,7 @@ export interface WireFields {
   "WidgetContentInput[html].sha256": (Extract<V1.WidgetContentInput, { "type": "html" }>)["sha256"];
   "WidgetContentInput[html].from": (Extract<V1.WidgetContentInput, { "type": "html" }>)["from"];
   "WidgetContentInput[html].name": (Extract<V1.WidgetContentInput, { "type": "html" }>)["name"];
+  "WidgetContentInput[html].choices": (Extract<V1.WidgetContentInput, { "type": "html" }>)["choices"];
   "WidgetContentInput[choices].spec_json": (Extract<V1.WidgetContentInput, { "type": "choices" }>)["spec_json"];
   "WidgetContentInput[choices].sha256": (Extract<V1.WidgetContentInput, { "type": "choices" }>)["sha256"];
   "WidgetContentInput[choices].from": (Extract<V1.WidgetContentInput, { "type": "choices" }>)["from"];
@@ -208,12 +223,17 @@ export interface WireFields {
   "WidgetContentRequest.key": (V1.WidgetContentRequest)["key"];
   "WidgetContentRequest.revision": (V1.WidgetContentRequest)["revision"];
   "WidgetBody[html].document": (Extract<V1.WidgetBody, { "type": "html" }>)["document"];
+  "WidgetBody[html].choices": (Extract<V1.WidgetBody, { "type": "html" }>)["choices"];
   "WidgetBody[choices].spec": (Extract<V1.WidgetBody, { "type": "choices" }>)["spec"];
   "WidgetContent.key": (V1.WidgetContent)["key"];
   "WidgetContent.revision": (V1.WidgetContent)["revision"];
   "WidgetContent.sha256": (V1.WidgetContent)["sha256"];
   "WidgetContent.body": (V1.WidgetContent)["body"];
   "WidgetContent.selection": (V1.WidgetContent)["selection"];
+  "WidgetShelfEntry.summary": (V1.WidgetShelfEntry)["summary"];
+  "WidgetShelfEntry.removed_at_ms": (V1.WidgetShelfEntry)["removed_at_ms"];
+  "WidgetShelfListResponse.widgets": (V1.WidgetShelfListResponse)["widgets"];
+  "WidgetShelfReopenRequest.key": (V1.WidgetShelfReopenRequest)["key"];
   "WidgetRemoveRequest.key": (V1.WidgetRemoveRequest)["key"];
   "WidgetRemoveResponse.result": (V1.WidgetRemoveResponse)["result"];
   "WidgetSelectValue[choice].choice_id": (Extract<V1.WidgetSelectValue, { "type": "choice" }>)["choice_id"];
@@ -236,8 +256,9 @@ export interface WireFieldNames {
   "WidgetLocator[tab]": "tab_id";
   "WidgetLocator[space]": "space_id";
   "WidgetAddress": "session_id" | "endpoint_path" | "source_pane_id" | "locator" | "space_check";
+  "WidgetChoicesInput": "spec_json" | "sha256" | "from" | "name";
   "WidgetContentInput": "sha256" | "from" | "name";
-  "WidgetContentInput[html]": "content_base64" | "sha256" | "from" | "name";
+  "WidgetContentInput[html]": "content_base64" | "sha256" | "from" | "name" | "choices";
   "WidgetContentInput[choices]": "spec_json" | "sha256" | "from" | "name";
   "WidgetShowRequest": "address" | "id" | "title" | "content" | "reopen" | "clear_selection";
   "WidgetContentFacts": "sha256" | "bytes" | "from" | "name";
@@ -262,9 +283,13 @@ export interface WireFieldNames {
   "WidgetWindowReport": "session_id" | "displayed_tab_id" | "blocker";
   "WidgetContentRequest": "key" | "revision";
   "WidgetBody": never;
-  "WidgetBody[html]": "document";
+  "WidgetBody[html]": "document" | "choices";
   "WidgetBody[choices]": "spec";
   "WidgetContent": "key" | "revision" | "sha256" | "body" | "selection";
+  "WidgetShelfListRequest": never;
+  "WidgetShelfEntry": "summary" | "removed_at_ms";
+  "WidgetShelfListResponse": "widgets";
+  "WidgetShelfReopenRequest": "key";
   "WidgetRemoveRequest": "key";
   "WidgetRemoveResponse": "result";
   "WidgetSelectValue": never;
@@ -278,6 +303,8 @@ export interface WireFieldNames {
 
 export interface WireChildNames {
   "WidgetAddress.locator": "WidgetLocator";
+  "WidgetContentInput.choices": "WidgetChoicesInput";
+  "WidgetContentInput[html].choices": "WidgetChoicesInput";
   "WidgetShowRequest.address": "WidgetAddress";
   "WidgetShowRequest.content": "WidgetContentInput";
   "WidgetShowResponse.content": "WidgetContentFacts";
@@ -295,11 +322,15 @@ export interface WireChildNames {
   "WidgetEvent[upserted].widget": "WidgetSummary";
   "WidgetEvent[removed].key": "WidgetKey";
   "WidgetContentRequest.key": "WidgetKey";
+  "WidgetBody.choices": "WidgetChoicesSpec";
   "WidgetBody.spec": "WidgetChoicesSpec";
+  "WidgetBody[html].choices": "WidgetChoicesSpec";
   "WidgetBody[choices].spec": "WidgetChoicesSpec";
   "WidgetContent.key": "WidgetKey";
   "WidgetContent.body": "WidgetBody";
   "WidgetContent.selection": "WidgetSelectionResponse";
+  "WidgetShelfEntry.summary": "WidgetSummary";
+  "WidgetShelfReopenRequest.key": "WidgetKey";
   "WidgetRemoveRequest.key": "WidgetKey";
   "WidgetSelectRequest.key": "WidgetKey";
   "WidgetSelectRequest.value": "WidgetSelectValue";
@@ -333,8 +364,9 @@ export interface WireCheckpointFieldNames {
   "WidgetLocator[tab]": "tab_id" | "type";
   "WidgetLocator[space]": "space_id" | "type";
   "WidgetAddress": "session_id" | "endpoint_path" | "source_pane_id" | "locator" | "space_check";
-  "WidgetContentInput": "content_base64" | "from" | "name" | "sha256" | "spec_json" | "type";
-  "WidgetContentInput[html]": "content_base64" | "sha256" | "from" | "name" | "type";
+  "WidgetChoicesInput": "spec_json" | "sha256" | "from" | "name";
+  "WidgetContentInput": "choices" | "content_base64" | "from" | "name" | "sha256" | "spec_json" | "type";
+  "WidgetContentInput[html]": "content_base64" | "sha256" | "from" | "name" | "choices" | "type";
   "WidgetContentInput[choices]": "spec_json" | "sha256" | "from" | "name" | "type";
   "WidgetShowRequest": "address" | "id" | "title" | "content" | "reopen" | "clear_selection";
   "WidgetContentFacts": "sha256" | "bytes" | "from" | "name";
@@ -358,10 +390,14 @@ export interface WireCheckpointFieldNames {
   "WidgetEvent[removed]": "sequence" | "key" | "reason" | "type";
   "WidgetWindowReport": "session_id" | "displayed_tab_id" | "blocker";
   "WidgetContentRequest": "key" | "revision";
-  "WidgetBody": "document" | "spec" | "type";
-  "WidgetBody[html]": "document" | "type";
+  "WidgetBody": "choices" | "document" | "spec" | "type";
+  "WidgetBody[html]": "document" | "choices" | "type";
   "WidgetBody[choices]": "spec" | "type";
   "WidgetContent": "key" | "revision" | "sha256" | "body" | "selection";
+  "WidgetShelfListRequest": never;
+  "WidgetShelfEntry": "summary" | "removed_at_ms";
+  "WidgetShelfListResponse": "widgets";
+  "WidgetShelfReopenRequest": "key";
   "WidgetRemoveRequest": "key";
   "WidgetRemoveResponse": "result";
   "WidgetSelectValue": "choice_id" | "type" | "value_json";
@@ -377,8 +413,10 @@ export type WireOmittableField =
   | "WidgetAddress.endpoint_path"
   | "WidgetAddress.source_pane_id"
   | "WidgetAddress.space_check"
+  | "WidgetChoicesInput.name"
   | "WidgetContentInput.name"
   | "WidgetContentInput[html].name"
+  | "WidgetContentInput[html].choices"
   | "WidgetContentInput[choices].name"
   | "WidgetShowRequest.title"
   | "WidgetContentFacts.name"
@@ -399,6 +437,7 @@ export type WireOmittableField =
   | "WidgetWindowReport.session_id"
   | "WidgetWindowReport.displayed_tab_id"
   | "WidgetWindowReport.blocker"
+  | "WidgetBody[html].choices"
   | "WidgetContent.selection"
   | "WidgetChoicesSpec.prompt"
   | "WidgetChoice.detail"
@@ -412,6 +451,7 @@ export type WireListField =
   | "WidgetListResponse.widgets"
   | "WidgetSummary.warnings"
   | "WidgetEvent[snapshot].widgets"
+  | "WidgetShelfListResponse.widgets"
   | "WidgetChoicesSpec.choices"
   | never;
 

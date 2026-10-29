@@ -57,6 +57,8 @@ export interface CommandInput {
   widgets: { pending: boolean; dockTabId: string | null; list: readonly WidgetSummary[] };
   viewerSources: ViewerSourcesState;
   local: Partial<Record<LocalShortcutId, () => void>>;
+  power?: { stayAwake: boolean; toggleStayAwake?: () => void; turnScreenOff?: () => void };
+  sendToIdleAgents?: () => void;
   run: {
     herdr(command: HerdrCommand): void;
     prefix(command: PrefixCommand): void;
@@ -122,6 +124,9 @@ export function buildCommands(input: CommandInput): CommandAction[] {
     }),
     { id: "space-tags:edit", label: "Edit Space tags…", group: "Space", icon: "tag", disabled: !selectedSpace || Boolean(input.tags.blocked), reason: !selectedSpace ? "Select a Space first" : input.tags.blocked ?? undefined, run: run.editSpaceTags },
     { id: "recovery:cleanup", label: "Recover task cleanup…", group: "Navigate", run: run.recovery },
+    ...(input.sendToIdleAgents ? [{ id: "agents:send-idle", label: "Send to idle agents…", group: "Navigate" as const, disabled: !live, reason: !live ? "Herdr is not live" : undefined, run: input.sendToIdleAgents }] : []),
+    ...(input.power?.toggleStayAwake ? [{ id: "power:stay-awake", label: `${input.power.stayAwake ? "✓ " : ""}Stay awake while agents work`, group: "Navigate" as const, run: input.power.toggleStayAwake }] : []),
+    ...(input.power?.turnScreenOff ? [{ id: "power:screen-off", label: "Turn screen off", group: "Navigate" as const, run: input.power.turnScreenOff }] : []),
     { id: "notes:toggle", label: notesOpen ? "Close Notes" : "Open Notes", icon: "file", primary: true, group: "Navigate", disabled: !selectedSpace, reason: !selectedSpace ? "Select a Space first" : undefined, run: run.toggleNotes },
     { id: "browser:open", label: "Open Browser", primary: true, shortcut: formatShortcut("toggle-browser"), group: "Browser", disabled: Boolean(browser.reason), reason: browser.reason ?? undefined, run: run.openBrowser },
     { id: "browser:close", label: "Close browser", shortcut: formatShortcut("toggle-browser"), group: "Browser", disabled: !browser.open, reason: !browser.open ? "No browser in this tab" : undefined, run: run.closeBrowser },

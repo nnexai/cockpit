@@ -5,6 +5,8 @@ import type { QuickAskAvailability, QuickAskLocation, QuickAskRequest } from "..
 export type { QuickAskAvailability, QuickAskLocation, QuickAskRequest } from "../protocol/generated/v1";
 import type { SpaceServiceStatusRequest, SpaceServiceStatusResponse, SpaceTagsResponse, SpaceTagChangeRequest } from "../protocol/generated/v1";
 export type { ServiceStatus, SpaceServiceStatus, SpaceServiceStatusRequest, SpaceServiceStatusResponse, SpaceTags, SpaceTagsResponse, SpaceTagChangeRequest } from "../protocol/generated/v1";
+import type { SpaceCpuStatusRequest, SpaceCpuStatusResponse } from "../protocol/generated/v1";
+export type { SpaceCpuPane, SpaceCpuStatusRequest, SpaceCpuProcess, SpaceCpuStatus, SpaceCpuStatusResponse } from "../protocol/generated/v1";
 import type { AgentAttentionResponse, AgentAttentionChangeRequest } from "../protocol/generated/v1";
 export type { AgentAttentionResponse, AgentAttentionChangeRequest, AgentAttentionObservation, AgentAttentionChange, AgentAttentionMark } from "../protocol/generated/v1";
 import type {
@@ -20,12 +22,14 @@ export type {
   LiaisonLookupRequest, LiaisonLookupResponse,
 } from "../protocol/generated/v1";
 import type {
-  WidgetEvent, WidgetWindowReport, WidgetContentRequest, WidgetContent,
+  WidgetEvent, WidgetWindowReport, WidgetContentRequest, WidgetContent, WidgetSummary,
   WidgetRemoveRequest, WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse,
+  WidgetShelfListRequest, WidgetShelfListResponse, WidgetShelfReopenRequest,
 } from "../protocol/generated/v1";
 export type {
   WidgetKey, WidgetSummary, WidgetEvent, WidgetWindowReport, WidgetContentRequest, WidgetContent,
   WidgetRemoveRequest, WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse,
+  WidgetShelfEntry, WidgetShelfListRequest, WidgetShelfListResponse, WidgetShelfReopenRequest,
 } from "../protocol/generated/v1";
 import type { NotesRequest, NotesResponse } from "../protocol/generated/v1";
 export type {
@@ -335,11 +339,16 @@ export interface TerminalStream extends ClosableStream {
   send(command: TerminalCommand): void;
 }
 
+export type UpdateStatus = { installed_commit: string | null; source_path: string; commits_behind_main: number | null };
+
 export interface CockpitClient {
   status(): Promise<StatusResponse>;
+  updateStatus(): Promise<UpdateStatus>;
+  updateInstall(sessionId: string, spaceId: string): Promise<QuickAskLocation>;
   orchestrationSnapshot(request: OrchestrationSnapshotRequest): Promise<OrchestrationSnapshot>;
   /** Read-only host resolution for this session; unavailable identity is not an empty match set. */
   orchestrationLiaisonLookup(request: LiaisonLookupRequest): Promise<LiaisonLookupResponse>;
+  orchestrationAgentSend(request: { session_id: string; reference: string; text: string }): Promise<void>;
   orchestrationMutate(request: OrchestrationMutationRequest): Promise<OrchestrationMutationResponse>;
   orchestrationWait(request: OrchestrationWaitRequest): Promise<OrchestrationWaitResponse>;
   /** Cached subscription limits; provider CLIs own authentication and collection. */
@@ -419,6 +428,7 @@ export interface CockpitClient {
   sessionSnapshot(sessionId: string, signal?: AbortSignal): Promise<CockpitSessionSnapshot>;
   spaceGitStatus(sessionId: string, signal?: AbortSignal): Promise<SpaceGitStatusResponse>;
   spaceServiceStatus(sessionId: string, request: SpaceServiceStatusRequest, signal?: AbortSignal): Promise<SpaceServiceStatusResponse>;
+  spaceCpuStatus(sessionId: string, request: SpaceCpuStatusRequest, signal?: AbortSignal): Promise<SpaceCpuStatusResponse>;
   spaceTags(sessionId: string, signal?: AbortSignal): Promise<SpaceTagsResponse>;
   changeSpaceTag(sessionId: string, request: SpaceTagChangeRequest): Promise<SpaceTagsResponse>;
   agentAttention(sessionId: string, signal?: AbortSignal): Promise<AgentAttentionResponse>;
@@ -433,6 +443,8 @@ export interface CockpitClient {
   widgetContent(request: WidgetContentRequest, signal?: AbortSignal): Promise<WidgetContent>;
   widgetRemove(request: WidgetRemoveRequest, signal?: AbortSignal): Promise<WidgetRemoveResponse>;
   widgetSelect(request: WidgetSelectRequest, signal?: AbortSignal): Promise<WidgetSelectResponse>;
+  widgetShelfList(request: WidgetShelfListRequest, signal?: AbortSignal): Promise<WidgetShelfListResponse>;
+  widgetShelfReopen(request: WidgetShelfReopenRequest, signal?: AbortSignal): Promise<WidgetSummary>;
 }
 
 export type CockpitClientErrorCode =
@@ -556,6 +568,8 @@ export function parseSessionSnapshotResponse(value: unknown): SessionSnapshotRes
 export function parseSpaceGitStatusResponse(value: unknown): SpaceGitStatusResponse { return parseWire(value, Wire.wireSpaceGitStatusResponse, CLIENT); }
 export function parseSpaceServiceStatusRequest(value: unknown): SpaceServiceStatusRequest { return parseWire(value, Wire.wireSpaceServiceStatusRequest, CLIENT); }
 export function parseSpaceServiceStatusResponse(value: unknown): SpaceServiceStatusResponse { return parseWire(value, Wire.wireSpaceServiceStatusResponse, CLIENT); }
+export function parseSpaceCpuStatusRequest(value: unknown): SpaceCpuStatusRequest { return parseWire(value, Wire.wireSpaceCpuStatusRequest, CLIENT); }
+export function parseSpaceCpuStatusResponse(value: unknown): SpaceCpuStatusResponse { return parseWire(value, Wire.wireSpaceCpuStatusResponse, CLIENT); }
 export function parseSpaceTagsResponse(value: unknown): SpaceTagsResponse { return parseWire(value, Wire.wireSpaceTagsResponse, CLIENT); }
 export function parseAgentAttentionResponse(value: unknown): AgentAttentionResponse { return parseWire(value, Wire.wireAgentAttentionResponse, CLIENT); }
 export function parseSpaceGitActionResponse(value: unknown): SpaceGitActionResponse { return parseWire(value, Wire.wireSpaceGitActionResponse, CLIENT); }

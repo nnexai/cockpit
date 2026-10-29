@@ -114,7 +114,7 @@ const POLICY = definePolicy({
       "Run", "NativeProcessIdentity", "NativeShellIdentity", "ReplacementRetirementAuthority",
       "ConversationIdentity", "TaskSchedule", "OwnedProcessScope", "AttemptBadge", "RunResumeResult", "RunAttachResult",
       "ProjectIdentity", "ProjectSource", "CheckoutIdentity", "DirectoryIdentity", "CheckoutGitIdentity",
-      "ResumeRecord", "ResumeCause", "SupervisorStartResult",
+      "ResumeCause", "SupervisorStartResult",
       "WorkerStartResult", "TaskScopeUpdateResult",
       "AgentLaunchReceipt",
       "Report", "SetupSummary", "AttachmentReference", "CheckOutcome", "IntegrationMapping", "IntegrationRecord", "IntegrationRecordResult",
@@ -131,15 +131,15 @@ const POLICY = definePolicy({
       "CleanupFinishResult", "CleanupResourceSummary", "RunCleanupSummary", "RestorationSummary",
       "OrchestrationAction[resource_register]", "OrchestrationAction[cleanup_finish]",
       "OrchestrationActionResult[resource_registered]", "OrchestrationActionResult[cleanup_finished]",
-      "LiaisonLookupRequest", "LiaisonLookupResponse", "LiaisonCandidate",
+      "LiaisonLookupRequest", "LiaisonLookupResponse",
       "OrchestrationAction[supervisor_start]", "OrchestrationAction[run_attach]",
       "OrchestrationAction[worker_start]", "OrchestrationAction[task_scope_update]", "OrchestrationAction[task_schedule]", "OrchestrationAction[task_schedule_cancel]", "OrchestrationAction[worker_replace]",
       "OrchestrationAction[run_register]", "OrchestrationAction[task_unassign]",
       "OrchestrationActionResult[supervisor_started]", "OrchestrationActionResult[worker_started]", "OrchestrationActionResult[task_scope_updated]",
       "OrchestrationActionResult[task_scheduled]", "OrchestrationActionResult[worker_replaced]",
       "OrchestrationActionResult[run_resumed]", "OrchestrationActionResult[run_attached]", "OrchestrationActionResult[task_unassigned]"]),
-    // run_resume uses generated required fields plus exact keys: complete also requires
-    // own optional fields, which would turn its explicit stop confirmation into a requirement.
+    // run_resume, ResumeRecord and LiaisonCandidate use generated required fields plus exact keys: complete also
+    // requires own optional fields, which Rust omits for additive fields (stop confirmation, fresh-conversation facts).
     raw: new Set(["OrchestrationSnapshotRequest", "OrchestrationWaitRequest", "OrchestrationWaitResponse",
       "LiaisonLookupRequest", "LiaisonLookupResponse"]),
     absent: new Set(["TaskOwner.conversation", "TaskOwnership.schedule", "ExecutionAttachment.process_scope", "DispatchState.scope_unit",

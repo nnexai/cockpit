@@ -7,6 +7,7 @@ import type {
   WorkspaceTeardownResult,
 } from "../../protocol/generated/v1";
 import { ModalSection } from "../input/ModalSection";
+import { plainError } from "../shell/plainErrors";
 import "./setup.css";
 
 export type TeardownClient = {
@@ -23,15 +24,27 @@ export type TeardownDialogProps = {
   onCompleted: (result: WorkspaceTeardownResult) => void;
 };
 
-function errorMessage(error: unknown, fallback: string): string {
-  if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") return error.message;
-  return error instanceof Error && error.message ? error.message : fallback;
+function describeTeardownError(error: unknown, fallback: string): { text: string; detail?: string } {
+  const message = typeof error === "object" && error !== null && "message" in error && typeof error.message === "string" ? error.message : fallback;
+  return plainError(errorCode(error) ?? undefined, message);
 }
 
 function errorCode(error: unknown): string | null {
   if (typeof error === "object" && error !== null && "operationCode" in error && typeof error.operationCode === "string") return error.operationCode;
   if (typeof error === "object" && error !== null && "code" in error && typeof error.code === "string") return error.code;
   return null;
+}
+
+function describeBlocker(blocker: string): string {
+  switch (blocker) {
+    case "the exact worktree is not live in the requested Space": return "The worktree is no longer open in this Space. Refresh the review and check the selected Space.";
+    case "the target is not a linked worktree": return "This directory is not a linked worktree. Close the Space to keep its files.";
+    case "the primary or unverified repository checkout cannot be removed": return "Cockpit cannot remove a primary or unverified checkout. Check the selected repository and refresh the review.";
+    case "Git status could not be confirmed; refresh the review before removing": return "Git status could not be confirmed. Refresh the review before removing the worktree.";
+    case "the prior teardown receipt belongs to a different target identity": return "A previous removal record does not match this target. Check the selected Space before trying again.";
+    case "a prior removal has an unknown outcome; reconcile it before retrying": return "The previous removal's outcome is unknown. Reconcile it before trying again.";
+    default: return blocker;
+  }
 }
 
 function actionLabel(action: WorkspaceTeardownAction, discardCount: number): string {
@@ -55,7 +68,7 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
   const titleId = useId();
   const [preview, setPreview] = useState<WorkspaceTeardownPreview | null>(null);
   const [selectedAction, setSelectedAction] = useState<WorkspaceTeardownAction | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{ text: string; detail?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [receipt, setReceipt] = useState<WorkspaceTeardownResult | null>(null);
@@ -69,7 +82,7 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
     setSelectedAction(null);
     void client.workspaceTeardownPreview(sessionId, { workspace_id: workspaceId })
       .then((next) => { if (active) setPreview(next); })
-      .catch((reason: unknown) => { if (active) setError(errorMessage(reason, "Could not prepare teardown review.")); });
+      .catch((reason: unknown) => { if (active) setError(describeTeardownError(reason, "Could not prepare teardown review.")); });
     return () => { active = false; };
   }, [client, open, refresh, sessionId, workspaceId]);
 
@@ -101,7 +114,7 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
       if (result.outcome === "completed") setPreview(null);
       else setRefresh((current) => current + 1);
     } catch (reason: unknown) {
-      setError(errorMessage(reason, "Could not complete the reviewed teardown."));
+      setError(describeTeardownError(reason, "Could not complete the reviewed teardown."));
       if (removeSelected || errorCode(reason) === "stale_identity") {
         setPreview(null);
         setSelectedAction(null);
@@ -118,7 +131,7 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
       <main className="setup-body"><section className="setup-step-content">
         {receipt ? <p className="setup-inline-status" role="status">{receipt.message}</p> : null}
         {receipt?.outcome === "completed" ? <div className="setup-actions"><button type="button" onClick={onClose}>Done</button></div> : !preview && !error ? <p className="setup-empty">Preparing fresh provenance and Git status…</p> : null}
-        {error ? <p className="setup-error" role="alert">{error}</p> : null}
+        {error ? <p className="setup-error" role="alert" title={error.detail}>{error.text}</p> : null}
         {preview ? <>
           <div className="setup-plan-summary">
             <div className="setup-summary-row"><span>Checkout</span><code>{preview.checkout_path}</code></div>
@@ -126,7 +139,7 @@ export function TeardownDialog({ client, sessionId, workspaceId, open, onClose, 
             <div className="setup-summary-row"><span>Git status</span><span>{preview.dirty_state}</span></div>
           </div>
           {preview.ownership === "borrowed_opened" ? <p className="setup-inline-status">This directory is borrowed. Closing its Space leaves its files in place.</p> : null}
-          {preview.blockers.length > 0 ? <div className="setup-diagnostics" role="status"><strong>Removal blocked</strong><ul>{preview.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></div> : null}
+          {preview.blockers.length > 0 ? <div className="setup-diagnostics" role="status"><strong>Removal blocked</strong><ul>{preview.blockers.map((blocker) => <li key={blocker} title={blocker}>{describeBlocker(blocker)}</li>)}</ul></div> : null}
           {preview.discard_count > 0 && preview.allowed_actions.includes("remove_owned_worktree") ? <div className="setup-diagnostics" role="status">
             <strong>{preview.discard_count} uncommitted {preview.discard_count === 1 ? "path" : "paths"} will be permanently discarded</strong>
             <ul className="setup-discard-list" tabIndex={0} aria-label="Paths to be discarded">{discardPaths.map((path) => <li key={path}><code>{path}</code></li>)}</ul>

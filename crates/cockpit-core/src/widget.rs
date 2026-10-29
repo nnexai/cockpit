@@ -22,7 +22,7 @@ mod target;
 mod tests;
 mod text;
 use store::{
-    SNAPSHOT_ENVELOPE_BYTES, Store, TabKey, TabWidgets, Tombstone, Waiter, Widget,
+    SNAPSHOT_ENVELOPE_BYTES, ShelfItem, Store, TabKey, TabWidgets, Tombstone, Waiter, Widget,
     summary_snapshot_bytes,
 };
 
@@ -166,6 +166,8 @@ impl WidgetService {
             check_owner(&widget.source_key, &resolved.source_key)?;
             if widget.summary.content.sha256 == prepared.facts.sha256
                 && widget.summary.kind == prepared.kind
+                && widget.choices_sha256 == prepared.choices_sha256
+                && widget.body == prepared.body
                 && !(request.clear_selection && widget.selection.is_some())
             {
                 return Ok(show_response(
@@ -291,7 +293,7 @@ impl WidgetService {
             updated_at_ms: now,
             selection: selection_facts,
         };
-        let snapshot_bytes = summary_snapshot_bytes(&summary)?;
+        let snapshot_bytes = summary_snapshot_bytes(&summary)? + prepared.choices_bytes;
         if store.snapshot_bytes - old_snapshot_bytes + snapshot_bytes + SNAPSHOT_ENVELOPE_BYTES
             > WIDGET_MAX_SNAPSHOT_BYTES
         {
@@ -327,11 +329,22 @@ impl WidgetService {
         let widget = Widget {
             summary: summary.clone(),
             body: prepared.body,
+            choices_sha256: prepared.choices_sha256,
             source_key: resolved.source_key,
             fingerprint: resolved.source.and_then(|source| source.fingerprint),
             selection,
             snapshot_bytes,
         };
+        if tomb_index.is_some() {
+            if let Some(index) = store.shelf.iter().position(|item| item.tab == resolved.key && item.widget.summary.key.id == request.id) {
+                let item = store.shelf.remove(index).expect("shelf index");
+                store.shelf_bytes -= item.bytes;
+            }
+        }
+        while store.html_bytes - old_bytes + new_bytes + store.shelf_bytes > WIDGET_MAX_TOTAL_HTML_BYTES {
+            let item = store.shelf.pop_front().expect("live bytes already checked");
+            store.shelf_bytes -= item.bytes;
+        }
         let tab = store
             .tabs
             .entry(resolved.key)
@@ -677,14 +690,39 @@ impl WidgetService {
             removed_at_ms: now,
             source_key: widget.source_key.clone(),
         });
-        if tab.tombstones.len() > WIDGET_MAX_TOMBSTONES_PER_TAB {
-            tab.tombstones.pop_front();
+        let evicted_id = if tab.tombstones.len() > WIDGET_MAX_TOMBSTONES_PER_TAB {
+            tab.tombstones.pop_front().map(|stone| stone.id)
+        } else { None };
+        if let Some(id) = evicted_id {
+            if let Some(index) = store.shelf.iter().position(|item| item.tab == key && item.widget.summary.key.id == id) {
+                let item = store.shelf.remove(index).expect("shelf index");
+                store.shelf_bytes -= item.bytes;
+            }
         }
+        let snapshot_bytes = widget.snapshot_bytes;
+        let bytes = retained_body_bytes(&widget.body) + widget.snapshot_bytes;
+        let revision = widget.summary.revision;
         store.html_bytes -= html_bytes(&widget);
-        store.snapshot_bytes -= widget.snapshot_bytes;
+        store.snapshot_bytes -= snapshot_bytes;
+        // Retain at most eight user removals per tab, subject to the owner's
+        // shared content budget. Tombstones outlive evicted shelf content.
+        const MAX_SHELF_PER_TAB: usize = 8;
+        while store.shelf.iter().filter(|item| item.tab == key).count() >= MAX_SHELF_PER_TAB {
+            let index = store.shelf.iter().position(|item| item.tab == key).expect("tab shelf entry");
+            let evicted = store.shelf.remove(index).expect("tab shelf index");
+            store.shelf_bytes -= evicted.bytes;
+        }
+        if bytes <= WIDGET_MAX_TOTAL_HTML_BYTES.saturating_sub(store.html_bytes) {
+            while store.html_bytes + store.shelf_bytes + bytes > WIDGET_MAX_TOTAL_HTML_BYTES {
+                let evicted = store.shelf.pop_front().expect("shelf budget");
+                store.shelf_bytes -= evicted.bytes;
+            }
+            store.shelf_bytes += bytes;
+            store.shelf.push_back(ShelfItem { tab: key.clone(), widget, removed_at_ms: now, bytes });
+        }
         let mut dismissed = selection_status(
             &request.key.id,
-            Some(widget.summary.revision),
+            Some(revision),
             WidgetSelectionStatus::Dismissed,
         );
         dismissed.removed_at_ms = Some(now);
@@ -694,6 +732,47 @@ impl WidgetService {
             result: WidgetRemoveResult::Removed,
         })
     }
+    pub fn shelf_list(&self, _request: WidgetShelfListRequest) -> Result<WidgetShelfListResponse, InspectionError> {
+        let store = self.store.lock();
+        store.check_running()?;
+        Ok(WidgetShelfListResponse { widgets: store.shelf.iter().rev().map(|item| WidgetShelfEntry {
+            summary: item.widget.summary.clone(),
+            removed_at_ms: item.removed_at_ms,
+        }).collect() })
+    }
+
+    pub fn shelf_reopen(&self, request: WidgetShelfReopenRequest) -> Result<WidgetSummary, InspectionError> {
+        let mut store = self.store.lock();
+        store.check_running()?;
+        let index = store.shelf.iter().position(|item| item.widget.summary.key == request.key).ok_or_else(not_found)?;
+        let item = &store.shelf[index];
+        let tab = store.tabs.get(&item.tab).ok_or_else(not_found)?;
+        if tab.live.len() >= WIDGET_MAX_LIVE_PER_TAB || store.html_bytes + store.shelf_bytes - item.bytes + html_bytes(&item.widget) > WIDGET_MAX_TOTAL_HTML_BYTES
+            || store.snapshot_bytes + item.widget.snapshot_bytes + SNAPSHOT_ENVELOPE_BYTES > WIDGET_MAX_SNAPSHOT_BYTES {
+            return Err(InspectionError::new("widget_limit", "widget cannot be reopened because the live widget limit is reached"));
+        }
+        if !tab.tombstones.iter().any(|stone| stone.id == request.key.id && stone.revision == item.widget.summary.revision) {
+            return Err(not_found());
+        }
+        let mut item = store.shelf.remove(index).expect("shelf index");
+        store.shelf_bytes -= item.bytes;
+        store.html_bytes += html_bytes(&item.widget);
+        store.snapshot_bytes += item.widget.snapshot_bytes;
+        store.created_seq += 1;
+        item.widget.summary.revision += 1;
+        item.widget.summary.created_seq = store.created_seq;
+        item.widget.summary.change = WidgetChange::Reopened;
+        item.widget.summary.updated_at_ms = (self.clock)();
+        item.widget.summary.selection = None;
+        item.widget.selection = None;
+        let summary = item.widget.summary.clone();
+        let tab = store.tabs.get_mut(&item.tab).expect("shelf tab");
+        tab.tombstones.retain(|stone| stone.id != request.key.id);
+        tab.live.push(item.widget);
+        store.emit_upsert(&self.events, summary.clone());
+        Ok(summary)
+    }
+
     pub fn select(
         &self,
         request: WidgetSelectRequest,
@@ -717,6 +796,9 @@ impl WidgetService {
         }
         let value_json = match (&widget.body, request.value) {
             (WidgetBody::Choices { spec }, WidgetSelectValue::Choice { choice_id }) => {
+                choices::value(spec, &choice_id)?
+            }
+            (WidgetBody::Html { choices: Some(spec), .. }, WidgetSelectValue::Choice { choice_id }) => {
                 choices::value(spec, &choice_id)?
             }
             (WidgetBody::Html { .. }, WidgetSelectValue::Page { value_json }) => {
@@ -788,6 +870,8 @@ impl WidgetService {
             .map(|(key, _)| key.clone())
             .collect();
         for key in keys {
+            store.shelf.retain(|item| item.tab != key);
+            store.shelf_bytes = store.shelf.iter().map(|item| item.bytes).sum();
             let tab = store.tabs.remove(&key).expect("known tab");
             for widget in tab.live {
                 store.html_bytes -= html_bytes(&widget);
@@ -897,6 +981,8 @@ impl WidgetService {
         }
         let tabs = std::mem::take(&mut store.tabs);
         store.html_bytes = 0;
+        store.shelf.clear();
+        store.shelf_bytes = 0;
         store.snapshot_bytes = 0;
         for tab in tabs.into_values() {
             for widget in tab.live {
@@ -912,6 +998,8 @@ impl WidgetService {
 
 struct Prepared {
     body: WidgetBody,
+    choices_sha256: Option<String>,
+    choices_bytes: usize,
     kind: WidgetKind,
     presentation: WidgetPresentation,
     facts: WidgetContentFacts,
@@ -919,12 +1007,18 @@ struct Prepared {
     warnings: Vec<String>,
 }
 fn prepare(input: WidgetContentInput) -> Result<Prepared, InspectionError> {
+    let (choices_sha256, choices_bytes) = match &input {
+        WidgetContentInput::Html { choices: Some(choices), .. } => (Some(choices.sha256.clone()), choices.spec_json.len()),
+        WidgetContentInput::Choices { spec_json, .. } => (None, spec_json.len()),
+        WidgetContentInput::Html { choices: None, .. } => (None, 0),
+    };
     let (body, bytes, sha256, from, name, title, warnings, kind, presentation) = match input {
         WidgetContentInput::Html {
             content_base64,
             sha256,
             from,
             name,
+            choices,
         } => {
             if content_base64.len() > WIDGET_MAX_HTML_BYTES.div_ceil(3) * 4 {
                 return Err(InspectionError::new(
@@ -945,9 +1039,17 @@ fn prepare(input: WidgetContentInput) -> Result<Prepared, InspectionError> {
             let html = std::str::from_utf8(&bytes)
                 .map_err(|_| InspectionError::new("widget_usage", "HTML is not UTF-8"))?;
             let sanitized = preflight::sanitize(html)?;
+            let choices = choices.map(|input| {
+                if input.spec_json.len() > WIDGET_MAX_CHOICES_BYTES {
+                    return Err(InspectionError::new("widget_too_large", "choices exceed 64 KiB"));
+                }
+                check_sha(input.spec_json.as_bytes(), &input.sha256)?;
+                choices::parse(&input.spec_json)
+            }).transpose()?;
             (
                 WidgetBody::Html {
                     document: sanitized.document,
+                    choices,
                 },
                 bytes.len(),
                 sha256,
@@ -988,6 +1090,8 @@ fn prepare(input: WidgetContentInput) -> Result<Prepared, InspectionError> {
     };
     Ok(Prepared {
         body,
+        choices_sha256,
+        choices_bytes,
         kind,
         presentation,
         facts: WidgetContentFacts {
@@ -1032,8 +1136,18 @@ fn check_owner(actual: &str, expected: &str) -> Result<(), InspectionError> {
 }
 fn body_html_bytes(body: &WidgetBody) -> usize {
     match body {
-        WidgetBody::Html { document } => document.len(),
+        WidgetBody::Html { document, .. } => document.len(),
         WidgetBody::Choices { .. } => 0,
+    }
+}
+fn retained_body_bytes(body: &WidgetBody) -> usize {
+    fn spec_bytes(spec: &WidgetChoicesSpec) -> usize {
+        spec.prompt.as_ref().map_or(0, String::len)
+            + spec.choices.iter().map(|choice| choice.id.len() + choice.label.len() + choice.detail.as_ref().map_or(0, String::len)).sum::<usize>()
+    }
+    match body {
+        WidgetBody::Html { document, choices } => document.len() + choices.as_ref().map_or(0, spec_bytes),
+        WidgetBody::Choices { spec } => spec_bytes(spec),
     }
 }
 fn html_bytes(widget: &Widget) -> usize {

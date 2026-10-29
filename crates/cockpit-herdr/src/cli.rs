@@ -2217,6 +2217,16 @@ impl HerdrAdapter for HerdrCliAdapter {
         self.socket_path(session_id).ok()
     }
 
+    async fn pane_shell_pid(&self, session_id: &str, server_instance: &str, pane_id: &str) -> Result<Option<u32>, InspectionError> {
+        let (result, endpoint) = self.socket_request_with_identity(
+            session_id, "pane.process_info", json!({"pane_id": pane_id}), None,
+        ).await?;
+        if shell::server_instance(&endpoint) != server_instance {
+            return Err(InspectionError::new("server_instance_changed", "Herdr server changed during CPU discovery"));
+        }
+        Ok(orchestration::parse_pane_process_info(&result, pane_id)?.shell_pid)
+    }
+
     async fn inspect(&self) -> Result<HerdrCompatibility, InspectionError> {
         self.inspect_with_server_autostart(self.config.session())
             .await

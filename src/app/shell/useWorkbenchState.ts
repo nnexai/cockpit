@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { SpaceGitAction, SpaceGitStatus, SpaceServiceStatus } from "../../protocol/generated/v1";
 import { spaceCheckoutKey, useSpaceGitStatus } from "../session/spaceGitStatus";
 import { useSpaceServiceStatus } from "../session/spaceServiceStatus";
+import { useSpaceCpu, type SpaceCpu } from "../session/spaceCpu";
 import { useSpaceTags, type SpaceTagsState } from "../session/spaceTags";
 import { useAgentAttention, type AgentAttentionState } from "../session/agentAttention";
 import { gitActionReason, gitActionRequest, useSpaceGitActions, type SpaceGitActions } from "../session/spaceGitActions";
@@ -26,6 +27,7 @@ export interface WorkbenchState extends WorkbenchView, WorkareaController, Sideb
   gitPoll: { spaces: ReadonlyMap<string, SpaceGitStatus>; error: string | undefined; refresh(): void };
   spaceGit: ReadonlyMap<string, SpaceGitStatus>; gitBlocked: string | undefined; gitActions: SpaceGitActions;
   spaceServices: ReadonlyMap<string, readonly SpaceServiceStatus[]>;
+  spaceCpu: ReadonlyMap<string, SpaceCpu>;
   spaceTags: SpaceTagsState;
   attention: AgentAttentionState;
   tagEditorRequest: { spaceId: string; token: number } | null;
@@ -33,7 +35,7 @@ export interface WorkbenchState extends WorkbenchView, WorkareaController, Sideb
   gitNotice: { sessionId: string | null; text: string } | null;
   runGitAction(spaceId: string, action: SpaceGitAction): void;
 }
-export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
+export function useWorkbenchState(props: WorkbenchProps, externalModal = false): WorkbenchState {
   const { client, state, selection, tabLayout, mutations } = props;
   const view = workbenchView(state, selection, tabLayout, mutations);
   const { snapshot, spaces, allTabs, tabs, selectedTab, sourcePaneId, selectedLeaf, shell, popup } = view;
@@ -49,10 +51,11 @@ export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
   const { sidebarCollapsed, narrowViewport, drawerOpen } = sidebar;
   const { popupPending, dialog, commandsOpen, switcherOpen, sessionChooserOpen, setupOpen, recoveryOpen, teardownSpaceId, libraryAddOpen, askOpen } = ui;
   const mutationBusy = mutations.pending !== null;
-  const modalOpen = Boolean(popup || popupPending) || dialog !== null || commandsOpen || switcherOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen || askOpen || liaison.recovery !== null;
+  const modalOpen = externalModal || Boolean(popup || popupPending) || dialog !== null || commandsOpen || switcherOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen || askOpen || liaison.recovery !== null;
   const gitPoll = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
   const spaceGit = gitPoll.spaces;
   const spaceServices = useSpaceServiceStatus(client, state.sync === "live" ? state.sessionId : null, snapshot, narrowViewport ? drawerOpen : !sidebarCollapsed);
+  const spaceCpu = useSpaceCpu(client, state.sync === "live" ? state.sessionId : null, snapshot, narrowViewport ? drawerOpen : !sidebarCollapsed);
   const spaceTags = useSpaceTags(client, state.sessionId, snapshot, state.sync === "live");
   const attention = useAgentAttention(client, state, state.sync === "live");
   const [tagEditor, setTagEditor] = useState<{ spaceId: string; token: number; sessionId: string | null; serverInstance: string | undefined } | null>(null);
@@ -93,5 +96,5 @@ export function useWorkbenchState(props: WorkbenchProps): WorkbenchState {
   return { ...view, ...workarea, ...ui, ...widget, ...navigation, ...sidebar, libraryOpen, notesOpen, overviewOpen, liaison,
     libraryCommand: workarea.view.kind === "library" ? workarea.view.command : null,
     mutationBusy, modalOpen, viewerSources, browserOpen, browserInputActive, browserReason,
-    sidebarSession: props.sessions.find(session => session.id === state.sessionId), gitPoll, spaceGit, spaceServices, spaceTags, attention, tagEditorRequest, requestTagEditor, gitBlocked, gitActions, gitNotice, runGitAction };
+    sidebarSession: props.sessions.find(session => session.id === state.sessionId), gitPoll, spaceGit, spaceServices, spaceCpu, spaceTags, attention, tagEditorRequest, requestTagEditor, gitBlocked, gitActions, gitNotice, runGitAction };
 }

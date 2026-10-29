@@ -30,6 +30,8 @@ operations to that owner.
 
 On Linux, `python3 scripts/restart-native.py` restarts the installed GUI. It matches only argument-free processes running the installed binary (including the renamed image left after an update), closes their windows through niri so Cockpit runs its graceful shutdown (SIGTERM without niri), waits for exit, then starts one replacement in a transient systemd user unit. Herdr and its agents are not touched. The repository's `.herdr/actions.json` exposes **Install and restart Cockpit**, which runs the installer and then this script in a tab.
 
+On Linux the top-bar **↑ N commits · install** chip appears when the build's recorded commit is behind the source checkout's local `main`. It checks at startup, on focus and about every ten minutes without fetching, then launches the configured install-and-restart action in a Herdr tab rooted in that checkout. The chip is hidden when build metadata, `main`, or the checkout is unavailable, and on macOS where the restart action is not supported.
+
 Linux desktop entries and icons are installed under the selected data directory at `applications/dev.cockpit.app.desktop` and `icons/hicolor/256x256/apps/dev.cockpit.app.png`. On macOS, launch the installed app bundle or use the `cockpit` shell launcher. Add the selected `bin` directory to `PATH` if needed.
 
 For subscription-limit OMP discovery and executable overrides, see [configuration](configuration.md). “OMP usage source not found” means the CLI could not be launched, not that its Copilot usage JSON failed to parse. Restart Cockpit after changing configuration.
@@ -37,6 +39,8 @@ For subscription-limit OMP discovery and executable overrides, see [configuratio
 ## Native window settings
 
 The native Tauri window reads presentation settings from the shared Cockpit TOML. The browser client ignores them. See [configuration](configuration.md) for the `[window]` example, defaults and allowed scale bounds.
+
+Native Commands offers **Stay awake while agents work**, enabled by default and remembered in local storage. The GUI holds an inhibitor only while an observed agent is working: Linux uses the desktop ScreenSaver D-Bus inhibitor and macOS uses an IOKit power assertion; closing Cockpit releases it. **Turn screen off** uses niri on Linux and `pmset` on macOS, without stopping agents. Controls unavailable in the current native environment are hidden; the browser client does not offer them. The macOS paths are unverified.
 
 For a quicker repeat build, use the Tauri debug profile:
 

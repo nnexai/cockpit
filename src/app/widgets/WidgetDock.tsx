@@ -72,7 +72,9 @@ export function WidgetDock({ ctx, tab, width, selected, inputBlocked, live, loca
         wrapper.current?.focus({ preventScroll: true });
         retiringFocus.current = false;
       }} /> : null}
-      {state.content?.body.type === "choices" ? <WidgetChoices key={key} client={ctx.client} widget={current} spec={state.content.body.spec} inputBlocked={inputBlocked} /> : null}
+      {state.content?.body.type === "choices" ? <WidgetChoices key={key} client={ctx.client} widget={current} spec={state.content.body.spec} inputBlocked={inputBlocked} />
+        : state.content?.body.type === "html" && state.content.body.choices && state.content.revision === current.revision
+          ? <div className="widget-dock-choices"><WidgetChoices key={key} client={ctx.client} widget={current} spec={state.content.body.choices} inputBlocked={inputBlocked} /></div> : null}
     </div>
   </>;
 }

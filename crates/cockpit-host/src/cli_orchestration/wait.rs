@@ -2,8 +2,10 @@ use std::time::Duration;
 
 use std::path::PathBuf;
 
-use cockpit_protocol::orchestration::{DeliveryStage, Message, OrchestrationAction, OrchestrationActionResult, ReportKind};
-use cockpit_core::orchestration::Actor;
+use cockpit_protocol::orchestration::{DeliveryStage, OrchestrationAction, OrchestrationActionResult};
+use cockpit_core::orchestration::{Actor, inbox_meaningful};
+#[cfg(test)]
+pub(super) use cockpit_core::orchestration::inbox_meaningful as meaningful;
 #[cfg(test)]
 pub(super) use cockpit_core::orchestration::inbox_counts;
 
@@ -28,9 +30,6 @@ pub(super) async fn inbox_wait(
     emit(&result?, json)
 }
 
-pub(super) fn meaningful(message: &Message) -> bool {
-    !message.report.as_ref().is_some_and(|report| matches!(report.kind, ReportKind::Progress | ReportKind::Initialized))
-}
 
 pub(super) async fn inbox_next(
     context: &Context,
@@ -56,7 +55,7 @@ pub(super) async fn inbox_next(
         return Err(CliError::new("orchestration_output", "Inbox pull returned no captured prefix"));
     };
     let captured = !messages.is_empty();
-    let messages: Vec<_> = messages.into_iter().filter(|message| !deliverable || meaningful(message)).collect();
+    let messages: Vec<_> = messages.into_iter().filter(|message| !deliverable || inbox_meaningful(message)).collect();
     let contexts = if messages.is_empty() { Default::default() } else {
         context.service.inbox_message_context(caller, &messages).unwrap_or_else(|error| {
             eprintln!("Inbox context unavailable: {}", error.message);

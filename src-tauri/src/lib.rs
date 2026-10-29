@@ -1,5 +1,6 @@
 mod clipboard;
 mod commands;
+mod power;
 mod startup;
 mod streams;
 
@@ -44,6 +45,7 @@ pub fn run() {
         .manage(browser_runtime)
         .manage(orchestration_runtime)
         .manage(clipboard::TerminalFilesState::default())
+        .manage(power::PowerState::default())
         .manage(StreamRegistry::new())
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {

@@ -201,7 +201,14 @@ it.each(["stale_identity", "git_failure"])("refreshes a %s removal failure while
   expect(client.workspaceTeardownPreview).toHaveBeenLastCalledWith("session", { workspace_id: "space" });
   expect(client.workspaceTeardownExecute).toHaveBeenCalledTimes(1);
   expect(onCompleted).not.toHaveBeenCalled();
-  expect(view.querySelector('[role="alert"]')!.textContent).toBe(failure.message);
+  const alert = view.querySelector('[role="alert"]')!;
+  if (operationCode === "stale_identity") {
+    expect(alert.textContent).not.toBe(failure.message);
+    expect(alert.textContent).toMatch(/refresh.*review/i);
+  } else {
+    expect(alert.textContent).toBe(failure.message);
+  }
+  expect(alert.getAttribute("title")).toContain(`${operationCode}: ${failure.message}`);
   expect(view.textContent).toContain("1 uncommitted path will be permanently discarded");
   expect(view.textContent).toContain("new-change.txt");
   expect(view.textContent).not.toContain("changed.txt");

@@ -245,6 +245,16 @@ export type SpaceServiceStatusRequest = { server_instance: string, pane_ids: Arr
 
 export type SpaceServiceStatusResponse = { session_id: string, services: Array<SpaceServiceStatus>, };
 
+export type SpaceCpuPane = { pane_id: string, terminal_id: string, space_id: string, };
+
+export type SpaceCpuStatusRequest = { server_instance: string, panes: Array<SpaceCpuPane>, };
+
+export type SpaceCpuProcess = { pid: number, name: string, percent: number, };
+
+export type SpaceCpuStatus = { space_id: string, percent: number, active: boolean, top_process: SpaceCpuProcess | null, };
+
+export type SpaceCpuStatusResponse = { session_id: string, server_instance: string, available: boolean, spaces: Array<SpaceCpuStatus>, };
+
 export type SpaceTags = { space_id: string,
 /**
  * Canonical catalog spellings, in catalog order.
@@ -928,7 +938,9 @@ export type WidgetAddress = { session_id: string, endpoint_path: string | null, 
 
 export type WidgetInputKind = "file" | "stdin";
 
-export type WidgetContentInput = { "type": "html", content_base64: string, sha256: string, from: WidgetInputKind, name: string | null, } | { "type": "choices", spec_json: string, sha256: string, from: WidgetInputKind, name: string | null, };
+export type WidgetChoicesInput = { spec_json: string, sha256: string, from: WidgetInputKind, name: string | null, };
+
+export type WidgetContentInput = { "type": "html", content_base64: string, sha256: string, from: WidgetInputKind, name: string | null, choices: WidgetChoicesInput | null, } | { "type": "choices", spec_json: string, sha256: string, from: WidgetInputKind, name: string | null, };
 
 export type WidgetShowRequest = { address: WidgetAddress, id: string, title: string | null, content: WidgetContentInput, reopen: boolean, clear_selection: boolean, };
 
@@ -994,9 +1006,17 @@ export type WidgetWindowReport = { session_id: string | null, displayed_tab_id: 
 
 export type WidgetContentRequest = { key: WidgetKey, revision: number, };
 
-export type WidgetBody = { "type": "html", document: string, } | { "type": "choices", spec: WidgetChoicesSpec, };
+export type WidgetBody = { "type": "html", document: string, choices: WidgetChoicesSpec | null, } | { "type": "choices", spec: WidgetChoicesSpec, };
 
 export type WidgetContent = { key: WidgetKey, revision: number, sha256: string, body: WidgetBody, selection: WidgetSelectionResponse | null, };
+
+export type WidgetShelfListRequest = Record<symbol, never>;
+
+export type WidgetShelfEntry = { summary: WidgetSummary, removed_at_ms: number, };
+
+export type WidgetShelfListResponse = { widgets: Array<WidgetShelfEntry>, };
+
+export type WidgetShelfReopenRequest = { key: WidgetKey, };
 
 export type WidgetRemoveRequest = { key: WidgetKey, };
 
@@ -1136,7 +1156,15 @@ export type ResumeCauseClass = "recover" | "decision";
 
 export type ResumeCause = { code: string, message: string, class: ResumeCauseClass, };
 
-export type ResumeRecord = { operation_id: string, run_id: string, previous_attachment_epoch: number | null, phase: ResumePhase, cause: ResumeCause | null, decision_id: string | null, replacement_attachment_epoch: number | null, updated_at: string, };
+export type ResumeRecord = { operation_id: string, run_id: string, previous_attachment_epoch: number | null,
+/**
+ * This replacement starts a new conversation rather than resuming the saved one.
+ */
+fresh_conversation?: boolean, previous_conversation?: ConversationIdentity,
+/**
+ * Namespace for sessions created by a fresh cutover, retained on later resumes.
+ */
+session_namespace?: string, phase: ResumePhase, cause: ResumeCause | null, decision_id: string | null, replacement_attachment_epoch: number | null, updated_at: string, };
 
 export type LiaisonLookupRequest = { session_id: string, selected_root_id: string | null, };
 
@@ -1148,7 +1176,11 @@ export type LiaisonCandidate = { root_id: string, connection: RootConnection, re
 /**
  * Resume may carry operator stop confirmation (core-computed static eligibility).
  */
-stop_confirmable: boolean, updated_at: string, };
+stop_confirmable: boolean,
+/**
+ * Static eligibility; the action rechecks claims and checkout under lock.
+ */
+fresh_available?: boolean, updated_at: string, };
 
 export type LiaisonLookupResponse = { "status": "resolved", lookup_revision: number, preferred_root_id: string | null, roots: Array<LiaisonCandidate>, } | { "status": "unavailable", code: string, message: string, };
 
@@ -1311,6 +1343,6 @@ export type OrchestrationAction = { "action": "task_create", root_id: string, ta
  * Human operator attests this exact saved root main has stopped.
  * Only for roots whose launch recorded no process identity.
  */
-confirmed_stopped_attachment_id?: string | null, } | { "action": "run_register", operation_id: string, } | { "action": "task_unassign", operation_id: string, root_id: string, task_id: string, expected_assignment_generation: number, } | { "action": "run_attach", operation_id: string, attachment_id: string, expected_attachment_epoch: number, conversation: ConversationIdentity, } | { "action": "run_adopt", label: string, location: RunLocation, } | { "action": "worker_start", operation_id: string, root_id: string, task_id: string, expected_task_revision: string, expected_doc_revision: string, target: DispatchTarget, label: string | null, brief: string, cleanup_policy: WorkerCleanupPolicy, } | { "action": "task_schedule", operation_id: string, root_id: string, task_id: string, target: DispatchTarget | null, brief: string, cleanup_policy: WorkerCleanupPolicy, label: string | null, expected_task_revision: string | null, expected_doc_revision: string | null, } | { "action": "task_schedule_cancel", operation_id: string, root_id: string, task_id: string, } | { "action": "worker_replace", operation_id: string, root_id: string, task_id: string, expected_run_id: string, expected_assignment_generation: number, reason: string, } | { "action": "task_scope_update", operation_id: string, root_id: string, task_id: string, run_id: string, expected_task_revision: string, expected_doc_revision: string, title: string | null, description: string | null, } | { "action": "accept", run_id: string, expected_task_revision: string, } | { "action": "integration_record", record: IntegrationRecord, } | { "action": "resource_request", request: ResourceRequest, } | { "action": "resource_release", release: ResourceRelease, } | { "action": "resource_build_register", registration: ResourceBuildRegistration, } | { "action": "resource_register", request: ResourceRegister, } | { "action": "cleanup_finish", request: CleanupFinish, } | { "action": "send_back", run_id: string, text: string, } | { "action": "cancel_run", run_id: string, } | { "action": "reconcile_run", run_id: string, recovery: WorkspaceRecoveryAction | null, } | { "action": "intent_resolve", intent_id: string, apply: boolean, } | { "action": "report", message_id: string, kind: ReportKind, outcome: ReportOutcome | null, summary: string, plan: string | null, source_output: SourceOutput | null, to_run_id: string | null, original_task_revision?: string | null, original_claim_id?: string | null, } | { "action": "message_send", message_id: string, to_run_id: string, kind: MessageKind, text: string, in_reply_to: string | null, original_task_revision?: string | null, original_claim_id?: string | null, } | { "action": "annotate", run_id: string, text: string, } | { "action": "inbox_pull", after_seq: number, limit: number, } | { "action": "inbox_ack", through_seq: number, };
+confirmed_stopped_attachment_id?: string | null, } | { "action": "run_start_fresh_supervisor", run_id: string, operation_id: string, expected_attachment_epoch: number, } | { "action": "run_register", operation_id: string, } | { "action": "task_unassign", operation_id: string, root_id: string, task_id: string, expected_assignment_generation: number, } | { "action": "run_attach", operation_id: string, attachment_id: string, expected_attachment_epoch: number, conversation: ConversationIdentity, } | { "action": "run_adopt", label: string, location: RunLocation, } | { "action": "worker_start", operation_id: string, root_id: string, task_id: string, expected_task_revision: string, expected_doc_revision: string, target: DispatchTarget, label: string | null, brief: string, cleanup_policy: WorkerCleanupPolicy, } | { "action": "task_schedule", operation_id: string, root_id: string, task_id: string, target: DispatchTarget | null, brief: string, cleanup_policy: WorkerCleanupPolicy, label: string | null, expected_task_revision: string | null, expected_doc_revision: string | null, } | { "action": "task_schedule_cancel", operation_id: string, root_id: string, task_id: string, } | { "action": "worker_replace", operation_id: string, root_id: string, task_id: string, expected_run_id: string, expected_assignment_generation: number, reason: string, } | { "action": "task_scope_update", operation_id: string, root_id: string, task_id: string, run_id: string, expected_task_revision: string, expected_doc_revision: string, title: string | null, description: string | null, } | { "action": "accept", run_id: string, expected_task_revision: string, } | { "action": "integration_record", record: IntegrationRecord, } | { "action": "resource_request", request: ResourceRequest, } | { "action": "resource_release", release: ResourceRelease, } | { "action": "resource_build_register", registration: ResourceBuildRegistration, } | { "action": "resource_register", request: ResourceRegister, } | { "action": "cleanup_finish", request: CleanupFinish, } | { "action": "send_back", run_id: string, text: string, } | { "action": "cancel_run", run_id: string, } | { "action": "reconcile_run", run_id: string, recovery: WorkspaceRecoveryAction | null, } | { "action": "intent_resolve", intent_id: string, apply: boolean, } | { "action": "report", message_id: string, kind: ReportKind, outcome: ReportOutcome | null, summary: string, plan: string | null, source_output: SourceOutput | null, to_run_id: string | null, original_task_revision?: string | null, original_claim_id?: string | null, } | { "action": "message_send", message_id: string, to_run_id: string, kind: MessageKind, text: string, in_reply_to: string | null, original_task_revision?: string | null, original_claim_id?: string | null, } | { "action": "annotate", run_id: string, text: string, } | { "action": "inbox_pull", after_seq: number, limit: number, } | { "action": "inbox_ack", through_seq: number, };
 
 export type OrchestrationActionResult = { "result": "run_registered", run_id: string, conversation: ConversationIdentity | null, assignment_generation: number | null, duplicate: boolean, } | { "result": "task_unassigned", task_id: string, assignment_generation: number, previous_run_id: string | null, duplicate: boolean, } | { "result": "worker_started", start: WorkerStartResult, } | { "result": "task_scheduled", operation_id: string, task_id: string, duplicate: boolean, } | { "result": "worker_replaced", start: WorkerStartResult, previous_run_id: string, assignment_generation: number, placement: ReplacementPlacement, } | { "result": "task_scope_updated", update: TaskScopeUpdateResult, } | { "result": "integration_recorded", receipt: IntegrationRecordResult, } | { "result": "resource", request: ResourceRequestRecord, duplicate: boolean, } | { "result": "resource_registered", resource: OwnedResourceRecord, duplicate: boolean, } | { "result": "cleanup_finished", cleanup: CleanupFinishResult, } | { "result": "supervisor_started", start: SupervisorStartResult, } | { "result": "run_resumed", resume: RunResumeResult, } | { "result": "run_attached", attach: RunAttachResult, } | { "result": "task", task: Task, } | { "result": "task_assigned", task: Task, to_run_id: string, seq: number, duplicate: boolean, } | { "result": "task_ids", assigned: number, doc_revision: string, } | { "result": "run", run_id: string, attempt: number, } | { "result": "message", to_run_id: string, seq: number, duplicate: boolean, stale: boolean, } | { "result": "inbox", messages: Array<Message>, read_through_seq: number, } | { "result": "done" };

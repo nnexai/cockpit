@@ -238,6 +238,47 @@ fn root_recovery_target(state: &super::store::OrchestrationState, run: &Run) -> 
     }
     Ok(())
 }
+/// Static eligibility only; admission also checks claims and adopted checkout.
+pub fn fresh_root_available(run: &Run) -> bool {
+    matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)
+        && run.run_id == run.root_id && run.parent_run_id.is_none()
+        && run.checkout_claim_id.is_none() && !matches!(run.stage, RunStage::Closed | RunStage::Reported)
+        && run.result.is_none()
+        && run.resume.as_ref().is_some_and(|resume| resume.phase == ResumePhase::Blocked)
+        && run.attachment.as_ref().is_some_and(|attachment| !matches!(attachment.state,
+            AttachmentState::Reserved | AttachmentState::Quiescing | AttachmentState::Revoked))
+        && (run.kind != RunKind::Supervisor || run.dispatch.is_some())
+        && run.dispatch.as_ref().is_none_or(|dispatch| dispatch.step == DispatchStep::Launched
+            && run.attachment.as_ref().is_some_and(|attachment| dispatch.launch_attempt == attachment.launch_attempt))
+        && run.launch_config.harness_kind == "omp" && run.launch_config.command == "omp"
+        && !run.launch_config.extra_args.iter().any(|arg| {
+            matches!(arg.as_str(), "-c" | "--continue" | "--restore" | "--session-dir")
+                || arg.starts_with("-r") || arg.starts_with("--resume")
+                || arg.starts_with("--continue=") || arg.starts_with("--restore=")
+                || arg.starts_with("--session-dir=")
+        })
+        && (run.kind != RunKind::Adopted || run.dispatch.is_some()
+            || (run.target.is_none() && run.setup.is_none() && run.checkout.is_some()
+                && run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref())
+                    .is_some_and(|location| location.session_id == run.session_id)))
+}
+
+/// Fences no worker capability and makes no claim of physical process exit.
+pub(crate) fn admit_fresh_root(state: &super::store::OrchestrationState, run: &Run) -> Result<(), InspectionError> {
+    if !fresh_root_available(run) || state.checkout_claims.iter().any(|claim|
+        claim.state != super::claims::ClaimState::Released
+            && claim.holder.as_ref().is_some_and(|holder| holder.run_id == run.run_id)) {
+        return Err(InspectionError::new("fresh_supervisor_unavailable",
+            "A fresh conversation requires a blocked, claim-free root and a supported isolated launch."));
+    }
+    if run.kind == RunKind::Adopted && run.dispatch.is_none() {
+        if run.target.is_some() || run.setup.is_some()
+            || run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref())
+                .is_none_or(|location| location.session_id != run.session_id) { return Err(root_unproven()); }
+        revalidate_checkout(run.checkout.as_ref().ok_or_else(root_unproven)?)?;
+    }
+    Ok(())
+}
 
 pub(crate) fn unrecorded_root_identity(attachment: &ExecutionAttachment) -> bool {
     attachment.process.is_none() && attachment.shell.is_none()

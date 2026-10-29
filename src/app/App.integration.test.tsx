@@ -221,9 +221,11 @@ class AppFixture {
         if (this.widgetEvent === onEvent) this.widgetEvent = null;
       }, report: vi.fn() };
     }),
-    widgetContent: vi.fn(async request => ({ key: request.key, revision: request.revision, sha256: "a".repeat(64), body: { type: "html" as const, document: "<p>Widget statistics</p>" }, selection: null })),
+    widgetContent: vi.fn(async request => ({ key: request.key, revision: request.revision, sha256: "a".repeat(64), body: { type: "html" as const, document: "<p>Widget statistics</p>", choices: null }, selection: null })),
     widgetRemove: vi.fn(async () => ({ result: "removed" as const })),
     widgetSelect: vi.fn(async () => ({ at_ms: 1 })),
+    widgetShelfList: vi.fn(async () => ({ widgets: [] })),
+    widgetShelfReopen: vi.fn(async () => { throw new Error("Unexpected widget shelf reopen in fixture"); }),
     browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this tab", cleanup: "none" as const, cleanup_reason: null })),
     browserCleanupStatus: vi.fn(async () => ({ failures: [] })),
     browserCleanupRetry: vi.fn(async () => ({ failures: [] })),
@@ -293,6 +295,10 @@ class AppFixture {
     sessionSnapshot: this.snapshotCalls,
     spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
     spaceServiceStatus: vi.fn<CockpitClient["spaceServiceStatus"]>(async (sessionId, _request, _signal) => ({ session_id: sessionId, services: [] })),
+    spaceCpuStatus: vi.fn<CockpitClient["spaceCpuStatus"]>(async (sessionId, request) => ({ session_id: sessionId, server_instance: request.server_instance, available: false, spaces: [] })),
+    orchestrationAgentSend: vi.fn(async () => { throw new Error("Unexpected agent send"); }),
+    updateStatus: vi.fn(async () => ({ installed_commit: null, source_path: "", commits_behind_main: null })),
+    updateInstall: vi.fn(async () => { throw new Error("Unexpected update install"); }),
     spaceTags: vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: snapshot(sessionId).server_instance, catalog: [], spaces: [] })),
     changeSpaceTag: vi.fn(async () => { throw new Error("Unexpected Space tag change in terminal fixture"); }),
     agentAttention: vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: snapshot(sessionId).server_instance, epoch: 1, records: [], refused: null })),
@@ -559,7 +565,7 @@ it.each(["own_tab", "cross_source"] as const)("reveals an %s widget without chan
   const updated: WidgetSummary = { ...widget, revision: 2, change: "replaced", content: { ...widget.content, sha256: "b".repeat(64) } };
   vi.mocked(fixture.client.widgetContent).mockResolvedValueOnce({
     key: updated.key, revision: 2, sha256: updated.content.sha256,
-    body: { type: "html", document: "<p>Updated statistics</p>" }, selection: null,
+    body: { type: "html", document: "<p>Updated statistics</p>", choices: null }, selection: null,
   });
   await act(async () => fixture.widgetEvent!({ type: "upserted", sequence: 2, widget: updated }));
   await settle();
@@ -1303,6 +1309,12 @@ describe("liaison conversation and compact task rail", () => {
       roots: current().runs.length ? [{ root_id: "root", connection: "connected", resume: "available", stop_confirmable: false, cause: null, updated_at: "2026-10-07T12:00:00Z", ...candidate() }] : [],
     }));
   }
+  function recoveryButton(label: string): HTMLButtonElement {
+    const dialog = document.body.querySelector<HTMLElement>(".confirmed-recovery");
+    const match = [...(dialog?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find(candidate => candidate.textContent?.trim() === label);
+    if (!match) throw new Error(`Missing recovery button ${label}`);
+    return match;
+  }
   it("starts a real liaison from Commands and opens its actual terminal tab", async () => {
     const fixture = new AppFixture();
     let current = orchestrationFixture([], []);
@@ -1444,7 +1456,7 @@ describe("liaison conversation and compact task rail", () => {
     const fixture = new AppFixture();
     let current = orchestrationFixture([taskFixture("Work")]);
     let candidate: Partial<LiaisonCandidate> = {
-      connection: "disconnected", resume: "blocked",
+      connection: "disconnected", resume: "blocked", fresh_available: false,
       cause: { code: "root_unproven", message: "The root attachment cannot be proven", class: "recover" },
     };
     current.runs[0].resume = { operation_id: "blocked-resume", run_id: "root", previous_attachment_epoch: 1, phase: "blocked", cause: candidate.cause!, decision_id: null, replacement_attachment_epoch: null, updated_at: "2026-10-07T12:00:00Z" };
@@ -1456,6 +1468,12 @@ describe("liaison conversation and compact task rail", () => {
     expect(container.textContent).toContain("The root attachment cannot be proven");
     expect(container.textContent).not.toContain("Resume in this folder");
     expect(button("Resume supervisor").disabled).toBe(false);
+    click(button("Resume supervisor")); await settle();
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).toContain("Supervisor recovery");
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).not.toContain("Start new conversation (tasks kept)");
+    expect(recoveryButton("Retry resume")).toBeTruthy();
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+    click(recoveryButton("Cancel")); await settle();
     candidate = { ...candidate, cause: { code: "checkout_identity_changed", message: "Saved physical checkout no longer matches", class: "decision" } };
     for (const stage of ["closed", "reported"] as const) {
       current = { ...current, revision: current.revision + 1, runs: [{ ...current.runs[0], stage }] };
@@ -1493,11 +1511,12 @@ describe("liaison conversation and compact task rail", () => {
     });
     await mount(fixture);
     click(button("Resume supervisor")); await settle();
-    click(button("Resume supervisor")); await settle();
+    click(recoveryButton("Retry resume")); await settle();
+    click(recoveryButton("Retry resume")); await settle();
     if (outcome === "unknown") {
       const actions = vi.mocked(fixture.client.orchestrationMutate).mock.calls.map(([request]) => request.action);
       expect(actions[1]).toEqual(actions[0]);
-      click(button("Resume supervisor")); await settle();
+      click(recoveryButton("Retry resume")); await settle();
     }
     const actions = vi.mocked(fixture.client.orchestrationMutate).mock.calls.map(([request]) => request.action);
     expect(actions).toHaveLength(outcome === "unknown" ? 3 : 2);
@@ -1505,6 +1524,47 @@ describe("liaison conversation and compact task rail", () => {
     const first = actions[0], last = actions.at(-1)!;
     if (first.action !== "run_resume" || last.action !== "run_resume") throw new Error("Expected root resume");
     expect(last.operation_id).not.toBe(first.operation_id);
+  });
+  it("retries a fresh conversation with the same identity after an unknown result and keeps tasks", async () => {
+    const fixture = new AppFixture();
+    const task = taskFixture("Existing work");
+    const cause = { code: "root_unproven", message: "The root attachment cannot be proven", class: "recover" as const };
+    let current = orchestrationFixture([task]), calls = 0;
+    current.runs[0].resume = { operation_id: "previous", run_id: "root", previous_attachment_epoch: 1, phase: "blocked", cause, decision_id: null, replacement_attachment_epoch: null, updated_at: "2026-10-07T12:00:00Z" };
+    bindLiaison(fixture, () => current, () => ({ connection: "unknown", resume: "blocked", stop_confirmable: true, fresh_available: true, cause }));
+    vi.mocked(fixture.client.orchestrationMutate).mockImplementation(async request => {
+      if (request.action.action !== "run_start_fresh_supervisor") throw new Error("Expected fresh supervisor");
+      calls++;
+      if (calls === 1) throw new Error("Response lost");
+      current = { ...current, revision: 2 };
+      current.runs[0].resume = { ...current.runs[0].resume!, operation_id: request.action.operation_id, phase: "launching", cause: null, replacement_attachment_epoch: 2 };
+      return { revision: 2, result: { result: "run_resumed", resume: { run_id: "root", duplicate: true, resume: current.runs[0].resume! } } };
+    });
+    await mount(fixture);
+    click(button("Resume supervisor")); await settle();
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).toContain("Your tasks and history are kept");
+    expect(recoveryButton("I've stopped it myself…")).toBeTruthy();
+    click(recoveryButton("Start new conversation (tasks kept)")); await settle();
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).toContain("Start a new conversation with your existing tasks and history");
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+    click(recoveryButton("Start new conversation")); await settle();
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).toContain("No answer yet. Retrying sends the same request.");
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).not.toContain("Retry resume");
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).not.toContain("I've stopped it myself");
+    click(recoveryButton("Cancel")); await settle();
+    click(button("Resume supervisor")); await settle();
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).not.toContain("Start new conversation (tasks kept)");
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).not.toContain("Retry resume");
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).not.toContain("I've stopped it myself");
+    click(recoveryButton("Start new conversation")); await settle();
+    const actions = vi.mocked(fixture.client.orchestrationMutate).mock.calls.map(([request]) => request.action);
+    expect(actions).toHaveLength(2);
+    expect(actions[0]).toEqual({ action: "run_start_fresh_supervisor", run_id: "root", operation_id: expect.any(String), expected_attachment_epoch: 1 });
+    expect(actions[1]).toEqual(actions[0]);
+    expect(current.board?.tasks).toEqual([task]);
+    expect(document.body.querySelector(".confirmed-recovery")).toBeNull();
+    await openCommand("Show overview");
+    expect(container.textContent).toContain("Existing work");
   });
   it("keeps Resume visible and disabled while the request and restart are in progress", async () => {
     const fixture = new AppFixture();
@@ -1558,6 +1618,8 @@ describe("liaison conversation and compact task rail", () => {
     await settle();
     expect(button("Resume supervisor").disabled).toBe(false);
     click(button("Resume supervisor")); await settle();
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+    click(recoveryButton("Retry resume")); await settle();
     expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toMatchObject({ action: "run_resume", run_id: "root", expected_attachment_epoch: 1 });
   });
   it.each(["offline", "focus pending"] as const)("keeps the known action disabled while %s", async gate => {

@@ -37,7 +37,7 @@ function fixture(client: CockpitClient) {
 }
 
 it("retains the visible preview while fetching a replacement and swaps only once its new frame loads", async () => {
-  const initial: WidgetContent = { key: summary.key, revision: 1, sha256: summary.content.sha256, body: { type: "html", document: "<p>Original chart</p>" }, selection: null };
+  const initial: WidgetContent = { key: summary.key, revision: 1, sha256: summary.content.sha256, body: { type: "html", document: "<p>Original chart</p>", choices: null }, selection: null };
   // The project's ES2022 library has no Promise.withResolvers.
   let finish!: (content: WidgetContent) => void;
   const pending = new Promise<WidgetContent>((resolve) => { finish = resolve; });
@@ -72,7 +72,7 @@ it("retains the visible preview while fetching a replacement and swaps only once
     expect(host.querySelector("iframe")).toBe(original);
     expect(original.srcdoc).toContain("Original chart");
     await act(async () => finish({ key: summary.key, revision: 2, sha256: updated.content.sha256,
-      body: { type: "html", document: "<p>Updated chart</p>" }, selection: null }));
+      body: { type: "html", document: "<p>Updated chart</p>", choices: null }, selection: null }));
     expect(host.querySelector("iframe")).toBe(original);
     expect(host.querySelectorAll("iframe")).toHaveLength(2);
     const incoming = host.querySelector<HTMLIFrameElement>("iframe[data-pending]")!;
@@ -134,9 +134,32 @@ function dockFrameIdentity(frame: HTMLIFrameElement): { nonce: string; revision:
   return JSON.parse(JSON.parse(state[1]));
 }
 
+
+it("renders Cockpit choices alongside HTML and submits their revision", async () => {
+  const content: WidgetContent = { key: summary.key, revision: summary.revision, sha256: summary.content.sha256, selection: null,
+    body: { type: "html", document: "<p>Context</p>", choices: { prompt: "Choose", choices: [{ id: "yes", label: "Yes", detail: null }] } } };
+  const widgetSelect = vi.fn().mockResolvedValue({ at_ms: 3000 });
+  const client = { widgetContent: vi.fn().mockResolvedValue(content), widgetSelect } as unknown as CockpitClient;
+  const { ctx, store } = fixture(client);
+  store.accept({ type: "snapshot", sequence: 1, widgets: [summary] });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    await act(async () => root.render(<WidgetDock ctx={ctx} tab={ctx.getState().tabs.tab} width={600}
+      selected={false} inputBlocked={false} live onSelect={() => {}} onZoom={() => {}} onGoToAgent={() => {}} />));
+    await act(async () => { await Promise.resolve(); });
+    expect(host.querySelector("iframe")).not.toBeNull();
+    await act(async () => host.querySelector<HTMLInputElement>('input[value="yes"]')!.click());
+    expect(widgetSelect).toHaveBeenCalledWith({ key: summary.key, revision: summary.revision, value: { type: "choice", choice_id: "yes" } });
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
 it("binds opaque page selections to the exact owner and restores retained selected null on remount", async () => {
   const content: WidgetContent = { key: summary.key, revision: 1, sha256: summary.content.sha256,
-    body: { type: "html", document: "<p>Results</p>" }, selection: {
+    body: { type: "html", document: "<p>Results</p>", choices: null }, selection: {
       id: summary.key.id, revision: 1, status: "selected", value_json: "null", at_ms: 2000, removed_at_ms: null,
     } };
   const widgetSelect = vi.fn().mockResolvedValue({ at_ms: 3000 });
@@ -178,7 +201,7 @@ it("binds opaque page selections to the exact owner and restores retained select
 
 it("does not install a late selection response after the owner replaces the content", async () => {
   const content: WidgetContent = { key: summary.key, revision: 1, sha256: summary.content.sha256,
-    body: { type: "html", document: "<p>Before</p>" }, selection: null };
+    body: { type: "html", document: "<p>Before</p>", choices: null }, selection: null };
   const widgetSelect = vi.fn().mockResolvedValue({ at_ms: 3000 });
   const client = { widgetContent: vi.fn().mockResolvedValue(content), widgetSelect } as unknown as CockpitClient;
   const { store } = fixture(client);
@@ -244,7 +267,7 @@ it.each(["agent", "retired", "snapshot", "user", "localUser"] as const)("preserv
 
 it("selects only the local widget leaf after a live iframe reports actual focused interaction", async () => {
   const content: WidgetContent = { key: summary.key, revision: 1, sha256: summary.content.sha256,
-    body: { type: "html", document: "<input>" }, selection: null };
+    body: { type: "html", document: "<input>", choices: null }, selection: null };
   const mutate = vi.fn();
   const terminalInput = vi.fn();
   const client = { widgetContent: vi.fn().mockResolvedValue(content), mutate, terminalInput } as unknown as CockpitClient;

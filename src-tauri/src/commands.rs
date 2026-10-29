@@ -56,6 +56,9 @@ macro_rules! native_commands {
         {
             tauri::generate_handler![
                 $($command,)*
+                crate::power::cockpit_power_status,
+                crate::power::cockpit_power_set_stay_awake,
+                crate::power::cockpit_power_screen_off,
                 crate::streams::cockpit_session_subscribe,
                 crate::streams::cockpit_scratch_page_generation,
                 crate::streams::cockpit_terminal_open,

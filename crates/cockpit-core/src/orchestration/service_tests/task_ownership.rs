@@ -1043,6 +1043,7 @@ fn pending_sticky_attempt_can_be_replaced_without_cleanup_or_late_launch_authori
         run.stage = RunStage::Starting;
         run.dispatch.as_mut().unwrap().step = DispatchStep::LaunchUnknown;
         run.resume = Some(ResumeRecord { operation_id: id(), run_id: worker.clone(), previous_attachment_epoch: Some(1),
+            fresh_conversation: None, previous_conversation: None, session_namespace: None,
             phase: ResumePhase::Launching, cause: None, decision_id: None, replacement_attachment_epoch: None, updated_at: now() });
     });
     let old = fixture.run(&worker);
@@ -1792,6 +1793,7 @@ fn resumed_worker_missing_space_rebinds_exact_epoch_without_promoting_borrowed_c
                 if authorized {
                     run.resume = Some(ResumeRecord { operation_id: operation.clone(), run_id: worker.clone(),
                         previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+                        fresh_conversation: None, previous_conversation: None, session_namespace: None,
                         phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now() });
                     let at = now();
                     state.operations.push(store::DurableOperationRecord {

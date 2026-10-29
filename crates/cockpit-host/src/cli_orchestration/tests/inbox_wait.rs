@@ -3,13 +3,17 @@ use super::{message, super::{output::capture, wait::{inbox_counts, meaningful}}}
 
 #[test]
 fn wake_envelope_contains_only_counts_not_bodies_or_other_runs() {
-    let messages = vec![
+    let mut messages = vec![
         message("own", 1, MessageKind::Instruction, DeliveryStage::Stored, "BELOW CURSOR"),
         message("own", 2, MessageKind::Report, DeliveryStage::Read, "PRIVATE REPORT"),
         message("own", 3, MessageKind::Report, DeliveryStage::Stored, "PRIVATE REPORT 2"),
         message("own", 4, MessageKind::Instruction, DeliveryStage::Acked, "ACKED"),
         message("other", 9, MessageKind::Instruction, DeliveryStage::Stored, "OTHER RUN"),
     ];
+    for item in &mut messages[1..=2] {
+        item.report = Some(Report { message_id: item.message_id.clone(), kind: ReportKind::Result,
+            outcome: None, summary: String::new(), plan: None, source_output: None, at: item.created_at.clone() });
+    }
     let result = inbox_counts(&messages, "own", 1);
     assert!(result.pending);
     assert_eq!(result.through_seq, 3);
@@ -36,12 +40,12 @@ fn newer_progress_coalesces_without_hiding_questions() {
     question.report.as_mut().unwrap().kind = ReportKind::NeedsInput;
     let counts = inbox_counts(&[older, question, newer], "own", 0);
     assert!(counts.pending);
-    assert_eq!(counts.through_seq, 3);
-    assert_eq!(counts.counts[0].count, 2);
+    assert_eq!(counts.through_seq, 2);
+    assert_eq!(counts.counts[0].count, 1);
 }
 
 #[test]
-fn meaningful_filters_only_typed_progress_and_initialization_reports() {
+fn meaningful_filters_housekeeping_without_hiding_decisions() {
     for kind in [ReportKind::Progress, ReportKind::Initialized, ReportKind::NeedsInput, ReportKind::Result] {
         let mut item = message("own", 1, MessageKind::Report, DeliveryStage::Stored, "Progress text is not a type");
         item.report = Some(Report {
@@ -51,9 +55,24 @@ fn meaningful_filters_only_typed_progress_and_initialization_reports() {
         });
         assert_eq!(meaningful(&item), matches!(kind, ReportKind::NeedsInput | ReportKind::Result));
     }
-    for kind in [MessageKind::WorkBrief, MessageKind::SupervisorBrief, MessageKind::Instruction,
-        MessageKind::Answer, MessageKind::CancelRequest, MessageKind::Report, MessageKind::Observation] {
+    for kind in [MessageKind::Instruction, MessageKind::Answer, MessageKind::CancelRequest, MessageKind::Observation] {
         assert!(meaningful(&message("own", 1, kind, DeliveryStage::Stored, "progress initialized")));
+    }
+    for id in ["cleanup:resource:integration_pending", "scope-cleanup:run:1:scope_dirty_checkout",
+        "scheduled-start:task", "dispatch-recovered:run:1", "observation:run:endpoint_changed:1:1"] {
+        let mut item = message("own", 1, MessageKind::Observation, DeliveryStage::Stored, "retained");
+        item.from = cockpit_protocol::orchestration::ActorRef::Dispatcher;
+        item.message_id = id.into();
+        assert!(!meaningful(&item), "{id}");
+        assert!(!inbox_counts(&[item], "own", 0).pending, "{id}");
+    }
+    for id in ["dispatch-failure:run:1:project_space_open", "observation:run:exited_without_report:1:1",
+        "observation:run:runtime_blocked:1:1", "observation:run:idle_without_report:1:1"] {
+        let mut item = message("own", 1, MessageKind::Observation, DeliveryStage::Stored, "decision");
+        item.from = cockpit_protocol::orchestration::ActorRef::Dispatcher;
+        item.message_id = id.into();
+        assert!(meaningful(&item), "{id}");
+        assert!(inbox_counts(&[item], "own", 0).pending, "{id}");
     }
 }
 

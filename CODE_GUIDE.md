@@ -20,6 +20,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Shell menus | `src/app/shell/ContextMenu.tsx`; `src/app/shell/ResourceContextMenu.tsx` |
 | Shell dialogs/recovery | `src/app/shell/PaneDialogOverlay.tsx`; `src/app/shell/SessionDialogOverlay.tsx`; `src/app/shell/RecoveryPanel.tsx` |
 | Compatibility notice | `src/app/shell/CompatibilityNotice.tsx` |
+| Plain refusal descriptions | `src/app/shell/plainErrors.ts`; recovery, compatibility and teardown surfaces preserve raw diagnostics as secondary detail |
 | Session ordering/focus/mutation | `src/app/session/sessionStore.ts`; `src/app/session/focusCoordinator.ts`; `src/app/session/mutationCoordinator.ts` |
 | Local layout state and reconciliation | `src/app/layout/tabLayoutStore.ts`; `src/app/layout/reconcile.ts` |
 | Local split geometry and canvas | `src/app/layout/splitTree.ts`; `src/app/layout/solveLayout.ts`; `src/app/layout/TabCanvas.tsx` |
@@ -31,6 +32,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Space tags/picker/grouping | `src/app/session/spaceTags.ts`; `src/app/sidebar/SpaceTagChip.tsx`; `src/app/sidebar/SpaceTagPopover.tsx`; `src/app/sidebar/spaceTagView.ts`; menu/Commands in `ResourceContextMenu.tsx`/`commands.ts` |
 | Git status/actions | `src/app/session/spaceGitStatus.ts`; `src/app/session/spaceGitActions.ts`; `src/app/sidebar/SpaceGitAction.tsx` |
 | Running services (read-only) | `src/app/session/spaceServiceStatus.ts`; `src/app/sidebar/Spaces.tsx`; plugin-owned rows join the caller's live pane/tab/Space snapshot, with no lifecycle controls; discovery runs on show or pane-set changes and repeats every five seconds only while health targets are present |
+| Space CPU badge | `src/app/session/spaceCpu.ts`; `src/app/sidebar/Spaces.tsx`; `crates/cockpit-core/src/space_cpu.rs`; visibility-gated sampling of pane process trees |
 | Keyboard registry and runtime aliases | `src/app/input/shortcuts.ts`; `src/app/input/herdrBindings.ts`; `src/app/input/keymap.ts` |
 | Modal/file picker input | `src/app/input/modal.ts`; `src/app/input/fileIndexCache.ts`; `src/app/input/fileNavigation.ts` |
 | Terminal and server popup | `src/app/TerminalPane.tsx`; `src/app/ServerPopup.tsx`; `src/app/terminal/cockpitTerminal.ts` |
@@ -346,6 +348,8 @@ Shared terminal creation in `src/app/terminal/cockpitTerminal.ts` installs xterm
 Tab Browser action → core tab association/service → private owner runtime → supervised Node/CDP helper attached to the CLI-managed Chromium session → bounded relay → transport-local stream → shared decoder → Browser hooks/frame presenter. `browser-runtime/browser-user-agent.cjs` owns the narrow running-version HeadlessChrome substitution policy; it is not general anti-bot/media parity. Fresh-open/default URL and prerequisites are in [configuration](docs/configuration.md); lifetime/reset/cleanup/delivery guards are in [DECISIONS](DECISIONS.md).
 
 Widget CLI show → bounded file/stdin/choices preflight → fresh source/target authorization → owner-memory widget store → ordered summaries/content/selection streams → tab dock → opaque script-only iframe bridge → validated retained selection. Widgets do not use Chromium capture. Limits, source/revision/nonce checks, fragment anchors, focus, tombstones and selection uncertainty remain in [DECISIONS](DECISIONS.md).
+
+An HTML `--file` or `--stdin` may be combined with `--choices-file` to display a Cockpit-rendered footer beneath the page; choices alone remain supported. Page and choice submissions share the latest answer for the revision. Ctrl+K navigates live widgets or explicitly reopens a retained user-removed widget from the bounded per-tab shelf; agent `--reopen` still requires a user request.
 
 Widget documents inject `src/app/widgets/widgetComponents.css` after the base style and before author styles. Wrap content in `.cw`; compose `cw-head`, `cw-title`, `cw-meta`, `cw-chip`, `cw-facts`, `cw-body`, `cw-sec`, `cw-fold`, `cw-list`, `cw-note`, `cw-callout`, `cw-scroll`, `cw-code`, `cw-link`, `cw-actions` and `cw-btn` as needed, with `cw-ok`, `cw-warn`, `cw-bad`, `cw-info` or `cw-dim` tones. Dark is the default; set `data-cw-theme="light"` on `.cw` for light styling. Copy the static [Jira ticket](integrations/widget-templates/jira-ticket.html) or [Confluence page](integrations/widget-templates/confluence-page.html) recipe and publish with `cockpit-cli widget show --id jira-preview --title 'Jira ticket' --file integrations/widget-templates/jira-ticket.html`. These examples do not fetch data or run scripts; authors supply content and retain responsibility for trusted HTML. Escape provider strings (`&`, `<`, `>`) before embedding them in HTML.
 

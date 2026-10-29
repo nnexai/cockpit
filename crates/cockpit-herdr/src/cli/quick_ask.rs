@@ -113,6 +113,43 @@ impl QuickAskHerdr for HerdrCliAdapter {
         Ok(QuickAskLocation { space_id: b.space_id.clone(), tab_id, pane_id: pane_id.into(), terminal_id: terminal_id.into(), tab_label: label.into() })
     }
 
+    async fn install_update(&self, session_id: &str, space_id: &str, cwd: &str, command: &[String], label: &str) -> Result<QuickAskLocation, InspectionError> {
+        let methods = self.project_methods(session_id).await?;
+        if !methods.contains("layout.apply") {
+            return Err(error("unsupported_capability", "Herdr does not support update installation"));
+        }
+        let (before, endpoint_identity) = self.socket_request_with_identity(session_id, "session.snapshot", json!({}), None).await?;
+        let parsed = parse_snapshot(json!({"result": &before}), session_id, &endpoint_identity)?;
+        if parsed.spaces.iter().filter(|space| space.id == space_id).count() != 1 {
+            return Err(error("update_target_changed", "The selected Space changed"));
+        }
+        let tabs = before["snapshot"]["tabs"].as_array().ok_or_else(stale)?;
+        let binding = QuickAskBinding { session_id: session_id.into(), server_instance: super::shell::server_instance(&endpoint_identity), endpoint_identity, space_id: space_id.into() };
+        let (result, _) = self.socket_request_with_identity(session_id, "layout.apply",
+            json!({"workspace_id": space_id, "tab_label": label, "focus": false,
+                "root": {"type": "pane", "label": label, "cwd": cwd, "command": command}}),
+            Some(&binding.endpoint_identity)).await.map_err(|_| uncertain())?;
+        let layout = &result["layout"];
+        let root = &layout["root"];
+        let tab_id = layout["tab_id"].as_str().filter(|s| !s.is_empty()).ok_or_else(uncertain)?.to_owned();
+        if tabs.iter().any(|tab| tab["tab_id"].as_str() == Some(tab_id.as_str())) { return Err(uncertain()); }
+        let receipt_pane = root["pane_id"].as_str().filter(|s| !s.is_empty()).ok_or_else(uncertain)?;
+        if result["type"].as_str() != Some("layout_apply") || layout["workspace_id"].as_str() != Some(space_id)
+            || root["type"].as_str() != Some("pane") || root["label"].as_str() != Some(label)
+            || root["command"] != json!(command) { return Err(uncertain()); }
+        let snapshot = self.quick_ask_snapshot(&binding).await.map_err(|_| uncertain())?;
+        let panes = snapshot["snapshot"]["panes"].as_array().ok_or_else(uncertain)?;
+        let mut found = panes.iter().filter(|p| p["tab_id"].as_str() == Some(tab_id.as_str()));
+        let pane = found.next().ok_or_else(uncertain)?;
+        if found.next().is_some() || pane["workspace_id"].as_str() != Some(space_id)
+            || pane["pane_id"].as_str() != Some(receipt_pane) { return Err(uncertain()); }
+        let pane_id = pane["pane_id"].as_str().filter(|s| !s.is_empty()).ok_or_else(uncertain)?;
+        let terminal_id = pane["terminal_id"].as_str().filter(|s| !s.is_empty()).ok_or_else(uncertain)?;
+        if panes.iter().filter(|p| p["pane_id"].as_str() == Some(pane_id)).count() != 1
+            || panes.iter().filter(|p| p["terminal_id"].as_str() == Some(terminal_id)).count() != 1 { return Err(uncertain()); }
+        Ok(QuickAskLocation { space_id: space_id.into(), tab_id, pane_id: pane_id.into(), terminal_id: terminal_id.into(), tab_label: label.into() })
+    }
+
 }
 
 #[cfg(test)]
