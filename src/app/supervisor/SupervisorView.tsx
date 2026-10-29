@@ -38,15 +38,18 @@ function taskAttention(snapshot: OrchestrationSnapshot | null, rootId: string | 
       }
       const observation = snapshot.runtime.status === "fresh" ? snapshot.runtime.runs.find(item => item.run_id === run.run_id) : null;
       const observedAgent = observation?.presence === "present" && observation.actual_agent;
-      if (run.stage !== "closed" && observedAgent && snapshot.runtime.status === "fresh") {
-        const status = observation.agent_status ? ` ${observation.agent_status}` : "";
-        labels.add(`${fresh ? "Observed" : "Last observed"}${status} · as of ${snapshot.runtime.observed_at}`);
-      }
       if (run.stage === "working" && (!fresh || !observedAgent)) labels.add("Live worker state unknown");
     }
     if ((!view.current_run_id || run?.stage === "queued") && !view.task.checked && (view.scheduled || view.lane === "blocked")) {
       const dependency = dependencySummary(view, tasks);
       labels.add(dependency ? `Blocked: ${dependency}` : view.lane === "blocked" ? "Blocked; reason unknown" : "Waiting for dispatch; reason unknown");
+    }
+    if (labels.size && run && run.stage !== "closed" && snapshot.runtime.status === "fresh") {
+      const observation = snapshot.runtime.runs.find(item => item.run_id === run.run_id);
+      if (observation?.presence === "present" && observation.actual_agent) {
+        const status = observation.agent_status ? ` ${observation.agent_status}` : "";
+        labels.add(`${fresh ? "Observed" : "Last observed"}${status} · as of ${snapshot.runtime.observed_at}`);
+      }
     }
     return labels.size ? [{ view, rowKey: `${view.task.task_id}:${index}`, labels: [...labels] }] : [];
   });
@@ -123,7 +126,7 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
     <div className="liaison-overview-body">
       <div className="liaison-overview-content">
         {attention.length || snapshot && (!fresh || snapshot.runtime.status !== "fresh") ? <section className="liaison-attention" aria-label="Task attention">
-          <div className="liaison-attention-heading"><h2>Task attention</h2>{snapshot && (!fresh || snapshot.runtime.status !== "fresh") ? <span>Runtime observations may be stale or unavailable.</span> : null}</div>
+          <div className="liaison-attention-heading"><h2>Task attention</h2><span>All projects</span>{snapshot && (!fresh || snapshot.runtime.status !== "fresh") ? <span>Runtime observations may be stale or unavailable.</span> : null}</div>
           {attention.length ? <ul>{attention.map(({ view: item, rowKey, labels }) => <li key={rowKey}>
             <button type="button" data-row-key={rowKey} aria-current={selectedKey === rowKey ? "true" : undefined} onClick={() => open(item, rowKey)}>
               <span className="liaison-attention-title">{item.task.title}</span><span className="liaison-attention-reason">{labels.join(" · ")}</span><span className="liaison-attention-action">History ›</span>

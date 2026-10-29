@@ -261,13 +261,15 @@ it("shows current root-scoped attention, separates reported results from accepta
   const failed = taskFixture("Failed", { lane: "review", current_run_id: "f" });
   const successful = taskFixture("Success", { lane: "review", current_run_id: "s" });
   const uncertain = taskFixture("Uncertain", { current_run_id: "u" });
-  const tasks = [question, failed, successful, uncertain];
+  const healthy = taskFixture("Healthy", { lane: "working", current_run_id: "h" });
+  const tasks = [question, failed, successful, uncertain, healthy];
   const report = (outcome: "succeeded" | "failed") => ({ message_id: `result-${outcome}`, kind: "result" as const, outcome, summary: "Reported", plan: null, source_output: null, at: "2026-10-07T12:00:00Z" });
   const workers = [
     runFixture({ kind: "worker", run_id: "q", task_id: "Question", stage: "working" }),
     runFixture({ kind: "worker", run_id: "f", task_id: "Failed", stage: "reported", result: report("failed") }),
     runFixture({ kind: "worker", run_id: "s", task_id: "Success", stage: "reported", result: report("succeeded") }),
     runFixture({ kind: "worker", run_id: "u", task_id: "Uncertain", stage: "working" }),
+    runFixture({ kind: "worker", run_id: "h", task_id: "Healthy", stage: "working" }),
   ];
   const snapshot = orchestrationFixture(tasks, workers);
   const at = workers[0].created_at;
@@ -281,6 +283,8 @@ it("shows current root-scoped attention, separates reported results from accepta
   ];
   await render(tasks, { snapshot, runs: workers });
   const panel = host.querySelector<HTMLElement>('[aria-label="Task attention"]')!;
+  expect(panel.querySelector('[data-row-key="Healthy:4"]')).toBeNull();
+  expect(host.querySelector('.liaison-card-open[data-row-key="Healthy:4"]')).not.toBeNull();
   expect(panel.textContent).toContain("Needs input");
   expect(panel.textContent).toContain("Failed result reported");
   expect(panel.textContent).toContain("Successful result reported");
@@ -300,6 +304,24 @@ it("shows current root-scoped attention, separates reported results from accepta
   act(() => { row.focus(); row.click(); });
   act(() => host.querySelector<HTMLButtonElement>(".liaison-detail-back")!.click());
   expect(document.activeElement).toBe(row);
+});
+
+it("keeps attention explicitly root-wide while the Board project filter changes and Graph is shown", async () => {
+  const alpha = taskFixture("Alpha task", { lane: "blocked", project: { key: "alpha", label: "Alpha" } });
+  const beta = taskFixture("Beta task", { lane: "blocked", project: { key: "beta", label: "Beta" } });
+  await render([alpha, beta]);
+  const panel = host.querySelector<HTMLElement>('[aria-label="Task attention"]')!;
+  expect(panel.textContent).toContain("All projects");
+  const filter = host.querySelector<HTMLElement>('[aria-label="Project"]')!;
+  act(() => [...filter.querySelectorAll("button")].find(button => button.textContent?.startsWith("Alpha"))!.click());
+  expect(host.querySelector('.liaison-card-open[data-row-key="Alpha task:0"]')).not.toBeNull();
+  expect(host.querySelector('.liaison-card-open[data-row-key="Beta task:1"]')).toBeNull();
+  expect(panel.querySelector('[data-row-key="Alpha task:0"]')).not.toBeNull();
+  expect(panel.querySelector('[data-row-key="Beta task:1"]')).not.toBeNull();
+  act(() => [...host.querySelectorAll("button")].find(button => button.textContent === "Graph")!.click());
+  expect(host.querySelector('[aria-label="Project"]')).toBeNull();
+  expect(panel.textContent).toContain("All projects");
+  expect(panel.querySelector('[data-row-key="Beta task:1"]')).not.toBeNull();
 });
 
 it("warns when observations are stale and excludes ambiguous, foreign and superseded identities", async () => {
