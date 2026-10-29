@@ -29,5 +29,6 @@ export function UpdateChip({ client, onUpdate }: { client: CockpitClient; onUpda
   }, [client]);
 
   if (!status?.commits_behind_main || !status.source_path) return null;
-  return <button type="button" className="tab-strip-action update-chip" title={`${status.commits_behind_main} commits on main since ${status.installed_commit?.slice(0, 8)} · ${status.source_path}`} onClick={() => onUpdate(status.source_path!)}>↑ {status.commits_behind_main} {status.commits_behind_main === 1 ? "commit" : "commits"} · install</button>;
+  const noun = status.commits_behind_main === 1 ? "commit" : "commits";
+  return <button type="button" className="tab-strip-action update-chip" title={`${status.commits_behind_main} ${noun} on main since ${status.installed_commit?.slice(0, 8)} · ${status.source_path}`} onClick={() => onUpdate(status.source_path!)}>↑ {status.commits_behind_main} {noun} · install</button>;
 }
