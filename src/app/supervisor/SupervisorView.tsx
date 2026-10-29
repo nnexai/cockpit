@@ -4,8 +4,53 @@ import { SupervisorTasks, taskLanes } from "./SupervisorTasks";
 import { SupervisorGraph } from "./SupervisorGraph";
 import { TaskHistoryDetail } from "./TaskHistoryDetail";
 import { taskHistory } from "./taskHistory";
+import { dependencySummary, uniqueTask } from "./dependencies";
 import { groupTasks } from "./taskProjects";
 import "./supervisor.css";
+
+const attentionLabels = {
+  needs_input: "Needs input",
+  runtime_blocked: "Runtime reported blocked",
+  brief_unread: "Work brief stored; delivery unconfirmed",
+  idle_without_report: "Idle without a result",
+  exited_without_report: "Worker not observed",
+  dispatch_unknown: "Dispatch outcome uncertain",
+  intent_conflict: "Assignment conflict",
+  retirement_unconfirmed: "Retirement unconfirmed",
+} as const;
+
+function taskAttention(snapshot: OrchestrationSnapshot | null, rootId: string | null, tasks: readonly TaskView[], fresh: boolean) {
+  if (!snapshot || !rootId || snapshot.board?.root_id !== rootId) return [];
+  return tasks.flatMap((view, index) => {
+    if (!uniqueTask(tasks, view.task.task_id)) return [];
+    const run = view.current_run_id ? snapshot.runs.find(item => item.run_id === view.current_run_id && item.root_id === rootId && item.task_id === view.task.task_id && item.kind !== "supervisor") : null;
+    const labels = new Set<string>();
+    if (run) {
+      for (const item of snapshot.attention) {
+        if (item.run_id !== run.run_id || item.task_id !== view.task.task_id) continue;
+        if (item.kind === "to_accept") {
+          const result = run.result?.outcome === "failed" ? "Failed result reported" : run.result?.outcome === "succeeded" ? "Successful result reported" : "Result reported";
+          labels.add(`${result}; not task acceptance`);
+        } else {
+          const runtimeFact = item.kind === "runtime_blocked" || item.kind === "idle_without_report" || item.kind === "exited_without_report" || item.kind === "dispatch_unknown";
+          labels.add(runtimeFact && (!fresh || snapshot.runtime.status !== "fresh") ? `Last observed: ${attentionLabels[item.kind]}` : attentionLabels[item.kind]);
+        }
+      }
+      const observation = snapshot.runtime.status === "fresh" ? snapshot.runtime.runs.find(item => item.run_id === run.run_id) : null;
+      const observedAgent = observation?.presence === "present" && observation.actual_agent;
+      if (run.stage !== "closed" && observedAgent && snapshot.runtime.status === "fresh") {
+        const status = observation.agent_status ? ` ${observation.agent_status}` : "";
+        labels.add(`${fresh ? "Observed" : "Last observed"}${status} · as of ${snapshot.runtime.observed_at}`);
+      }
+      if (run.stage === "working" && (!fresh || !observedAgent)) labels.add("Live worker state unknown");
+    }
+    if ((!view.current_run_id || run?.stage === "queued") && !view.task.checked && (view.scheduled || view.lane === "blocked")) {
+      const dependency = dependencySummary(view, tasks);
+      labels.add(dependency ? `Blocked: ${dependency}` : view.lane === "blocked" ? "Blocked; reason unknown" : "Waiting for dispatch; reason unknown");
+    }
+    return labels.size ? [{ view, rowKey: `${view.task.task_id}:${index}`, labels: [...labels] }] : [];
+  });
+}
 
 /** Optional overview; the normal terminal remains mounted as the conversation. */
 export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot, rootId, fresh }: {
@@ -16,6 +61,7 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
   const [project, setProject] = useState<string | null>(null);
   const groups = useMemo(() => groupTasks(tasks, runs), [tasks, runs]);
   const activeProject = project !== null && groups.some(group => group.key === project) ? project : null;
+  const attention = useMemo(() => taskAttention(snapshot, rootId, tasks, fresh), [snapshot, rootId, tasks, fresh]);
   const [selected, setSelected] = useState<{ taskId: string; rowKey: string } | null>(null);
   const overview = useRef<HTMLElement>(null), conversation = useRef<HTMLButtonElement>(null), closeDetail = useRef<HTMLButtonElement>(null);
   const focusIntent = useRef<"back" | "origin" | "conversation" | null>("conversation");
@@ -76,6 +122,14 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
     <header><button type="button" className="liaison-conversation" ref={conversation} onClick={onClose}>‹ Conversation</button><h1>Overview</h1><div role="group" aria-label="Overview view"><button type="button" aria-pressed={mode === "tasks"} onClick={() => setMode("tasks")}>Board</button><button type="button" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>Graph</button></div><span className={waiting ? "liaison-waiting" : "liaison-task-status"}>{waiting ? "● waiting for you" : status ?? summary}</span></header>
     <div className="liaison-overview-body">
       <div className="liaison-overview-content">
+        {attention.length || snapshot && (!fresh || snapshot.runtime.status !== "fresh") ? <section className="liaison-attention" aria-label="Task attention">
+          <div className="liaison-attention-heading"><h2>Task attention</h2>{snapshot && (!fresh || snapshot.runtime.status !== "fresh") ? <span>Runtime observations may be stale or unavailable.</span> : null}</div>
+          {attention.length ? <ul>{attention.map(({ view: item, rowKey, labels }) => <li key={rowKey}>
+            <button type="button" data-row-key={rowKey} aria-current={selectedKey === rowKey ? "true" : undefined} onClick={() => open(item, rowKey)}>
+              <span className="liaison-attention-title">{item.task.title}</span><span className="liaison-attention-reason">{labels.join(" · ")}</span><span className="liaison-attention-action">History ›</span>
+            </button>
+          </li>)}</ul> : null}
+        </section> : null}
         {mode === "tasks" ? <>
           {groups.length > 1 ? <div className="liaison-project-filter" role="group" aria-label="Project">
             <button type="button" aria-pressed={activeProject === null} onClick={() => setProject(null)}>All {groups.some(group => group.open) ? <span>{groups.reduce((sum, group) => sum + group.open, 0)}</span> : null}</button>

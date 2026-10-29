@@ -62,7 +62,7 @@ pub struct OrchestrationSnapshot {
     pub restoration: RestorationSummary,
     pub runtime: RuntimeObservation,
     pub unmanaged_agents: Vec<UnmanagedAgent>,
-    pub attention: Vec<Attention>, // Public run list --json projection; no Cockpit UI reader.
+    pub attention: Vec<Attention>, // Public run list and read-only Overview projection.
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct UnmanagedAgent {

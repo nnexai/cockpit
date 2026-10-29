@@ -255,3 +255,106 @@ it("keeps Done history visible when Graph omits its row and closes back to Conve
   act(() => host.querySelector<HTMLButtonElement>('[aria-label="Close task history"]')!.click());
   expect(document.activeElement).toBe(host.querySelector(".liaison-conversation"));
 });
+
+it("shows current root-scoped attention, separates reported results from acceptance, and opens history from either view", async () => {
+  const question = taskFixture("Question", { current_run_id: "q" });
+  const failed = taskFixture("Failed", { lane: "review", current_run_id: "f" });
+  const successful = taskFixture("Success", { lane: "review", current_run_id: "s" });
+  const uncertain = taskFixture("Uncertain", { current_run_id: "u" });
+  const tasks = [question, failed, successful, uncertain];
+  const report = (outcome: "succeeded" | "failed") => ({ message_id: `result-${outcome}`, kind: "result" as const, outcome, summary: "Reported", plan: null, source_output: null, at: "2026-10-07T12:00:00Z" });
+  const workers = [
+    runFixture({ kind: "worker", run_id: "q", task_id: "Question", stage: "working" }),
+    runFixture({ kind: "worker", run_id: "f", task_id: "Failed", stage: "reported", result: report("failed") }),
+    runFixture({ kind: "worker", run_id: "s", task_id: "Success", stage: "reported", result: report("succeeded") }),
+    runFixture({ kind: "worker", run_id: "u", task_id: "Uncertain", stage: "working" }),
+  ];
+  const snapshot = orchestrationFixture(tasks, workers);
+  const at = workers[0].created_at;
+  snapshot.attention = [
+    { kind: "needs_input", run_id: "q", task_id: "Question", message_seq: null, since: at },
+    { kind: "to_accept", run_id: "f", task_id: "Failed", message_seq: null, since: at },
+    { kind: "to_accept", run_id: "s", task_id: "Success", message_seq: null, since: at },
+    { kind: "runtime_blocked", run_id: "u", task_id: "Uncertain", message_seq: null, since: at },
+    { kind: "brief_unread", run_id: "u", task_id: "Uncertain", message_seq: 1, since: at },
+    { kind: "dispatch_unknown", run_id: "old", task_id: "Question", message_seq: null, since: at },
+  ];
+  await render(tasks, { snapshot, runs: workers });
+  const panel = host.querySelector<HTMLElement>('[aria-label="Task attention"]')!;
+  expect(panel.textContent).toContain("Needs input");
+  expect(panel.textContent).toContain("Failed result reported");
+  expect(panel.textContent).toContain("Successful result reported");
+  expect(panel.textContent).toContain("not task acceptance");
+  expect(panel.textContent).toContain(`Observed working · as of ${at}`);
+  expect(panel.textContent).not.toContain("accepted");
+  expect(panel.textContent).toContain("Runtime reported blocked");
+  expect(panel.textContent).toContain("Work brief stored; delivery unconfirmed");
+  expect(panel.textContent).not.toContain("Dispatch outcome uncertain");
+  const row = panel.querySelector<HTMLButtonElement>("button")!;
+  act(() => { row.focus(); row.click(); });
+  expect(document.activeElement).toBe(host.querySelector(".liaison-detail-back"));
+  expect(host.querySelector('[aria-label="Task history"]')).not.toBeNull();
+  act(() => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+  expect(document.activeElement).toBe(row);
+  act(() => [...host.querySelectorAll("button")].find(button => button.textContent === "Graph")!.click());
+  act(() => { row.focus(); row.click(); });
+  act(() => host.querySelector<HTMLButtonElement>(".liaison-detail-back")!.click());
+  expect(document.activeElement).toBe(row);
+});
+
+it("warns when observations are stale and excludes ambiguous, foreign and superseded identities", async () => {
+  const task = taskFixture("Work", { current_run_id: "current" });
+  const foreign = taskFixture("Foreign", { current_run_id: "foreign" });
+  const duplicate = taskFixture("Duplicate", { current_run_id: "duplicate" });
+  const tasks = [task, foreign, duplicate, duplicate];
+  const current = runFixture({ kind: "worker", run_id: "current", task_id: "Work", stage: "working" });
+  const old = runFixture({ kind: "worker", run_id: "old", task_id: "Work", stage: "closed" });
+  const wrongRoot = runFixture({ kind: "worker", root_id: "other", run_id: "foreign", task_id: "Foreign", stage: "working" });
+  const dupRun = runFixture({ kind: "worker", run_id: "duplicate", task_id: "Duplicate", stage: "working" });
+  const snapshot = orchestrationFixture(tasks, [current, old, wrongRoot, dupRun]);
+  snapshot.attention = [current, old, wrongRoot, dupRun].map(run => ({ kind: "idle_without_report", run_id: run.run_id, task_id: run.task_id, message_seq: null, since: run.created_at }));
+  await render(tasks, { snapshot, fresh: false });
+  const panel = host.querySelector<HTMLElement>('[aria-label="Task attention"]')!;
+  expect(panel.textContent).toContain("Runtime observations may be stale or unavailable");
+  expect(panel.textContent).toContain("Idle without a result");
+  expect(panel.textContent).toContain(`Last observed working · as of ${snapshot.runtime.status === "fresh" ? snapshot.runtime.observed_at : ""}`);
+  expect(panel.querySelectorAll("button")).toHaveLength(1);
+  expect(panel.textContent).not.toContain("Foreign");
+  expect(panel.textContent).not.toContain("Duplicate");
+  await render(tasks, { snapshot: { ...snapshot, attention: [] }, fresh: false });
+  expect(host.querySelector('[aria-label="Task attention"]')?.textContent).toContain("stale or unavailable");
+});
+
+it("keeps scheduled and prerequisite-blocked task facts visible on the board", async () => {
+  const prerequisite = taskFixture("Prerequisite");
+  const queued = taskFixture("Queued", { scheduled: true });
+  const blocked = taskFixture("Blocked", { lane: "blocked", dependencies: { state: "blocked", unmet: [{ task_id: "Prerequisite", reason: "unchecked" }], problems: [] } });
+  const unknown = taskFixture("Unknown blocker", { lane: "blocked" });
+  await render([prerequisite, queued, blocked, unknown]);
+  const cards = [...host.querySelectorAll<HTMLButtonElement>(".liaison-card-open")];
+  expect(cards.find(card => card.textContent?.includes("Queued"))?.textContent).toContain("scheduled");
+  expect(cards.find(card => card.textContent?.includes("Blocked"))?.textContent).toContain("after “Prerequisite”");
+  const panel = host.querySelector<HTMLElement>('[aria-label="Task attention"]')!;
+  expect(panel.textContent).toContain("Waiting for dispatch; reason unknown");
+  expect(panel.textContent).toContain("Blocked: after “Prerequisite”");
+  expect(panel.textContent).toContain("Blocked; reason unknown");
+});
+
+it("shows unknown live worker state when no current agent can be observed", async () => {
+  const task = taskFixture("Work", { current_run_id: "worker", lane: "working" });
+  const worker = runFixture({ kind: "worker", run_id: "worker", task_id: "Work", stage: "working" });
+  const snapshot = orchestrationFixture([task], [worker]);
+  if (snapshot.runtime.status !== "fresh") throw new Error("fixture runtime must be fresh");
+  const runtime = snapshot.runtime;
+  const observation = runtime.runs[0];
+  for (const runs of [[], [{ ...observation, presence: "unobserved" as const }], [{ ...observation, presence: "missing" as const }], [{ ...observation, actual_agent: false }]]) {
+    await render([task], { snapshot: { ...snapshot, runtime: { ...runtime, runs } } });
+    const panel = host.querySelector<HTMLElement>('[aria-label="Task attention"]')!;
+    expect(panel.textContent).toContain("Live worker state unknown");
+    expect(panel.textContent).not.toContain("Observed working");
+  }
+  await render([task], { snapshot: { ...snapshot, runtime: { status: "unavailable", error: { code: "offline", message: "Unavailable" } } } });
+  expect(host.querySelector('[aria-label="Task attention"]')?.textContent).toContain("Live worker state unknown");
+  await render([task], { snapshot, fresh: false });
+  expect(host.querySelector('[aria-label="Task attention"]')?.textContent).toContain("Live worker state unknown");
+});
