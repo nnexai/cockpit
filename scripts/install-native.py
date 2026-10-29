@@ -25,6 +25,7 @@ APPLICATION_NAME = "Cockpit"
 BINARY_NAME = "cockpit-tauri"
 BUNDLE_NAME = "Cockpit.app"
 CLI_BINARY_NAME = "cockpit"
+NATIVE_BUILD_PACKAGES = ("cockpit-host", "cockpit-tauri")
 LAUNCHER_NAME = "cockpit"
 CLI_LAUNCHER_NAME = "cockpit-cli"
 RECEIPT_NAME = "install.json"
@@ -157,6 +158,7 @@ def macos_bundle_config(project_root: Path, debug: bool) -> str:
 
 
 def run_build(project_root: Path, debug: bool) -> None:
+    # Tauri adds --bins and custom-protocol, then bundles after both binaries build.
     tauri_command = ["bunx", "tauri", "build"]
     if sys.platform != "darwin":
         tauri_command.append("--no-bundle")
@@ -164,11 +166,10 @@ def run_build(project_root: Path, debug: bool) -> None:
         tauri_command.extend(["--bundles", "app", "--config", macos_bundle_config(project_root, debug)])
     if debug:
         tauri_command.append("--debug")
-    cli_command = ["cargo", "build", "-p", "cockpit-host", "--bin", CLI_BINARY_NAME]
-    if not debug:
-        cli_command.append("--release")
+    tauri_command.append("--")
+    for package in NATIVE_BUILD_PACKAGES:
+        tauri_command.extend(["--package", package])
     try:
-        subprocess.run(cli_command, cwd=project_root, check=True)
         subprocess.run(tauri_command, cwd=project_root, check=True)
     except FileNotFoundError as error:
         raise InstallError(f"{error.filename} was not found; install the repository's toolchain first") from error
