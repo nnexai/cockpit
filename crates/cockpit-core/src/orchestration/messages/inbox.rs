@@ -3,7 +3,7 @@ use super::super::DecisionProvenance;
 
 use super::{
     Actor, AuthorizedJob, JobRole, AppendMessage, OrchestrationState, agent, actor_ref, append, duplicate, error,
-    current_question, deliverable, is_ancestor, latest_progress_sequences, message_result, now,
+    current_question_for, deliverable, is_ancestor, latest_progress_sequences, message_result, now,
     run_index, text_bound, upward,
 };
 use crate::InspectionError;
@@ -127,13 +127,15 @@ pub(super) fn apply(
     Ok(Some(result))
 }
 
-fn root_self_answer(state: &OrchestrationState, caller: Option<&AuthorizedJob>, target: usize) -> bool {
-    let Some(job) = caller else { return false };
-    let run = &state.runs[target];
-    job.role == JobRole::Root && job.run_index == target
-        && run.parent_run_id.is_none() && run.root_id == run.run_id
+fn self_answer(state: &OrchestrationState, caller: Option<&AuthorizedJob>, target: usize) -> bool {
+    caller.is_some_and(|job| job.run_index == target)
+        && if top_level_root(&state.runs[target]) { state.runs[target].stage == RunStage::Active }
+           else { state.runs[target].stage != RunStage::Closed }
+}
+
+fn top_level_root(run: &Run) -> bool {
+    run.parent_run_id.is_none() && run.root_id == run.run_id
         && matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)
-        && run.stage == RunStage::Active
 }
 
 fn recipient(
@@ -162,13 +164,13 @@ fn recipient(
             let job = caller.expect("admitted agent");
             let own = &state.runs[index].run_id;
             if matches!(kind, MessageKind::Answer | MessageKind::Instruction | MessageKind::CancelRequest)
-                && job.role != JobRole::Root
+                && job.role != JobRole::Root && !(kind == MessageKind::Answer && self_answer(state, caller, target))
             {
                 return Err(error("actor_forbidden", "Only the root job may coordinate descendant runs"));
             }
             match kind {
                 MessageKind::Answer => {
-                    if !root_self_answer(state, caller, target) {
+                    if !self_answer(state, caller, target) {
                         super::super::management_target(
                             state,
                             actor,
@@ -239,6 +241,8 @@ fn send(
             || existing.text != text
             || existing.in_reply_to != *in_reply_to
             || existing.report.is_some()
+            || existing.handoff.is_some()
+            || (kind != MessageKind::Answer && existing.thread_id.is_some())
             || existing
                 .escalated_from
                 .as_deref()
@@ -258,6 +262,8 @@ fn send(
     {
         return Err(error("invalid_stage", "Accepted run history is read-only"));
     }
+    let mut answer_thread = None;
+    let mut worker_self_answer = false;
     let answer_provenance = if kind == MessageKind::Answer {
         if in_reply_to.as_deref().is_none_or(|id| id.trim().is_empty()) {
             return Err(error(
@@ -267,28 +273,34 @@ fn send(
         }
         let run = &state.runs[target];
         // Progress and transport receipts cannot resolve or replace a semantic question.
-        let current = current_question(&state.messages, &run.run_id);
+        let question = state.messages.iter().rev().find(|message| {
+            !message.stale && message.message_id == *in_reply_to.as_ref().unwrap()
+                && matches!(&message.from, ActorRef::Run { run_id } if run_id == &run.run_id)
+                && message.report.as_ref().is_some_and(|report| report.kind == ReportKind::NeedsInput)
+        });
+        let current = question.and_then(|question| current_question_for(&state.messages, &run.run_id, question.thread_id.as_deref()));
         if run.stage == RunStage::Closed
-            || current.is_none_or(|report| {
-                Some(report.message_id.as_str()) != in_reply_to.as_deref()
-            })
+            || current.is_none_or(|message| Some(message.message_id.as_str()) != in_reply_to.as_deref())
         {
             return Err(error(
                 "question_not_current",
                 "The answer must link to the open run's current NeedsInput report",
             ));
         }
-        if root_self_answer(state, caller, target) {
+        let question = current.expect("current question checked");
+        answer_thread = Some(question.thread_id.clone().unwrap_or_else(|| question.message_id.clone()));
+        if top_level_root(run) && state.messages.iter().any(|message| {
+            message.to_run_id == run.run_id && message.kind == MessageKind::Answer
+                && !message.stale && message.in_reply_to == *in_reply_to
+        }) {
+            return Err(error("question_already_answered", "The root's current human question already has an explicit answer"));
+        }
+        if self_answer(state, caller, target) {
             if text.trim().is_empty() {
-                return Err(error("invalid_message", "A root human answer requires the actual nonempty answer text"));
+                return Err(error("invalid_message", "A human answer requires the actual nonempty answer text"));
             }
-            if state.messages.iter().any(|message| {
-                message.to_run_id == run.run_id && message.kind == MessageKind::Answer
-                    && !message.stale && message.in_reply_to == *in_reply_to
-            }) {
-                return Err(error("question_already_answered", "The root's current human question already has an explicit answer"));
-            }
-            Some(DecisionProvenance {
+            worker_self_answer = !top_level_root(run);
+            (!worker_self_answer).then(|| DecisionProvenance {
                 origin: DecisionOrigin::Supervisor,
                 supervisor_run_id: Some(run.run_id.clone()),
                 conversation: run.attachment.as_ref().and_then(|attachment| attachment.conversation.clone()),
@@ -311,20 +323,39 @@ fn send(
         }
         None
     };
+    let notice = if worker_self_answer {
+        let root = state.runs[target].root_id.clone();
+        run_index(state, &root)?;
+        let notice_id = format!("resolved-{}-{message_id}", state.runs[target].run_id);
+        let notice_text = serde_json::json!({
+            "event": "question_resolved_in_session",
+            "run_id": state.runs[target].run_id,
+            "question_message_id": in_reply_to,
+            "answer_message_id": message_id,
+            "answer_text": text,
+        }).to_string();
+        text_bound(&notice_text)?;
+        Some((root, notice_id, notice_text))
+    } else { None };
     let result = append(
         state,
-        AppendMessage {
-            from,
-            to_run_id: &recipient,
-            message_id,
-            kind,
-            text,
-            in_reply_to: in_reply_to.clone(),
-            report: None,
-            stale: false,
-            escalated_from: escalated,
-        },
+        AppendMessage { thread_id: answer_thread, handoff: None, from,
+        to_run_id: &recipient,
+        message_id,
+        kind,
+        text,
+        in_reply_to: in_reply_to.clone(),
+        report: None,
+        stale: false,
+        escalated_from: escalated, },
     )?;
+    if let Some((root, notice_id, text)) = notice {
+        append(state, AppendMessage {
+            from: ActorRef::Dispatcher, to_run_id: &root, message_id: &notice_id,
+            kind: MessageKind::Observation, text: &text, in_reply_to: None,
+            report: None, thread_id: None, handoff: None, stale: false, escalated_from: None,
+        })?;
+    }
     if let Some(provenance) = answer_provenance {
         let annotation = super::super::decision_annotation(
             actor_ref(actor, caller.map(|job| job.run_index), state),

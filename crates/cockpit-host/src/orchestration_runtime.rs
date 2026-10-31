@@ -109,13 +109,16 @@ impl OrchestrationRuntime {
     ) -> Result<OrchestrationSnapshot, InspectionError> {
         self.service.snapshot(self.herdr.as_ref(), request).await
     }
+    pub async fn inbox(&self, request: &InboxRequest) -> Result<InboxView, InspectionError> {
+        self.service.inbox(self.herdr.as_ref(), request).await
+    }
     pub async fn send_agent(
-        &self, session: &str, reference: &str, text: String, origin: OperatorOrigin,
+        &self, session: &str, reference: &str, text: String, origin: OperatorOrigin, expected_target: Option<AgentSendTarget>,
     ) -> Result<serde_json::Value, InspectionError> {
         let adapter = self.agent_send_adapter.as_ref()
             .ok_or_else(|| InspectionError::new("herdr_unavailable", "Agent delivery is unavailable"))?;
         crate::agent_send::send_to_agent(
-            self.service.as_ref(), adapter.as_ref(), session, None, reference, text, origin, false, true,
+            self.service.as_ref(), adapter.as_ref(), session, None, reference, text, origin, false, true, expected_target,
             |_, _| Ok(None),
         ).await
     }
@@ -193,6 +196,38 @@ async fn resolve_physical_mutation_input(
     request: &OrchestrationMutationRequest,
 ) -> Result<ResolvedMutationInput, InspectionError> {
     match &request.action {
+        OrchestrationAction::ThreadHandoff { binding: Some(binding), .. } => {
+            let repository_common_dir = match binding.repository_id.as_deref() {
+                Some(id) => Some(cockpit_core::repositories::RepositoryCatalog::new(projects.configuration())
+                    .resolve(id).await.map_err(handoff_unavailable)?.common_dir),
+                None => None,
+            };
+            let workspace_checkout = match binding.workspace_id.as_deref() {
+                Some(id) => {
+                    let runtime = herdr.runtime(&request.session_id).await.map_err(handoff_unavailable)?;
+                    let workspace = authoritative_workspace(&runtime, id).map_err(handoff_unavailable)?;
+                    let (_, checkout) = resolve_directory(Path::new(&workspace.cwd), None, Some(id.to_owned()))
+                        .await.map_err(handoff_unavailable)?;
+                    let (branch, head) = if checkout.git.is_some() {
+                        (checkout_branch(Path::new(&checkout.path)).await.map_err(handoff_unavailable)?,
+                         checkout_head(Path::new(&checkout.path)).await.map_err(handoff_unavailable)?)
+                    } else { (None, None) };
+                    Some(BoundCheckout {
+                        path: checkout.path,
+                        common_dir: checkout.git.map(|git| git.common_dir),
+                        branch,
+                        head,
+                    })
+                }
+                None => None,
+            };
+            Ok(ResolvedMutationInput {
+                handoff_binding: Some(HandoffBindingRecord {
+                    requested: binding.clone(), repository_common_dir, workspace_checkout,
+                }),
+                ..Default::default()
+            })
+        }
         OrchestrationAction::WorkerStart { target, .. } => {
             resolve_start_target(projects, herdr, &request.session_id, target).await
         }
@@ -212,6 +247,14 @@ async fn resolve_physical_mutation_input(
                 let (fresh_project, checkout) = service.resolve_run_checkout(&run).await?;
                 resolved.project = Some(fresh_project);
                 resolved.checkout = Some(checkout);
+                if resolved.writer_exit_proof.is_some()
+                    && matches!(run.target.as_ref(),
+                        Some(DispatchTarget::ExistingSpace { .. })
+                        | Some(DispatchTarget::Setup { request: WorkspaceSetupRequest::Open { .. } }))
+                    && let Some(checkout) = resolved.checkout.as_ref().filter(|checkout| checkout.git.is_some())
+                {
+                    resolved.checkout_branch = checkout_branch(Path::new(&checkout.path)).await?;
+                }
                 resolved
             } else {
                 ResolvedMutationInput { project: Some(project.clone()), ..Default::default() }
@@ -397,7 +440,48 @@ async fn resolve_start_target(
             (project, None)
         }
     };
-    Ok(ResolvedMutationInput { project: Some(project), checkout, ..Default::default() })
+    let checkout_branch = if matches!(target, DispatchTarget::ExistingSpace { .. } | DispatchTarget::Setup { request: WorkspaceSetupRequest::Open { .. } }) {
+        match checkout.as_ref() {
+            Some(checkout) if checkout.git.is_some() => checkout_branch(Path::new(&checkout.path)).await?,
+            _ => None,
+        }
+    } else { None };
+    Ok(ResolvedMutationInput { project: Some(project), checkout, checkout_branch, ..Default::default() })
+}
+
+fn handoff_unavailable(error: impl std::fmt::Display) -> InspectionError {
+    InspectionError::new("handoff_binding_unavailable", error.to_string())
+}
+
+async fn checkout_branch(path: &Path) -> Result<Option<String>, InspectionError> {
+    let output = tokio::time::timeout(Duration::from_secs(5), cockpit_core::space_git::git_output(
+        path, &["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )).await.map_err(|_| runtime_error("Git branch observation timed out"))??;
+    if output.status.success() {
+        let branch = String::from_utf8(output.stdout).map_err(runtime_error)?.trim().to_owned();
+        if branch.is_empty() { return Err(runtime_error("Git returned an empty branch")); }
+        Ok(Some(branch))
+    } else if output.status.code() == Some(1) {
+        Ok(None)
+    } else {
+        Err(runtime_error("Git branch observation failed"))
+    }
+}
+
+async fn checkout_head(path: &Path) -> Result<Option<String>, InspectionError> {
+    let output = tokio::time::timeout(Duration::from_secs(5), cockpit_core::space_git::git_output(
+        path, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+    )).await.map_err(|_| runtime_error("Git HEAD observation timed out"))??;
+    if !output.status.success() {
+        return if output.status.code() == Some(1) {
+            Ok(None)
+        } else { Err(runtime_error("Git HEAD observation failed")) };
+    }
+    let head = String::from_utf8(output.stdout).map_err(runtime_error)?.trim().to_owned();
+    if !matches!(head.len(), 40 | 64) || !head.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(runtime_error("Git returned an invalid HEAD"));
+    }
+    Ok(Some(head))
 }
 
 fn authoritative_workspace<'a>(

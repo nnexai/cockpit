@@ -16,6 +16,44 @@ except ImportError:
     import ui_polish_runtime as runtime
 
 
+class RuntimeOmpAuthEnvironmentTests(unittest.TestCase):
+    def test_default_isolation_and_explicit_auth_inheritance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            agent = home / ".omp" / "agent"
+            agent.mkdir(parents=True)
+            (agent / "agent.db").touch()
+            fixture = home / "fixture"
+            fixture.mkdir()
+            with patch.dict(os.environ, {"HOME": str(home), "OMP_PROFILE": "default",
+                                         "PI_PROFILE": "default", "OMP_AUTH_BROKER_TOKEN": "secret"}, clear=True):
+                private = runtime.environment(fixture)
+                self.assertEqual(private["PI_CODING_AGENT_DIR"], str(fixture / "omp-agent"))
+                resolved = runtime.inherited_omp_agent_dir()
+                inherited = runtime.environment(fixture, resolved)
+                self.assertEqual(inherited["PI_CODING_AGENT_DIR"], str(agent))
+                self.assertEqual(inherited["PI_CODING_AGENT_SESSION_DIR"], str(fixture / "omp-sessions"))
+                self.assertEqual(inherited["PI_NATIVES_DIR"], str(fixture / "native-cache"))
+                self.assertEqual(inherited["HOME"], str(fixture))
+                self.assertNotIn("OMP_PROFILE", inherited)
+                self.assertNotIn("PI_PROFILE", inherited)
+                self.assertNotIn("OMP_AUTH_BROKER_TOKEN", inherited)
+
+    def test_rejects_named_profiles_brokers_and_xdg_migrated_store(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            agent = home / ".omp" / "agent"
+            agent.mkdir(parents=True)
+            (agent / "agent.db").touch()
+            (home / "data" / "omp").mkdir(parents=True)
+            for extra in ({"OMP_PROFILE": "work"}, {"PI_PROFILE": "work"},
+                          {"OMP_AUTH_BROKER_URL": "http://127.0.0.1"},
+                          {"XDG_DATA_HOME": str(home / "data")}):
+                with self.subTest(extra=extra), patch.dict(os.environ, {"HOME": str(home), **extra}, clear=True):
+                    with self.assertRaises(ValueError):
+                        runtime.inherited_omp_agent_dir()
+
+
 class RuntimeReadinessTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="cpol-")

@@ -886,7 +886,7 @@ mod tests {
             root_id: "root".into(), task_id: "task".into(), generation: 1, schedule: None,
             owner: Some(TaskOwner { run_id: "worker".into(), conversation: Some(conversation), claim_operation_id: id() }),
         }], ..Default::default() };
-        let mut action = OrchestrationAction::Report { message_id: "current-result".into(),
+        let mut action = OrchestrationAction::Report { thread_id: None, card: None, message_id: "current-result".into(),
             kind: ReportKind::Result, outcome: Some(ReportOutcome::Succeeded), summary: "Updated scope completed".into(),
             plan: None, source_output: Some(output), to_run_id: None,
             original_task_revision: Some("updated canonical scope".into()), original_claim_id: None };

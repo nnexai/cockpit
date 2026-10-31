@@ -12,7 +12,7 @@ fn wake_envelope_contains_only_counts_not_bodies_or_other_runs() {
     ];
     for item in &mut messages[1..=2] {
         item.report = Some(Report { message_id: item.message_id.clone(), kind: ReportKind::Result,
-            outcome: None, summary: String::new(), plan: None, source_output: None, at: item.created_at.clone() });
+            outcome: None, summary: String::new(), plan: None, source_output: None, card: None, at: item.created_at.clone() });
     }
     let result = inbox_counts(&messages, "own", 1);
     assert!(result.pending);
@@ -30,7 +30,7 @@ fn newer_progress_coalesces_without_hiding_questions() {
     let mut older = message("own", 1, MessageKind::Report, DeliveryStage::Stored, "old progress");
     older.report = Some(Report {
         message_id: older.message_id.clone(), kind: ReportKind::Progress, outcome: None,
-        summary: "old".into(), plan: None, source_output: None, at: older.created_at.clone(),
+        summary: "old".into(), plan: None, source_output: None, card: None, at: older.created_at.clone(),
     });
     let mut newer = older.clone();
     newer.seq = 3;
@@ -50,7 +50,7 @@ fn meaningful_filters_housekeeping_without_hiding_decisions() {
         let mut item = message("own", 1, MessageKind::Report, DeliveryStage::Stored, "Progress text is not a type");
         item.report = Some(Report {
             message_id: item.message_id.clone(), kind, outcome: None,
-            summary: "Result text is not a type".into(), plan: None, source_output: None,
+            summary: "Result text is not a type".into(), plan: None, source_output: None, card: None,
             at: item.created_at.clone(),
         });
         assert_eq!(meaningful(&item), matches!(kind, ReportKind::NeedsInput | ReportKind::Result));

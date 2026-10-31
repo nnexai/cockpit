@@ -70,7 +70,7 @@ impl Fixture {
             reason: "Accepted non-code output has no Git integration".into(),
             result_message_id: "result".into(),
         };
-        run.result = Some(Report { message_id: "result".into(), kind: ReportKind::Result,
+        run.result = Some(Report { card: None, message_id: "result".into(), kind: ReportKind::Result,
             outcome: Some(ReportOutcome::Succeeded), summary: "Complete".into(), plan: None,
             source_output: Some(source_output), at: now() });
         run.retirement = retirement::retirement_for_accepted(&run, RetirementTrigger::Accept, "reviewed-revision", &now());

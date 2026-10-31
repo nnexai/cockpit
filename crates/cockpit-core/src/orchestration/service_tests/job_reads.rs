@@ -6,11 +6,9 @@ fn caller(actor: &Actor) -> &AgentCaller {
 }
 
 fn private_message(state: &mut OrchestrationState, recipient: &str, text: &str) {
-    messages::append(state, messages::AppendMessage {
-        from: ActorRef::Operator, to_run_id: recipient, message_id: &id(),
-        kind: MessageKind::Instruction, text, in_reply_to: None,
-        report: None, stale: false, escalated_from: None,
-    }).unwrap();
+    messages::append(state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: recipient, message_id: &id(),
+    kind: MessageKind::Instruction, text, in_reply_to: None,
+    report: None, stale: false, escalated_from: None, }).unwrap();
 }
 
 fn resource(run: &Run) -> OwnedResourceRecord {
@@ -175,12 +173,10 @@ fn private_question_aliases_and_answers_are_hidden_but_public_run_reports_remain
         (&root, &root_actor, "ROOT-PRIVATE-QUESTION-BODY"),
     ] {
         let message_id = id();
-        fixture.apply(actor, OrchestrationAction::Report {
-            message_id: message_id.clone(), kind: ReportKind::NeedsInput, outcome: None,
-            summary: marker.into(), plan: Some(format!("{marker}-PLAN")),
-            source_output: None, to_run_id: None,
-            original_task_revision: None, original_claim_id: None,
-        }).unwrap();
+        fixture.apply(actor, OrchestrationAction::Report { thread_id: None, card: None, message_id: message_id.clone(), kind: ReportKind::NeedsInput, outcome: None,
+        summary: marker.into(), plan: Some(format!("{marker}-PLAN")),
+        source_output: None, to_run_id: None,
+        original_task_revision: None, original_claim_id: None, }).unwrap();
         questions.push((run_id.clone(), message_id));
     }
     for (run_id, question_id) in questions {
@@ -190,12 +186,10 @@ fn private_question_aliases_and_answers_are_hidden_but_public_run_reports_remain
             original_task_revision: None, original_claim_id: None,
         });
     }
-    fixture.apply(&progress_actor, OrchestrationAction::Report {
-        message_id: id(), kind: ReportKind::Progress, outcome: None,
-        summary: "PUBLIC-PROGRESS-BODY".into(), plan: None,
-        source_output: None, to_run_id: None,
-        original_task_revision: None, original_claim_id: None,
-    }).unwrap();
+    fixture.apply(&progress_actor, OrchestrationAction::Report { thread_id: None, card: None, message_id: id(), kind: ReportKind::Progress, outcome: None,
+    summary: "PUBLIC-PROGRESS-BODY".into(), plan: None,
+    source_output: None, to_run_id: None,
+    original_task_revision: None, original_claim_id: None, }).unwrap();
     let mut result = fixture.successful_result(&result_actor);
     let OrchestrationAction::Report { summary, .. } = &mut result else { unreachable!() };
     *summary = "PUBLIC-RESULT-BODY".into();

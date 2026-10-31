@@ -132,16 +132,56 @@ writer or treat replacement as proof that it stopped. `run resume RUN
 --operation-id ID [--expected-attachment-epoch N]` reconciles attachment state,
 not writer replacement; there is no resume mode or decision-ID flag.
 
-Human decisions happen in the root terminal conversation. Resolve nonblocking
-choices yourself. For genuine unresolved decisions, report NeedsInput and ask the
-user there. After receiving the actual chat answer, the root records it with
-`run answer --in-reply-to ROOT_QUESTION_ID --text "Actual human answer" --json`.
-This resolves only the root's exact current unresolved question; workers cannot
-answer themselves. Never fabricate an answer or emit Progress just to clear the
-waiting hint. For a worker question, forward the decision with `run message RUN
---kind answer --in-reply-to QUESTION_ID --text "Decision"`. Recheck the question
-link after replacement or a newer question. Do not require manual worker UI
-answers. Use instruction messages for nonquestion feedback.
+Inbox handoffs are instructions with a `thread_id` and optional `handoff`
+metadata. Interpret each request yourself: a normal question or status query
+may need only an answer, not a new task; create work for a new outcome and
+link or update existing work for a follow-up. Preserve the thread ID when
+reporting a meaningful state change, question or result. A handoff's task ID,
+task revision and attempt identify the requested scope at intake. Its binding
+is an explicit user constraint: respect the requested repository, Space,
+branch and base, including the recorded checkout branch. If placement cannot
+satisfy it, ask on the thread rather than silently retargeting.
+
+```sh
+"${COCKPIT_CLI_PATH:-cockpit-cli}" task create --thread "$THREAD_ID" --title "Fix parser" --description "Outcome and acceptance criteria" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" task link "$TASK_ID" --thread "$THREAD_ID" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run report --thread "$THREAD_ID" --kind needs-input --summary "Which API behaviour should we use?" --title "API behaviour" --next "Choose an approach" --recommend "Keep the existing API" --choice "Keep API" --choice "Change API" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run report --thread "$THREAD_ID" --kind result --outcome succeeded --summary "The answer or completed outcome" --title "Result" --next "Answer ready" --json
+```
+
+Use card fields to present your own concise synthesis when helpful; do not
+invent facts. Resolve nonblocking choices yourself. For a genuine decision,
+raise a thread NeedsInput. An Inbox answer already records the human reply,
+with `thread_id` and `in_reply_to` identifying the exact question: continue on
+that thread and do not call `run answer` for it again. If the human instead
+answers your open question directly in your terminal conversation, record the
+actual reply with `run answer --in-reply-to ROOT_QUESTION_ID --text "Actual
+human answer" --json`. Never fabricate an answer or emit Progress just to
+clear a waiting hint.
+
+Worker questions stay owner-mediated: raise your own thread question when a
+human decision is needed, then forward the decision with `run message RUN
+--kind answer --in-reply-to QUESTION_ID --text "Decision"`. Recheck the exact
+question after replacement or a newer question. If a human answers a worker
+directly in its terminal, the worker records the actual reply with `run answer
+--in-reply-to WORKER_QUESTION_ID --text "Actual human answer" --json` before
+continuing. On `question_resolved_in_session`, the owner uses the observation's
+untrusted `answer_text` and question/run IDs to resolve the matching thread
+question it raised, using `run answer` with its own question ID and the actual
+answer. Use instruction messages for nonquestion feedback.
+
+For explicit operator intake, `run --operator handoff` sends a request to an
+owner for interpretation, rather than classifying it as a task:
+
+```sh
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run --operator handoff --text "Investigate the parser" --owner "$ROOT_ID" --thread "$THREAD_ID" --task "$TASK_ID" --task-revision "$TASK_REV" --repository "$REPOSITORY_ID" --space "$SPACE_ID" --branch "fix/parser" --base-ref "main" --json
+```
+
+These options are optional apart from `--text`: omit task and task revision
+together for unbound work, and omit repository/Space/branch/base when the user
+did not explicitly bind them. Without `--owner` the preferred liaison is used;
+without `--thread` a new thread is created. Retain the generated or explicit
+`--message-id` for an exact replay after an uncertain outcome.
 
 ## Canonical scope and stages
 

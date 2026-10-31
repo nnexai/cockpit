@@ -518,6 +518,20 @@ impl Dispatcher {
             }
             DispatchTarget::OwnedAttemptDirectory { .. } => unreachable!("directory target resolved before Git target handling"),
         };
+        let checkout_branch = if (shared_by_default || matches!(target, DispatchTarget::ExistingSpace { .. }
+            | DispatchTarget::Setup { request: WorkspaceSetupRequest::Open { .. } }))
+            && matches!(&project.source, cockpit_protocol::orchestration::ProjectSource::Git { .. }) {
+            let path = git_source.as_deref().ok_or_else(|| InspectionError::new("workspace_cwd_missing", "Existing Space requires a checkout path"))?;
+            let output = crate::space_git::git_output(std::path::Path::new(path), &["symbolic-ref", "--quiet", "--short", "HEAD"]).await?;
+            if output.status.success() {
+                let branch = String::from_utf8(output.stdout).map_err(|_| InspectionError::new("checkout_branch_invalid", "Checkout branch is not UTF-8"))?;
+                Some(branch.trim_end().to_owned())
+            } else if output.status.code() == Some(1) {
+                None
+            } else {
+                return Err(InspectionError::new("checkout_branch_unavailable", "Could not observe the existing Space branch"));
+            }
+        } else { None };
         let required: Vec<_> = inputs.accepted_sources.iter().filter(|source|
             matches!(&source.source_output, cockpit_protocol::orchestration::SourceOutput::Code { repository_key, .. }
                 if repository_key == &project.key)).collect();
@@ -543,7 +557,7 @@ impl Dispatcher {
             }
             (Some(base), verified)
         };
-        Ok(super::ResolvedMutationInput { project: Some(project), checkout, normalized_target, shared_by_default,
+        Ok(super::ResolvedMutationInput { project: Some(project), checkout, checkout_branch, normalized_target, shared_by_default,
             schedule_inputs: Some(super::ScheduleInputFacts { snapshot: inputs, base_commit, verified_code_runs }),
             ..Default::default() })
     }
@@ -2296,7 +2310,7 @@ pub fn render_run_bootstrap(run: &Run) -> String {
     }
     let cli = "\"$COCKPIT_CLI_PATH\"";
     let role = if run.kind == RunKind::Worker {
-        format!("Worker: execute only your authorized task in this checkout. Read {cli} task show --self --json for canonical description/stages and {cli} task inputs --self --json for actual prerequisite Results/source/artifact references; do not infer publication or copy an old tree. Own focused whole-task checks and commits. Mark completed stages with task step-set-checked. Finish with {cli} run done --summary \"...\" --check \"contract::command::passed|failed|not_run\". For an outcome-changing decision use {cli} run report --kind needs-input --summary \"...\". Do not create or replace other workers.")
+        format!("Worker: execute only your authorized task in this checkout. Read {cli} task show --self --json for canonical description/stages and {cli} task inputs --self --json for actual prerequisite Results/source/artifact references; do not infer publication or copy an old tree. Own focused whole-task checks and commits. Mark completed stages with task step-set-checked. Finish with {cli} run done --summary \"...\" --check \"contract::command::passed|failed|not_run\". For an outcome-changing decision use {cli} run report --kind needs-input --summary \"...\". If that question is answered in this session, record the actual answer with {cli} run answer --in-reply-to QUESTION_ID --text \"...\" so the liaison is notified. Do not create or replace other workers.")
     } else {
         format!("Supervisor liaison: delegate implementation, do not perform worker task scope. Author canonical tasks/dependencies, then {cli} task schedule TASK to authorize autonomous dependency-ready dispatch. Review Results and run accept or send-back. Replace an unproven/stalled attempt with {cli} run worker-replace RUN --reason \"...\"; never blindly replay an unknown launch. Record real integration/check evidence, then cleanup. Resolve routine boundaries autonomously; ask the human only for outcome-changing decisions in this conversation.")
     };
@@ -2331,12 +2345,10 @@ impl OrchestrationService {
             return Ok(());
         }
         let text = format!("Scheduled task {} remains queued: {}. Resolve its explicit source Space/placement or cancel/re-schedule; no launch was replayed.", candidate.task_id, error.message);
-        super::messages::append(&mut state, super::messages::AppendMessage {
-            from: cockpit_protocol::orchestration::ActorRef::Dispatcher,
-            to_run_id: &candidate.root_id, message_id: &message_id,
-            kind: cockpit_protocol::orchestration::MessageKind::Observation,
-            text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None,
-        })?;
+        super::messages::append(&mut state, super::messages::AppendMessage { thread_id: None, handoff: None, from: cockpit_protocol::orchestration::ActorRef::Dispatcher,
+        to_run_id: &candidate.root_id, message_id: &message_id,
+        kind: cockpit_protocol::orchestration::MessageKind::Observation,
+        text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None, })?;
         let revision = locked.save(&mut state)?;
         self.revision.send_if_modified(|current| {
             if *current == revision { false } else { *current = revision; true }
@@ -2461,7 +2473,7 @@ impl OrchestrationService {
         waits.retain(|key, _| blocked.contains(key));
         if !notices.is_empty() {
             for (root, id, text) in notices {
-                super::messages::append(&mut state, super::messages::AppendMessage { from: ActorRef::Dispatcher,
+                super::messages::append(&mut state, super::messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher,
                     to_run_id: &root, message_id: &id, kind: MessageKind::Observation, text: &text,
                     in_reply_to: None, report: None, stale: false, escalated_from: None })?;
             }
@@ -2500,7 +2512,7 @@ impl OrchestrationService {
         }
         if !notices.is_empty() {
             for (root, key, text) in notices {
-                super::messages::append(&mut state, super::messages::AppendMessage { from: ActorRef::Dispatcher,
+                super::messages::append(&mut state, super::messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher,
                     to_run_id: &root, message_id: &key, kind: MessageKind::Observation, text: &text,
                     in_reply_to: None, report: None, stale: false, escalated_from: None })?;
             }

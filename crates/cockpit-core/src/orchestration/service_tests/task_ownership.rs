@@ -8,13 +8,11 @@ fn canonical_check(fixture: &Fixture, root: &str, task_id: &str, checked: bool) 
 }
 
 fn related_task(fixture: &Fixture, root: &str, edges: &[String], follow: Option<&Task>) -> Task {
-    task_result(fixture.operator(OrchestrationAction::TaskCreate {
-        root_id: root.into(), task_id: id(), title: "Related task".into(),
-        description: "Protected description".into(), depends_on: edges.to_vec(),
-        follow_up_of: follow.map(|task| task.task_id.clone()),
-        expected_doc_revision: Some(task_document_revision(fixture, root)),
-        source_revision: follow.map(|task| task.task_revision.clone()),
-    }))
+    task_result(fixture.operator(OrchestrationAction::TaskCreate { thread_id: None, root_id: root.into(), task_id: id(), title: "Related task".into(),
+    description: "Protected description".into(), depends_on: edges.to_vec(),
+    follow_up_of: follow.map(|task| task.task_id.clone()),
+    expected_doc_revision: Some(task_document_revision(fixture, root)),
+    source_revision: follow.map(|task| task.task_revision.clone()), }))
 }
 
 fn execute_task(fixture: &Fixture, root: &str, task: &Task) -> (String, Actor) {
@@ -274,11 +272,9 @@ fn relationship_doc_cas_fences_other_task_bytes_and_create_replay_bypasses_only_
     let root = fixture.root();
     let source = fixture.create_task(&root, "Source");
     let task_id = id();
-    let action = OrchestrationAction::TaskCreate {
-        root_id: root.clone(), task_id: task_id.clone(), title: "Stable follow-up".into(),
-        description: "Retained UUID".into(), depends_on: vec![source.task_id.clone()], follow_up_of: Some(source.task_id.clone()),
-        expected_doc_revision: Some(task_document_revision(&fixture, &root)), source_revision: Some(source.task_revision.clone()),
-    };
+    let action = OrchestrationAction::TaskCreate { thread_id: None, root_id: root.clone(), task_id: task_id.clone(), title: "Stable follow-up".into(),
+    description: "Retained UUID".into(), depends_on: vec![source.task_id.clone()], follow_up_of: Some(source.task_id.clone()),
+    expected_doc_revision: Some(task_document_revision(&fixture, &root)), source_revision: Some(source.task_revision.clone()), };
     let created = task_result(fixture.operator(action.clone()));
     let old_doc = task_document_revision(&fixture, &root);
     fixture.operator(OrchestrationAction::TaskUpdate {
@@ -355,10 +351,8 @@ fn step_actions_execute_on_owned_task_and_prose_edits_preserve_checklist() {
 fn active_root_and_acceptance_intent_fences_cover_all_content_actions() {
     let fixture = Fixture::new();
     let root = fixture.root();
-    let action = OrchestrationAction::TaskCreate {
-        root_id: root.clone(), task_id: id(), title: "No preparing-root authoring".into(), description: String::new(),
-        depends_on: Vec::new(), follow_up_of: None, expected_doc_revision: None, source_revision: None,
-    };
+    let action = OrchestrationAction::TaskCreate { thread_id: None, root_id: root.clone(), task_id: id(), title: "No preparing-root authoring".into(), description: String::new(),
+    depends_on: Vec::new(), follow_up_of: None, expected_doc_revision: None, source_revision: None, };
     assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), action), "invalid_stage");
     let (task, run_id, actor) = fixture.working(&root);
     fixture.apply(&actor, fixture.successful_result(&actor)).unwrap();

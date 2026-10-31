@@ -45,6 +45,48 @@ summary:focus-visible {
   background: var(--app-bg);
 }
 
+.inbox-switcher {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 42px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome-bg);
+}
+.inbox-switcher button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  border-radius: 999px;
+  padding: 5px 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  cursor: pointer;
+}
+.inbox-switcher button[aria-current="page"] {
+  color: var(--text-primary);
+  background: var(--surface-selected);
+}
+.inbox-switcher-count {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--app-bg);
+  font-size: 11px;
+}
+.inbox-switcher-preview {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inbox-workbench .workbench { height: calc(100dvh - 42px); }
+.app-shell > .inbox-root { height: calc(100dvh - 42px); }
+
 .workbench {
   display: flex;
   height: 100dvh;

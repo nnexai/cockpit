@@ -10,13 +10,13 @@ export type { SpaceCpuPane, SpaceCpuStatusRequest, SpaceCpuProcess, SpaceCpuStat
 import type { AgentAttentionResponse, AgentAttentionChangeRequest } from "../protocol/generated/v1";
 export type { AgentAttentionResponse, AgentAttentionChangeRequest, AgentAttentionObservation, AgentAttentionChange, AgentAttentionMark } from "../protocol/generated/v1";
 import type {
-  OrchestrationSnapshotRequest, OrchestrationSnapshot,
+  OrchestrationSnapshotRequest, OrchestrationSnapshot, InboxRequest, InboxView, AgentSendTarget,
   OrchestrationMutationRequest, OrchestrationMutationResponse,
   OrchestrationWaitRequest, OrchestrationWaitResponse,
   LiaisonLookupRequest, LiaisonLookupResponse,
 } from "../protocol/generated/v1";
 export type {
-  OrchestrationSnapshotRequest, OrchestrationSnapshot,
+  OrchestrationSnapshotRequest, OrchestrationSnapshot, InboxRequest, InboxView, AgentSendTarget,
   OrchestrationMutationRequest, OrchestrationMutationResponse,
   OrchestrationWaitRequest, OrchestrationWaitResponse,
   LiaisonLookupRequest, LiaisonLookupResponse,
@@ -346,11 +346,12 @@ export interface CockpitClient {
   updateStatus(): Promise<UpdateStatus>;
   updateInstall(sessionId: string, spaceId: string): Promise<QuickAskLocation>;
   orchestrationSnapshot(request: OrchestrationSnapshotRequest): Promise<OrchestrationSnapshot>;
+  orchestrationInbox(request: InboxRequest, signal?: AbortSignal): Promise<InboxView>;
   /** Read-only host resolution for this session; unavailable identity is not an empty match set. */
   orchestrationLiaisonLookup(request: LiaisonLookupRequest): Promise<LiaisonLookupResponse>;
-  orchestrationAgentSend(request: { session_id: string; reference: string; text: string }): Promise<void>;
+  orchestrationAgentSend(request: { session_id: string; reference: string; text: string; expected_target?: AgentSendTarget }): Promise<void>;
   orchestrationMutate(request: OrchestrationMutationRequest): Promise<OrchestrationMutationResponse>;
-  orchestrationWait(request: OrchestrationWaitRequest): Promise<OrchestrationWaitResponse>;
+  orchestrationWait(request: OrchestrationWaitRequest, signal?: AbortSignal): Promise<OrchestrationWaitResponse>;
   /** Cached subscription limits; provider CLIs own authentication and collection. */
   quotaStatus(request: QuotaStatusRequest, signal?: AbortSignal): Promise<QuotaStatusResponse>;
   quickAskAvailability(): Promise<QuickAskAvailability>;

@@ -190,6 +190,7 @@ fn same_report(left: Option<&Report>, right: Option<&Report>) -> bool {
                 && left.summary == right.summary
                 && left.plan == right.plan
                 && left.source_output == right.source_output
+                && left.card == right.card
         }
         _ => false,
     }
@@ -235,17 +236,18 @@ fn deliverable(message: &Message, latest_progress: &HashSet<u64>) -> bool {
         || latest_progress.contains(&message.seq)
 }
 
-pub(crate) fn current_question<'a>(messages: &'a [Message], run_id: &str) -> Option<&'a Report> {
-    messages.iter().rev().find_map(|message| {
-        if message.stale
-            || !matches!(&message.from, ActorRef::Run { run_id: sender } if sender == run_id)
-        {
-            return None;
-        }
-        message.report.as_ref().filter(|report| {
-            matches!(report.kind, ReportKind::NeedsInput | ReportKind::Result)
-        })
-    }).filter(|report| report.kind == ReportKind::NeedsInput)
+pub(crate) fn current_questions<'a>(messages: &'a [Message], run_id: &str) -> Vec<&'a Message> {
+    let mut scopes = HashSet::new();
+    messages.iter().rev().filter(|message| {
+        !message.stale
+            && matches!(&message.from, ActorRef::Run { run_id: sender } if sender == run_id)
+            && message.report.as_ref().is_some_and(|report| matches!(report.kind, ReportKind::NeedsInput | ReportKind::Result))
+            && scopes.insert(message.thread_id.as_deref())
+    }).filter(|message| message.report.as_ref().is_some_and(|report| report.kind == ReportKind::NeedsInput)).collect()
+}
+
+pub(crate) fn current_question_for<'a>(messages: &'a [Message], run_id: &str, thread_id: Option<&str>) -> Option<&'a Message> {
+    current_questions(messages, run_id).into_iter().find(|message| message.thread_id.as_deref() == thread_id)
 }
 
 pub(crate) struct AppendMessage<'a> {
@@ -256,6 +258,8 @@ pub(crate) struct AppendMessage<'a> {
     pub text: &'a str,
     pub in_reply_to: Option<String>,
     pub report: Option<Report>,
+    pub thread_id: Option<String>,
+    pub handoff: Option<HandoffRecord>,
     pub stale: bool,
     pub escalated_from: Option<String>,
 }
@@ -266,7 +270,7 @@ pub(crate) fn append(
     message: AppendMessage<'_>,
 ) -> Result<OrchestrationActionResult, InspectionError> {
     let AppendMessage {
-        from, to_run_id, message_id, kind, text, in_reply_to, report, stale, escalated_from,
+        from, to_run_id, message_id, kind, text, in_reply_to, report, stale, escalated_from, thread_id, handoff,
     } = message;
     if message_id.is_empty() {
         return Err(error("invalid_message_id", "A message id is required"));
@@ -297,6 +301,8 @@ pub(crate) fn append(
             || existing.in_reply_to != in_reply_to
             || !same_report(existing.report.as_ref(), report.as_ref())
             || existing.escalated_from != escalated_from
+            || existing.thread_id != thread_id
+            || existing.handoff != handoff
         {
             return Err(error(
                 "message_id_conflict",
@@ -329,6 +335,8 @@ pub(crate) fn append(
         text: text.to_owned(),
         in_reply_to,
         report,
+        thread_id,
+        handoff,
         stale,
         escalated_from,
         stage: DeliveryStage::Stored,

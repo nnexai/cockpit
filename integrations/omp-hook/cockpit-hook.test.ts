@@ -129,6 +129,29 @@ describe("optional public OMP Cockpit hook", () => {
     expect(rendered).not.toContain('"in_reply_to"');
   });
 
+  it("keeps thread correlation and only whitelisted handoff facts inside untrusted frames", () => {
+    const handoff = { ...message(1), thread_id: "thread-one", handoff: {
+      task_id: "task-one", task_revision: "rev-one", attempt_run_id: "attempt-one", origin: "browser",
+      token: "secret-token", binding: {
+        requested: { repository_id: "repo", workspace_id: "space", branch: "feature", base_ref: "main", capability: "secret-capability" },
+        workspace_checkout: { path: "/private", common_dir: "/private/.git", branch: "checkout-branch", head: "commit" },
+      },
+    } };
+    const answer = { ...message(2, "answer"), thread_id: "thread-one", in_reply_to: "question-one" };
+    const report = { ...message(3, "report"), report: { kind: "needs_input", card: { title: "Decision", secret: "secret-card" } } };
+    const rendered = frames([handoff, answer, report]).join("");
+    expect(rendered).toContain("--- BEGIN UNTRUSTED DATA");
+    expect(rendered).toContain('"thread_id":"thread-one"');
+    expect(rendered).toContain('"task_revision":"rev-one"');
+    expect(rendered).toContain('"attempt_run_id":"attempt-one"');
+    expect(rendered).toContain('"requested":{"repository_id":"repo","workspace_id":"space","branch":"feature","base_ref":"main"}');
+    expect(rendered).toContain('"workspace_checkout":{"branch":"checkout-branch"}');
+    expect(rendered).toContain('"in_reply_to":"question-one"');
+    expect(rendered).toContain('"card_title":"Decision"');
+    expect(rendered).toContain("Answer messages are already recorded");
+    expect(rendered).not.toMatch(/secret-token|secret-capability|secret-card|\/private/);
+  });
+
   it("preserves oversized canonical bootstrap without truncation", () => {
     const text = `Stages: stage-one [x]\nDescription: ${"🧪".repeat(10_000)}`;
     const parts = bootstrapFrames(text);
@@ -141,7 +164,10 @@ describe("optional public OMP Cockpit hook", () => {
 
   it("registers actual identity, coalesces bursts, and starts prompts only when idle", async () => {
     // The real CLI filters progress before writing the capture.
-    const f = fixture([[message(1)], [message(2)], [message(2)], []]);
+    const scoped = { ...message(2), thread_id: "thread-two", handoff: {
+      task_id: "task-two", task_revision: "revision-two", binding: { requested: { branch: "feature-two" } },
+    } };
+    const f = fixture([[message(1)], [scoped], [scoped], []]);
     f.emit("session_start");
     await f.waiting;
     expect(f.env.COCKPIT_SESSION_ID).toBe("actual-session");
@@ -153,6 +179,9 @@ describe("optional public OMP Cockpit hook", () => {
     expect(f.sends).toHaveLength(2);
     expect(f.sends[1].options).toEqual({ attribution: "agent" });
     expect(f.sends[1].text.match(/message-2/g)).toHaveLength(1);
+    expect(f.sends[1].text).toContain('"thread_id":"thread-two"');
+    expect(f.sends[1].text).toContain('"task_revision":"revision-two"');
+    expect(f.sends[1].text).toContain('"branch":"feature-two"');
     expect(f.sends[1].text).not.toContain("message-3");
     const spool = readdirSync(f.credentials)[0];
     expect(readdirSync(join(f.credentials, spool))).toEqual([]);

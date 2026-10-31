@@ -310,6 +310,39 @@ const defaultedSnapshotFields: Readonly<Record<string, true>> = {
 };
 
 describe("orchestration protocol boundary", () => {
+  it("decodes the observed unmanaged target without accepting additional identity fields", () => {
+    const target = { endpoint_identity: "endpoint", workspace_id: "space", tab_id: "other-tab", pane_id: "other-pane",
+      terminal_id: "terminal", agent_kind: "omp", agent_name: "omp", native_session_id: null,
+      native_session_file: null, state_changed_at: at };
+    const dto = { ...snapshot, unmanaged_agents: [{ ...snapshot.unmanaged_agents[0]!, expected_target: target }] };
+    expect(parseOrchestrationSnapshot(dto)).toEqual(dto);
+    expect(() => parseOrchestrationSnapshot({ ...dto,
+      unmanaged_agents: [{ ...dto.unmanaged_agents[0], expected_target: { ...target, secret: true } }],
+    })).toThrow(CockpitClientError);
+  });
+
+  it("preserves optional thread metadata without weakening nested exactness", () => {
+    const card = { title: "Review", next: "Choose", recommendation: null, choices: [], project: null };
+    const handoff = { task_id: null, task_revision: null, attempt_run_id: null, binding: null, origin: "native" };
+    const threaded = { ...snapshot,
+      messages: [{ ...message, thread_id: prerequisiteId, handoff, report: { ...report, card } }],
+      questions: [{ ...snapshot.questions[0]!, thread_id: prerequisiteId }],
+    };
+    expect(parseOrchestrationSnapshot(threaded)).toEqual(threaded);
+    const create = { ...actions.find(action => action.action === "task_create")!, thread_id: prerequisiteId };
+    expect(parseOrchestrationAction(create)).toEqual(create);
+    const reportAction = { action: "report", message_id: "report", kind: "initialized", outcome: "succeeded",
+      summary: "Initialized", plan: null, source_output: null, to_run_id: null, thread_id: prerequisiteId, card };
+    expect(parseOrchestrationAction(reportAction)).toEqual(reportAction);
+    expect(() => parseOrchestrationAction({ ...reportAction, card: { ...card, secret: true } })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationSnapshot({ ...threaded,
+      messages: [{ ...threaded.messages[0], handoff: { ...handoff, secret: true } }],
+    })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationSnapshot({ ...threaded,
+      messages: [{ ...threaded.messages[0], report: { ...report, card: { ...card, secret: true } } }],
+    })).toThrow(CockpitClientError);
+  });
+
   it("decodes queued schedules, explicit replacement and current task attempt badges", () => {
     const scheduleAction = actions.find(action => action.action === "task_schedule")!;
     const replaceAction = actions.find(action => action.action === "worker_replace")!;
@@ -1812,6 +1845,95 @@ describe("orchestration protocol boundary", () => {
 });
 
 describe("browser/native orchestration parity", () => {
+  it.each(["browser", "native"] as const)("preserves the direct-send target fence on %s", async transport => {
+    const expected_target = { endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: "pane",
+      terminal_id: "terminal", agent_kind: "omp", agent_name: "agent", native_session_id: null,
+      native_session_file: null, state_changed_at: at };
+    const request = { session_id: "session", reference: "pane", text: "Review this", expected_target };
+    const browserCall = vi.fn(async (_input: string, _init?: RequestInit) => new Response(JSON.stringify({ delivery: "prompted" })));
+    const nativeCall = vi.fn(async (_command: string, _args?: Record<string, unknown>) => ({ delivery: "prompted" }));
+    const client = transport === "browser" ? createBrowserClient(browserCall) : createNativeClient(nativeCall);
+    await expect(client.orchestrationAgentSend(request)).resolves.toBeUndefined();
+    if (transport === "browser") expect(JSON.parse(browserCall.mock.calls[0]![1]!.body as string)).toEqual(request);
+    else expect(nativeCall).toHaveBeenCalledWith("orchestration_agent_send", { request });
+    browserCall.mockClear(); nativeCall.mockClear();
+    for (const invalid of [{ ...expected_target, terminal_id: 7 }, { ...expected_target, extra: true },
+      Object.fromEntries(Object.entries(expected_target).filter(([key]) => key !== "agent_name"))]) {
+      await expect(client.orchestrationAgentSend({ ...request, expected_target: invalid as typeof expected_target }))
+        .rejects.toMatchObject({ code: "malformed_response" });
+    }
+    expect(browserCall).not.toHaveBeenCalled(); expect(nativeCall).not.toHaveBeenCalled();
+    const { expected_target: _target, ...legacy } = request;
+    await expect(client.orchestrationAgentSend(legacy)).resolves.toBeUndefined();
+    if (transport === "browser") expect(JSON.parse(browserCall.mock.calls[0]![1]!.body as string)).toEqual(legacy);
+    else expect(nativeCall).toHaveBeenCalledWith("orchestration_agent_send", { request: legacy });
+  });
+
+  it.each(["browser", "native"] as const)("reads and strictly decodes the Inbox on %s", async transport => {
+    const request = { session_id: "session" };
+    const title = { text: "Investigate", source: { kind: "user" }, message_id: null, at: null };
+    const thread = { thread_id: prerequisiteId, state: "underway", need: null, owner_root_ids: ["root"],
+      title, next: null, project: null, request: null, questions: [], recommendation: null, reply: null,
+      unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: at };
+    const view = { session_id: "session", state_store_id: hash, revision: 1, tasks_token: hash,
+      observation: { status: "fresh", observed_at: at }, owners: [], threads: [thread], unmanaged_agents: [] };
+    let payload: unknown = view;
+    const browserCall = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(payload)));
+    const nativeCall = vi.fn(async () => payload);
+    const client = transport === "browser" ? createBrowserClient(browserCall) : createNativeClient(nativeCall);
+    for (const bad of [
+      { ...view, session_id: "other" },
+      { ...view, unexpected: true },
+      { ...view, observation: { status: "future" } },
+      { ...view, threads: [{ thread_id: "thread" }] },
+      { ...view, threads: [{ ...thread, title: { ...title, source: { kind: "unknown" } } }] },
+      { ...view, threads: [{ ...thread, title: { ...title, private: true } }] },
+      { ...view, revision: Number.MAX_SAFE_INTEGER + 1 },
+    ]) {
+      payload = bad;
+      await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+  });
+
+  it.each(["browser", "native"] as const)("honors an aborted Inbox read on %s", async transport => {
+    const browserCall = vi.fn(async () => new Response("{}"));
+    const nativeCall = vi.fn(async () => ({}));
+    const client = transport === "browser" ? createBrowserClient(browserCall) : createNativeClient(nativeCall);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(client.orchestrationInbox({ session_id: "session" }, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(browserCall).not.toHaveBeenCalled();
+    expect(nativeCall).not.toHaveBeenCalled();
+  });
+
+  it.each(["browser", "native"] as const)("cancels an in-flight orchestration wait on %s", async transport => {
+    let resolve!: (value: unknown) => void;
+    const pending = new Promise<unknown>(next => { resolve = next; });
+    const client = transport === "browser"
+      ? createBrowserClient(vi.fn(async () => new Response(JSON.stringify(await pending))))
+      : createNativeClient(vi.fn(async () => pending));
+    const controller = new AbortController();
+    const result = client.orchestrationWait({ root_id: null, after_revision: 2, after_tasks_token: hash, timeout_ms: 30_000 }, controller.signal);
+    controller.abort();
+    resolve({ revision: 2, tasks_token: hash, changed: false });
+    await expect(result).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("accepts thread actions and rejects unknown fields", () => {
+    const binding = { repository_id: null, workspace_id: null, branch: null, base_ref: null };
+    const actions = [
+      { action: "thread_handoff", message_id: assignmentTaskId, thread_id: prerequisiteId, to_run_id: "root", text: "Please investigate" },
+      { action: "thread_handoff", message_id: assignmentTaskId, thread_id: prerequisiteId, to_run_id: "root", text: "Please investigate", binding },
+      { action: "thread_mark_read", thread_id: prerequisiteId, through_message_id: assignmentTaskId },
+      { action: "thread_link", root_id: "root", task_id: assignmentTaskId, thread_id: prerequisiteId },
+    ];
+    for (const action of actions) {
+      expect(parseOrchestrationAction(action)).toEqual(action);
+      expect(() => parseOrchestrationAction({ ...action, unexpected: true })).toThrow(CockpitClientError);
+    }
+    expect(() => parseOrchestrationAction({ ...actions[1], binding: { ...binding, unexpected: true } })).toThrow(CockpitClientError);
+  });
+
   it.each(["browser", "native"] as const)("preserves W3 integration receipts and resource proof on %s", async transport => {
     const cases: { action: OrchestrationAction; response: unknown }[] = [
       { action: { action: "integration_record", record: integrationRecord }, response: { revision: 3,

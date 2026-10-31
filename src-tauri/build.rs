@@ -9,6 +9,7 @@ fn main() {
             "cockpit_power_screen_off",
             "cockpit_quota_status",
             "orchestration_snapshot",
+            "orchestration_inbox",
             "orchestration_liaison_lookup",
             "orchestration_agent_send",
             "orchestration_mutate",

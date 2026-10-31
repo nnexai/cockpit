@@ -776,15 +776,13 @@ fn restoration_counts_ignore_completed_worker_history_and_unresumed_attachments(
     completed.kind = RunKind::Worker;
     completed.stage = RunStage::Working;
     completed.resume = Some(restoration_resume(&completed, ResumePhase::Launching));
-    completed.result = Some(Report {
-        message_id: "completed-result".into(),
-        kind: ReportKind::Result,
-        outcome: Some(ReportOutcome::Succeeded),
-        summary: "Completed work retained before its stage catches up".into(),
-        plan: None,
-        source_output: None,
-        at: completed.updated_at.clone(),
-    });
+    completed.result = Some(Report { card: None, message_id: "completed-result".into(),
+    kind: ReportKind::Result,
+    outcome: Some(ReportOutcome::Succeeded),
+    summary: "Completed work retained before its stage catches up".into(),
+    plan: None,
+    source_output: None,
+    at: completed.updated_at.clone(), });
     state.runs.push(completed);
     let restoration = cleanup::restoration_summary(&state, SESSION);
     assert_eq!((restoration.reattached, restoration.total_attachments, restoration.cleanup_pending), (0, 0, 0));

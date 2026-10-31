@@ -1097,6 +1097,83 @@ async fn setup_open_and_existing_space_resolve_same_exact_plain_directory() {
         &worker_start_request(invalid_target)).await.is_err());
 }
 
+#[tokio::test]
+async fn handoff_binding_observes_the_current_workspace_checkout_and_refuses_stale_runtime() {
+    let fixture = Fixture::new();
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec!["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "commit", "--allow-empty", "-qm", "Fixture"],
+    ] {
+        assert!(std::process::Command::new("git").args(args).current_dir(&fixture.root)
+            .status().unwrap().success());
+    }
+    let binding = HandoffBinding {
+        repository_id: None, workspace_id: Some("space".into()),
+        branch: Some("main".into()), base_ref: None,
+    };
+    let request = OrchestrationMutationRequest {
+        session_id: "fixture".into(), expected_revision: None,
+        action: OrchestrationAction::ThreadHandoff {
+            message_id: "message".into(), thread_id: "thread".into(), to_run_id: "run".into(),
+            text: "Investigate".into(), task_id: None, expected_task_revision: None,
+            binding: Some(binding.clone()),
+        },
+    };
+    let projects = fixture.projects(None);
+    let actor = Actor::Operator(OperatorOrigin::Browser);
+    let resolved = resolve_physical_mutation_input(
+        &fixture.service, &projects, &fixture.runtime(), &actor, &request,
+    ).await.unwrap();
+    let record = resolved.handoff_binding.unwrap();
+    assert_eq!(record.requested, binding);
+    assert!(record.repository_common_dir.is_none());
+    let checkout = record.workspace_checkout.unwrap();
+    assert_eq!(Path::new(&checkout.path), fs::canonicalize(&fixture.root).unwrap());
+    assert!(checkout.common_dir.is_some());
+    assert_eq!(checkout.branch.as_deref(), Some("main"));
+    assert!(checkout.head.as_ref().is_some_and(|head| !head.is_empty()));
+
+    let mut missing = fixture.runtime();
+    missing.0.as_mut().unwrap().workspaces.clear();
+    let mut ambiguous = fixture.runtime();
+    let runtime = ambiguous.0.as_mut().unwrap();
+    runtime.workspaces.push(runtime.workspaces[0].clone());
+    for herdr in [ObservedHerdr(None), missing, ambiguous] {
+        let error = resolve_physical_mutation_input(
+            &fixture.service, &projects, &herdr, &actor, &request,
+        ).await.err().unwrap();
+        assert_eq!(error.code, "handoff_binding_unavailable");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn live_worker_resume_rejects_a_workspace_repointed_from_its_saved_checkout() {
+    let fixture = Fixture::new();
+    let original = fixture.root.join("original");
+    let replacement = fixture.root.join("replacement");
+    fs::create_dir(&original).unwrap();
+    fs::create_dir(&replacement).unwrap();
+    let mut worker = root_with_process(std::process::id());
+    worker.kind = RunKind::Worker;
+    worker.parent_run_id = Some("root".into());
+    worker.root_id = "root".into();
+    worker.target = Some(DispatchTarget::Setup {
+        request: WorkspaceSetupRequest::Open {
+            path: original.to_string_lossy().into_owned(), label: None,
+            task_name: None, focus: false,
+        },
+    });
+    let mut herdr = fixture.runtime();
+    let runtime = herdr.0.as_mut().unwrap();
+    runtime.workspaces[0].cwd = replacement.to_string_lossy().into_owned();
+    runtime.panes[0].native_session_id = Some("native".into());
+    assert!(exact_saved_pane(runtime, &worker));
+    let error = resolve_resume_input(&fixture.service, &herdr, &worker).await.err().unwrap();
+    assert_eq!(error.code, "checkout_identity_changed");
+}
+
 
 #[cfg(target_os = "linux")]
 #[tokio::test]

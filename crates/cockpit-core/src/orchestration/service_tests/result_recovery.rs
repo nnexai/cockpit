@@ -225,21 +225,19 @@ fn child_reports_and_parent_inbox_delivery_preserve_nonnull_parent_receipts() {
         fixture
             .apply(
                 &child_actor,
-                OrchestrationAction::Report {
-                    message_id: message_id.clone(),
-                    kind,
-                    outcome,
-                    summary: summary.into(),
-                    plan: None,
-                    source_output: (kind == ReportKind::Result).then(|| SourceOutput::NonCode {
-                        result_message_id: message_id.clone(),
-                        task_revision: fixture.task(&root, fixture.run(&child).task_id.as_deref().unwrap()).task_revision,
-                        artifacts: Vec::new(), focused_checks: Vec::new(),
-                    }),
-                    to_run_id: None,
-                    original_task_revision: None,
-                    original_claim_id: None,
-                },
+                OrchestrationAction::Report { thread_id: None, card: None, message_id: message_id.clone(),
+                kind,
+                outcome,
+                summary: summary.into(),
+                plan: None,
+                source_output: (kind == ReportKind::Result).then(|| SourceOutput::NonCode {
+                    result_message_id: message_id.clone(),
+                    task_revision: fixture.task(&root, fixture.run(&child).task_id.as_deref().unwrap()).task_revision,
+                    artifacts: Vec::new(), focused_checks: Vec::new(),
+                }),
+                to_run_id: None,
+                original_task_revision: None,
+                original_claim_id: None, },
             )
             .unwrap();
         assert_parent_receipts();

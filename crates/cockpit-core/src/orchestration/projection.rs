@@ -35,43 +35,30 @@ pub(crate) fn current_task_run<'a>(
 
 /// Projects the current main request and its latest explicit recipient-inbox answer.
 /// Delivery receipts never change the run or imply that work has resumed.
-pub(crate) fn question_status(run: &Run, inbox: &[&Message], events: &[Message]) -> Option<QuestionStatus> {
+pub(crate) fn question_statuses(run: &Run, inbox: &[&Message], events: &[Message]) -> Vec<QuestionStatus> {
     if run.stage == RunStage::Closed {
-        return None;
+        return Vec::new();
     }
-    let report = super::messages::current_question(events, &run.run_id)?;
-    let answer = inbox
-        .iter()
-        .copied()
-        .filter(|message| {
-            message.to_run_id == run.run_id
-                && message.kind == MessageKind::Answer
-                && !message.stale
-                && message.in_reply_to.as_deref() == Some(report.message_id.as_str())
-        })
-        .max_by_key(|message| message.seq);
-    let receipt = answer.map_or(QuestionReceipt::Unresolved, |message| {
-        let answer = AnswerReceipt {
-            sender: message.from.clone(),
-            message_id: message.message_id.clone(),
-            seq: message.seq,
-            stage: message.stage,
-            created_at: message.created_at.clone(),
-            acked_at: message.acked_at.clone(),
-        };
-        match message.stage {
-            DeliveryStage::Stored | DeliveryStage::Read => {
-                QuestionReceipt::AnswerDelivered { answer }
+    super::messages::current_questions(events, &run.run_id).into_iter().map(|question| {
+        let report = question.report.as_ref().expect("current question has report");
+        let answer = inbox.iter().copied().filter(|message| {
+            message.to_run_id == run.run_id && message.kind == MessageKind::Answer
+                && !message.stale && message.in_reply_to.as_deref() == Some(report.message_id.as_str())
+        }).max_by_key(|message| message.seq);
+        let receipt = answer.map_or(QuestionReceipt::Unresolved, |message| {
+            let answer = AnswerReceipt {
+                sender: message.from.clone(), message_id: message.message_id.clone(),
+                seq: message.seq, stage: message.stage, created_at: message.created_at.clone(),
+                acked_at: message.acked_at.clone(),
+            };
+            match message.stage {
+                DeliveryStage::Stored | DeliveryStage::Read => QuestionReceipt::AnswerDelivered { answer },
+                DeliveryStage::Acked => QuestionReceipt::AnswerAcknowledged { answer },
             }
-            DeliveryStage::Acked => QuestionReceipt::AnswerAcknowledged { answer },
-        }
-    });
-    Some(QuestionStatus {
-        run_id: run.run_id.clone(),
-        question_message_id: report.message_id.clone(),
-        asked_at: report.at.clone(),
-        receipt,
-    })
+        });
+        QuestionStatus { thread_id: question.thread_id.clone(), run_id: run.run_id.clone(),
+            question_message_id: report.message_id.clone(), asked_at: report.at.clone(), receipt }
+    }).collect()
 }
 
 /// Joins durable intent and canonical Markdown with one fresh runtime observation.
@@ -236,19 +223,17 @@ fn project_attention(
     let mut questions = Vec::new();
     for run in runs {
         let inbox: &[&Message] = inboxes.get(run.run_id.as_str()).map_or(&[], Vec::as_slice);
-        let question = question_status(run, inbox, events);
+        let run_questions = question_statuses(run, inbox, events);
         derive_attention(
             run,
             inbox,
-            question.as_ref(),
+            &run_questions,
             observations.get(run.run_id.as_str()).copied(),
             clock.at,
             clock.text,
             &mut attention,
         );
-        if let Some(question) = question {
-            questions.push(question);
-        }
+        questions.extend(run_questions);
         if let Some(RunRetirement { state: RetirementState::Unknown { at, .. }, .. }) = &run.retirement {
             attention.push(Attention {
                 kind: AttentionKind::RetirementUnconfirmed,
@@ -396,7 +381,7 @@ fn attempt_order(run: &Run) -> (bool, u32, &str, &str) {
     )
 }
 
-fn lane(task: &Task, dependencies: &TaskDependencies, run: Option<&Run>, intent_runs: &HashSet<&str>) -> TaskLane {
+pub(crate) fn lane(task: &Task, dependencies: &TaskDependencies, run: Option<&Run>, intent_runs: &HashSet<&str>) -> TaskLane {
     if task.checked { return TaskLane::Accepted; }
     if let Some(run) = run {
         if run.stage == RunStage::Reported || (run.stage == RunStage::Closed
@@ -410,7 +395,7 @@ fn lane(task: &Task, dependencies: &TaskDependencies, run: Option<&Run>, intent_
     } else { TaskLane::Ready }
 }
 
-fn observe(
+pub(crate) fn observe(
     runs: &[&Run],
     runtime: Result<RuntimeView, InspectionError>,
     now: &str,
@@ -509,6 +494,18 @@ fn observe(
                 agent_name: name.to_owned(),
                 agent_status: pane.agent_status.clone(),
                 state_changed_at: pane.state_changed_at.clone(),
+                expected_target: pane.terminal_id.as_ref().filter(|id| !id.is_empty()).map(|terminal_id| AgentSendTarget {
+                    endpoint_identity: view.endpoint_identity.clone(),
+                    workspace_id: pane.workspace_id.clone(),
+                    tab_id: pane.tab_id.clone(),
+                    pane_id: pane.pane_id.clone(),
+                    terminal_id: terminal_id.clone(),
+                    agent_kind: kind.to_owned(),
+                    agent_name: pane.agent_name.clone(),
+                    native_session_id: pane.native_session_id.clone(),
+                    native_session_file: pane.native_session_file.clone(),
+                    state_changed_at: pane.state_changed_at.clone(),
+                }),
             })
         })
         .collect();
@@ -572,7 +569,7 @@ fn optional_evidence_matches(expected: Option<&str>, actual: Option<&str>) -> bo
 fn derive_attention(
     run: &Run,
     inbox: &[&Message],
-    question: Option<&QuestionStatus>,
+    questions: &[QuestionStatus],
     observation: Option<&RunObservation>,
     clock: OffsetDateTime,
     now: &str,
@@ -604,11 +601,10 @@ fn derive_attention(
         ) {
             add(AttentionKind::DispatchUnknown, &dispatch.updated_at, None);
         }
-    let needs_input = question
-        .filter(|question| matches!(&question.receipt, QuestionReceipt::Unresolved));
-    if let Some(question) = needs_input {
+    for question in questions.iter().filter(|question| matches!(&question.receipt, QuestionReceipt::Unresolved)) {
         add(AttentionKind::NeedsInput, &question.asked_at, None);
     }
+    let needs_input = questions.iter().find(|question| matches!(&question.receipt, QuestionReceipt::Unresolved));
     let latest = |kind| {
         inbox
             .iter()
@@ -963,6 +959,8 @@ mod tests {
 
     fn brief(kind: MessageKind, stage: DeliveryStage) -> Message {
         Message {
+            thread_id: None,
+            handoff: None,
             message_id: "44444444-4444-4444-8444-444444444444".into(),
             to_run_id: WORKER.into(),
             seq: 1,
@@ -981,15 +979,13 @@ mod tests {
 
     fn asking() -> Run {
         let mut run = worker(RunStage::Working);
-        run.last_report = Some(Report {
-            message_id: "ask".into(),
-            kind: ReportKind::NeedsInput,
-            outcome: None,
-            summary: "Need a decision".into(),
-            plan: None,
-            source_output: None,
-            at: START.into(),
-        });
+        run.last_report = Some(Report { card: None, message_id: "ask".into(),
+        kind: ReportKind::NeedsInput,
+        outcome: None,
+        summary: "Need a decision".into(),
+        plan: None,
+        source_output: None,
+        at: START.into(), });
         run
     }
 
@@ -1290,15 +1286,13 @@ mod tests {
         other_report.message_id = "other-ask".into();
         other_report.from = ActorRef::Run { run_id: "other-worker".into() };
         other_report.to_run_id = ROOT.into();
-        other_report.report = Some(Report {
-            message_id: "other-ask".into(),
-            kind: ReportKind::NeedsInput,
-            outcome: None,
-            summary: "A separate worker question".into(),
-            plan: None,
-            source_output: None,
-            at: NOW.into(),
-        });
+        other_report.report = Some(Report { card: None, message_id: "other-ask".into(),
+        kind: ReportKind::NeedsInput,
+        outcome: None,
+        summary: "A separate worker question".into(),
+        plan: None,
+        source_output: None,
+        at: NOW.into(), });
         durable.messages.push(other_report);
         let projected = project(&durable, Ok(runtime("working")));
         assert_eq!(projected.questions.len(), 1);
@@ -2031,5 +2025,30 @@ os.waitpid(pid, 0)
                 assert_eq!(observed.unmanaged_agents[0].agent_name, "neutral-harness");
             }
         }
+    }
+    #[test]
+    fn unmanaged_target_preserves_observed_identity_and_requires_terminal() {
+        let mut live = runtime("working");
+        live.endpoint_identity = "endpoint-fresh".into();
+        let pane = &mut live.panes[0];
+        pane.pane_id = "unmanaged-pane".into();
+        pane.terminal_id = Some("terminal-fresh".into());
+        pane.agent_kind = Some("omp".into());
+        pane.agent_name = None;
+        pane.native_session_id = Some("native".into());
+        pane.native_session_file = Some("/session/file".into());
+        pane.state_changed_at = Some("changed".into());
+        let observed = project(&state(worker(RunStage::Working)), Ok(live.clone()));
+        let target = observed.unmanaged_agents[0].expected_target.as_ref().unwrap();
+        assert_eq!(target.endpoint_identity, "endpoint-fresh");
+        assert_eq!(target.terminal_id, "terminal-fresh");
+        assert_eq!(target.agent_kind, "omp");
+        assert_eq!(target.agent_name, None);
+        assert_eq!(target.native_session_id.as_deref(), Some("native"));
+        assert_eq!(target.native_session_file.as_deref(), Some("/session/file"));
+        assert_eq!(target.state_changed_at.as_deref(), Some("changed"));
+        live.panes[0].terminal_id = None;
+        let observed = project(&state(worker(RunStage::Working)), Ok(live));
+        assert!(observed.unmanaged_agents[0].expected_target.is_none());
     }
 }

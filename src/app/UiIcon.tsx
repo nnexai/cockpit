@@ -37,6 +37,15 @@ const paths = {
   "slash-ring": "M5.6 5.6l12.8 12.8M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
   command: "M9 9V6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3V9h6v6H9",
   supervisor: "M11 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM3 21a8 8 0 0 1 11-7.4",
+  help: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M9.4 9.4a2.7 2.7 0 1 1 3.8 2.5c-.8.4-1.2 1-1.2 1.8 M12 17h.01",
+  spark: "M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z M18.5 16l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z",
+  work: "M12 3l9 5-9 5-9-5z M3 13l9 5 9-5",
+  "check-circle": "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M8 12.3l2.7 2.7L16 9.5",
+  offline: "M3 3l18 18 M2 8.8a15 15 0 0 1 5-3 M22 8.8a15 15 0 0 0-9-3.7 M5.5 12.5a10 10 0 0 1 3-1.9 M18.5 12.5a10 10 0 0 0-3-2 M9 16a5 5 0 0 1 6 0 M12 19.5h.01",
+  send: "M21 3L10 14 M21 3l-7 18-4-7-7-4z",
+  reply: "M9 7L4 12l5 5 M4 12h10a6 6 0 0 1 6 6v1",
+  alert: "M12 4l9 16H3z M12 10v4 M12 17h.01",
+  user: "M11 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM3 21a8 8 0 0 1 16 0",
 } satisfies Record<string, string>;
 
 /** Solid parts of a mark, drawn over its outline (the half of `half-ring`, the dot of `dot-ring`). */

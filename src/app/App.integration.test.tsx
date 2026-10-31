@@ -240,6 +240,7 @@ class AppFixture {
     setProviderCredential: vi.fn(async () => { throw new Error("Unexpected provider credentials in terminal fixture"); }),
     clearProviderCredential: vi.fn(async () => { throw new Error("Unexpected provider credentials in terminal fixture"); }),
     repositories: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
+    orchestrationInbox: vi.fn(async request => ({ session_id: request.session_id, state_store_id: "fixture", revision: 0, tasks_token: "fixture", observation: { status: "fresh" as const, observed_at: "2026-01-01T00:00:00Z" }, owners: [], threads: [], unmanaged_agents: [] })),
     orchestrationSnapshot: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
     orchestrationMutate: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
     orchestrationWait: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
@@ -1427,7 +1428,6 @@ describe("liaison conversation and compact task rail", () => {
     const input = document.activeElement;
     expect(container.querySelector(".liaison-tab-dot")).not.toBeNull();
     expect(container.querySelector('[aria-label="Tasks"]')).toBeNull();
-    expect(container.querySelector("textarea")).toBeNull();
     current = { ...current, revision: 2, tasks_token: "cleared", questions: [{ ...current.questions[0], receipt: { status: "answer_acknowledged", answer: { sender: { type: "run", run_id: "root" }, message_id: "answer", seq: 2, stage: "acked", created_at: "2026-10-07T12:00:01Z", acked_at: "2026-10-07T12:00:01Z" } } }] };
     await act(async () => pending.at(-1)!.resolve({ revision: 2, tasks_token: "cleared", changed: true }));
     await settle();
@@ -2022,6 +2022,23 @@ describe("tab-local viewers, focus and placement", () => {
     expect(created.style.width).toBe(viewer.style.width);
     expect(Number.parseFloat(created.style.top)).toBeGreaterThan(Number.parseFloat(viewer.style.top));
     expect(Number.parseFloat(leaf("pane-5").style.left)).toBeGreaterThan(Number.parseFloat(created.style.left));
+  });
+
+  it("detaches terminal control while the Inbox is visible without resizing it", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    const stream: TerminalStream = await vi.mocked(fixture.client.openTerminal).mock.results[0].value;
+    const sendsBefore = vi.mocked(stream.send).mock.calls.length;
+    const opensBefore = vi.mocked(fixture.client.openTerminal).mock.calls.length;
+    click(button("Inbox"));
+    await settle();
+    expect(container.querySelector('[data-testid="terminal-pane-1"]')).toBeNull();
+    expect(stream.close).toHaveBeenCalled();
+    expect(vi.mocked(stream.send).mock.calls.slice(sendsBefore).some(([command]) => command.type === "terminal.resize")).toBe(false);
+    expect(fixture.client.openTerminal).toHaveBeenCalledTimes(opensBefore);
+    click(button("Workbench"));
+    await settle();
+    expect(container.querySelector('[data-testid="terminal-pane-1"]')).not.toBeNull();
   });
 
   it("applies swap, divider resize and zoom locally while selection keeps painted control streams attached", async () => {

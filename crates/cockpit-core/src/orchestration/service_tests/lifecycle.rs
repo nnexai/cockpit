@@ -138,14 +138,12 @@ fn canonical_task_mutations_are_authorized_only_in_the_agents_own_root() {
         fixture
             .apply(
                 &actor,
-                OrchestrationAction::TaskCreate {
-                    root_id: own_root.clone(),
-                    title: "Own task".into(),
-                    task_id: id(),
-                    description: "Own body".into(),
-                    depends_on: Vec::new(), follow_up_of: None,
-                    expected_doc_revision: None, source_revision: None,
-                },
+                OrchestrationAction::TaskCreate { thread_id: None, root_id: own_root.clone(),
+                title: "Own task".into(),
+                task_id: id(),
+                description: "Own body".into(),
+                depends_on: Vec::new(), follow_up_of: None,
+                expected_doc_revision: None, source_revision: None, },
             )
             .unwrap(),
     );
@@ -206,14 +204,12 @@ fn canonical_task_mutations_are_authorized_only_in_the_agents_own_root() {
         .doc_revision
         .clone();
     for action in [
-        OrchestrationAction::TaskCreate {
-            root_id: other_root.clone(),
-            title: "Intrusion".into(),
-            task_id: id(),
-            description: String::new(),
-            depends_on: Vec::new(), follow_up_of: None,
-            expected_doc_revision: None, source_revision: None,
-        },
+        OrchestrationAction::TaskCreate { thread_id: None, root_id: other_root.clone(),
+        title: "Intrusion".into(),
+        task_id: id(),
+        description: String::new(),
+        depends_on: Vec::new(), follow_up_of: None,
+        expected_doc_revision: None, source_revision: None, },
         OrchestrationAction::TaskUpdate {
             root_id: other_root.clone(),
             task_id: other_task.task_id.clone(),
@@ -451,7 +447,7 @@ fn bound_top_root_starts_answers_sends_back_accepts_and_cancels() {
     let state = fixture.state();
     let run = state.runs.iter().find(|run| run.run_id == run_id).unwrap();
     let inbox = state.messages.iter().filter(|message| message.to_run_id == run_id).collect::<Vec<_>>();
-    let question = projection::question_status(run, &inbox, &state.messages).unwrap();
+    let question = projection::question_statuses(run, &inbox, &state.messages).into_iter().next().unwrap();
     assert_eq!(question.question_message_id, sendback_question);
     assert!(matches!(question.receipt, QuestionReceipt::Unresolved));
     fixture.apply(&worker, fixture.successful_result(&worker))
@@ -559,6 +555,13 @@ fn management_requires_root_credentials_not_worker_child_or_forged_identity() {
         if matches!(operation, 2 | 3) {
             fixture.apply(&worker, fixture.successful_result(&worker)).unwrap();
         }
+        let (_, branch_id, branch_actor) = fixture.working(&root);
+        let answer_question = if operation == 5 {
+            fixture.apply(&branch_actor, report(ReportKind::NeedsInput, None, None)).unwrap();
+            Some(fixture.run(&branch_id).last_report.unwrap().message_id)
+        } else {
+            None
+        };
         let action = match operation {
             0 => fixture.start_action(&root, &fixture.create_task(&root, "Denied start")),
             2 => OrchestrationAction::Accept {
@@ -573,9 +576,9 @@ fn management_requires_root_credentials_not_worker_child_or_forged_identity() {
                 run_id: run_id.clone(),
             },
             5 => OrchestrationAction::MessageSend { message_id: id(),
-            to_run_id: run_id.clone(),
+            to_run_id: branch_id.clone(),
             kind: MessageKind::Answer,
-            text: "Answer".into(), in_reply_to: None, original_task_revision: None, original_claim_id: None },
+            text: "Answer".into(), in_reply_to: answer_question, original_task_revision: None, original_claim_id: None },
             6 => OrchestrationAction::ReconcileRun {
                 run_id: run_id.clone(),
                 recovery: None,
@@ -584,8 +587,10 @@ fn management_requires_root_credentials_not_worker_child_or_forged_identity() {
         };
         let other_root = fixture.root();
         let outsider = fixture.launch_and_bind(&other_root);
-        let (_, branch_id, branch_actor) = fixture.working(&root);
-        let mut denied = vec![outsider, branch_actor.clone()];
+        let mut denied = vec![outsider];
+        if operation != 5 {
+            denied.push(branch_actor);
+        }
         denied.push(worker);
         for fence in 0..3 {
             let mut actor = supervisor.clone();
@@ -637,6 +642,10 @@ fn management_requires_root_credentials_not_worker_child_or_forged_identity() {
                 bytes,
                 "Malformed root must not gain management authority"
             );
+        }
+        if operation == 5 {
+            fixture.seed_run(&root, |run| *run = valid_root.clone());
+            fixture.apply(&supervisor, action).unwrap();
         }
     }
 }

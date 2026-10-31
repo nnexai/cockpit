@@ -2,12 +2,54 @@
 import type * as V1 from "../v1";
 
 export interface WireTypes {
+  "RetirementPhase": V1.RetirementPhase;
+  "Run": V1.Run;
+  "DispatchState": V1.DispatchState;
+  "Annotation": V1.Annotation;
+  "ActorRef": V1.ActorRef;
+  "ReportKind": V1.ReportKind;
+  "ReportOutcome": V1.ReportOutcome;
+  "Report": V1.Report;
+  "MessageKind": V1.MessageKind;
+  "DeliveryStage": V1.DeliveryStage;
+  "Message": V1.Message;
+  "QuestionStatus": V1.QuestionStatus;
+  "QuestionReceipt": V1.QuestionReceipt;
+  "AnswerReceipt": V1.AnswerReceipt;
+  "IntentState": V1.IntentState;
+  "TaskIntent": V1.TaskIntent;
+  "TaskAssignmentIntent": V1.TaskAssignmentIntent;
+  "Presence": V1.Presence;
+  "RunObservation": V1.RunObservation;
+  "RuntimeObservation": V1.RuntimeObservation;
+  "AttentionKind": V1.AttentionKind;
   "Attention": V1.Attention;
   "OrchestrationAction": V1.OrchestrationAction;
   "OrchestrationActionResult": V1.OrchestrationActionResult;
 }
 
 export interface WireOwners {
+  "Run": V1.Run;
+  "DispatchState": V1.DispatchState;
+  "Annotation": V1.Annotation;
+  "ActorRef": V1.ActorRef;
+  "ActorRef[operator]": Extract<V1.ActorRef, { "type": "operator" }>;
+  "ActorRef[run]": Extract<V1.ActorRef, { "type": "run" }>;
+  "ActorRef[dispatcher]": Extract<V1.ActorRef, { "type": "dispatcher" }>;
+  "Report": V1.Report;
+  "Message": V1.Message;
+  "QuestionStatus": V1.QuestionStatus;
+  "QuestionReceipt": V1.QuestionReceipt;
+  "QuestionReceipt[unresolved]": Extract<V1.QuestionReceipt, { "status": "unresolved" }>;
+  "QuestionReceipt[answer_delivered]": Extract<V1.QuestionReceipt, { "status": "answer_delivered" }>;
+  "QuestionReceipt[answer_acknowledged]": Extract<V1.QuestionReceipt, { "status": "answer_acknowledged" }>;
+  "AnswerReceipt": V1.AnswerReceipt;
+  "TaskIntent": V1.TaskIntent;
+  "TaskAssignmentIntent": V1.TaskAssignmentIntent;
+  "RunObservation": V1.RunObservation;
+  "RuntimeObservation": V1.RuntimeObservation;
+  "RuntimeObservation[fresh]": Extract<V1.RuntimeObservation, { "status": "fresh" }>;
+  "RuntimeObservation[unavailable]": Extract<V1.RuntimeObservation, { "status": "unavailable" }>;
   "Attention": V1.Attention;
   "OrchestrationAction": V1.OrchestrationAction;
   "OrchestrationAction[task_create]": Extract<V1.OrchestrationAction, { "action": "task_create" }>;
@@ -44,6 +86,9 @@ export interface WireOwners {
   "OrchestrationAction[cancel_run]": Extract<V1.OrchestrationAction, { "action": "cancel_run" }>;
   "OrchestrationAction[reconcile_run]": Extract<V1.OrchestrationAction, { "action": "reconcile_run" }>;
   "OrchestrationAction[intent_resolve]": Extract<V1.OrchestrationAction, { "action": "intent_resolve" }>;
+  "OrchestrationAction[thread_handoff]": Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>;
+  "OrchestrationAction[thread_mark_read]": Extract<V1.OrchestrationAction, { "action": "thread_mark_read" }>;
+  "OrchestrationAction[thread_link]": Extract<V1.OrchestrationAction, { "action": "thread_link" }>;
   "OrchestrationAction[report]": Extract<V1.OrchestrationAction, { "action": "report" }>;
   "OrchestrationAction[message_send]": Extract<V1.OrchestrationAction, { "action": "message_send" }>;
   "OrchestrationAction[annotate]": Extract<V1.OrchestrationAction, { "action": "annotate" }>;
@@ -73,6 +118,119 @@ export interface WireOwners {
 }
 
 export interface WireFields {
+  "Run.session_id": (V1.Run)["session_id"];
+  "Run.brief": (V1.Run)["brief"];
+  "Run.run_id": (V1.Run)["run_id"];
+  "Run.kind": (V1.Run)["kind"];
+  "Run.label": (V1.Run)["label"];
+  "Run.root_id": (V1.Run)["root_id"];
+  "Run.parent_run_id": (V1.Run)["parent_run_id"];
+  "Run.task_id": (V1.Run)["task_id"];
+  "Run.attempt": (V1.Run)["attempt"];
+  "Run.assignment_generation": (V1.Run)["assignment_generation"];
+  "Run.launch_config": (V1.Run)["launch_config"];
+  "Run.task_revision_at_start": (V1.Run)["task_revision_at_start"];
+  "Run.stage": (V1.Run)["stage"];
+  "Run.close_reason": (V1.Run)["close_reason"];
+  "Run.dispatch": (V1.Run)["dispatch"];
+  "Run.target": (V1.Run)["target"];
+  "Run.setup": (V1.Run)["setup"];
+  "Run.cleanup_policy": (V1.Run)["cleanup_policy"];
+  "Run.last_report": (V1.Run)["last_report"];
+  "Run.result": (V1.Run)["result"];
+  "Run.source_output": (V1.Run)["source_output"];
+  "Run.integration": (V1.Run)["integration"];
+  "Run.annotations": (V1.Run)["annotations"];
+  "Run.project": (V1.Run)["project"];
+  "Run.checkout": (V1.Run)["checkout"];
+  "Run.attachment": (V1.Run)["attachment"];
+  "Run.checkout_claim_id": (V1.Run)["checkout_claim_id"];
+  "Run.resume": (V1.Run)["resume"];
+  "Run.retirement": (V1.Run)["retirement"];
+  "Run.created_at": (V1.Run)["created_at"];
+  "Run.updated_at": (V1.Run)["updated_at"];
+  "DispatchState.launch_tag": (V1.DispatchState)["launch_tag"];
+  "DispatchState.endpoint_identity": (V1.DispatchState)["endpoint_identity"];
+  "DispatchState.scope_unit": (V1.DispatchState)["scope_unit"];
+  "DispatchState.pre_move_scope": (V1.DispatchState)["pre_move_scope"];
+  "DispatchState.latch": (V1.DispatchState)["latch"];
+  "DispatchState.latch_state": (V1.DispatchState)["latch_state"];
+  "DispatchState.source_location": (V1.DispatchState)["source_location"];
+  "DispatchState.move_operation_id": (V1.DispatchState)["move_operation_id"];
+  "DispatchState.staging_workspace_id": (V1.DispatchState)["staging_workspace_id"];
+  "DispatchState.recovery": (V1.DispatchState)["recovery"];
+  "DispatchState.agent_started": (V1.DispatchState)["agent_started"];
+  "DispatchState.step": (V1.DispatchState)["step"];
+  "DispatchState.launch_attempt": (V1.DispatchState)["launch_attempt"];
+  "DispatchState.error": (V1.DispatchState)["error"];
+  "DispatchState.updated_at": (V1.DispatchState)["updated_at"];
+  "Annotation.by": (V1.Annotation)["by"];
+  "Annotation.text": (V1.Annotation)["text"];
+  "Annotation.at": (V1.Annotation)["at"];
+  "ActorRef[run].run_id": (Extract<V1.ActorRef, { "type": "run" }>)["run_id"];
+  "Report.message_id": (V1.Report)["message_id"];
+  "Report.kind": (V1.Report)["kind"];
+  "Report.outcome": (V1.Report)["outcome"];
+  "Report.summary": (V1.Report)["summary"];
+  "Report.plan": (V1.Report)["plan"];
+  "Report.source_output": (V1.Report)["source_output"];
+  "Report.card": (V1.Report)["card"];
+  "Report.at": (V1.Report)["at"];
+  "Message.message_id": (V1.Message)["message_id"];
+  "Message.to_run_id": (V1.Message)["to_run_id"];
+  "Message.seq": (V1.Message)["seq"];
+  "Message.from": (V1.Message)["from"];
+  "Message.kind": (V1.Message)["kind"];
+  "Message.text": (V1.Message)["text"];
+  "Message.in_reply_to": (V1.Message)["in_reply_to"];
+  "Message.report": (V1.Message)["report"];
+  "Message.thread_id": (V1.Message)["thread_id"];
+  "Message.handoff": (V1.Message)["handoff"];
+  "Message.stale": (V1.Message)["stale"];
+  "Message.escalated_from": (V1.Message)["escalated_from"];
+  "Message.stage": (V1.Message)["stage"];
+  "Message.created_at": (V1.Message)["created_at"];
+  "Message.acked_at": (V1.Message)["acked_at"];
+  "QuestionStatus.run_id": (V1.QuestionStatus)["run_id"];
+  "QuestionStatus.question_message_id": (V1.QuestionStatus)["question_message_id"];
+  "QuestionStatus.asked_at": (V1.QuestionStatus)["asked_at"];
+  "QuestionStatus.thread_id": (V1.QuestionStatus)["thread_id"];
+  "QuestionStatus.receipt": (V1.QuestionStatus)["receipt"];
+  "QuestionReceipt[answer_delivered].answer": (Extract<V1.QuestionReceipt, { "status": "answer_delivered" }>)["answer"];
+  "QuestionReceipt[answer_acknowledged].answer": (Extract<V1.QuestionReceipt, { "status": "answer_acknowledged" }>)["answer"];
+  "AnswerReceipt.sender": (V1.AnswerReceipt)["sender"];
+  "AnswerReceipt.message_id": (V1.AnswerReceipt)["message_id"];
+  "AnswerReceipt.seq": (V1.AnswerReceipt)["seq"];
+  "AnswerReceipt.stage": (V1.AnswerReceipt)["stage"];
+  "AnswerReceipt.created_at": (V1.AnswerReceipt)["created_at"];
+  "AnswerReceipt.acked_at": (V1.AnswerReceipt)["acked_at"];
+  "TaskIntent.intent_id": (V1.TaskIntent)["intent_id"];
+  "TaskIntent.root_id": (V1.TaskIntent)["root_id"];
+  "TaskIntent.task_id": (V1.TaskIntent)["task_id"];
+  "TaskIntent.run_id": (V1.TaskIntent)["run_id"];
+  "TaskIntent.expected_task_revision": (V1.TaskIntent)["expected_task_revision"];
+  "TaskIntent.state": (V1.TaskIntent)["state"];
+  "TaskIntent.origin": (V1.TaskIntent)["origin"];
+  "TaskIntent.supervisor_run_id": (V1.TaskIntent)["supervisor_run_id"];
+  "TaskIntent.conversation": (V1.TaskIntent)["conversation"];
+  "TaskIntent.result_message_id": (V1.TaskIntent)["result_message_id"];
+  "TaskAssignmentIntent.root_id": (V1.TaskAssignmentIntent)["root_id"];
+  "TaskAssignmentIntent.task_id": (V1.TaskAssignmentIntent)["task_id"];
+  "TaskAssignmentIntent.state": (V1.TaskAssignmentIntent)["state"];
+  "RunObservation.run_id": (V1.RunObservation)["run_id"];
+  "RunObservation.presence": (V1.RunObservation)["presence"];
+  "RunObservation.actual_agent": (V1.RunObservation)["actual_agent"];
+  "RunObservation.workspace_id": (V1.RunObservation)["workspace_id"];
+  "RunObservation.workspace_label": (V1.RunObservation)["workspace_label"];
+  "RunObservation.tab_id": (V1.RunObservation)["tab_id"];
+  "RunObservation.tab_label": (V1.RunObservation)["tab_label"];
+  "RunObservation.pane_id": (V1.RunObservation)["pane_id"];
+  "RunObservation.agent_status": (V1.RunObservation)["agent_status"];
+  "RunObservation.state_changed_at": (V1.RunObservation)["state_changed_at"];
+  "RuntimeObservation[fresh].endpoint_identity": (Extract<V1.RuntimeObservation, { "status": "fresh" }>)["endpoint_identity"];
+  "RuntimeObservation[fresh].observed_at": (Extract<V1.RuntimeObservation, { "status": "fresh" }>)["observed_at"];
+  "RuntimeObservation[fresh].runs": (Extract<V1.RuntimeObservation, { "status": "fresh" }>)["runs"];
+  "RuntimeObservation[unavailable].error": (Extract<V1.RuntimeObservation, { "status": "unavailable" }>)["error"];
   "Attention.kind": (V1.Attention)["kind"];
   "Attention.run_id": (V1.Attention)["run_id"];
   "Attention.task_id": (V1.Attention)["task_id"];
@@ -86,6 +244,7 @@ export interface WireFields {
   "OrchestrationAction[task_create].follow_up_of": (Extract<V1.OrchestrationAction, { "action": "task_create" }>)["follow_up_of"];
   "OrchestrationAction[task_create].expected_doc_revision": (Extract<V1.OrchestrationAction, { "action": "task_create" }>)["expected_doc_revision"];
   "OrchestrationAction[task_create].source_revision": (Extract<V1.OrchestrationAction, { "action": "task_create" }>)["source_revision"];
+  "OrchestrationAction[task_create].thread_id": (Extract<V1.OrchestrationAction, { "action": "task_create" }>)["thread_id"];
   "OrchestrationAction[task_assign].root_id": (Extract<V1.OrchestrationAction, { "action": "task_assign" }>)["root_id"];
   "OrchestrationAction[task_assign].task_id": (Extract<V1.OrchestrationAction, { "action": "task_assign" }>)["task_id"];
   "OrchestrationAction[task_assign].title": (Extract<V1.OrchestrationAction, { "action": "task_assign" }>)["title"];
@@ -206,6 +365,18 @@ export interface WireFields {
   "OrchestrationAction[reconcile_run].recovery": (Extract<V1.OrchestrationAction, { "action": "reconcile_run" }>)["recovery"];
   "OrchestrationAction[intent_resolve].intent_id": (Extract<V1.OrchestrationAction, { "action": "intent_resolve" }>)["intent_id"];
   "OrchestrationAction[intent_resolve].apply": (Extract<V1.OrchestrationAction, { "action": "intent_resolve" }>)["apply"];
+  "OrchestrationAction[thread_handoff].message_id": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["message_id"];
+  "OrchestrationAction[thread_handoff].thread_id": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["thread_id"];
+  "OrchestrationAction[thread_handoff].to_run_id": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["to_run_id"];
+  "OrchestrationAction[thread_handoff].text": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["text"];
+  "OrchestrationAction[thread_handoff].task_id": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["task_id"];
+  "OrchestrationAction[thread_handoff].expected_task_revision": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["expected_task_revision"];
+  "OrchestrationAction[thread_handoff].binding": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["binding"];
+  "OrchestrationAction[thread_mark_read].thread_id": (Extract<V1.OrchestrationAction, { "action": "thread_mark_read" }>)["thread_id"];
+  "OrchestrationAction[thread_mark_read].through_message_id": (Extract<V1.OrchestrationAction, { "action": "thread_mark_read" }>)["through_message_id"];
+  "OrchestrationAction[thread_link].root_id": (Extract<V1.OrchestrationAction, { "action": "thread_link" }>)["root_id"];
+  "OrchestrationAction[thread_link].task_id": (Extract<V1.OrchestrationAction, { "action": "thread_link" }>)["task_id"];
+  "OrchestrationAction[thread_link].thread_id": (Extract<V1.OrchestrationAction, { "action": "thread_link" }>)["thread_id"];
   "OrchestrationAction[report].message_id": (Extract<V1.OrchestrationAction, { "action": "report" }>)["message_id"];
   "OrchestrationAction[report].kind": (Extract<V1.OrchestrationAction, { "action": "report" }>)["kind"];
   "OrchestrationAction[report].outcome": (Extract<V1.OrchestrationAction, { "action": "report" }>)["outcome"];
@@ -215,6 +386,8 @@ export interface WireFields {
   "OrchestrationAction[report].to_run_id": (Extract<V1.OrchestrationAction, { "action": "report" }>)["to_run_id"];
   "OrchestrationAction[report].original_task_revision": (Extract<V1.OrchestrationAction, { "action": "report" }>)["original_task_revision"];
   "OrchestrationAction[report].original_claim_id": (Extract<V1.OrchestrationAction, { "action": "report" }>)["original_claim_id"];
+  "OrchestrationAction[report].thread_id": (Extract<V1.OrchestrationAction, { "action": "report" }>)["thread_id"];
+  "OrchestrationAction[report].card": (Extract<V1.OrchestrationAction, { "action": "report" }>)["card"];
   "OrchestrationAction[message_send].message_id": (Extract<V1.OrchestrationAction, { "action": "message_send" }>)["message_id"];
   "OrchestrationAction[message_send].to_run_id": (Extract<V1.OrchestrationAction, { "action": "message_send" }>)["to_run_id"];
   "OrchestrationAction[message_send].kind": (Extract<V1.OrchestrationAction, { "action": "message_send" }>)["kind"];
@@ -271,9 +444,30 @@ export interface WireFields {
 }
 
 export interface WireFieldNames {
+  "Run": "session_id" | "brief" | "run_id" | "kind" | "label" | "root_id" | "parent_run_id" | "task_id" | "attempt" | "assignment_generation" | "launch_config" | "task_revision_at_start" | "stage" | "close_reason" | "dispatch" | "target" | "setup" | "cleanup_policy" | "last_report" | "result" | "source_output" | "integration" | "annotations" | "project" | "checkout" | "attachment" | "checkout_claim_id" | "resume" | "retirement" | "created_at" | "updated_at";
+  "DispatchState": "launch_tag" | "endpoint_identity" | "scope_unit" | "pre_move_scope" | "latch" | "latch_state" | "source_location" | "move_operation_id" | "staging_workspace_id" | "recovery" | "agent_started" | "step" | "launch_attempt" | "error" | "updated_at";
+  "Annotation": "by" | "text" | "at";
+  "ActorRef": never;
+  "ActorRef[operator]": never;
+  "ActorRef[run]": "run_id";
+  "ActorRef[dispatcher]": never;
+  "Report": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "card" | "at";
+  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "in_reply_to" | "report" | "thread_id" | "handoff" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
+  "QuestionStatus": "run_id" | "question_message_id" | "asked_at" | "thread_id" | "receipt";
+  "QuestionReceipt": never;
+  "QuestionReceipt[unresolved]": never;
+  "QuestionReceipt[answer_delivered]": "answer";
+  "QuestionReceipt[answer_acknowledged]": "answer";
+  "AnswerReceipt": "sender" | "message_id" | "seq" | "stage" | "created_at" | "acked_at";
+  "TaskIntent": "intent_id" | "root_id" | "task_id" | "run_id" | "expected_task_revision" | "state" | "origin" | "supervisor_run_id" | "conversation" | "result_message_id";
+  "TaskAssignmentIntent": "root_id" | "task_id" | "state";
+  "RunObservation": "run_id" | "presence" | "actual_agent" | "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_status" | "state_changed_at";
+  "RuntimeObservation": never;
+  "RuntimeObservation[fresh]": "endpoint_identity" | "observed_at" | "runs";
+  "RuntimeObservation[unavailable]": "error";
   "Attention": "kind" | "run_id" | "task_id" | "message_seq" | "since";
   "OrchestrationAction": never;
-  "OrchestrationAction[task_create]": "root_id" | "task_id" | "title" | "description" | "depends_on" | "follow_up_of" | "expected_doc_revision" | "source_revision";
+  "OrchestrationAction[task_create]": "root_id" | "task_id" | "title" | "description" | "depends_on" | "follow_up_of" | "expected_doc_revision" | "source_revision" | "thread_id";
   "OrchestrationAction[task_assign]": "root_id" | "task_id" | "title" | "description";
   "OrchestrationAction[task_assignment_resolve]": "root_id" | "task_id" | "expected_task_revision" | "assign";
   "OrchestrationAction[task_update]": "root_id" | "task_id" | "expected_task_revision" | "title" | "description";
@@ -307,7 +501,10 @@ export interface WireFieldNames {
   "OrchestrationAction[cancel_run]": "run_id";
   "OrchestrationAction[reconcile_run]": "run_id" | "recovery";
   "OrchestrationAction[intent_resolve]": "intent_id" | "apply";
-  "OrchestrationAction[report]": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "to_run_id" | "original_task_revision" | "original_claim_id";
+  "OrchestrationAction[thread_handoff]": "message_id" | "thread_id" | "to_run_id" | "text" | "task_id" | "expected_task_revision" | "binding";
+  "OrchestrationAction[thread_mark_read]": "thread_id" | "through_message_id";
+  "OrchestrationAction[thread_link]": "root_id" | "task_id" | "thread_id";
+  "OrchestrationAction[report]": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "to_run_id" | "original_task_revision" | "original_claim_id" | "thread_id" | "card";
   "OrchestrationAction[message_send]": "message_id" | "to_run_id" | "kind" | "text" | "in_reply_to" | "original_task_revision" | "original_claim_id";
   "OrchestrationAction[annotate]": "run_id" | "text";
   "OrchestrationAction[inbox_pull]": "after_seq" | "limit";
@@ -336,6 +533,39 @@ export interface WireFieldNames {
 }
 
 export interface WireChildNames {
+  "Run.launch_config": "OrchestrationConfiguration";
+  "Run.dispatch": "DispatchState";
+  "Run.target": "DispatchTarget";
+  "Run.setup": "SetupSummary";
+  "Run.last_report": "Report";
+  "Run.result": "Report";
+  "Run.source_output": "SourceOutput";
+  "Run.integration": "Integration";
+  "Run.project": "ProjectIdentity";
+  "Run.checkout": "CheckoutIdentity";
+  "Run.attachment": "ExecutionAttachment";
+  "Run.resume": "ResumeRecord";
+  "Run.retirement": "RunRetirement";
+  "DispatchState.pre_move_scope": "OwnedProcessScope";
+  "DispatchState.latch": "AgentLaunchReceipt";
+  "DispatchState.source_location": "RunLocation";
+  "DispatchState.error": "ErrorResponse";
+  "Annotation.by": "ActorRef";
+  "Report.source_output": "SourceOutput";
+  "Report.card": "ThreadCard";
+  "Message.from": "ActorRef";
+  "Message.report": "Report";
+  "Message.handoff": "HandoffRecord";
+  "QuestionStatus.receipt": "QuestionReceipt";
+  "QuestionReceipt.answer": "AnswerReceipt";
+  "QuestionReceipt[answer_delivered].answer": "AnswerReceipt";
+  "QuestionReceipt[answer_acknowledged].answer": "AnswerReceipt";
+  "AnswerReceipt.sender": "ActorRef";
+  "TaskIntent.conversation": "ConversationIdentity";
+  "RuntimeObservation.error": "ErrorResponse";
+  "RuntimeObservation[unavailable].error": "ErrorResponse";
+  "OrchestrationAction.binding": "HandoffBinding";
+  "OrchestrationAction.card": "ThreadCard";
   "OrchestrationAction.conversation": "ConversationIdentity";
   "OrchestrationAction.location": "RunLocation";
   "OrchestrationAction.record": "IntegrationRecord";
@@ -355,7 +585,9 @@ export interface WireChildNames {
   "OrchestrationAction[resource_build_register].registration": "ResourceBuildRegistration";
   "OrchestrationAction[resource_register].request": "ResourceRegister";
   "OrchestrationAction[cleanup_finish].request": "CleanupFinish";
+  "OrchestrationAction[thread_handoff].binding": "HandoffBinding";
   "OrchestrationAction[report].source_output": "SourceOutput";
+  "OrchestrationAction[report].card": "ThreadCard";
   "OrchestrationActionResult.attach": "RunAttachResult";
   "OrchestrationActionResult.cleanup": "CleanupFinishResult";
   "OrchestrationActionResult.conversation": "ConversationIdentity";
@@ -384,6 +616,17 @@ export interface WireChildNames {
 }
 
 export interface WireTagNames {
+  "ActorRef": "type";
+  "ActorRef[operator]": "type";
+  "ActorRef[run]": "type";
+  "ActorRef[dispatcher]": "type";
+  "QuestionReceipt": "status";
+  "QuestionReceipt[unresolved]": "status";
+  "QuestionReceipt[answer_delivered]": "status";
+  "QuestionReceipt[answer_acknowledged]": "status";
+  "RuntimeObservation": "status";
+  "RuntimeObservation[fresh]": "status";
+  "RuntimeObservation[unavailable]": "status";
   "OrchestrationAction": "action";
   "OrchestrationAction[task_create]": "action";
   "OrchestrationAction[task_assign]": "action";
@@ -419,6 +662,9 @@ export interface WireTagNames {
   "OrchestrationAction[cancel_run]": "action";
   "OrchestrationAction[reconcile_run]": "action";
   "OrchestrationAction[intent_resolve]": "action";
+  "OrchestrationAction[thread_handoff]": "action";
+  "OrchestrationAction[thread_mark_read]": "action";
+  "OrchestrationAction[thread_link]": "action";
   "OrchestrationAction[report]": "action";
   "OrchestrationAction[message_send]": "action";
   "OrchestrationAction[annotate]": "action";
@@ -448,9 +694,30 @@ export interface WireTagNames {
 }
 
 export interface WireCheckpointFieldNames {
+  "Run": "session_id" | "brief" | "run_id" | "kind" | "label" | "root_id" | "parent_run_id" | "task_id" | "attempt" | "assignment_generation" | "launch_config" | "task_revision_at_start" | "stage" | "close_reason" | "dispatch" | "target" | "setup" | "cleanup_policy" | "last_report" | "result" | "source_output" | "integration" | "annotations" | "project" | "checkout" | "attachment" | "checkout_claim_id" | "resume" | "retirement" | "created_at" | "updated_at";
+  "DispatchState": "launch_tag" | "endpoint_identity" | "scope_unit" | "pre_move_scope" | "latch" | "latch_state" | "source_location" | "move_operation_id" | "staging_workspace_id" | "recovery" | "agent_started" | "step" | "launch_attempt" | "error" | "updated_at";
+  "Annotation": "by" | "text" | "at";
+  "ActorRef": "run_id" | "type";
+  "ActorRef[operator]": "type";
+  "ActorRef[run]": "run_id" | "type";
+  "ActorRef[dispatcher]": "type";
+  "Report": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "card" | "at";
+  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "in_reply_to" | "report" | "thread_id" | "handoff" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
+  "QuestionStatus": "run_id" | "question_message_id" | "asked_at" | "thread_id" | "receipt";
+  "QuestionReceipt": "answer" | "status";
+  "QuestionReceipt[unresolved]": "status";
+  "QuestionReceipt[answer_delivered]": "answer" | "status";
+  "QuestionReceipt[answer_acknowledged]": "answer" | "status";
+  "AnswerReceipt": "sender" | "message_id" | "seq" | "stage" | "created_at" | "acked_at";
+  "TaskIntent": "intent_id" | "root_id" | "task_id" | "run_id" | "expected_task_revision" | "state" | "origin" | "supervisor_run_id" | "conversation" | "result_message_id";
+  "TaskAssignmentIntent": "root_id" | "task_id" | "state";
+  "RunObservation": "run_id" | "presence" | "actual_agent" | "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_status" | "state_changed_at";
+  "RuntimeObservation": "endpoint_identity" | "error" | "observed_at" | "runs" | "status";
+  "RuntimeObservation[fresh]": "endpoint_identity" | "observed_at" | "runs" | "status";
+  "RuntimeObservation[unavailable]": "error" | "status";
   "Attention": "kind" | "run_id" | "task_id" | "message_seq" | "since";
-  "OrchestrationAction": "action" | "after_seq" | "apply" | "assign" | "attachment_id" | "before_step_id" | "brief" | "checked" | "cleanup_policy" | "confirmed_stopped_attachment_id" | "conversation" | "depends_on" | "description" | "expected_assignment_generation" | "expected_attachment_epoch" | "expected_doc_revision" | "expected_run_id" | "expected_task_revision" | "follow_up_of" | "in_reply_to" | "intent_id" | "kind" | "label" | "limit" | "location" | "message_id" | "operation_id" | "original_claim_id" | "original_task_revision" | "outcome" | "parent_step_id" | "plan" | "reason" | "record" | "recovery" | "registration" | "release" | "request" | "root_id" | "run_id" | "scope" | "selected_root_id" | "source_output" | "source_revision" | "step_id" | "summary" | "target" | "task_id" | "text" | "through_seq" | "title" | "to_run_id";
-  "OrchestrationAction[task_create]": "root_id" | "task_id" | "title" | "description" | "depends_on" | "follow_up_of" | "expected_doc_revision" | "source_revision" | "action";
+  "OrchestrationAction": "action" | "after_seq" | "apply" | "assign" | "attachment_id" | "before_step_id" | "binding" | "brief" | "card" | "checked" | "cleanup_policy" | "confirmed_stopped_attachment_id" | "conversation" | "depends_on" | "description" | "expected_assignment_generation" | "expected_attachment_epoch" | "expected_doc_revision" | "expected_run_id" | "expected_task_revision" | "follow_up_of" | "in_reply_to" | "intent_id" | "kind" | "label" | "limit" | "location" | "message_id" | "operation_id" | "original_claim_id" | "original_task_revision" | "outcome" | "parent_step_id" | "plan" | "reason" | "record" | "recovery" | "registration" | "release" | "request" | "root_id" | "run_id" | "scope" | "selected_root_id" | "source_output" | "source_revision" | "step_id" | "summary" | "target" | "task_id" | "text" | "thread_id" | "through_message_id" | "through_seq" | "title" | "to_run_id";
+  "OrchestrationAction[task_create]": "root_id" | "task_id" | "title" | "description" | "depends_on" | "follow_up_of" | "expected_doc_revision" | "source_revision" | "thread_id" | "action";
   "OrchestrationAction[task_assign]": "root_id" | "task_id" | "title" | "description" | "action";
   "OrchestrationAction[task_assignment_resolve]": "root_id" | "task_id" | "expected_task_revision" | "assign" | "action";
   "OrchestrationAction[task_update]": "root_id" | "task_id" | "expected_task_revision" | "title" | "description" | "action";
@@ -484,7 +751,10 @@ export interface WireCheckpointFieldNames {
   "OrchestrationAction[cancel_run]": "run_id" | "action";
   "OrchestrationAction[reconcile_run]": "run_id" | "recovery" | "action";
   "OrchestrationAction[intent_resolve]": "intent_id" | "apply" | "action";
-  "OrchestrationAction[report]": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "to_run_id" | "original_task_revision" | "original_claim_id" | "action";
+  "OrchestrationAction[thread_handoff]": "message_id" | "thread_id" | "to_run_id" | "text" | "task_id" | "expected_task_revision" | "binding" | "action";
+  "OrchestrationAction[thread_mark_read]": "thread_id" | "through_message_id" | "action";
+  "OrchestrationAction[thread_link]": "root_id" | "task_id" | "thread_id" | "action";
+  "OrchestrationAction[report]": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "to_run_id" | "original_task_revision" | "original_claim_id" | "thread_id" | "card" | "action";
   "OrchestrationAction[message_send]": "message_id" | "to_run_id" | "kind" | "text" | "in_reply_to" | "original_task_revision" | "original_claim_id" | "action";
   "OrchestrationAction[annotate]": "run_id" | "text" | "action";
   "OrchestrationAction[inbox_pull]": "after_seq" | "limit" | "action";
@@ -513,12 +783,66 @@ export interface WireCheckpointFieldNames {
 }
 
 export type WireOmittableField =
+  | "Run.parent_run_id"
+  | "Run.task_id"
+  | "Run.assignment_generation"
+  | "Run.task_revision_at_start"
+  | "Run.close_reason"
+  | "Run.dispatch"
+  | "Run.target"
+  | "Run.setup"
+  | "Run.cleanup_policy"
+  | "Run.last_report"
+  | "Run.result"
+  | "Run.source_output"
+  | "Run.integration"
+  | "Run.project"
+  | "Run.checkout"
+  | "Run.attachment"
+  | "Run.checkout_claim_id"
+  | "Run.resume"
+  | "Run.retirement"
+  | "DispatchState.launch_tag"
+  | "DispatchState.endpoint_identity"
+  | "DispatchState.scope_unit"
+  | "DispatchState.pre_move_scope"
+  | "DispatchState.latch"
+  | "DispatchState.latch_state"
+  | "DispatchState.source_location"
+  | "DispatchState.move_operation_id"
+  | "DispatchState.staging_workspace_id"
+  | "DispatchState.recovery"
+  | "DispatchState.error"
+  | "Report.outcome"
+  | "Report.plan"
+  | "Report.source_output"
+  | "Report.card"
+  | "Message.in_reply_to"
+  | "Message.report"
+  | "Message.thread_id"
+  | "Message.handoff"
+  | "Message.escalated_from"
+  | "Message.acked_at"
+  | "QuestionStatus.thread_id"
+  | "AnswerReceipt.acked_at"
+  | "TaskIntent.origin"
+  | "TaskIntent.supervisor_run_id"
+  | "TaskIntent.conversation"
+  | "TaskIntent.result_message_id"
+  | "RunObservation.workspace_id"
+  | "RunObservation.workspace_label"
+  | "RunObservation.tab_id"
+  | "RunObservation.tab_label"
+  | "RunObservation.pane_id"
+  | "RunObservation.agent_status"
+  | "RunObservation.state_changed_at"
   | "Attention.run_id"
   | "Attention.task_id"
   | "Attention.message_seq"
   | "OrchestrationAction[task_create].follow_up_of"
   | "OrchestrationAction[task_create].expected_doc_revision"
   | "OrchestrationAction[task_create].source_revision"
+  | "OrchestrationAction[task_create].thread_id"
   | "OrchestrationAction[task_assignment_resolve].expected_task_revision"
   | "OrchestrationAction[task_update].title"
   | "OrchestrationAction[task_update].description"
@@ -539,12 +863,17 @@ export type WireOmittableField =
   | "OrchestrationAction[task_scope_update].title"
   | "OrchestrationAction[task_scope_update].description"
   | "OrchestrationAction[reconcile_run].recovery"
+  | "OrchestrationAction[thread_handoff].task_id"
+  | "OrchestrationAction[thread_handoff].expected_task_revision"
+  | "OrchestrationAction[thread_handoff].binding"
   | "OrchestrationAction[report].outcome"
   | "OrchestrationAction[report].plan"
   | "OrchestrationAction[report].source_output"
   | "OrchestrationAction[report].to_run_id"
   | "OrchestrationAction[report].original_task_revision"
   | "OrchestrationAction[report].original_claim_id"
+  | "OrchestrationAction[report].thread_id"
+  | "OrchestrationAction[report].card"
   | "OrchestrationAction[message_send].in_reply_to"
   | "OrchestrationAction[message_send].original_task_revision"
   | "OrchestrationAction[message_send].original_claim_id"
@@ -554,14 +883,26 @@ export type WireOmittableField =
   | never;
 
 export type WireOptionalField =
+  | "Report.card"
+  | "Message.thread_id"
+  | "Message.handoff"
+  | "QuestionStatus.thread_id"
+  | "OrchestrationAction[task_create].thread_id"
   | "OrchestrationAction[run_resume].confirmed_stopped_attachment_id"
+  | "OrchestrationAction[thread_handoff].task_id"
+  | "OrchestrationAction[thread_handoff].expected_task_revision"
+  | "OrchestrationAction[thread_handoff].binding"
   | "OrchestrationAction[report].original_task_revision"
   | "OrchestrationAction[report].original_claim_id"
+  | "OrchestrationAction[report].thread_id"
+  | "OrchestrationAction[report].card"
   | "OrchestrationAction[message_send].original_task_revision"
   | "OrchestrationAction[message_send].original_claim_id"
   | never;
 
 export type WireListField =
+  | "Run.annotations"
+  | "RuntimeObservation[fresh].runs"
   | "OrchestrationAction[task_create].depends_on"
   | "OrchestrationAction[task_dependencies_set].depends_on"
   | "OrchestrationActionResult[inbox].messages"

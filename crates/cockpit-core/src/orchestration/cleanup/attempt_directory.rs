@@ -231,7 +231,7 @@ mod tests {
                     outcome: CheckStatus::Passed, evidence: None, limitation: None,
                 }] };
             run.source_output = Some(source_output.clone());
-            run.result = Some(Report { message_id: "result".into(), kind: ReportKind::Result,
+            run.result = Some(Report { card: None, message_id: "result".into(), kind: ReportKind::Result,
                 outcome: Some(ReportOutcome::Succeeded), summary: "Accepted non-code output".into(), plan: None,
                 source_output: Some(source_output), at: now() });
             run.integration = Integration::NotApplicable { result_message_id: "result".into(), reason: "Non-code artifact".into() };

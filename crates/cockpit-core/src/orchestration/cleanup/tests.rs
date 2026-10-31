@@ -977,7 +977,7 @@ async fn terminal_capture_defers_preexec_and_stale_cache_then_preserves_exact_po
     assert!(crate::process_identity::executable_identity(pid, start).is_err());
     run.stage = RunStage::Closed;
     run.close_reason = Some(CloseReason::Accepted);
-    run.result = Some(Report { message_id: "actual-result".into(), kind: ReportKind::Result,
+    run.result = Some(Report { card: None, message_id: "actual-result".into(), kind: ReportKind::Result,
         outcome: Some(ReportOutcome::Succeeded), summary: "actual completed test child".into(),
         plan: None, source_output: None, at: now() });
     run.retirement = retirement::retirement_for_accepted(&run, RetirementTrigger::Accept, "revision", &now());

@@ -2,6 +2,18 @@
 
 These are historical observations, not proof of the current checkout. Each named original source occurrence is reproduced verbatim, including mixed current-rule/result paragraphs, obsolete wording, dates and limitations. Current architecture, rules and source owners live in the root documents. Undated cohorts retain source context rather than an invented run date.
 
+## Inbox routing and Workbench (2026-11-01)
+
+Selected checks: final core run passed 1,246 tests with one ignored; the targeted private CLI no-extension test passed one; frontend production build passed. An initial frontend run had 107 files passing and two failing out of 109; after an incidental assertion correction the affected 221 tests passed, and the latest Inbox suite passed 12 tests. Python fixture tests passed five. These are separate runs, not a single all-workspace-green pass.
+
+In disposable session `polish-cfifkmx3`, the browser used the real owner OMP with existing authentication, enabled only with user permission. Root `191ebe74-42cd-4496-8d82-37755a7877b9` handed off to thread `f4f3305d-1d4d-4d3c-8fbe-28fd557a923f`; the model published a NeedsInput choice, the browser answered “Sample only” after a Space change, and the root generated “Received the answer: Sample only. No project files were changed.” Handoff and Answer were acknowledged. The returned owner card retained OMP source; Open Supervisor reached `w2:p1`, visiting kept the result unread, and explicit Mark read made it handled. Evidence: `/tmp/cpol-cfifkmx3/evidence/inbox-model-loop.json`.
+
+The built native app in an owned nested Niri session used actual IPC to project Inbox “Other work 1” / “Nothing needs you”; the Workbench canvas was absent in Inbox and present in Workbench. The acknowledged `native-focus` tag persisted across the screen return and the Git no-upstream marker was visible. These are focused disposable browser/native observations, not installed-native, macOS or Copilot-model acceptance. The fixture remained running at this observation; its owner handles cleanup separately.
+
+After final visual polish, the frontend build passed and the Inbox, App integration and orchestration protocol suites passed 234 tests across three files. Browser checks at 1040×800 and 390×844 found no horizontal overflow; mobile Back to Inbox restored the list, and an explicit choice entered Answer mode with the draft retained. Screenshots: `/tmp/omp-sshots-15bc5d75852c0dc4.webp` and `/tmp/omp-sshots-15bc5d896e2c0dc5.webp`.
+
+The default-GPU native fixture initially passed Inbox read and Workbench Git/tag preservation, but its GTK main loop stalled on input; a bounded debugger attachment located the main stack in Wayland buffer swap, then detached and resumed. Only the owned native app and driver were restarted with `GDK_GL=disable WEBKIT_DISABLE_COMPOSITING_MODE=1`, not product or global settings. On the latest polished UI that software fallback completed a second actual OMP intake, question, “Sample only” answer and model result “Native check complete … Received Sample only; no project files changed.” Screenshot: `/tmp/cpol-cfifkmx3/evidence/native-inbox-focused.png`. The final default-GPU composer path remains unproven; macOS was not run.
+
 ## Agent launch, worker reuse and widget components (2026-10-28)
 
 Full workspace tests passed (1,835 tests; nine ignored), as did all 1,499 frontend tests, TypeScript checking, the production frontend build and explicit CLI/native builds. Existing ts-rs, deprecated AsyncFd, dead-code and Vite chunk-size diagnostics were not suppressed. Two obsolete Quick Terminal pixel-layout/wiring tests were removed rather than repinned.

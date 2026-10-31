@@ -142,6 +142,7 @@ pub(in crate::orchestration) fn worker_start(
     if dependencies::DependencyGraph::new(&document.tasks).evaluate(task).state == TaskDependencyState::Invalid {
         return Err(error("task_dependencies_invalid", "Task relationships are structurally invalid"));
     }
+    check_binding(ctx.state, root_id, task_id, target, ctx.resolved)?;
     let generation = ownership_index(ctx.state, root_id, task_id);
     let generation = ctx.state.task_ownership[generation].generation.checked_add(1)
         .ok_or_else(|| error("invalid_counter", "Task assignment generation exhausted"))?;
@@ -164,6 +165,64 @@ pub(in crate::orchestration) struct AttemptRequest<'a> {
     pub cleanup_policy: WorkerCleanupPolicy,
     pub label: Option<&'a str>,
     pub generation: u64,
+}
+
+/// Enforce every explicit handoff linked to this task against the freshly
+/// resolved source and the actual placement selected for the attempt.
+pub(in crate::orchestration) fn check_binding(
+    state: &OrchestrationState, root_id: &str, task_id: &str,
+    target: &DispatchTarget, resolved: Option<&ResolvedMutationInput>,
+) -> Result<(), InspectionError> {
+    for link in state.thread_links.iter().filter(|link| link.root_id == root_id && link.task_id == task_id) {
+        for binding in state.messages.iter().filter(|message|
+            message.to_run_id == root_id && message.thread_id.as_deref() == Some(link.thread_id.as_str()))
+            .filter_map(|message| message.handoff.as_ref().and_then(|handoff| handoff.binding.as_ref()))
+        {
+            let requested = &binding.requested;
+            let project = resolved.and_then(|input| input.project.as_ref());
+            if requested.repository_id.is_some() || binding.workspace_checkout.as_ref().and_then(|checkout| checkout.common_dir.as_ref()).is_some() {
+                let expected = if requested.repository_id.is_some() {
+                    binding.repository_common_dir.as_ref()
+                } else {
+                    binding.workspace_checkout.as_ref().and_then(|checkout| checkout.common_dir.as_ref())
+                };
+                let actual = project.and_then(|project| match &project.source {
+                    ProjectSource::Git { common_dir } => Some(common_dir),
+                    _ => None,
+                });
+                if expected.is_none() || actual != expected {
+                    return Err(error("handoff_binding_mismatch", format!("Expected repository {}", expected.map(String::as_str).or(requested.repository_id.as_deref()).unwrap_or("bound Space repository"))));
+                }
+            }
+            if let Some(workspace) = &requested.workspace_id
+                && project.and_then(|project| project.source_workspace_id.as_ref()) != Some(workspace) {
+                return Err(error("handoff_binding_mismatch", format!("Expected Space {workspace}")));
+            }
+            let (branch, base) = match target {
+                DispatchTarget::SpaceWorktree { branch, base_ref, .. }
+                | DispatchTarget::Setup { request: WorkspaceSetupRequest::Create { branch, base_ref, .. } } =>
+                    (branch.as_deref(), base_ref.as_deref()),
+                DispatchTarget::ExistingSpace { .. }
+                | DispatchTarget::Setup { request: WorkspaceSetupRequest::Open { .. } } =>
+                    (resolved.and_then(|input| input.checkout_branch.as_deref()), None),
+                _ => (None, None),
+            };
+            if let Some(expected) = &requested.branch && branch != Some(expected.as_str()) {
+                return Err(error("handoff_binding_mismatch", format!("Expected branch {expected}")));
+            }
+            if let Some(expected) = &requested.base_ref && base != Some(expected.as_str()) {
+                return Err(error("handoff_binding_mismatch", format!("Expected base {expected}")));
+            }
+            if requested.workspace_id.is_some() && requested.base_ref.is_none()
+                && matches!(target, DispatchTarget::SpaceWorktree { .. })
+                && let Some(base) = base
+                && base != "HEAD"
+                && binding.workspace_checkout.as_ref().and_then(|checkout| checkout.branch.as_deref()) != Some(base) {
+                return Err(error("handoff_binding_mismatch", format!("Expected base HEAD or bound Space branch; got {base}")));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn ownership_index(state: &mut OrchestrationState, root_id: &str, task_id: &str) -> usize {
@@ -402,6 +461,9 @@ pub(super) fn worker_replace(ctx: &mut MutationCtx<'_>, action: OrchestrationAct
             None => return Err(error("replacement_source_unavailable", "Replacement requires a revalidated Git checkpoint or original Directory source")),
         }
     };
+    // Replacement is a new placement decision and must preserve every explicit
+    // handoff binding before the current owner or its claims are changed.
+    check_binding(ctx.state, root_id, task_id, &target, Some(resolved))?;
     // Preserve the original task brief rather than nesting every replacement's
     // recovery header. Progress is evidence to inspect, never a stale directive.
     let original_brief = ctx.state.task_ownership.iter().find(|ownership|
@@ -483,7 +545,7 @@ pub(in crate::orchestration) fn cancel(
     state.runs[index].stage = RunStage::Closed;
     state.runs[index].close_reason = Some(CloseReason::Cancelled);
     let from = actor_ref(actor, caller, state);
-    messages::append(state, messages::AppendMessage { from, to_run_id: &run_id, message_id: &format!("cancel-{}", id()), kind: MessageKind::CancelRequest, text: "Tracking is closed for this run. Please stop and report outstanding effects. This advisory request does not guarantee process termination; resources and descendants are retained.", in_reply_to: None, report: None, stale: false, escalated_from: None })?;
+    messages::append(state, messages::AppendMessage { thread_id: None, handoff: None, from, to_run_id: &run_id, message_id: &format!("cancel-{}", id()), kind: MessageKind::CancelRequest, text: "Tracking is closed for this run. Please stop and report outstanding effects. This advisory request does not guarantee process termination; resources and descendants are retained.", in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     let annotation = decision_annotation(
         actor_ref(actor, caller, state),
         &provenance,
@@ -718,6 +780,7 @@ impl OrchestrationService {
         if schedule.target.is_none() && root.project.as_ref().is_some_and(|expected| expected.key != project.key) {
             return Err(error("project_conflict", "Scheduled source no longer belongs to the liaison project"));
         }
+        check_binding(&state, &candidate.root_id, &candidate.task_id, &target, Some(resolved))?;
         let inputs = input_snapshot(&state, &locked, &candidate.session_id, &candidate.root_id, &candidate.task_id)?;
         if let Some(commit) = materialized_inputs(&inputs, project, resolved.schedule_inputs.as_ref())? {
             freeze_input_base(&mut target, &commit);
@@ -853,6 +916,89 @@ mod capacity_tests {
             source_workspace_id: None,
         });
         run
+    }
+
+    fn bound_state(binding: HandoffBindingRecord) -> OrchestrationState {
+        let mut state = OrchestrationState::default();
+        state.thread_links.push(store::ThreadLinkRecord {
+            thread_id: "thread".into(), root_id: "root".into(), task_id: "task".into(),
+            linked_by: ActorRef::Operator, at: "now".into(),
+        });
+        state.messages.push(Message {
+            message_id: "message".into(), to_run_id: "root".into(), seq: 1,
+            from: ActorRef::Operator, kind: MessageKind::Instruction, text: "work".into(),
+            in_reply_to: None, report: None, thread_id: Some("thread".into()),
+            handoff: Some(HandoffRecord { task_id: None, task_revision: None, attempt_run_id: None,
+                binding: Some(binding), origin: OperatorOrigin::Native }),
+            stale: false, escalated_from: None, stage: DeliveryStage::Stored,
+            created_at: "now".into(), acked_at: None,
+        });
+        state
+    }
+
+    #[test]
+    fn linked_handoffs_enforce_repository_space_branch_and_base() {
+        let binding = HandoffBindingRecord {
+            requested: HandoffBinding { repository_id: Some("repo".into()), workspace_id: Some("space".into()),
+                branch: Some("feature".into()), base_ref: Some("main".into()) },
+            repository_common_dir: Some("/repo/.git".into()),
+            workspace_checkout: Some(BoundCheckout { path: "/repo".into(), common_dir: Some("/repo/.git".into()),
+                branch: Some("main".into()), head: Some("abc".into()) }),
+        };
+        let state = bound_state(binding);
+        let mut resolved = ResolvedMutationInput { project: Some(ProjectIdentity {
+            key: "git".into(), source: ProjectSource::Git { common_dir: "/repo/.git".into() },
+            repository_id: None, source_workspace_id: Some("space".into()),
+        }), checkout_branch: Some("feature".into()), ..Default::default() };
+        let target = DispatchTarget::SpaceWorktree { workspace_id: "space".into(),
+            branch: Some("feature".into()), base_ref: Some("main".into()) };
+        assert!(check_binding(&state, "root", "task", &target, Some(&resolved)).is_ok());
+        let wrong_branch = DispatchTarget::SpaceWorktree { workspace_id: "space".into(),
+            branch: Some("wrong".into()), base_ref: Some("main".into()) };
+        assert!(check_binding(&state, "root", "task", &wrong_branch, Some(&resolved)).is_err());
+        resolved.project.as_mut().unwrap().source = ProjectSource::Git { common_dir: "/other/.git".into() };
+        assert_eq!(check_binding(&state, "root", "task", &target, Some(&resolved)).unwrap_err().code, "handoff_binding_mismatch");
+        assert!(check_binding(&state, "root", "other-task", &target, Some(&resolved)).is_ok());
+        resolved.project.as_mut().unwrap().source = ProjectSource::Git { common_dir: "/repo/.git".into() };
+        resolved.project.as_mut().unwrap().source_workspace_id = Some("other".into());
+        assert!(check_binding(&state, "root", "task", &target, Some(&resolved)).is_err());
+        resolved.project.as_mut().unwrap().source_workspace_id = Some("space".into());
+        let existing = DispatchTarget::ExistingSpace { workspace_id: "space".into() };
+        assert!(check_binding(&state, "root", "task", &existing, Some(&resolved)).is_err());
+        let open = DispatchTarget::Setup { request: WorkspaceSetupRequest::Open {
+            path: "/repo".into(), label: None, task_name: None, focus: false,
+        }};
+        assert!(check_binding(&state, "root", "task", &open, Some(&resolved)).is_err());
+        let mut branch_only = state.clone();
+        branch_only.messages[0].handoff.as_mut().unwrap().binding.as_mut().unwrap().requested.base_ref = None;
+        assert!(check_binding(&branch_only, "root", "task", &open, Some(&resolved)).is_ok());
+        assert!(check_binding(&branch_only, "root", "task", &existing, Some(&resolved)).is_ok());
+        resolved.checkout_branch = Some("other".into());
+        assert!(check_binding(&branch_only, "root", "task", &open, Some(&resolved)).is_err());
+        assert!(check_binding(&branch_only, "root", "task", &existing, Some(&resolved)).is_err());
+    }
+
+    #[test]
+    fn space_binding_allows_only_its_branch_or_head_as_implicit_base() {
+        let state = bound_state(HandoffBindingRecord {
+            requested: HandoffBinding { repository_id: None, workspace_id: Some("space".into()),
+                branch: None, base_ref: None },
+            repository_common_dir: None,
+            workspace_checkout: Some(BoundCheckout { path: "/repo".into(), common_dir: Some("/repo/.git".into()),
+                branch: Some("main".into()), head: None }),
+        });
+        let resolved = ResolvedMutationInput { project: Some(ProjectIdentity {
+            key: "git".into(), source: ProjectSource::Git { common_dir: "/repo/.git".into() },
+            repository_id: None, source_workspace_id: Some("space".into()),
+        }), ..Default::default() };
+        for base in [None, Some("HEAD"), Some("main")] {
+            let target = DispatchTarget::SpaceWorktree { workspace_id: "space".into(),
+                branch: None, base_ref: base.map(str::to_owned) };
+            assert!(check_binding(&state, "root", "task", &target, Some(&resolved)).is_ok());
+        }
+        let target = DispatchTarget::SpaceWorktree { workspace_id: "space".into(),
+            branch: None, base_ref: Some("other".into()) };
+        assert!(check_binding(&state, "root", "task", &target, Some(&resolved)).is_err());
     }
 
     #[test]

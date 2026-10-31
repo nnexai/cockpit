@@ -128,20 +128,18 @@ fn main_actor(run_id: &str) -> Actor {
 
 
 fn report(id: &str, kind: ReportKind, destination: Option<&str>) -> OrchestrationAction {
-    OrchestrationAction::Report {
-        message_id: id.into(),
-        kind,
-        outcome: (kind == ReportKind::Result).then_some(ReportOutcome::Succeeded),
-        summary: format!("summary-{id}"),
-        plan: (kind == ReportKind::Initialized).then(|| "Inspect, change, then verify.".into()),
-        source_output: (kind == ReportKind::Result).then(|| SourceOutput::NonCode {
-            result_message_id: id.into(), task_revision: "task-revision".into(),
-            artifacts: Vec::new(), focused_checks: Vec::new(),
-        }),
-        to_run_id: destination.map(str::to_owned),
-        original_task_revision: None,
-        original_claim_id: None,
-    }
+    OrchestrationAction::Report { thread_id: None, card: None, message_id: id.into(),
+    kind,
+    outcome: (kind == ReportKind::Result).then_some(ReportOutcome::Succeeded),
+    summary: format!("summary-{id}"),
+    plan: (kind == ReportKind::Initialized).then(|| "Inspect, change, then verify.".into()),
+    source_output: (kind == ReportKind::Result).then(|| SourceOutput::NonCode {
+        result_message_id: id.into(), task_revision: "task-revision".into(),
+        artifacts: Vec::new(), focused_checks: Vec::new(),
+    }),
+    to_run_id: destination.map(str::to_owned),
+    original_task_revision: None,
+    original_claim_id: None, }
 }
 
 fn send(id: &str, kind: MessageKind, question: Option<&str>) -> OrchestrationAction {
@@ -205,6 +203,83 @@ fn root_answer(id: &str, question: Option<&str>) -> OrchestrationAction {
         original_task_revision: None, original_claim_id: None,
     }
 }
+fn thread_report(id: &str, thread: &str, kind: ReportKind) -> OrchestrationAction {
+    let mut action = report(id, kind, None);
+    if let OrchestrationAction::Report { thread_id, card, .. } = &mut action {
+        *thread_id = Some(thread.into());
+        *card = Some(ThreadCard { title: "Decision".into(), next: "Choose".into(),
+            recommendation: None, choices: Vec::new(), project: None });
+    }
+    action
+}
+
+#[test]
+fn thread_questions_are_independent_and_root_answers_race_once() {
+    let mut state = state();
+    let root = main_actor("root");
+    let a = uuid::Uuid::new_v4().to_string();
+    let b = uuid::Uuid::new_v4().to_string();
+    mutation(&mut state, &root, 0, &thread_report("qa", &a, ReportKind::NeedsInput));
+    mutation(&mut state, &root, 0, &thread_report("qb", &b, ReportKind::NeedsInput));
+    assert_eq!(current_questions(&state.messages, "root").len(), 2);
+    let inbox = state.messages.iter().filter(|message| message.to_run_id == "root").collect::<Vec<_>>();
+    let statuses = super::super::projection::question_statuses(&state.runs[0], &inbox, &state.messages);
+    assert_eq!(statuses.len(), 2);
+    assert!(statuses.iter().all(|status| matches!(status.receipt, QuestionReceipt::Unresolved)));
+    let operator = Actor::Operator(OperatorOrigin::Browser);
+    apply(&mut state, &operator, None, false, &root_answer("aa", Some("qa"))).unwrap();
+    assert_eq!(state.messages.last().unwrap().thread_id.as_deref(), Some(a.as_str()));
+    let inbox = state.messages.iter().filter(|message| message.to_run_id == "root").collect::<Vec<_>>();
+    let statuses = super::super::projection::question_statuses(&state.runs[0], &inbox, &state.messages);
+    assert!(statuses.iter().any(|status| status.question_message_id == "qa" && matches!(status.receipt, QuestionReceipt::AnswerDelivered { .. })));
+    assert!(statuses.iter().any(|status| status.question_message_id == "qb" && matches!(status.receipt, QuestionReceipt::Unresolved)));
+    assert_error(&mut state, &root, 0, &root_answer("aa-race", Some("qa")), "question_already_answered");
+    mutation(&mut state, &root, 0, &root_answer("ab", Some("qb")));
+    assert_rejected_without_mutation(&mut state, &root_answer("ab-race", Some("qb")), "question_already_answered");
+    mutation(&mut state, &root, 0, &thread_report("qa2", &a, ReportKind::NeedsInput));
+    assert_rejected_without_mutation(&mut state, &root_answer("old", Some("qa")), "question_not_current");
+    assert_eq!(current_question_for(&state.messages, "root", Some(&b)).unwrap().message_id, "qb");
+    mutation(&mut state, &root, 0, &thread_report("result-a", &a, ReportKind::Result));
+    assert!(current_question_for(&state.messages, "root", Some(&a)).is_none());
+    assert!(current_question_for(&state.messages, "root", Some(&b)).is_some());
+}
+
+#[test]
+fn thread_card_dedupe_and_worker_restrictions() {
+    let mut state = state();
+    let root = main_actor("root");
+    let worker = main_actor("worker");
+    let thread = uuid::Uuid::new_v4().to_string();
+    let action = thread_report("q", &thread, ReportKind::NeedsInput);
+    assert_error(&mut state, &worker, 1, &action, "thread_forbidden");
+    mutation(&mut state, &root, 0, &action);
+    let mut changed = action.clone();
+    if let OrchestrationAction::Report { card: Some(card), .. } = &mut changed {
+        card.recommendation = Some("A different choice".into());
+    }
+    assert_error(&mut state, &root, 0, &changed, "message_id_conflict");
+    if let OrchestrationAction::Report { card: Some(card), .. } = &mut changed {
+        card.title = "two\nlines".into();
+    }
+    assert_error(&mut state, &root, 0, &changed, "invalid_card");
+}
+
+#[test]
+fn worker_self_answer_wakes_owner_with_actual_answer() {
+    let mut state = state();
+    let worker = main_actor("worker");
+    mutation(&mut state, &worker, 1, &report("worker-q", ReportKind::NeedsInput, None));
+    mutation(&mut state, &worker, 1, &send("worker-a", MessageKind::Answer, Some("worker-q")));
+    let answer = state.messages.iter().find(|message| message.message_id == "worker-a").unwrap();
+    assert_eq!(answer.thread_id.as_deref(), Some("worker-q"));
+    let notice = state.messages.iter().find(|message| message.message_id == "resolved-worker-worker-a").unwrap();
+    assert_eq!(notice.to_run_id, "root");
+    assert!(inbox_meaningful(notice));
+    let payload: serde_json::Value = serde_json::from_str(&notice.text).unwrap();
+    assert_eq!(payload["event"], "question_resolved_in_session");
+    assert_eq!(payload["answer_text"], "Proceed with the approved choice");
+}
+
 
 #[test]
 fn root_relays_exact_human_answer_and_capture_receipts_do_not_rewrite_reports() {
@@ -223,13 +298,13 @@ fn root_relays_exact_human_answer_and_capture_receipts_do_not_rewrite_reports() 
     assert_eq!(state.runs[0].last_report.as_ref().unwrap().message_id, "later-progress");
     assert_eq!(state.runs[0].stage, RunStage::Active);
     let inbox = state.messages.iter().filter(|message| message.to_run_id == "root").collect::<Vec<_>>();
-    let question = super::super::projection::question_status(&state.runs[0], &inbox, &state.messages).unwrap();
+    let question = super::super::projection::question_statuses(&state.runs[0], &inbox, &state.messages).into_iter().next().unwrap();
     assert!(matches!(question.receipt, QuestionReceipt::AnswerDelivered { .. }));
     let OrchestrationActionResult::Inbox { read_through_seq, .. } =
         mutation(&mut state, &root, 0, &OrchestrationAction::InboxPull { after_seq: 0, limit: 100 }) else { unreachable!() };
     mutation(&mut state, &root, 0, &OrchestrationAction::InboxAck { through_seq: read_through_seq });
     let inbox = state.messages.iter().filter(|message| message.to_run_id == "root").collect::<Vec<_>>();
-    let question = super::super::projection::question_status(&state.runs[0], &inbox, &state.messages).unwrap();
+    let question = super::super::projection::question_statuses(&state.runs[0], &inbox, &state.messages).into_iter().next().unwrap();
     assert!(matches!(question.receipt, QuestionReceipt::AnswerAcknowledged { .. }));
     assert_eq!(state.runs[0].last_report.as_ref().unwrap().message_id, "later-progress");
 }
@@ -260,13 +335,12 @@ fn root_self_answer_requires_exact_unresolved_question_and_preserves_committed_r
 }
 
 #[test]
-fn worker_self_answer_and_other_sender_question_do_not_gain_root_answer_authority() {
+fn worker_question_does_not_gain_root_answer_authority() {
     let mut state = state();
     let root = main_actor("root");
     let worker = main_actor("worker");
     mutation(&mut state, &worker, 1, &report("worker-question", ReportKind::NeedsInput, None));
     let before = serde_json::to_value(&state).unwrap();
-    assert_error(&mut state, &worker, 1, &send("worker-self-answer", MessageKind::Answer, Some("worker-question")), "actor_forbidden");
     assert_error(&mut state, &root, 0, &root_answer("wrong-sender", Some("worker-question")), "question_not_current");
     assert_eq!(serde_json::to_value(&state).unwrap(), before);
     mutation(&mut state, &root, 0, &report("root-question", ReportKind::NeedsInput, None));
@@ -435,6 +509,7 @@ fn dedupe_rejects_changed_payload_and_preserves_original_report_after_stage_chan
         to_run_id,
         original_task_revision,
         original_claim_id,
+        ..
     } = ready
     else {
         unreachable!()
@@ -444,17 +519,15 @@ fn dedupe_rejects_changed_payload_and_preserves_original_report_after_stage_chan
         &mut state,
         &actor,
         1,
-        &OrchestrationAction::Report {
-            message_id,
-            kind,
-            outcome,
-            summary,
-            plan,
-            source_output,
-            to_run_id,
-            original_task_revision,
-            original_claim_id,
-        },
+        &OrchestrationAction::Report { thread_id: None, card: None, message_id,
+        kind,
+        outcome,
+        summary,
+        plan,
+        source_output,
+        to_run_id,
+        original_task_revision,
+        original_claim_id, },
         "message_id_conflict",
     );
     assert_eq!(
@@ -466,7 +539,7 @@ fn dedupe_rejects_changed_payload_and_preserves_original_report_after_stage_chan
 #[test]
 fn append_keys_by_sender_and_sequences_by_recipient() {
     let mut state = state();
-    let first = append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
+    let first = append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     assert!(matches!(
         first,
@@ -476,7 +549,7 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
             ..
         }
     ));
-    let duplicate = append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
+    let duplicate = append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     assert!(matches!(
         duplicate,
@@ -486,11 +559,11 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
             ..
         }
     ));
-    append(&mut state, AppendMessage { from: ActorRef::Run {
+    append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Run {
         run_id: "root".into(),
     }, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
-    append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "sibling", message_id: "other", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
+    append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "sibling", message_id: "other", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     assert_eq!(
         state
@@ -502,6 +575,8 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
     );
     assert_eq!(
         append(&mut state, AppendMessage {
+            thread_id: None,
+            handoff: None,
             from: ActorRef::Operator,
             to_run_id: "sibling",
             message_id: "same",
@@ -518,6 +593,8 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
     );
     assert_eq!(
         append(&mut state, AppendMessage {
+            thread_id: None,
+            handoff: None,
             from: ActorRef::Operator,
             to_run_id: "worker",
             message_id: "same",
@@ -540,6 +617,8 @@ fn append_bounds_utf8_bytes_and_rejects_sequence_overflow() {
     let oversized = "é".repeat(MAX_TEXT / 2 + 1);
     assert_eq!(
         append(&mut state, AppendMessage {
+            thread_id: None,
+            handoff: None,
             from: ActorRef::Operator,
             to_run_id: "worker",
             message_id: "large",
@@ -554,11 +633,13 @@ fn append_bounds_utf8_bytes_and_rejects_sequence_overflow() {
         .code,
         "message_too_large"
     );
-    append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: "first", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
+    append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: "first", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     state.messages[0].seq = u64::MAX;
     assert_eq!(
         append(&mut state, AppendMessage {
+            thread_id: None,
+            handoff: None,
             from: ActorRef::Operator,
             to_run_id: "worker",
             message_id: "second",
@@ -873,7 +954,7 @@ fn durable_pull_and_ack_are_atomic_across_the_whole_prefix() {
 fn pull_caps_at_one_hundred_and_is_scoped_to_registered_run_inbox() {
     let mut state = state();
     for seq in 0..105 {
-        append(&mut state, AppendMessage { from: ActorRef::Operator, to_run_id: "worker", message_id: &format!("message-{seq}"), kind: MessageKind::Instruction, text: "read", in_reply_to: None, report: None, stale: false, escalated_from: None })
+        append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: &format!("message-{seq}"), kind: MessageKind::Instruction, text: "read", in_reply_to: None, report: None, stale: false, escalated_from: None })
         .unwrap();
     }
     let result = mutation(

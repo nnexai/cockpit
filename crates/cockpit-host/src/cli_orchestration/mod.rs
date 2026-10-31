@@ -46,6 +46,11 @@ pub(crate) const RUN_HELP: &str = r#"RUN accepts a full UUID, unique UUID prefix
 or a unique task title substring selecting its current run. Use --operator
 for explicit local management; credentialed workers report their own work.
 Accept reads the current task revision when --task-revision is omitted.
+Operator handoff defaults to the preferred liaison; --owner selects another
+root. --thread reuses a thread; otherwise a new thread ID is printed.
+Optional --task uses the current revision unless --task-revision is supplied.
+Explicit --repository, --space, --branch and --base-ref bind the work.
+Use task link to associate an existing task with a thread.
 Generated operation/message IDs are printed before submission. After an
 uncertain outcome inspect the same ID and payload before retrying.
 Examples:
@@ -252,6 +257,8 @@ const REPORT_HELP: &str = r#"Report the credential's own run with optional actua
   Resource/integration JSON commands retain their current credential/CAS fences.
   Choose one --message-id and retain the exact payload across uncertain delivery.
   Answers use the NeedsInput ID; delivery/capture does not prove resumed work.
+  Root reports can use --thread with --title and --next to publish a card;
+  --recommend, repeated --choice (needs-input only), and --project are optional.
 
 Examples:
   cockpit-cli run report --kind initialized --message-id UUID --summary "Checkout inspected"
@@ -429,7 +436,8 @@ impl RunArgs {
             | args::RunCommand::Show { run: Some(_), .. } | args::RunCommand::Accept { .. }
             | args::RunCommand::SendBack { .. } | args::RunCommand::Cancel { .. }
             | args::RunCommand::Reconcile { .. } | args::RunCommand::Message { .. }
-            | args::RunCommand::Annotate { .. } | args::RunCommand::Report { to: Some(_), .. }) {
+            | args::RunCommand::Annotate { .. } | args::RunCommand::Report { to: Some(_), .. }
+            | args::RunCommand::Handoff { .. }) {
             let context = Context::open(&self.common, caller_required).await?;
             resolve::run_command(&context, self.common.root.clone(), &mut self.command).await?;
         }
@@ -468,10 +476,7 @@ impl RunArgs {
             },
             RunOperation::Answer { message_id, question, text } => {
                 let Some(cockpit_core::orchestration::Actor::Agent(caller)) = &context.actor else { unreachable!() };
-                let (own, role) = context.service.job_role(caller)?;
-                if role != cockpit_core::orchestration::JobRole::Root {
-                    return Err(CliError::new("actor_forbidden", "Only the root liaison resolves its human question"));
-                }
+                let (own, _) = context.service.job_role(caller)?;
                 emit(&context.mutate(OrchestrationAction::MessageSend {
                     message_id: args::submission_id(message_id, "Message")?,
                     to_run_id: own.run_id, kind: cockpit_protocol::orchestration::MessageKind::Answer,
@@ -545,6 +550,7 @@ impl RunArgs {
                         else { cockpit_protocol::orchestration::ReportOutcome::Succeeded }),
                     summary, plan: None, to_run_id: None, source_output,
                     original_task_revision: None, original_claim_id: None,
+                    thread_id: None, card: None,
                 }).await?, self.common.json)
             },
             RunOperation::Mutation(action) => emit(&context.mutate(action).await?, self.common.json),

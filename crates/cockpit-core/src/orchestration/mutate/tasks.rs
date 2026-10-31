@@ -71,6 +71,7 @@ pub(in crate::orchestration) fn create(
     follow_up_of: Option<String>,
     expected_doc_revision: Option<String>,
     source_revision: Option<String>,
+    thread_id: Option<String>,
 ) -> Result<Applied, InspectionError> {
     let locked = ctx.locked;
     let actor = ctx.actor;
@@ -96,6 +97,11 @@ pub(in crate::orchestration) fn create(
     // Only exact intended identity replay may bypass now-stale graph/source fences.
     // Shape and fresh caller authority have already been checked.
     let replay = document.tasks.iter().any(|task| task.task_id == task_id);
+    if replay && !document.matches_authoring_creation(
+        document.task(&task_id)?, &title, &description, &edges, follow.as_deref(),
+    ) {
+        return Err(error("task_id_conflict", "Task identity exists with different canonical bytes"));
+    }
     if !replay {
         if expected_doc_revision.as_deref().is_some_and(|revision| revision != document.doc_revision) {
             return Err(error("task_revision_conflict", "Task document changed"));
@@ -110,6 +116,9 @@ pub(in crate::orchestration) fn create(
                 return Err(error("task_revision_conflict", "Follow-up source changed"));
             }
         }
+    }
+    if let Some(thread_id) = thread_id.as_deref() {
+        threads::journal_task_link(ctx, &root_id, &task_id, thread_id)?;
     }
     Ok(Applied::Document(OrchestrationActionResult::Task {
         task: document.create_authoring_with_id(&task_id, &title, &description,
@@ -370,7 +379,7 @@ fn authenticated_task_caller(
     Ok(job)
 }
 
-pub(super) fn task_root_authority(
+pub(in crate::orchestration) fn task_root_authority(
     state: &OrchestrationState, actor: &Actor, caller: Option<usize>, session: &str, root_id: &str,
 ) -> Result<(), InspectionError> {
     let root = active_task_root(state, session, root_id)?;
@@ -1029,10 +1038,8 @@ mod tests {
             };
             fixture.state.runs[1].stage = RunStage::Reported;
             fixture.state.runs[1].source_output = Some(output.clone());
-            fixture.state.runs[1].result = Some(Report {
-                message_id: result_id.clone(), kind: ReportKind::Result, outcome: Some(ReportOutcome::Succeeded),
-                summary: "Completed scope".into(), plan: None, source_output: Some(output), at: now(),
-            });
+            fixture.state.runs[1].result = Some(Report { card: None, message_id: result_id.clone(), kind: ReportKind::Result, outcome: Some(ReportOutcome::Succeeded),
+            summary: "Completed scope".into(), plan: None, source_output: Some(output), at: now(), });
             fixture.state.task_intents.push(TaskIntent {
                 intent_id: id(), root_id: fixture.state.runs[0].run_id.clone(), task_id: fixture.task.task_id.clone(),
                 run_id: fixture.state.runs[1].run_id.clone(), expected_task_revision: fixture.task.task_revision.clone(),

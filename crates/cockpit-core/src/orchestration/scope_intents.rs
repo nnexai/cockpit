@@ -143,11 +143,9 @@ pub(super) fn resume(
             root_id: &intent.root_id, task_id: &intent.task_id,
             task_revision: &task.task_revision, doc_revision: &document.doc_revision,
         }).map_err(|failure| error("task_scope_write", failure.to_string()))?;
-        messages::append(state, messages::AppendMessage {
-            from: intent.from, to_run_id: &intent.run_id, message_id: &message_id,
-            kind: MessageKind::Instruction, text: &text, in_reply_to: None,
-            report: None, stale: false, escalated_from: None,
-        })?;
+        messages::append(state, messages::AppendMessage { thread_id: None, handoff: None, from: intent.from, to_run_id: &intent.run_id, message_id: &message_id,
+        kind: MessageKind::Instruction, text: &text, in_reply_to: None,
+        report: None, stale: false, escalated_from: None, })?;
         Some(message_id)
     } else { None };
     let result = OrchestrationActionResult::TaskScopeUpdated { update: TaskScopeUpdateResult {

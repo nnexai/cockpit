@@ -96,7 +96,8 @@ async fn neutral_cli_environment_child() {
     };
     let run_id = context.service.job_role(caller).unwrap().0.run_id;
     let directory = capture_directory(&caller.auth, &run_id).unwrap();
-    initial.run().await.unwrap();
+    // Keep the separate debug-sized CLI futures out of this libtest future.
+    Box::pin(initial.run()).await.unwrap();
     assert!(!directory.exists(), "context only derives its recovery pointer");
     for field in 0..4 {
         let mut auth = caller.auth.clone();
@@ -120,7 +121,7 @@ async fn neutral_cli_environment_child() {
         "test", "inbox", "next", "--wait", "0", "--deliverable",
         "--capture-file", failed_capture.to_str().unwrap(),
     ]).unwrap().command else { panic!("expected inbox") };
-    assert_eq!(failed.run().await.unwrap_err().code, "inbox_capture");
+    assert_eq!(Box::pin(failed.run()).await.unwrap_err().code, "inbox_capture");
     let unread = context.snapshot(None).await.unwrap();
     assert!(unread.messages.iter().all(|message|
         message.stage == cockpit_protocol::orchestration::DeliveryStage::Read
@@ -139,7 +140,7 @@ async fn neutral_cli_environment_child() {
     let TestCommand::Inbox(next) = TestCli::try_parse_from([
         "test", "inbox", "next", "--wait", "0", "--deliverable", "--json",
     ]).unwrap().command else { panic!("expected inbox") };
-    next.run().await.unwrap();
+    Box::pin(next.run()).await.unwrap();
     let metadata = std::fs::metadata(&directory).unwrap();
     assert_eq!(metadata.permissions().mode() & 0o777, 0o700);
     assert_eq!(metadata.uid(), nix::unistd::Uid::current().as_raw());
@@ -179,7 +180,7 @@ async fn neutral_cli_environment_child() {
     let TestCommand::Run(done) = TestCli::try_parse_from([
         "test", "run", "done", "--failed", "--summary", "root batch",
     ]).unwrap().command else { panic!("expected run") };
-    assert_eq!(done.run().await.unwrap_err().code, "actor_forbidden");
+    assert_eq!(Box::pin(done.run()).await.unwrap_err().code, "actor_forbidden");
     let after_done = registered.snapshot(None).await.unwrap();
     assert_eq!(before_done.revision, after_done.revision, "root done fails before mutation");
     let (still_running, _) = registered.service.job_role(caller).unwrap();
@@ -230,7 +231,7 @@ async fn neutral_cli_recovery_context_child() {
         "test", "run", "context", "--json",
     ]).unwrap().command else { panic!("expected run") };
     println!();
-    recovery.run().await.unwrap();
+    Box::pin(recovery.run()).await.unwrap();
     let credential = std::env::var_os("COCKPIT_JOB_CREDENTIAL_FILE").unwrap();
     std::fs::write(&credential, b"PRIVATE invalid credential").unwrap();
     let error = match Context::open(&bare.common, true).await {
@@ -350,7 +351,7 @@ fn no_extension_context_registration_uses_private_capability_without_live_herdr(
     let mut progress = super::message(run_id, 1, MessageKind::Report, DeliveryStage::Stored, "Hidden progress");
     progress.report = Some(Report {
         message_id: progress.message_id.clone(), kind: ReportKind::Progress, outcome: None,
-        summary: "Hidden progress".into(), plan: None, source_output: None, at: progress.created_at.clone(),
+        summary: "Hidden progress".into(), plan: None, source_output: None, card: None, at: progress.created_at.clone(),
     });
     let instruction = super::message(run_id, 2, MessageKind::Instruction, DeliveryStage::Stored, "Retained instruction");
     let state = serde_json::json!({

@@ -162,7 +162,7 @@ fn finalize(
     };
     let text = serde_json::to_string(&pointer)
         .map_err(|failure| error("task_assignment_write", failure.to_string()))?;
-    let result = messages::append(state, messages::AppendMessage { from: ActorRef::Operator, to_run_id: &pointer.root_id, message_id: &format!("assign-{}", pointer.task_id), kind: MessageKind::Instruction, text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
+    let result = messages::append(state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: &pointer.root_id, message_id: &format!("assign-{}", pointer.task_id), kind: MessageKind::Instruction, text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     let OrchestrationActionResult::Message {
         seq,
         duplicate: message_duplicate,

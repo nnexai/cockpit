@@ -268,6 +268,7 @@ fn root_authoring_execution_and_management_deny_workers_and_foreign_roots() {
     let task = matrix.current_task();
     let actions = vec![
         OrchestrationAction::TaskCreate {
+            thread_id: None,
             root_id: matrix.root.clone(), task_id: id(), title: "Root-only creation".into(), description: "New task".into(),
             depends_on: Vec::new(), follow_up_of: None, expected_doc_revision: None, source_revision: None,
         },

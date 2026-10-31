@@ -54,7 +54,12 @@ pub fn status(policy: StatusPolicy, error: &OperationError) -> StatusCode {
             | "space_tags_target_changed"
             | "agent_attention_target_changed"
             | "space_git_action_ineligible"
+            | "question_not_current"
+            | "question_already_answered"
+            | "task_revision_conflict"
+            | "handoff_binding_mismatch"
             | "space_git_action_in_progress" => StatusCode::CONFLICT,
+            "thread_forbidden" | "thread_owner_invalid" => StatusCode::BAD_REQUEST,
             _ => StatusCode::SERVICE_UNAVAILABLE,
         },
         StatusPolicy::Notes => match code {
@@ -114,5 +119,29 @@ impl From<OperationError> for ErrorResponse {
                 message: error.message,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inbox_service_errors_have_actionable_http_statuses() {
+        for code in [
+            "question_not_current",
+            "question_already_answered",
+            "task_revision_conflict",
+            "handoff_binding_mismatch",
+        ] {
+            let error = OperationError::Service(InspectionError::new(code, "test"));
+            assert_eq!(status(StatusPolicy::Service, &error), StatusCode::CONFLICT, "{code}");
+        }
+        for code in ["invalid_card", "invalid_binding", "thread_forbidden", "thread_owner_invalid"] {
+            let error = OperationError::Service(InspectionError::new(code, "test"));
+            assert_eq!(status(StatusPolicy::Service, &error), StatusCode::BAD_REQUEST, "{code}");
+        }
+        let error = OperationError::Service(InspectionError::new("handoff_binding_unavailable", "test"));
+        assert_eq!(status(StatusPolicy::Service, &error), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

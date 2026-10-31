@@ -40,9 +40,9 @@ pub(super) fn apply(
             tasks::assignment_resolve(ctx, root_id, task_id, expected_task_revision, assign),
         OrchestrationAction::TaskCreate {
             root_id, task_id, title, description, depends_on, follow_up_of,
-            expected_doc_revision, source_revision,
+            expected_doc_revision, source_revision, thread_id,
         } => tasks::create(ctx, root_id, task_id, title, description, depends_on,
-            follow_up_of, expected_doc_revision, source_revision),
+            follow_up_of, expected_doc_revision, source_revision, thread_id),
         OrchestrationAction::TaskUpdate { root_id, task_id, expected_task_revision, title, description } =>
             tasks::update(ctx, root_id, task_id, expected_task_revision, title, description),
         OrchestrationAction::TaskDependenciesSet {
@@ -106,6 +106,9 @@ pub(super) fn apply(
             super::resource_queue::apply(ctx, action),
         action @ (OrchestrationAction::ResourceRegister { .. } | OrchestrationAction::CleanupFinish { .. }) =>
             super::cleanup::apply(ctx, action),
+        action @ OrchestrationAction::ThreadHandoff { .. } => super::threads::handoff(ctx, action),
+        action @ OrchestrationAction::ThreadMarkRead { .. } => super::threads::mark_read(ctx, action),
+        action @ OrchestrationAction::ThreadLink { .. } => super::threads::link(ctx, action),
         OrchestrationAction::Accept { run_id, expected_task_revision } =>
             intents::accept(ctx, run_id, expected_task_revision),
         OrchestrationAction::SendBack { run_id, text } =>

@@ -19,6 +19,8 @@ import { widgetKey } from "../widgets/widgetStore";
 import { stateClass } from "../sidebar/spaceTree";
 import { useAgentPower } from "./useAgentPower";
 import { SendAgentDialog } from "../quickAsk/SendAgentDialog";
+import { Inbox, type InboxLocation } from "../inbox/Inbox";
+import { UiIcon } from "../UiIcon";
 
 export interface WorkbenchProps {
   client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; terminalMouseInput: boolean; mutations: MutationCoordinatorState;
@@ -31,8 +33,10 @@ export interface WorkbenchProps {
 }
 export function Workbench(props: WorkbenchProps) {
   const [sendAgentsOpen, setSendAgentsOpen] = useState(false);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [inboxAttention, setInboxAttention] = useState<{ count: number; preview: string | null }>({ count: 0, preview: null });
   useEffect(() => { setSendAgentsOpen(false); }, [props.state.sessionId]);
-  const runtime = useWorkbenchState(props, sendAgentsOpen);
+  const runtime = useWorkbenchState(props, sendAgentsOpen || inboxOpen);
   const actions = useWorkbenchActions(props, runtime);
   const power = useAgentPower((runtime.snapshot?.agents ?? []).some(agent => stateClass(agent.status) === "working"), runtime.setPrefixHint);
   const [quickTerminal, setQuickTerminal] = useState<{ sessionId: string; paneId: string; cwd: string | null; returnFocus: HTMLElement | null } | null>(null);
@@ -191,9 +195,27 @@ export function Workbench(props: WorkbenchProps) {
   const commandFailureMessage = commandFailures.map(failure => plainError(failure.code, failure.message).text).join(" ");
   const commandFailureDetail = commandFailures.map(failure => failure.detail ?? plainError(failure.code, failure.message).detail).filter(Boolean).join("\n");
   const commandStatus = commandNotice || commandFailureMessage || lifecycleError ? <p role="alert" title={commandNotice || lifecycleError ? undefined : commandFailureDetail || undefined}>{commandNotice || commandFailureMessage || lifecycleError}</p> : null;
-  return <><WorkbenchContent {...props} {...runtime} {...actions} onUpdate={installUpdate} closedWidgets={closedWidgets} liaisonAction={{ label: liaisonLabel, reason: liaisonReason, running, inPane: inLiaisonPane, toggle: toggleLiaison }} ask={ask} quickTerminalOpen={Boolean(quickTerminal)} commandActions={commandActions} commandFailureMessage={commandFailureMessage} commandStatus={commandStatus} />
+  const openInboxLocation = async (location: InboxLocation) => {
+    const snapshot = props.state.snapshot;
+    if (props.state.sync !== "live" || !props.state.sessionId || snapshot?.session_id !== props.state.sessionId
+      || !snapshot.spaces.some(space => space.id === location.workspace_id)
+      || !snapshot.tabs.some(tab => tab.id === location.tab_id && tab.space_id === location.workspace_id)
+      || !snapshot.panes.some(pane => pane.id === location.pane_id && pane.tab_id === location.tab_id && pane.space_id === location.workspace_id)) {
+      throw new Error("This session location is no longer current.");
+    }
+    setInboxOpen(false);
+    await runtime.supervisorTerminal(location.pane_id);
+  };
+  const currentSpace = byId(runtime.spaces, runtime.confirmedSpaceId);
+  return <><nav className="inbox-switcher" aria-label="Application views">
+    <button type="button" aria-current={!inboxOpen ? "page" : undefined} onClick={() => setInboxOpen(false)}><UiIcon name="grid" /> Workbench</button>
+    <button type="button" aria-current={inboxOpen ? "page" : undefined} disabled={!inboxOpen && runtime.modalOpen} onClick={() => setInboxOpen(true)}><UiIcon name="comment" /> Inbox{inboxAttention.count > 0 && <span className="inbox-switcher-count">{inboxAttention.count}</span>}</button>
+    {!inboxOpen && inboxAttention.preview && <span className="inbox-switcher-preview">{inboxAttention.preview}</span>}
+  </nav>
+    <Inbox client={props.client} sessionId={props.state.sessionId} active={inboxOpen} currentSpace={currentSpace ? { id: currentSpace.id, label: currentSpace.label } : null} attention={runtime.attention} snapshot={props.state.sync === "live" ? runtime.snapshot : null} onOpenLocation={openInboxLocation} onAttentionChange={setInboxAttention} />
+    <div className="inbox-workbench" hidden={inboxOpen}><WorkbenchContent {...props} {...runtime} {...actions} inboxActive={inboxOpen} onUpdate={installUpdate} closedWidgets={closedWidgets} liaisonAction={{ label: liaisonLabel, reason: liaisonReason, running, inPane: inLiaisonPane, toggle: toggleLiaison }} ask={ask} quickTerminalOpen={Boolean(quickTerminal)} commandActions={commandActions} commandFailureMessage={commandFailureMessage} commandStatus={commandStatus} />
     {quickTerminal ? <QuickTerminal client={props.client} sessionId={quickTerminal.sessionId} paneId={quickTerminal.paneId} cwd={quickTerminal.cwd} focusEpoch={props.state.epoch} returnFocus={quickTerminal.returnFocus} suspended={Boolean(popup)} onDismiss={() => setQuickTerminal(null)} /> : null}
     {sendAgentsOpen && props.state.sessionId ? <SendAgentDialog key={props.state.sessionId} targets={(props.state.sync === "live" ? runtime.snapshot?.agents ?? [] : []).filter(agent => stateClass(agent.status) === "idle").map(agent => ({
       paneId: agent.pane_id, label: agent.title || agent.name, space: `${spaces.find(space => space.id === agent.space_id)?.label ?? "Space"} · ${allTabs.find(tab => tab.id === agent.tab_id)?.label ?? "tab"}`,
-    }))} onSend={async (paneId, text) => { await props.client.orchestrationAgentSend({ session_id: props.state.sessionId!, reference: paneId, text }); }} onClose={() => setSendAgentsOpen(false)} /> : null}</>;
+    }))} onSend={async (paneId, text) => { await props.client.orchestrationAgentSend({ session_id: props.state.sessionId!, reference: paneId, text }); }} onClose={() => setSendAgentsOpen(false)} /> : null}</div></>;
 }

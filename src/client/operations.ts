@@ -2,7 +2,7 @@ import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./not
 import {
   matchOrchestrationSnapshot, parseOrchestrationSnapshotRequest, parseOrchestrationMutationRequest, 
   parseOrchestrationMutationResponse, parseOrchestrationWaitRequest, parseOrchestrationWaitResponse,
-  parseLiaisonLookupRequest, parseLiaisonLookupResponse,
+  parseLiaisonLookupRequest, parseLiaisonLookupResponse, parseInboxRequest, matchInboxView, parseAgentSendTarget,
 } from "./orchestrationProtocol";
 import {
   matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest, parseWidgetRemoveResponse, 
@@ -146,6 +146,18 @@ const operations: OperationTable = {
       };
     },
   },
+  orchestrationInbox: { nativeAbort: "read",
+    encode(_backend, value, signal) {
+      signal?.throwIfAborted();
+      const body = parseInboxRequest(value);
+      return {
+        operation: "orchestration inbox",
+        http: { method: "GET", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/inbox`, signal: () => signal },
+        tauri: { command: "orchestration_inbox", args: () => ({ request: body }) },
+        parse: response => { signal?.throwIfAborted(); return matchInboxView(response, body); },
+      };
+    },
+  },
   orchestrationLiaisonLookup: {
     encode(_backend, value) {
       const body = parseLiaisonLookupRequest(value);
@@ -159,7 +171,8 @@ const operations: OperationTable = {
   },
   orchestrationAgentSend: {
     encode(_backend, value) {
-      const body = { session_id: validateSessionId(value.session_id), reference: validateResourceId(value.reference), text: value.text };
+      const body = { session_id: validateSessionId(value.session_id), reference: validateResourceId(value.reference), text: value.text,
+        ...(value.expected_target === undefined ? {} : { expected_target: parseAgentSendTarget(value.expected_target) }) };
       if (typeof body.text !== "string" || !body.text.trim()) throw new CockpitClientError("malformed_response", "Agent message must not be empty");
       return {
         operation: "send to agent",
@@ -185,14 +198,16 @@ const operations: OperationTable = {
       };
     },
   },
-  orchestrationWait: {
-    encode(_backend, value) {
+  orchestrationWait: { nativeAbort: "read",
+    encode(_backend, value, signal) {
+      signal?.throwIfAborted();
       const body = parseOrchestrationWaitRequest(value);
       return {
         operation: "orchestration wait",
-        http: { method: "POST", route: () => "/api/v1/orchestration/wait", json: () => body },
+        http: { method: "POST", route: () => "/api/v1/orchestration/wait", json: () => body, signal: () => signal },
         tauri: { command: "orchestration_wait", args: () => ({ request: body }) },
         parse: parseOrchestrationWaitResponse,
+        matchIdentity: response => { signal?.throwIfAborted(); return response; },
       };
     },
   },

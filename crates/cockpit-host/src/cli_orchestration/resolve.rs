@@ -37,7 +37,7 @@ pub(super) async fn task_command(context: &Context, root: &str, command: &mut Ta
     let board = snapshot.board.as_ref().ok_or_else(|| CliError::new("root_not_found", "Task board does not exist"))?;
     let id = match &mut *command {
         TaskCommand::Show { task: Some(id), .. } | TaskCommand::Inputs { task: Some(id), .. }
-        | TaskCommand::Schedule { task: id, .. } | TaskCommand::ScheduleCancel { task: id, .. }
+        | TaskCommand::Link { task: id, .. } | TaskCommand::Schedule { task: id, .. } | TaskCommand::ScheduleCancel { task: id, .. }
         | TaskCommand::Restart { task: id, .. } | TaskCommand::Unassign { task: id, .. }
         | TaskCommand::Update { task: id, .. } | TaskCommand::ScopeUpdate { task: id, .. } => Some(id),
         TaskCommand::DependenciesSet { task, .. } | TaskCommand::StepAdd { task, .. }
@@ -93,6 +93,37 @@ pub(super) async fn run_command(context: &Context, root: Option<String>, command
             };
             for value in [space, space_worktree].into_iter().flatten() {
                 if !canonical_uuid(value) { *value = self::space(value, &runtime.workspaces)?; }
+            }
+        }
+        return Ok(());
+    }
+    if let RunCommand::Handoff { owner, task: target, task_revision, space: workspace, .. } = &mut *command {
+        if owner.is_none() {
+            use cockpit_protocol::orchestration::{LiaisonLookupRequest, LiaisonLookupResponse};
+            let response = cockpit_host::orchestration_runtime::lookup_liaison(
+                &context.service, context.adapter.as_ref(),
+                &LiaisonLookupRequest { session_id: context.session.clone(), selected_root_id: None },
+            ).await?;
+            *owner = match response {
+                LiaisonLookupResponse::Resolved { preferred_root_id, .. } => preferred_root_id,
+                LiaisonLookupResponse::Unavailable { code, message } => return Err(CliError::new(&code, message)),
+            };
+            if owner.is_none() { return Err(CliError::new("root_not_found", "No preferred liaison; specify --owner")); }
+        }
+        let snapshot = context.snapshot(None).await?;
+        let id = owner.as_mut().expect("owner resolved");
+        *id = run(&snapshot, id)?;
+        if let Some(target) = target {
+            let board_snapshot = context.snapshot(Some(id.clone())).await?;
+            *target = task(&board_snapshot, target)?;
+            let view = board_snapshot.board.as_ref().and_then(|board| board.tasks.iter().find(|v| v.task.task_id == *target))
+                .ok_or_else(|| CliError::new("task_not_found", "Task is not in the owner root"))?;
+            fence(task_revision, &view.task.task_revision, "task revision");
+        }
+        if let Some(value) = workspace {
+            if !canonical_uuid(value) {
+                let runtime = context.adapter.runtime(&context.session).await?;
+                *value = self::space(value, &runtime.workspaces)?;
             }
         }
         return Ok(());

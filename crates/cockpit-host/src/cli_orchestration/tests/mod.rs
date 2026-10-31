@@ -32,7 +32,7 @@ fn message(run: &str, seq: u64, kind: MessageKind, stage: DeliveryStage, text: &
     Message {
         message_id: format!("message-{seq}"), to_run_id: run.into(), seq,
         from: ActorRef::Dispatcher, kind, text: text.into(), in_reply_to: None,
-        report: None, stale: false, escalated_from: None, stage,
+        report: None, thread_id: None, handoff: None, stale: false, escalated_from: None, stage,
         created_at: "2026-10-05T00:00:00Z".into(), acked_at: None,
     }
 }

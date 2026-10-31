@@ -22,23 +22,36 @@ pub(super) fn apply(
             plan,
             source_output,
             to_run_id,
+            thread_id,
+            card,
             ..
         } => {
             let (_, index) = agent(actor, caller)?;
             text_bound(summary)?;
+            let run = &state.runs[index];
+            if thread_id.is_some() || card.is_some() {
+                if caller.is_none_or(|job| job.role != super::JobRole::Root)
+                    || run.parent_run_id.is_some() || run.root_id != run.run_id {
+                    return Err(error("thread_forbidden", "Only a root may publish thread reports"));
+                }
+            }
+            if let Some(thread_id) = thread_id {
+                super::super::threads::validate_thread_id(thread_id)?;
+            }
+            if let Some(card) = card {
+                validate_card(card, *kind, thread_id.is_some())?;
+            }
             if let Some(plan) = plan {
                 text_bound(plan)?;
             }
             let from = actor_ref(actor, caller.map(|job| job.run_index), state);
-            let report = Report {
-                message_id: message_id.clone(),
-                kind: *kind,
-                outcome: *outcome,
-                summary: summary.clone(),
-                plan: plan.clone(),
-                source_output: source_output.clone(),
-                at: now(),
-            };
+            let report = Report { card: card.clone(), message_id: message_id.clone(),
+            kind: *kind,
+            outcome: *outcome,
+            summary: summary.clone(),
+            plan: plan.clone(),
+            source_output: source_output.clone(),
+            at: now(), };
             // Resolve the logical address before dedupe, but retain the original escalation receipt on retry.
             let logical_target = to_run_id
                 .as_deref()
@@ -49,6 +62,8 @@ pub(super) fn apply(
                 if existing.kind != MessageKind::Report
                     || existing.text != *summary
                     || !same_report(existing.report.as_ref(), Some(&report))
+                    || existing.thread_id != *thread_id
+                    || existing.handoff.is_some()
                     || existing.in_reply_to.is_some()
                     || existing
                         .escalated_from
@@ -63,20 +78,21 @@ pub(super) fn apply(
                 }
                 return Ok(Some(message_result(existing, true)));
             }
+            if let Some(thread_id) = thread_id {
+                super::super::threads::check_report_authority(state, thread_id, &state.runs[index].run_id)?;
+            }
             validate_report_stage(&state.runs[index], *kind, outcome.is_some())?;
             let result = append(
                 state,
-                AppendMessage {
-                    from,
-                    to_run_id: &recipient,
-                    message_id,
-                    kind: MessageKind::Report,
-                    text: summary,
-                    in_reply_to: None,
-                    report: Some(report.clone()),
-                    stale: false,
-                    escalated_from: escalated,
-                },
+                AppendMessage { thread_id: thread_id.clone(), handoff: None, from,
+                to_run_id: &recipient,
+                message_id,
+                kind: MessageKind::Report,
+                text: summary,
+                in_reply_to: None,
+                report: Some(report.clone()),
+                stale: false,
+                escalated_from: escalated, },
             )?;
             publish_report_receipt(
                 state,
@@ -91,6 +107,21 @@ pub(super) fn apply(
         _ => return Ok(None),
     };
     Ok(Some(result))
+}
+
+fn validate_card(card: &ThreadCard, kind: ReportKind, has_thread: bool) -> Result<(), InspectionError> {
+    let single_line = |value: &str, max: usize| !value.trim().is_empty()
+        && value.len() <= max && !value.contains(['\n', '\r']);
+    if !has_thread || !single_line(&card.title, 80) || !single_line(&card.next, 160)
+        || card.recommendation.as_ref().is_some_and(|value| value.len() > 600)
+        || card.project.as_ref().is_some_and(|value| value.len() > 80)
+        || card.choices.len() > 4
+        || (!card.choices.is_empty() && kind != ReportKind::NeedsInput)
+        || card.choices.iter().any(|value| !single_line(value, 60))
+    {
+        return Err(error("invalid_card", "Invalid thread report card"));
+    }
+    Ok(())
 }
 
 fn validate_report_stage(
@@ -145,17 +176,15 @@ fn publish_report_receipt(
             _ => "needs_input",
         };
         let text = serde_json::json!({"event":event,"run_id":run_id,"receipt_message_id":message_id}).to_string();
-        append(state, AppendMessage {
-            from: ActorRef::Dispatcher,
-            to_run_id: &root_id,
-            message_id: &format!("manage-{run_id}-{message_id}"),
-            kind: MessageKind::Observation,
-            text: &text,
-            in_reply_to: None,
-            report: None,
-            stale: false,
-            escalated_from: None,
-        })?;
+        append(state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher,
+        to_run_id: &root_id,
+        message_id: &format!("manage-{run_id}-{message_id}"),
+        kind: MessageKind::Observation,
+        text: &text,
+        in_reply_to: None,
+        report: None,
+        stale: false,
+        escalated_from: None, })?;
     }
     Ok(())
 }

@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand, ValueEnum};
 use cockpit_protocol::{
     orchestration::{
-        DispatchTarget, MessageKind, OrchestrationAction, ReportKind, ReportOutcome,
-        TaskStepScope, WorkerCleanupPolicy,
+        DispatchTarget, HandoffBinding, MessageKind, OrchestrationAction, ReportKind, ReportOutcome,
+        TaskStepScope, ThreadCard, WorkerCleanupPolicy,
     },
     projects::{WorkspaceRecoveryAction, WorkspaceSetupRequest},
 };
@@ -134,6 +134,12 @@ fn revision_fence(revision: Option<String>) -> Result<String, CliError> {
 pub(super) enum TaskCommand {
     /// List canonical tasks, dependency state, step progress and exact document revision.
     List,
+    /// Link an existing task to a thread in its root.
+    Link {
+        task: String,
+        #[arg(long)]
+        thread: String,
+    },
     /// Read description, read-only body, diagnostics, step IDs/offsets, relationships and revision.
     Show {
         /// Canonical task UUID from task list.
@@ -198,6 +204,9 @@ source_revision from task show SOURCE --json (task.task_revision)."
         /// Stable caller UUID; generated once when omitted and reported before submission.
         #[arg(long)]
         task_id: Option<String>,
+        /// Correlate this task atomically with an existing thread.
+        #[arg(long)]
+        thread: Option<String>,
         /// Task title; description prose is supplied separately.
         #[arg(long)]
         title: String,
@@ -351,12 +360,16 @@ impl TaskCommand {
 
     pub(super) fn action(self, root_id: String) -> Result<OrchestrationAction, CliError> {
         Ok(match self {
+            Self::Link { task, thread } => OrchestrationAction::ThreadLink {
+                root_id, task_id: task, thread_id: thread,
+            },
             Self::Unassign { task, operation_id, expected_assignment_generation } =>
                 OrchestrationAction::TaskUnassign {
                     root_id, task_id: task, operation_id, expected_assignment_generation,
                 },
             Self::Create {
                 task_id,
+                thread,
                 title,
                 description,
                 depends_on,
@@ -365,6 +378,7 @@ impl TaskCommand {
                 source_revision,
             } => OrchestrationAction::TaskCreate {
                 root_id,
+                thread_id: thread,
                 task_id: task_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                 title,
                 description: description.read()?.unwrap_or_default(),
@@ -735,16 +749,39 @@ pub(super) enum RunCommand {
     Context,
     /// Read canonical task scope and the short launch bootstrap.
     Brief,
-    /// Resolve the root's exact current human question after receiving the actual chat answer.
+    /// Resolve this run's exact current question after receiving the actual chat answer.
     Answer {
         #[arg(long)]
         message_id: Option<String>,
-        /// Exact unresolved root NeedsInput message ID.
+        /// Exact unresolved NeedsInput message ID for this run.
         #[arg(long = "in-reply-to")]
         question: String,
         /// The actual human answer; not a synthetic progress/acceptance receipt.
         #[arg(long)]
         text: String,
+    },
+    /// Deliver an operator request to an explicit owner or the preferred liaison.
+    Handoff {
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        thread: Option<String>,
+        #[arg(long)]
+        owner: Option<String>,
+        #[arg(long)]
+        task: Option<String>,
+        #[arg(long, requires = "task")]
+        task_revision: Option<String>,
+        #[arg(long)]
+        repository: Option<String>,
+        #[arg(long)]
+        space: Option<String>,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        base_ref: Option<String>,
+        #[arg(long)]
+        message_id: Option<String>,
     },
     /// Replace this descendant's current attempt; inspect and fence internally.
     WorkerReplace {
@@ -839,6 +876,20 @@ operation's outcome is uncertain; never repeat it blindly."
         /// Truthful evidence or one blocking question (at most 16 KiB).
         #[arg(long)]
         summary: String,
+        /// Thread receiving this owner report.
+        #[arg(long)]
+        thread: Option<String>,
+        /// Structured card title; requires --thread and --next.
+        #[arg(long, requires_all = ["thread", "next"])]
+        title: Option<String>,
+        #[arg(long, requires_all = ["thread", "title"])]
+        next: Option<String>,
+        #[arg(long, requires = "title")]
+        recommend: Option<String>,
+        #[arg(long = "choice", requires = "title")]
+        choices: Vec<String>,
+        #[arg(long, requires = "title")]
+        project: Option<String>,
         /// Required for Result; succeeded or failed does not accept the task.
         #[arg(long, value_enum)]
         outcome: Option<OutcomeArg>,
@@ -1085,6 +1136,25 @@ impl RunCommand {
                 }
                 return Ok(RunOperation::Answer { message_id, question, text: bounded(text)? });
             },
+            Self::Handoff { text, thread, owner, task, task_revision, repository, space, branch, base_ref, message_id } => {
+                if !common.operator { return Err(CliError::usage("handoff requires --operator")); }
+                let thread_id = match thread {
+                    Some(id) => id,
+                    None => {
+                        let id = uuid::Uuid::new_v4().to_string();
+                        eprintln!("Thread ID: {id}");
+                        id
+                    }
+                };
+                let binding = if repository.is_some() || space.is_some() || branch.is_some() || base_ref.is_some() {
+                    Some(HandoffBinding { repository_id: repository, workspace_id: space, branch, base_ref })
+                } else { None };
+                OrchestrationAction::ThreadHandoff {
+                    message_id: submission_id(message_id, "Message")?, thread_id,
+                    to_run_id: owner.ok_or_else(|| CliError::usage("handoff requires a resolved owner"))?,
+                    text: bounded(text)?, task_id: task, expected_task_revision: task_revision, binding,
+                }
+            },
             Self::WorkerReplace { run, operation_id, reason } =>
                 return Ok(RunOperation::WorkerReplace { run, operation_id, reason: bounded(reason)? }),
             Self::Done { message_id, summary, failed, checks, artifacts, source_output_file } =>
@@ -1111,6 +1181,7 @@ impl RunCommand {
                 kind,
                 message_id,
                 summary,
+                thread, title, next, recommend, choices, project,
                 outcome,
                 source_output_file,
                 plan,
@@ -1125,12 +1196,28 @@ impl RunCommand {
                     Some(plan) => Some(bounded(plan)?),
                     None => read_input(plan_file, stdin)?,
                 };
+                let card = match (title, next) {
+                    (Some(title), Some(next)) => {
+                        if thread.is_none() || title.trim().is_empty() || title.len() > 80 || title.contains(['\n', '\r'])
+                            || next.trim().is_empty() || next.len() > 160 || next.contains(['\n', '\r'])
+                            || recommend.as_ref().is_some_and(|s| s.len() > 600)
+                            || project.as_ref().is_some_and(|s| s.len() > 80)
+                            || choices.len() > 4 || choices.iter().any(|s| s.trim().is_empty() || s.len() > 60 || s.contains(['\n', '\r']))
+                            || (!choices.is_empty() && !matches!(kind, ReportKindArg::NeedsInput))
+                        { return Err(CliError::usage("invalid thread card")); }
+                        Some(ThreadCard { title, next, recommendation: recommend, choices, project })
+                    },
+                    (None, None) if recommend.is_none() && choices.is_empty() && project.is_none() => None,
+                    _ => return Err(CliError::usage("thread card requires --thread, --title and --next")),
+                };
                 OrchestrationAction::Report {
                     message_id,
                     kind: kind.into(),
                     outcome: outcome.map(Into::into),
                     summary: bounded(summary)?,
                     plan,
+                    thread_id: thread,
+                    card,
                     to_run_id: to,
                     source_output: source_output_file.map(read_json_file).transpose()?,
                     original_task_revision,
@@ -1192,6 +1279,9 @@ impl RunCommand {
     }
 
     pub(super) fn preflight(&self, common: &OrchestrationArgs) -> Result<(), CliError> {
+        if matches!(self, Self::Handoff { .. }) && !common.operator {
+            return Err(CliError::new("actor_forbidden", "handoff requires --operator"));
+        }
         if matches!(self, Self::Register { .. } | Self::Context | Self::Brief
             | Self::Answer { .. } | Self::Done { .. } | Self::Report { .. }
             | Self::Show { self_run: true, .. }

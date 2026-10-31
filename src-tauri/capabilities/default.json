@@ -11,6 +11,7 @@
     "allow-cockpit-update-status",
     "allow-cockpit-update-install",
     "allow-orchestration-snapshot",
+    "allow-orchestration-inbox",
     "allow-orchestration-liaison-lookup",
     "allow-orchestration-agent-send",
     "allow-orchestration-mutate",

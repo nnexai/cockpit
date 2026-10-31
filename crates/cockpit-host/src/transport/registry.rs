@@ -365,6 +365,16 @@ macro_rules! cockpit_operations {
                   limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
                   guard = after(Orchestration); status = service
             }
+            { id: orchestration_inbox, ctx: orchestration, out: ::cockpit_protocol::orchestration::InboxView,
+              call: $crate::transport::operations::orchestration::orchestration_inbox,
+              native: orchestration_inbox(request: ::serde_json::Value)
+                  => $crate::transport::native_input::value($crate::transport::limits::MUTATION_BYTES, "orchestration"),
+              http: get "/api/v1/sessions/{session_id}/orchestration/inbox"
+                  (path: ::axum::extract::Path<::std::string::String>, query: ::std::result::Result<::axum::extract::Query<$crate::transport::operations::orchestration::InboxQuery>, ::axum::extract::rejection::QueryRejection>)
+                  => $crate::transport::operations::orchestration::inbox_input();
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
+                  guard = after(Orchestration); status = service
+            }
             { id: orchestration_agent_send, ctx: orchestration, out: ::serde_json::Value,
               call: $crate::transport::operations::orchestration::orchestration_agent_send,
               native: orchestration_agent_send(request: ::serde_json::Value)

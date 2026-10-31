@@ -374,7 +374,7 @@ impl OrchestrationService {
                 let text = format!("Cleanup is on hold for attempt {} (checkout claim {}, attachment epoch {epoch}): {}. {}",
                     expected.run_id, expected.checkout_claim_id.as_deref().unwrap_or("unproven"),
                     message.trim_end_matches('.'), cleanup_hold_action(code));
-                messages::append(&mut state, messages::AppendMessage { from: ActorRef::Dispatcher,
+                messages::append(&mut state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher,
                     to_run_id: &expected.root_id, message_id: &message_id, kind: MessageKind::Observation,
                     text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
                 changed = true;
@@ -471,7 +471,7 @@ mod tests {
                 base_commit: "0".repeat(40), head_commit: "a".repeat(40), commits: vec!["a".repeat(40)],
                 task_revision: "scope".into(), result_message_id: "result".into(), focused_checks: checks.clone() };
             run.source_output = Some(source.clone());
-            run.result = Some(Report { message_id: "result".into(), kind: ReportKind::Result,
+            run.result = Some(Report { card: None, message_id: "result".into(), kind: ReportKind::Result,
                 outcome: Some(ReportOutcome::Succeeded), summary: "complete".into(), plan: None,
                 source_output: Some(source.clone()), at: now() });
             run.integration = Integration::Integrated { operation_id: id(), accepted_result_message_id: "result".into(),

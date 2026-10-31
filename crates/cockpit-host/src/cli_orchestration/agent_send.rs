@@ -28,7 +28,7 @@ pub(super) async fn send(common: &OrchestrationArgs, reference: &str, text: Stri
     let service = OrchestrationService::open(&configuration)?;
     let endpoint = endpoint(common, &service)?;
     let adapter = HerdrCliAdapter::new(endpoint.config);
-    let result = cockpit_host::agent_send::send_to_agent(&service, &adapter, &endpoint.session, common.root.clone(), reference, text, OperatorOrigin::Native, true, false, |snapshot, reference| {
+    let result = cockpit_host::agent_send::send_to_agent(&service, &adapter, &endpoint.session, common.root.clone(), reference, text, OperatorOrigin::Native, true, false, None, |snapshot, reference| {
         match resolve::run(snapshot, reference) {
             Ok(id) => Ok(Some(id)),
             Err(error) if error.code == "reference_not_found" => Ok(None),

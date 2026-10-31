@@ -116,7 +116,7 @@ fn worker() -> Run {
         artifacts: Vec::new(), focused_checks: Vec::new(),
     };
     run.source_output = Some(source_output.clone());
-    run.result = Some(Report { message_id: "reviewed-result".into(), kind: ReportKind::Result,
+    run.result = Some(Report { card: None, message_id: "reviewed-result".into(), kind: ReportKind::Result,
         outcome: Some(ReportOutcome::Succeeded), summary: "Verified evidence".into(), plan: None,
         source_output: Some(source_output), at: AT.into() });
     run
@@ -294,14 +294,12 @@ fn operator_resolution_uses_current_revision_but_not_a_different_result() {
         OrchestrationAction::IntentResolve { intent_id: intent.intent_id, apply: false }).unwrap();
     fixture.mutate(&Actor::Operator(OperatorOrigin::Browser),
         OrchestrationAction::SendBack { run_id: fixture.run().run_id, text: "Report against the reviewed current scope".into() }).unwrap();
-    fixture.mutate(&Actor::Agent(Box::new(fixture.caller())), OrchestrationAction::Report {
-        message_id: "fresh-result".into(), kind: ReportKind::Result, outcome: Some(ReportOutcome::Succeeded),
-        summary: "Current non-code output".into(), plan: None,
-        source_output: Some(SourceOutput::NonCode {
-            result_message_id: "fresh-result".into(), task_revision: current.task_revision.clone(),
-            artifacts: Vec::new(), focused_checks: Vec::new(),
-        }), to_run_id: None, original_task_revision: None, original_claim_id: None,
-    }).unwrap();
+    fixture.mutate(&Actor::Agent(Box::new(fixture.caller())), OrchestrationAction::Report { thread_id: None, card: None, message_id: "fresh-result".into(), kind: ReportKind::Result, outcome: Some(ReportOutcome::Succeeded),
+    summary: "Current non-code output".into(), plan: None,
+    source_output: Some(SourceOutput::NonCode {
+        result_message_id: "fresh-result".into(), task_revision: current.task_revision.clone(),
+        artifacts: Vec::new(), focused_checks: Vec::new(),
+    }), to_run_id: None, original_task_revision: None, original_claim_id: None, }).unwrap();
     let fresh_intent = fixture.intent();
     fixture.mutate(&Actor::Operator(OperatorOrigin::Browser),
         OrchestrationAction::IntentResolve { intent_id: fresh_intent.intent_id, apply: true }).unwrap();
@@ -465,11 +463,9 @@ fn closed_worker_cannot_append_messages_or_register_again() {
     let fixture = Fixture::new();
     fixture.accept();
     for action in [
-        OrchestrationAction::Report {
-            message_id: id(), kind: ReportKind::Progress, outcome: None,
-            summary: "late history".into(), plan: None, source_output: None,
-            to_run_id: None, original_task_revision: None, original_claim_id: None,
-        },
+        OrchestrationAction::Report { thread_id: None, card: None, message_id: id(), kind: ReportKind::Progress, outcome: None,
+        summary: "late history".into(), plan: None, source_output: None,
+        to_run_id: None, original_task_revision: None, original_claim_id: None, },
         OrchestrationAction::RunRegister { operation_id: id() },
         OrchestrationAction::InboxPull { after_seq: 0, limit: 10 },
         OrchestrationAction::InboxAck { through_seq: 0 },

@@ -71,7 +71,7 @@ impl Fixture {
             base_commit: base, head_commit: head.clone(), commits: vec![head], task_revision: id(),
             result_message_id: result_message_id.clone(), focused_checks: Vec::new() };
         run.source_output = Some(source.clone());
-        run.result = Some(Report { message_id: result_message_id, kind: ReportKind::Result,
+        run.result = Some(Report { card: None, message_id: result_message_id, kind: ReportKind::Result,
             outcome: Some(ReportOutcome::Succeeded), summary: "accepted real Git output".into(), plan: None,
             source_output: Some(source), at: now() });
         // Arrange the service's logical release boundary, not a live scope-drain proof.

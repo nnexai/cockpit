@@ -426,7 +426,7 @@ impl ReviewFixture {
         self.run = self.current().1;
         let locked = self.service.store.lock().unwrap();
         let mut state = locked.read().unwrap();
-        super::super::messages::append(&mut state, super::super::messages::AppendMessage { from: cockpit_protocol::orchestration::ActorRef::Operator, to_run_id: &self.run.run_id, message_id: "preserved-message", kind: cockpit_protocol::orchestration::MessageKind::Observation, text: "Existing operator message", in_reply_to: None, report: None, stale: false, escalated_from: None }).unwrap();
+        super::super::messages::append(&mut state, super::super::messages::AppendMessage { thread_id: None, handoff: None, from: cockpit_protocol::orchestration::ActorRef::Operator, to_run_id: &self.run.run_id, message_id: "preserved-message", kind: cockpit_protocol::orchestration::MessageKind::Observation, text: "Existing operator message", in_reply_to: None, report: None, stale: false, escalated_from: None }).unwrap();
         locked.save(&mut state).unwrap();
     }
     fn worker_task(&mut self, prerequisite: Option<(&str, bool)>) {
@@ -1416,15 +1416,13 @@ async fn late_review_cannot_rewrite_explicit_retry_or_drop_root_result() {
                 test_attachment(run).shell = None;
                 run.stage = RunStage::Starting;
             } else {
-                run.result = Some(cockpit_protocol::orchestration::Report {
-                    message_id: "fresh-result".into(),
-                    kind: cockpit_protocol::orchestration::ReportKind::Result,
-                    outcome: Some(cockpit_protocol::orchestration::ReportOutcome::Succeeded),
-                    summary: "A root result while still Active".into(),
-                    plan: None,
-                    source_output: None,
-                    at: now(),
-                });
+                run.result = Some(cockpit_protocol::orchestration::Report { card: None, message_id: "fresh-result".into(),
+                kind: cockpit_protocol::orchestration::ReportKind::Result,
+                outcome: Some(cockpit_protocol::orchestration::ReportOutcome::Succeeded),
+                summary: "A root result while still Active".into(),
+                plan: None,
+                source_output: None,
+                at: now(), });
             }
         });
         let before = fixture.current();
@@ -2019,11 +2017,9 @@ fn append_hint_instruction(fixture: &ReviewFixture, message_id: &str) {
     use cockpit_protocol::orchestration::{ActorRef, MessageKind};
     let locked = fixture.service.store.lock().unwrap();
     let mut state = locked.read().unwrap();
-    append(&mut state, AppendMessage {
-        from: ActorRef::Operator, to_run_id: &fixture.run.run_id, message_id,
-        kind: MessageKind::Instruction, text: "private pending instruction",
-        in_reply_to: None, report: None, stale: false, escalated_from: None,
-    }).unwrap();
+    append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: &fixture.run.run_id, message_id,
+    kind: MessageKind::Instruction, text: "private pending instruction",
+    in_reply_to: None, report: None, stale: false, escalated_from: None, }).unwrap();
     locked.save(&mut state).unwrap();
 }
 

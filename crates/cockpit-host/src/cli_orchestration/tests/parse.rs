@@ -14,6 +14,73 @@ use super::super::{
 use super::{TestCli, TestCommand, parsed_task_action};
 
 #[test]
+fn thread_cli_preserves_cards_bindings_and_links() {
+    let action = parsed_task_action(&["create", "--title", "Work", "--thread", "thread"]).unwrap();
+    assert_eq!(serde_json::to_value(action).unwrap()["thread_id"], "thread");
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "report", "--kind", "needs-input", "--summary", "Question",
+        "--thread", "thread", "--title", "Decision", "--next", "Choose",
+        "--recommend", "A", "--choice", "A", "--choice", "B", "--project", "Project",
+    ]).unwrap().command else { panic!("expected run") };
+    let RunOperation::Mutation(action) = args.command.operation(&args.common).unwrap() else { panic!("expected report") };
+    let value = serde_json::to_value(action).unwrap();
+    assert_eq!(value["thread_id"], "thread");
+    assert_eq!(value["card"], serde_json::json!({
+        "title": "Decision", "next": "Choose", "recommendation": "A",
+        "choices": ["A", "B"], "project": "Project"
+    }));
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "--operator", "handoff", "--text", "Please help", "--thread", "thread",
+        "--owner", "root", "--task", "task", "--task-revision", "revision", "--repository", "repo",
+        "--space", "space", "--branch", "branch", "--base-ref", "main", "--message-id", "message",
+    ]).unwrap().command else { panic!("expected run") };
+    let RunOperation::Mutation(action) = args.command.operation(&args.common).unwrap() else { panic!("expected handoff") };
+    let value = serde_json::to_value(action).unwrap();
+    assert_eq!(value["to_run_id"], "root");
+    assert_eq!(value["thread_id"], "thread");
+    assert_eq!(value["expected_task_revision"], "revision");
+    assert_eq!(value["binding"], serde_json::json!({
+        "repository_id": "repo", "workspace_id": "space", "branch": "branch", "base_ref": "main"
+    }));
+    let action = parsed_task_action(&["link", "task", "--thread", "thread"]).unwrap();
+    let value = serde_json::to_value(action).unwrap();
+    assert_eq!(value["root_id"], "root");
+    assert_eq!(value["task_id"], "task");
+    assert_eq!(value["thread_id"], "thread");
+}
+
+#[test]
+fn thread_card_rejects_incomplete_flags_and_invalid_values() {
+    for flags in [
+        vec!["--title", "Title", "--next", "Next"],
+        vec!["--thread", "thread", "--title", "Title"],
+        vec!["--thread", "thread", "--next", "Next"],
+        vec!["--choice", "Choice"],
+        vec!["--recommend", "Choice"],
+        vec!["--project", "Project"],
+    ] {
+        assert!(TestCli::try_parse_from(["test", "run", "report", "--kind", "needs-input", "--summary", "Question"]
+            .into_iter().chain(flags)).is_err());
+    }
+    for (kind, title, next, choices) in [
+        ("needs-input", "", "Next", vec![]),
+        ("needs-input", "Title\nextra", "Next", vec![]),
+        ("needs-input", "Title", "", vec![]),
+        ("needs-input", "Title", "Next", vec![""]),
+        ("needs-input", "Title", "Next", vec!["a", "b", "c", "d", "e"]),
+        ("progress", "Title", "Next", vec!["choice"]),
+    ] {
+        let mut flags = vec!["test", "run", "report", "--kind", kind, "--summary", "Question",
+            "--thread", "thread", "--title", title, "--next", next];
+        for choice in choices { flags.extend(["--choice", choice]); }
+        let TestCommand::Run(args) = TestCli::try_parse_from(flags).unwrap().command else { panic!("expected run") };
+        assert!(args.command.operation(&args.common).is_err());
+    }
+    assert!(TestCli::try_parse_from(["test", "run", "--operator", "handoff", "--text", "x",
+        "--task-revision", "revision"]).is_err());
+}
+
+#[test]
 fn task_creation_preserves_identity_prose_and_exact_relationship_fences() {
     let id = "08776d1f-6352-4aad-9c6b-48b2094c49b7";
     let action = parsed_task_action(&[

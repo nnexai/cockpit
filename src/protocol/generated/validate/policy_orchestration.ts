@@ -3,11 +3,33 @@ import type * as V1 from "../v1";
 
 export interface WireTypes {
   "OrchestrationSnapshotRequest": V1.OrchestrationSnapshotRequest;
+  "InboxRequest": V1.InboxRequest;
+  "InboxView": V1.InboxView;
+  "InboxObservation": V1.InboxObservation;
+  "OwnerAvailability": V1.OwnerAvailability;
+  "InboxOwner": V1.InboxOwner;
+  "InboxLocation": V1.InboxLocation;
+  "InboxState": V1.InboxState;
+  "InboxNeed": V1.InboxNeed;
+  "InboxSource": V1.InboxSource;
+  "InboxText": V1.InboxText;
+  "InboxRequestEcho": V1.InboxRequestEcho;
+  "InboxQuestion": V1.InboxQuestion;
+  "InboxReceipt": V1.InboxReceipt;
+  "InboxRun": V1.InboxRun;
+  "InboxTaskLink": V1.InboxTaskLink;
+  "InboxThread": V1.InboxThread;
+  "HandoffBinding": V1.HandoffBinding;
+  "HandoffBindingRecord": V1.HandoffBindingRecord;
+  "BoundCheckout": V1.BoundCheckout;
+  "HandoffRecord": V1.HandoffRecord;
+  "ThreadCard": V1.ThreadCard;
   "OrchestrationWaitRequest": V1.OrchestrationWaitRequest;
   "OrchestrationWaitResponse": V1.OrchestrationWaitResponse;
   "OrchestrationMutationRequest": V1.OrchestrationMutationRequest;
   "OrchestrationMutationResponse": V1.OrchestrationMutationResponse;
   "OrchestrationSnapshot": V1.OrchestrationSnapshot;
+  "AgentSendTarget": V1.AgentSendTarget;
   "UnmanagedAgent": V1.UnmanagedAgent;
   "RootSummary": V1.RootSummary;
   "TaskBoard": V1.TaskBoard;
@@ -116,36 +138,41 @@ export interface WireTypes {
   "RetirementBlocker": V1.RetirementBlocker;
   "TerminalOutcome": V1.TerminalOutcome;
   "RetainReason": V1.RetainReason;
-  "RetirementPhase": V1.RetirementPhase;
-  "Run": V1.Run;
-  "DispatchState": V1.DispatchState;
-  "Annotation": V1.Annotation;
-  "ActorRef": V1.ActorRef;
-  "ReportKind": V1.ReportKind;
-  "ReportOutcome": V1.ReportOutcome;
-  "Report": V1.Report;
-  "MessageKind": V1.MessageKind;
-  "DeliveryStage": V1.DeliveryStage;
-  "Message": V1.Message;
-  "QuestionStatus": V1.QuestionStatus;
-  "QuestionReceipt": V1.QuestionReceipt;
-  "AnswerReceipt": V1.AnswerReceipt;
-  "IntentState": V1.IntentState;
-  "TaskIntent": V1.TaskIntent;
-  "TaskAssignmentIntent": V1.TaskAssignmentIntent;
-  "Presence": V1.Presence;
-  "RunObservation": V1.RunObservation;
-  "RuntimeObservation": V1.RuntimeObservation;
-  "AttentionKind": V1.AttentionKind;
 }
 
 export interface WireOwners {
   "OrchestrationSnapshotRequest": V1.OrchestrationSnapshotRequest;
+  "InboxRequest": V1.InboxRequest;
+  "InboxView": V1.InboxView;
+  "InboxObservation": V1.InboxObservation;
+  "InboxObservation[fresh]": Extract<V1.InboxObservation, { "status": "fresh" }>;
+  "InboxObservation[unavailable]": Extract<V1.InboxObservation, { "status": "unavailable" }>;
+  "InboxOwner": V1.InboxOwner;
+  "InboxLocation": V1.InboxLocation;
+  "InboxSource": V1.InboxSource;
+  "InboxSource[recorded]": Extract<V1.InboxSource, { "kind": "recorded" }>;
+  "InboxSource[user]": Extract<V1.InboxSource, { "kind": "user" }>;
+  "InboxSource[owner]": Extract<V1.InboxSource, { "kind": "owner" }>;
+  "InboxSource[owner_card]": Extract<V1.InboxSource, { "kind": "owner_card" }>;
+  "InboxSource[worker]": Extract<V1.InboxSource, { "kind": "worker" }>;
+  "InboxText": V1.InboxText;
+  "InboxRequestEcho": V1.InboxRequestEcho;
+  "InboxQuestion": V1.InboxQuestion;
+  "InboxReceipt": V1.InboxReceipt;
+  "InboxRun": V1.InboxRun;
+  "InboxTaskLink": V1.InboxTaskLink;
+  "InboxThread": V1.InboxThread;
+  "HandoffBinding": V1.HandoffBinding;
+  "HandoffBindingRecord": V1.HandoffBindingRecord;
+  "BoundCheckout": V1.BoundCheckout;
+  "HandoffRecord": V1.HandoffRecord;
+  "ThreadCard": V1.ThreadCard;
   "OrchestrationWaitRequest": V1.OrchestrationWaitRequest;
   "OrchestrationWaitResponse": V1.OrchestrationWaitResponse;
   "OrchestrationMutationRequest": V1.OrchestrationMutationRequest;
   "OrchestrationMutationResponse": V1.OrchestrationMutationResponse;
   "OrchestrationSnapshot": V1.OrchestrationSnapshot;
+  "AgentSendTarget": V1.AgentSendTarget;
   "UnmanagedAgent": V1.UnmanagedAgent;
   "RootSummary": V1.RootSummary;
   "TaskBoard": V1.TaskBoard;
@@ -245,32 +272,114 @@ export interface WireOwners {
   "RetirementState[retired]": Extract<V1.RetirementState, { "state": "retired" }>;
   "RetirementState[retained]": Extract<V1.RetirementState, { "state": "retained" }>;
   "RetirementState[unknown]": Extract<V1.RetirementState, { "state": "unknown" }>;
-  "Run": V1.Run;
-  "DispatchState": V1.DispatchState;
-  "Annotation": V1.Annotation;
-  "ActorRef": V1.ActorRef;
-  "ActorRef[operator]": Extract<V1.ActorRef, { "type": "operator" }>;
-  "ActorRef[run]": Extract<V1.ActorRef, { "type": "run" }>;
-  "ActorRef[dispatcher]": Extract<V1.ActorRef, { "type": "dispatcher" }>;
-  "Report": V1.Report;
-  "Message": V1.Message;
-  "QuestionStatus": V1.QuestionStatus;
-  "QuestionReceipt": V1.QuestionReceipt;
-  "QuestionReceipt[unresolved]": Extract<V1.QuestionReceipt, { "status": "unresolved" }>;
-  "QuestionReceipt[answer_delivered]": Extract<V1.QuestionReceipt, { "status": "answer_delivered" }>;
-  "QuestionReceipt[answer_acknowledged]": Extract<V1.QuestionReceipt, { "status": "answer_acknowledged" }>;
-  "AnswerReceipt": V1.AnswerReceipt;
-  "TaskIntent": V1.TaskIntent;
-  "TaskAssignmentIntent": V1.TaskAssignmentIntent;
-  "RunObservation": V1.RunObservation;
-  "RuntimeObservation": V1.RuntimeObservation;
-  "RuntimeObservation[fresh]": Extract<V1.RuntimeObservation, { "status": "fresh" }>;
-  "RuntimeObservation[unavailable]": Extract<V1.RuntimeObservation, { "status": "unavailable" }>;
 }
 
 export interface WireFields {
   "OrchestrationSnapshotRequest.session_id": (V1.OrchestrationSnapshotRequest)["session_id"];
   "OrchestrationSnapshotRequest.root_id": (V1.OrchestrationSnapshotRequest)["root_id"];
+  "InboxRequest.session_id": (V1.InboxRequest)["session_id"];
+  "InboxView.session_id": (V1.InboxView)["session_id"];
+  "InboxView.state_store_id": (V1.InboxView)["state_store_id"];
+  "InboxView.revision": (V1.InboxView)["revision"];
+  "InboxView.tasks_token": (V1.InboxView)["tasks_token"];
+  "InboxView.observation": (V1.InboxView)["observation"];
+  "InboxView.owners": (V1.InboxView)["owners"];
+  "InboxView.threads": (V1.InboxView)["threads"];
+  "InboxView.unmanaged_agents": (V1.InboxView)["unmanaged_agents"];
+  "InboxObservation[fresh].observed_at": (Extract<V1.InboxObservation, { "status": "fresh" }>)["observed_at"];
+  "InboxObservation[unavailable].error": (Extract<V1.InboxObservation, { "status": "unavailable" }>)["error"];
+  "InboxOwner.root_id": (V1.InboxOwner)["root_id"];
+  "InboxOwner.label": (V1.InboxOwner)["label"];
+  "InboxOwner.kind": (V1.InboxOwner)["kind"];
+  "InboxOwner.stage": (V1.InboxOwner)["stage"];
+  "InboxOwner.harness": (V1.InboxOwner)["harness"];
+  "InboxOwner.availability": (V1.InboxOwner)["availability"];
+  "InboxOwner.location": (V1.InboxOwner)["location"];
+  "InboxOwner.undelivered": (V1.InboxOwner)["undelivered"];
+  "InboxLocation.workspace_id": (V1.InboxLocation)["workspace_id"];
+  "InboxLocation.workspace_label": (V1.InboxLocation)["workspace_label"];
+  "InboxLocation.tab_id": (V1.InboxLocation)["tab_id"];
+  "InboxLocation.tab_label": (V1.InboxLocation)["tab_label"];
+  "InboxLocation.pane_id": (V1.InboxLocation)["pane_id"];
+  "InboxSource[owner].run_id": (Extract<V1.InboxSource, { "kind": "owner" }>)["run_id"];
+  "InboxSource[owner].harness": (Extract<V1.InboxSource, { "kind": "owner" }>)["harness"];
+  "InboxSource[owner_card].run_id": (Extract<V1.InboxSource, { "kind": "owner_card" }>)["run_id"];
+  "InboxSource[owner_card].harness": (Extract<V1.InboxSource, { "kind": "owner_card" }>)["harness"];
+  "InboxSource[worker].run_id": (Extract<V1.InboxSource, { "kind": "worker" }>)["run_id"];
+  "InboxText.text": (V1.InboxText)["text"];
+  "InboxText.source": (V1.InboxText)["source"];
+  "InboxText.message_id": (V1.InboxText)["message_id"];
+  "InboxText.at": (V1.InboxText)["at"];
+  "InboxRequestEcho.message_id": (V1.InboxRequestEcho)["message_id"];
+  "InboxRequestEcho.text": (V1.InboxRequestEcho)["text"];
+  "InboxRequestEcho.created_at": (V1.InboxRequestEcho)["created_at"];
+  "InboxRequestEcho.to_run_id": (V1.InboxRequestEcho)["to_run_id"];
+  "InboxRequestEcho.handoff": (V1.InboxRequestEcho)["handoff"];
+  "InboxQuestion.run_id": (V1.InboxQuestion)["run_id"];
+  "InboxQuestion.question_message_id": (V1.InboxQuestion)["question_message_id"];
+  "InboxQuestion.asked_at": (V1.InboxQuestion)["asked_at"];
+  "InboxQuestion.text": (V1.InboxQuestion)["text"];
+  "InboxQuestion.choices": (V1.InboxQuestion)["choices"];
+  "InboxQuestion.receipt": (V1.InboxQuestion)["receipt"];
+  "InboxReceipt.message_id": (V1.InboxReceipt)["message_id"];
+  "InboxReceipt.kind": (V1.InboxReceipt)["kind"];
+  "InboxReceipt.to_run_id": (V1.InboxReceipt)["to_run_id"];
+  "InboxReceipt.attempt_run_id": (V1.InboxReceipt)["attempt_run_id"];
+  "InboxReceipt.stage": (V1.InboxReceipt)["stage"];
+  "InboxReceipt.created_at": (V1.InboxReceipt)["created_at"];
+  "InboxReceipt.acked_at": (V1.InboxReceipt)["acked_at"];
+  "InboxReceipt.stale": (V1.InboxReceipt)["stale"];
+  "InboxRun.run_id": (V1.InboxRun)["run_id"];
+  "InboxRun.attempt": (V1.InboxRun)["attempt"];
+  "InboxRun.stage": (V1.InboxRun)["stage"];
+  "InboxRun.harness": (V1.InboxRun)["harness"];
+  "InboxRun.presence": (V1.InboxRun)["presence"];
+  "InboxRun.agent_status": (V1.InboxRun)["agent_status"];
+  "InboxRun.location": (V1.InboxRun)["location"];
+  "InboxRun.cleanup": (V1.InboxRun)["cleanup"];
+  "InboxTaskLink.root_id": (V1.InboxTaskLink)["root_id"];
+  "InboxTaskLink.task_id": (V1.InboxTaskLink)["task_id"];
+  "InboxTaskLink.title": (V1.InboxTaskLink)["title"];
+  "InboxTaskLink.project": (V1.InboxTaskLink)["project"];
+  "InboxTaskLink.lane": (V1.InboxTaskLink)["lane"];
+  "InboxTaskLink.run": (V1.InboxTaskLink)["run"];
+  "InboxThread.thread_id": (V1.InboxThread)["thread_id"];
+  "InboxThread.state": (V1.InboxThread)["state"];
+  "InboxThread.need": (V1.InboxThread)["need"];
+  "InboxThread.owner_root_ids": (V1.InboxThread)["owner_root_ids"];
+  "InboxThread.title": (V1.InboxThread)["title"];
+  "InboxThread.next": (V1.InboxThread)["next"];
+  "InboxThread.project": (V1.InboxThread)["project"];
+  "InboxThread.request": (V1.InboxThread)["request"];
+  "InboxThread.questions": (V1.InboxThread)["questions"];
+  "InboxThread.recommendation": (V1.InboxThread)["recommendation"];
+  "InboxThread.reply": (V1.InboxThread)["reply"];
+  "InboxThread.unread_result_message_id": (V1.InboxThread)["unread_result_message_id"];
+  "InboxThread.tasks": (V1.InboxThread)["tasks"];
+  "InboxThread.receipts": (V1.InboxThread)["receipts"];
+  "InboxThread.facts": (V1.InboxThread)["facts"];
+  "InboxThread.updated_at": (V1.InboxThread)["updated_at"];
+  "HandoffBinding.repository_id": (V1.HandoffBinding)["repository_id"];
+  "HandoffBinding.workspace_id": (V1.HandoffBinding)["workspace_id"];
+  "HandoffBinding.branch": (V1.HandoffBinding)["branch"];
+  "HandoffBinding.base_ref": (V1.HandoffBinding)["base_ref"];
+  "HandoffBindingRecord.requested": (V1.HandoffBindingRecord)["requested"];
+  "HandoffBindingRecord.repository_common_dir": (V1.HandoffBindingRecord)["repository_common_dir"];
+  "HandoffBindingRecord.workspace_checkout": (V1.HandoffBindingRecord)["workspace_checkout"];
+  "BoundCheckout.path": (V1.BoundCheckout)["path"];
+  "BoundCheckout.common_dir": (V1.BoundCheckout)["common_dir"];
+  "BoundCheckout.branch": (V1.BoundCheckout)["branch"];
+  "BoundCheckout.head": (V1.BoundCheckout)["head"];
+  "HandoffRecord.task_id": (V1.HandoffRecord)["task_id"];
+  "HandoffRecord.task_revision": (V1.HandoffRecord)["task_revision"];
+  "HandoffRecord.attempt_run_id": (V1.HandoffRecord)["attempt_run_id"];
+  "HandoffRecord.binding": (V1.HandoffRecord)["binding"];
+  "HandoffRecord.origin": (V1.HandoffRecord)["origin"];
+  "ThreadCard.title": (V1.ThreadCard)["title"];
+  "ThreadCard.next": (V1.ThreadCard)["next"];
+  "ThreadCard.recommendation": (V1.ThreadCard)["recommendation"];
+  "ThreadCard.choices": (V1.ThreadCard)["choices"];
+  "ThreadCard.project": (V1.ThreadCard)["project"];
   "OrchestrationWaitRequest.root_id": (V1.OrchestrationWaitRequest)["root_id"];
   "OrchestrationWaitRequest.after_revision": (V1.OrchestrationWaitRequest)["after_revision"];
   "OrchestrationWaitRequest.after_tasks_token": (V1.OrchestrationWaitRequest)["after_tasks_token"];
@@ -300,6 +409,16 @@ export interface WireFields {
   "OrchestrationSnapshot.runtime": (V1.OrchestrationSnapshot)["runtime"];
   "OrchestrationSnapshot.unmanaged_agents": (V1.OrchestrationSnapshot)["unmanaged_agents"];
   "OrchestrationSnapshot.attention": (V1.OrchestrationSnapshot)["attention"];
+  "AgentSendTarget.endpoint_identity": (V1.AgentSendTarget)["endpoint_identity"];
+  "AgentSendTarget.workspace_id": (V1.AgentSendTarget)["workspace_id"];
+  "AgentSendTarget.tab_id": (V1.AgentSendTarget)["tab_id"];
+  "AgentSendTarget.pane_id": (V1.AgentSendTarget)["pane_id"];
+  "AgentSendTarget.terminal_id": (V1.AgentSendTarget)["terminal_id"];
+  "AgentSendTarget.agent_kind": (V1.AgentSendTarget)["agent_kind"];
+  "AgentSendTarget.agent_name": (V1.AgentSendTarget)["agent_name"];
+  "AgentSendTarget.native_session_id": (V1.AgentSendTarget)["native_session_id"];
+  "AgentSendTarget.native_session_file": (V1.AgentSendTarget)["native_session_file"];
+  "AgentSendTarget.state_changed_at": (V1.AgentSendTarget)["state_changed_at"];
   "UnmanagedAgent.workspace_id": (V1.UnmanagedAgent)["workspace_id"];
   "UnmanagedAgent.workspace_label": (V1.UnmanagedAgent)["workspace_label"];
   "UnmanagedAgent.tab_id": (V1.UnmanagedAgent)["tab_id"];
@@ -308,6 +427,7 @@ export interface WireFields {
   "UnmanagedAgent.agent_name": (V1.UnmanagedAgent)["agent_name"];
   "UnmanagedAgent.agent_status": (V1.UnmanagedAgent)["agent_status"];
   "UnmanagedAgent.state_changed_at": (V1.UnmanagedAgent)["state_changed_at"];
+  "UnmanagedAgent.expected_target": (V1.UnmanagedAgent)["expected_target"];
   "RootSummary.root_id": (V1.RootSummary)["root_id"];
   "RootSummary.label": (V1.RootSummary)["label"];
   "RootSummary.kind": (V1.RootSummary)["kind"];
@@ -718,125 +838,42 @@ export interface WireFields {
   "RetirementState[unknown].at": (Extract<V1.RetirementState, { "state": "unknown" }>)["at"];
   "RetirementState[unknown].phase": (Extract<V1.RetirementState, { "state": "unknown" }>)["phase"];
   "RetirementState[unknown].detail": (Extract<V1.RetirementState, { "state": "unknown" }>)["detail"];
-  "Run.session_id": (V1.Run)["session_id"];
-  "Run.brief": (V1.Run)["brief"];
-  "Run.run_id": (V1.Run)["run_id"];
-  "Run.kind": (V1.Run)["kind"];
-  "Run.label": (V1.Run)["label"];
-  "Run.root_id": (V1.Run)["root_id"];
-  "Run.parent_run_id": (V1.Run)["parent_run_id"];
-  "Run.task_id": (V1.Run)["task_id"];
-  "Run.attempt": (V1.Run)["attempt"];
-  "Run.assignment_generation": (V1.Run)["assignment_generation"];
-  "Run.launch_config": (V1.Run)["launch_config"];
-  "Run.task_revision_at_start": (V1.Run)["task_revision_at_start"];
-  "Run.stage": (V1.Run)["stage"];
-  "Run.close_reason": (V1.Run)["close_reason"];
-  "Run.dispatch": (V1.Run)["dispatch"];
-  "Run.target": (V1.Run)["target"];
-  "Run.setup": (V1.Run)["setup"];
-  "Run.cleanup_policy": (V1.Run)["cleanup_policy"];
-  "Run.last_report": (V1.Run)["last_report"];
-  "Run.result": (V1.Run)["result"];
-  "Run.source_output": (V1.Run)["source_output"];
-  "Run.integration": (V1.Run)["integration"];
-  "Run.annotations": (V1.Run)["annotations"];
-  "Run.project": (V1.Run)["project"];
-  "Run.checkout": (V1.Run)["checkout"];
-  "Run.attachment": (V1.Run)["attachment"];
-  "Run.checkout_claim_id": (V1.Run)["checkout_claim_id"];
-  "Run.resume": (V1.Run)["resume"];
-  "Run.retirement": (V1.Run)["retirement"];
-  "Run.created_at": (V1.Run)["created_at"];
-  "Run.updated_at": (V1.Run)["updated_at"];
-  "DispatchState.launch_tag": (V1.DispatchState)["launch_tag"];
-  "DispatchState.endpoint_identity": (V1.DispatchState)["endpoint_identity"];
-  "DispatchState.scope_unit": (V1.DispatchState)["scope_unit"];
-  "DispatchState.pre_move_scope": (V1.DispatchState)["pre_move_scope"];
-  "DispatchState.latch": (V1.DispatchState)["latch"];
-  "DispatchState.latch_state": (V1.DispatchState)["latch_state"];
-  "DispatchState.source_location": (V1.DispatchState)["source_location"];
-  "DispatchState.move_operation_id": (V1.DispatchState)["move_operation_id"];
-  "DispatchState.staging_workspace_id": (V1.DispatchState)["staging_workspace_id"];
-  "DispatchState.recovery": (V1.DispatchState)["recovery"];
-  "DispatchState.agent_started": (V1.DispatchState)["agent_started"];
-  "DispatchState.step": (V1.DispatchState)["step"];
-  "DispatchState.launch_attempt": (V1.DispatchState)["launch_attempt"];
-  "DispatchState.error": (V1.DispatchState)["error"];
-  "DispatchState.updated_at": (V1.DispatchState)["updated_at"];
-  "Annotation.by": (V1.Annotation)["by"];
-  "Annotation.text": (V1.Annotation)["text"];
-  "Annotation.at": (V1.Annotation)["at"];
-  "ActorRef[run].run_id": (Extract<V1.ActorRef, { "type": "run" }>)["run_id"];
-  "Report.message_id": (V1.Report)["message_id"];
-  "Report.kind": (V1.Report)["kind"];
-  "Report.outcome": (V1.Report)["outcome"];
-  "Report.summary": (V1.Report)["summary"];
-  "Report.plan": (V1.Report)["plan"];
-  "Report.source_output": (V1.Report)["source_output"];
-  "Report.at": (V1.Report)["at"];
-  "Message.message_id": (V1.Message)["message_id"];
-  "Message.to_run_id": (V1.Message)["to_run_id"];
-  "Message.seq": (V1.Message)["seq"];
-  "Message.from": (V1.Message)["from"];
-  "Message.kind": (V1.Message)["kind"];
-  "Message.text": (V1.Message)["text"];
-  "Message.in_reply_to": (V1.Message)["in_reply_to"];
-  "Message.report": (V1.Message)["report"];
-  "Message.stale": (V1.Message)["stale"];
-  "Message.escalated_from": (V1.Message)["escalated_from"];
-  "Message.stage": (V1.Message)["stage"];
-  "Message.created_at": (V1.Message)["created_at"];
-  "Message.acked_at": (V1.Message)["acked_at"];
-  "QuestionStatus.run_id": (V1.QuestionStatus)["run_id"];
-  "QuestionStatus.question_message_id": (V1.QuestionStatus)["question_message_id"];
-  "QuestionStatus.asked_at": (V1.QuestionStatus)["asked_at"];
-  "QuestionStatus.receipt": (V1.QuestionStatus)["receipt"];
-  "QuestionReceipt[answer_delivered].answer": (Extract<V1.QuestionReceipt, { "status": "answer_delivered" }>)["answer"];
-  "QuestionReceipt[answer_acknowledged].answer": (Extract<V1.QuestionReceipt, { "status": "answer_acknowledged" }>)["answer"];
-  "AnswerReceipt.sender": (V1.AnswerReceipt)["sender"];
-  "AnswerReceipt.message_id": (V1.AnswerReceipt)["message_id"];
-  "AnswerReceipt.seq": (V1.AnswerReceipt)["seq"];
-  "AnswerReceipt.stage": (V1.AnswerReceipt)["stage"];
-  "AnswerReceipt.created_at": (V1.AnswerReceipt)["created_at"];
-  "AnswerReceipt.acked_at": (V1.AnswerReceipt)["acked_at"];
-  "TaskIntent.intent_id": (V1.TaskIntent)["intent_id"];
-  "TaskIntent.root_id": (V1.TaskIntent)["root_id"];
-  "TaskIntent.task_id": (V1.TaskIntent)["task_id"];
-  "TaskIntent.run_id": (V1.TaskIntent)["run_id"];
-  "TaskIntent.expected_task_revision": (V1.TaskIntent)["expected_task_revision"];
-  "TaskIntent.state": (V1.TaskIntent)["state"];
-  "TaskIntent.origin": (V1.TaskIntent)["origin"];
-  "TaskIntent.supervisor_run_id": (V1.TaskIntent)["supervisor_run_id"];
-  "TaskIntent.conversation": (V1.TaskIntent)["conversation"];
-  "TaskIntent.result_message_id": (V1.TaskIntent)["result_message_id"];
-  "TaskAssignmentIntent.root_id": (V1.TaskAssignmentIntent)["root_id"];
-  "TaskAssignmentIntent.task_id": (V1.TaskAssignmentIntent)["task_id"];
-  "TaskAssignmentIntent.state": (V1.TaskAssignmentIntent)["state"];
-  "RunObservation.run_id": (V1.RunObservation)["run_id"];
-  "RunObservation.presence": (V1.RunObservation)["presence"];
-  "RunObservation.actual_agent": (V1.RunObservation)["actual_agent"];
-  "RunObservation.workspace_id": (V1.RunObservation)["workspace_id"];
-  "RunObservation.workspace_label": (V1.RunObservation)["workspace_label"];
-  "RunObservation.tab_id": (V1.RunObservation)["tab_id"];
-  "RunObservation.tab_label": (V1.RunObservation)["tab_label"];
-  "RunObservation.pane_id": (V1.RunObservation)["pane_id"];
-  "RunObservation.agent_status": (V1.RunObservation)["agent_status"];
-  "RunObservation.state_changed_at": (V1.RunObservation)["state_changed_at"];
-  "RuntimeObservation[fresh].endpoint_identity": (Extract<V1.RuntimeObservation, { "status": "fresh" }>)["endpoint_identity"];
-  "RuntimeObservation[fresh].observed_at": (Extract<V1.RuntimeObservation, { "status": "fresh" }>)["observed_at"];
-  "RuntimeObservation[fresh].runs": (Extract<V1.RuntimeObservation, { "status": "fresh" }>)["runs"];
-  "RuntimeObservation[unavailable].error": (Extract<V1.RuntimeObservation, { "status": "unavailable" }>)["error"];
 }
 
 export interface WireFieldNames {
   "OrchestrationSnapshotRequest": "session_id" | "root_id";
+  "InboxRequest": "session_id";
+  "InboxView": "session_id" | "state_store_id" | "revision" | "tasks_token" | "observation" | "owners" | "threads" | "unmanaged_agents";
+  "InboxObservation": never;
+  "InboxObservation[fresh]": "observed_at";
+  "InboxObservation[unavailable]": "error";
+  "InboxOwner": "root_id" | "label" | "kind" | "stage" | "harness" | "availability" | "location" | "undelivered";
+  "InboxLocation": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id";
+  "InboxSource": never;
+  "InboxSource[recorded]": never;
+  "InboxSource[user]": never;
+  "InboxSource[owner]": "run_id" | "harness";
+  "InboxSource[owner_card]": "run_id" | "harness";
+  "InboxSource[worker]": "run_id";
+  "InboxText": "text" | "source" | "message_id" | "at";
+  "InboxRequestEcho": "message_id" | "text" | "created_at" | "to_run_id" | "handoff";
+  "InboxQuestion": "run_id" | "question_message_id" | "asked_at" | "text" | "choices" | "receipt";
+  "InboxReceipt": "message_id" | "kind" | "to_run_id" | "attempt_run_id" | "stage" | "created_at" | "acked_at" | "stale";
+  "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "presence" | "agent_status" | "location" | "cleanup";
+  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run";
+  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "updated_at";
+  "HandoffBinding": "repository_id" | "workspace_id" | "branch" | "base_ref";
+  "HandoffBindingRecord": "requested" | "repository_common_dir" | "workspace_checkout";
+  "BoundCheckout": "path" | "common_dir" | "branch" | "head";
+  "HandoffRecord": "task_id" | "task_revision" | "attempt_run_id" | "binding" | "origin";
+  "ThreadCard": "title" | "next" | "recommendation" | "choices" | "project";
   "OrchestrationWaitRequest": "root_id" | "after_revision" | "after_tasks_token" | "timeout_ms";
   "OrchestrationWaitResponse": "revision" | "tasks_token" | "changed";
   "OrchestrationMutationRequest": "session_id" | "expected_revision" | "action";
   "OrchestrationMutationResponse": "revision" | "result";
   "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "task_ownership" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
-  "UnmanagedAgent": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_name" | "agent_status" | "state_changed_at";
+  "AgentSendTarget": "endpoint_identity" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "agent_kind" | "agent_name" | "native_session_id" | "native_session_file" | "state_changed_at";
+  "UnmanagedAgent": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_name" | "agent_status" | "state_changed_at" | "expected_target";
   "RootSummary": "root_id" | "label" | "kind" | "open_runs" | "needs_you";
   "TaskBoard": "root_id" | "path" | "doc_revision" | "unidentified_items" | "diagnostics" | "tasks";
   "Task": "task_id" | "title" | "body" | "description" | "description_editable" | "description_diagnostic" | "steps" | "step_progress" | "steps_diagnostic" | "depends_on" | "follow_up_of" | "relations_diagnostic" | "checked" | "line" | "task_revision" | "diagnostic";
@@ -935,35 +972,34 @@ export interface WireFieldNames {
   "RetirementState[retired]": "at" | "terminal";
   "RetirementState[retained]": "at" | "reason" | "stopped";
   "RetirementState[unknown]": "at" | "phase" | "detail";
-  "Run": "session_id" | "brief" | "run_id" | "kind" | "label" | "root_id" | "parent_run_id" | "task_id" | "attempt" | "assignment_generation" | "launch_config" | "task_revision_at_start" | "stage" | "close_reason" | "dispatch" | "target" | "setup" | "cleanup_policy" | "last_report" | "result" | "source_output" | "integration" | "annotations" | "project" | "checkout" | "attachment" | "checkout_claim_id" | "resume" | "retirement" | "created_at" | "updated_at";
-  "DispatchState": "launch_tag" | "endpoint_identity" | "scope_unit" | "pre_move_scope" | "latch" | "latch_state" | "source_location" | "move_operation_id" | "staging_workspace_id" | "recovery" | "agent_started" | "step" | "launch_attempt" | "error" | "updated_at";
-  "Annotation": "by" | "text" | "at";
-  "ActorRef": never;
-  "ActorRef[operator]": never;
-  "ActorRef[run]": "run_id";
-  "ActorRef[dispatcher]": never;
-  "Report": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "at";
-  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "in_reply_to" | "report" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
-  "QuestionStatus": "run_id" | "question_message_id" | "asked_at" | "receipt";
-  "QuestionReceipt": never;
-  "QuestionReceipt[unresolved]": never;
-  "QuestionReceipt[answer_delivered]": "answer";
-  "QuestionReceipt[answer_acknowledged]": "answer";
-  "AnswerReceipt": "sender" | "message_id" | "seq" | "stage" | "created_at" | "acked_at";
-  "TaskIntent": "intent_id" | "root_id" | "task_id" | "run_id" | "expected_task_revision" | "state" | "origin" | "supervisor_run_id" | "conversation" | "result_message_id";
-  "TaskAssignmentIntent": "root_id" | "task_id" | "state";
-  "RunObservation": "run_id" | "presence" | "actual_agent" | "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_status" | "state_changed_at";
-  "RuntimeObservation": never;
-  "RuntimeObservation[fresh]": "endpoint_identity" | "observed_at" | "runs";
-  "RuntimeObservation[unavailable]": "error";
 }
 
 export interface WireChildNames {
+  "InboxView.observation": "InboxObservation";
+  "InboxObservation.error": "ErrorResponse";
+  "InboxObservation[unavailable].error": "ErrorResponse";
+  "InboxOwner.location": "InboxLocation";
+  "InboxText.source": "InboxSource";
+  "InboxRequestEcho.handoff": "HandoffRecord";
+  "InboxQuestion.text": "InboxText";
+  "InboxQuestion.receipt": "QuestionReceipt";
+  "InboxRun.location": "InboxLocation";
+  "InboxTaskLink.project": "TaskProject";
+  "InboxTaskLink.run": "InboxRun";
+  "InboxThread.title": "InboxText";
+  "InboxThread.next": "InboxText";
+  "InboxThread.request": "InboxRequestEcho";
+  "InboxThread.recommendation": "InboxText";
+  "InboxThread.reply": "InboxText";
+  "HandoffBindingRecord.requested": "HandoffBinding";
+  "HandoffBindingRecord.workspace_checkout": "BoundCheckout";
+  "HandoffRecord.binding": "HandoffBindingRecord";
   "OrchestrationMutationRequest.action": "OrchestrationAction";
   "OrchestrationMutationResponse.result": "OrchestrationActionResult";
   "OrchestrationSnapshot.board": "TaskBoard";
   "OrchestrationSnapshot.restoration": "RestorationSummary";
   "OrchestrationSnapshot.runtime": "RuntimeObservation";
+  "UnmanagedAgent.expected_target": "AgentSendTarget";
   "Task.step_progress": "TaskStepProgress";
   "TaskOwnership.owner": "TaskOwner";
   "TaskOwnership.schedule": "TaskSchedule";
@@ -1023,38 +1059,18 @@ export interface WireChildNames {
   "RunRetirement.replacement": "ReplacementRetirementAuthority";
   "RunRetirement.identity": "RetirementIdentity";
   "RunRetirement.state": "RetirementState";
-  "Run.launch_config": "OrchestrationConfiguration";
-  "Run.dispatch": "DispatchState";
-  "Run.target": "DispatchTarget";
-  "Run.setup": "SetupSummary";
-  "Run.last_report": "Report";
-  "Run.result": "Report";
-  "Run.source_output": "SourceOutput";
-  "Run.integration": "Integration";
-  "Run.project": "ProjectIdentity";
-  "Run.checkout": "CheckoutIdentity";
-  "Run.attachment": "ExecutionAttachment";
-  "Run.resume": "ResumeRecord";
-  "Run.retirement": "RunRetirement";
-  "DispatchState.pre_move_scope": "OwnedProcessScope";
-  "DispatchState.latch": "AgentLaunchReceipt";
-  "DispatchState.source_location": "RunLocation";
-  "DispatchState.error": "ErrorResponse";
-  "Annotation.by": "ActorRef";
-  "Report.source_output": "SourceOutput";
-  "Message.from": "ActorRef";
-  "Message.report": "Report";
-  "QuestionStatus.receipt": "QuestionReceipt";
-  "QuestionReceipt.answer": "AnswerReceipt";
-  "QuestionReceipt[answer_delivered].answer": "AnswerReceipt";
-  "QuestionReceipt[answer_acknowledged].answer": "AnswerReceipt";
-  "AnswerReceipt.sender": "ActorRef";
-  "TaskIntent.conversation": "ConversationIdentity";
-  "RuntimeObservation.error": "ErrorResponse";
-  "RuntimeObservation[unavailable].error": "ErrorResponse";
 }
 
 export interface WireTagNames {
+  "InboxObservation": "status";
+  "InboxObservation[fresh]": "status";
+  "InboxObservation[unavailable]": "status";
+  "InboxSource": "kind";
+  "InboxSource[recorded]": "kind";
+  "InboxSource[user]": "kind";
+  "InboxSource[owner]": "kind";
+  "InboxSource[owner_card]": "kind";
+  "InboxSource[worker]": "kind";
   "ReplacementPlacement": "placement";
   "ReplacementPlacement[same_checkout]": "placement";
   "ReplacementPlacement[isolated_worktree]": "placement";
@@ -1091,27 +1107,42 @@ export interface WireTagNames {
   "RetirementState[retired]": "state";
   "RetirementState[retained]": "state";
   "RetirementState[unknown]": "state";
-  "ActorRef": "type";
-  "ActorRef[operator]": "type";
-  "ActorRef[run]": "type";
-  "ActorRef[dispatcher]": "type";
-  "QuestionReceipt": "status";
-  "QuestionReceipt[unresolved]": "status";
-  "QuestionReceipt[answer_delivered]": "status";
-  "QuestionReceipt[answer_acknowledged]": "status";
-  "RuntimeObservation": "status";
-  "RuntimeObservation[fresh]": "status";
-  "RuntimeObservation[unavailable]": "status";
 }
 
 export interface WireCheckpointFieldNames {
   "OrchestrationSnapshotRequest": "session_id" | "root_id";
+  "InboxRequest": "session_id";
+  "InboxView": "session_id" | "state_store_id" | "revision" | "tasks_token" | "observation" | "owners" | "threads" | "unmanaged_agents";
+  "InboxObservation": "error" | "observed_at" | "status";
+  "InboxObservation[fresh]": "observed_at" | "status";
+  "InboxObservation[unavailable]": "error" | "status";
+  "InboxOwner": "root_id" | "label" | "kind" | "stage" | "harness" | "availability" | "location" | "undelivered";
+  "InboxLocation": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id";
+  "InboxSource": "harness" | "kind" | "run_id";
+  "InboxSource[recorded]": "kind";
+  "InboxSource[user]": "kind";
+  "InboxSource[owner]": "run_id" | "harness" | "kind";
+  "InboxSource[owner_card]": "run_id" | "harness" | "kind";
+  "InboxSource[worker]": "run_id" | "kind";
+  "InboxText": "text" | "source" | "message_id" | "at";
+  "InboxRequestEcho": "message_id" | "text" | "created_at" | "to_run_id" | "handoff";
+  "InboxQuestion": "run_id" | "question_message_id" | "asked_at" | "text" | "choices" | "receipt";
+  "InboxReceipt": "message_id" | "kind" | "to_run_id" | "attempt_run_id" | "stage" | "created_at" | "acked_at" | "stale";
+  "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "presence" | "agent_status" | "location" | "cleanup";
+  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run";
+  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "updated_at";
+  "HandoffBinding": "repository_id" | "workspace_id" | "branch" | "base_ref";
+  "HandoffBindingRecord": "requested" | "repository_common_dir" | "workspace_checkout";
+  "BoundCheckout": "path" | "common_dir" | "branch" | "head";
+  "HandoffRecord": "task_id" | "task_revision" | "attempt_run_id" | "binding" | "origin";
+  "ThreadCard": "title" | "next" | "recommendation" | "choices" | "project";
   "OrchestrationWaitRequest": "root_id" | "after_revision" | "after_tasks_token" | "timeout_ms";
   "OrchestrationWaitResponse": "revision" | "tasks_token" | "changed";
   "OrchestrationMutationRequest": "session_id" | "expected_revision" | "action";
   "OrchestrationMutationResponse": "revision" | "result";
   "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "task_ownership" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
-  "UnmanagedAgent": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_name" | "agent_status" | "state_changed_at";
+  "AgentSendTarget": "endpoint_identity" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "agent_kind" | "agent_name" | "native_session_id" | "native_session_file" | "state_changed_at";
+  "UnmanagedAgent": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_name" | "agent_status" | "state_changed_at" | "expected_target";
   "RootSummary": "root_id" | "label" | "kind" | "open_runs" | "needs_you";
   "TaskBoard": "root_id" | "path" | "doc_revision" | "unidentified_items" | "diagnostics" | "tasks";
   "Task": "task_id" | "title" | "body" | "description" | "description_editable" | "description_diagnostic" | "steps" | "step_progress" | "steps_diagnostic" | "depends_on" | "follow_up_of" | "relations_diagnostic" | "checked" | "line" | "task_revision" | "diagnostic";
@@ -1210,36 +1241,51 @@ export interface WireCheckpointFieldNames {
   "RetirementState[retired]": "at" | "terminal" | "state";
   "RetirementState[retained]": "at" | "reason" | "stopped" | "state";
   "RetirementState[unknown]": "at" | "phase" | "detail" | "state";
-  "Run": "session_id" | "brief" | "run_id" | "kind" | "label" | "root_id" | "parent_run_id" | "task_id" | "attempt" | "assignment_generation" | "launch_config" | "task_revision_at_start" | "stage" | "close_reason" | "dispatch" | "target" | "setup" | "cleanup_policy" | "last_report" | "result" | "source_output" | "integration" | "annotations" | "project" | "checkout" | "attachment" | "checkout_claim_id" | "resume" | "retirement" | "created_at" | "updated_at";
-  "DispatchState": "launch_tag" | "endpoint_identity" | "scope_unit" | "pre_move_scope" | "latch" | "latch_state" | "source_location" | "move_operation_id" | "staging_workspace_id" | "recovery" | "agent_started" | "step" | "launch_attempt" | "error" | "updated_at";
-  "Annotation": "by" | "text" | "at";
-  "ActorRef": "run_id" | "type";
-  "ActorRef[operator]": "type";
-  "ActorRef[run]": "run_id" | "type";
-  "ActorRef[dispatcher]": "type";
-  "Report": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "at";
-  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "in_reply_to" | "report" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
-  "QuestionStatus": "run_id" | "question_message_id" | "asked_at" | "receipt";
-  "QuestionReceipt": "answer" | "status";
-  "QuestionReceipt[unresolved]": "status";
-  "QuestionReceipt[answer_delivered]": "answer" | "status";
-  "QuestionReceipt[answer_acknowledged]": "answer" | "status";
-  "AnswerReceipt": "sender" | "message_id" | "seq" | "stage" | "created_at" | "acked_at";
-  "TaskIntent": "intent_id" | "root_id" | "task_id" | "run_id" | "expected_task_revision" | "state" | "origin" | "supervisor_run_id" | "conversation" | "result_message_id";
-  "TaskAssignmentIntent": "root_id" | "task_id" | "state";
-  "RunObservation": "run_id" | "presence" | "actual_agent" | "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_status" | "state_changed_at";
-  "RuntimeObservation": "endpoint_identity" | "error" | "observed_at" | "runs" | "status";
-  "RuntimeObservation[fresh]": "endpoint_identity" | "observed_at" | "runs" | "status";
-  "RuntimeObservation[unavailable]": "error" | "status";
 }
 
 export type WireOmittableField =
   | "OrchestrationSnapshotRequest.root_id"
+  | "InboxOwner.location"
+  | "InboxText.message_id"
+  | "InboxText.at"
+  | "InboxReceipt.attempt_run_id"
+  | "InboxReceipt.acked_at"
+  | "InboxRun.agent_status"
+  | "InboxRun.location"
+  | "InboxTaskLink.project"
+  | "InboxTaskLink.run"
+  | "InboxThread.need"
+  | "InboxThread.next"
+  | "InboxThread.project"
+  | "InboxThread.request"
+  | "InboxThread.recommendation"
+  | "InboxThread.reply"
+  | "InboxThread.unread_result_message_id"
+  | "HandoffBinding.repository_id"
+  | "HandoffBinding.workspace_id"
+  | "HandoffBinding.branch"
+  | "HandoffBinding.base_ref"
+  | "HandoffBindingRecord.repository_common_dir"
+  | "HandoffBindingRecord.workspace_checkout"
+  | "BoundCheckout.common_dir"
+  | "BoundCheckout.branch"
+  | "BoundCheckout.head"
+  | "HandoffRecord.task_id"
+  | "HandoffRecord.task_revision"
+  | "HandoffRecord.attempt_run_id"
+  | "HandoffRecord.binding"
+  | "ThreadCard.recommendation"
+  | "ThreadCard.project"
   | "OrchestrationWaitRequest.root_id"
   | "OrchestrationMutationRequest.expected_revision"
   | "OrchestrationSnapshot.board"
+  | "AgentSendTarget.agent_name"
+  | "AgentSendTarget.native_session_id"
+  | "AgentSendTarget.native_session_file"
+  | "AgentSendTarget.state_changed_at"
   | "UnmanagedAgent.agent_status"
   | "UnmanagedAgent.state_changed_at"
+  | "UnmanagedAgent.expected_target"
   | "Task.description_diagnostic"
   | "Task.step_progress"
   | "Task.steps_diagnostic"
@@ -1323,58 +1369,10 @@ export type WireOmittableField =
   | "RunRetirement.task_revision"
   | "RunRetirement.replacement"
   | "RunRetirement.identity"
-  | "Run.parent_run_id"
-  | "Run.task_id"
-  | "Run.assignment_generation"
-  | "Run.task_revision_at_start"
-  | "Run.close_reason"
-  | "Run.dispatch"
-  | "Run.target"
-  | "Run.setup"
-  | "Run.cleanup_policy"
-  | "Run.last_report"
-  | "Run.result"
-  | "Run.source_output"
-  | "Run.integration"
-  | "Run.project"
-  | "Run.checkout"
-  | "Run.attachment"
-  | "Run.checkout_claim_id"
-  | "Run.resume"
-  | "Run.retirement"
-  | "DispatchState.launch_tag"
-  | "DispatchState.endpoint_identity"
-  | "DispatchState.scope_unit"
-  | "DispatchState.pre_move_scope"
-  | "DispatchState.latch"
-  | "DispatchState.latch_state"
-  | "DispatchState.source_location"
-  | "DispatchState.move_operation_id"
-  | "DispatchState.staging_workspace_id"
-  | "DispatchState.recovery"
-  | "DispatchState.error"
-  | "Report.outcome"
-  | "Report.plan"
-  | "Report.source_output"
-  | "Message.in_reply_to"
-  | "Message.report"
-  | "Message.escalated_from"
-  | "Message.acked_at"
-  | "AnswerReceipt.acked_at"
-  | "TaskIntent.origin"
-  | "TaskIntent.supervisor_run_id"
-  | "TaskIntent.conversation"
-  | "TaskIntent.result_message_id"
-  | "RunObservation.workspace_id"
-  | "RunObservation.workspace_label"
-  | "RunObservation.tab_id"
-  | "RunObservation.tab_label"
-  | "RunObservation.pane_id"
-  | "RunObservation.agent_status"
-  | "RunObservation.state_changed_at"
   | never;
 
 export type WireOptionalField =
+  | "UnmanagedAgent.expected_target"
   | "ResumeRecord.fresh_conversation"
   | "ResumeRecord.previous_conversation"
   | "ResumeRecord.session_namespace"
@@ -1382,6 +1380,17 @@ export type WireOptionalField =
   | never;
 
 export type WireListField =
+  | "InboxView.owners"
+  | "InboxView.threads"
+  | "InboxView.unmanaged_agents"
+  | "InboxQuestion.choices"
+  | "InboxRun.cleanup"
+  | "InboxThread.owner_root_ids"
+  | "InboxThread.questions"
+  | "InboxThread.tasks"
+  | "InboxThread.receipts"
+  | "InboxThread.facts"
+  | "ThreadCard.choices"
   | "OrchestrationSnapshot.roots"
   | "OrchestrationSnapshot.runs"
   | "OrchestrationSnapshot.messages"
@@ -1420,7 +1429,5 @@ export type WireListField =
   | "CleanupFinishResult.items"
   | "RunCleanupSummary.items"
   | "RetirementState[waiting].blockers"
-  | "Run.annotations"
-  | "RuntimeObservation[fresh].runs"
   | never;
 

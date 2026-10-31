@@ -28,11 +28,35 @@ HERDR_SOCKET_SECONDS = 10
 GATEWAY_READY_SECONDS = 30
 
 
-def environment(root):
+def inherited_omp_agent_dir():
+    """Resolve the default-profile local store without opening or copying credentials."""
+    if any(os.environ.get(key) not in (None, "", "default") for key in ("OMP_PROFILE", "PI_PROFILE")):
+        raise ValueError("OMP auth inheritance requires the default profile")
+    if os.environ.get("PI_CONFIG_DIR") not in (None, "", ".omp"):
+        raise ValueError("OMP auth inheritance does not support PI_CONFIG_DIR overrides")
+    if os.environ.get("OMP_AUTH_BROKER_URL"):
+        raise ValueError("OMP auth inheritance requires a local credential store, not a broker")
+    home = Path(os.environ["HOME"])
+    default_dir = home / ".omp" / "agent"
+    agent_dir = Path(os.environ.get("PI_CODING_AGENT_DIR") or default_dir).resolve()
+    data_home = os.environ.get("XDG_DATA_HOME")
+    if agent_dir == default_dir.resolve() and data_home and (Path(data_home) / "omp").exists():
+        raise ValueError("OMP auth inheritance does not support an XDG-migrated agent database")
+    if not agent_dir.is_dir() or not (agent_dir / "agent.db").is_file():
+        raise ValueError("OMP auth inheritance requires an existing agent directory and agent.db")
+    if agent_dir.stat().st_uid != os.getuid() or (agent_dir / "agent.db").stat().st_uid != os.getuid():
+        raise ValueError("OMP agent directory and database must be owned by the current user")
+    return agent_dir
+
+
+def environment(root, inherited_agent_dir=None):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("HERDR_", "COCKPIT_"))}
     for key in ("ENV", "BASH_ENV", "ZDOTDIR", "PI_CONFIG_FILES",
                 "OMP_AUTH_BROKER_URL", "OMP_AUTH_BROKER_TOKEN"):
         env.pop(key, None)
+    if inherited_agent_dir is not None:
+        env.pop("OMP_PROFILE", None)
+        env.pop("PI_PROFILE", None)
     env.update(HOME=str(root), XDG_CONFIG_HOME=str(root / "config"),
                XDG_STATE_HOME=str(root / "state"), XDG_CACHE_HOME=str(root / "cache"),
                XDG_DATA_HOME=str(root / "data"),
@@ -43,6 +67,8 @@ def environment(root):
                OMP_AUTH_BROKER_SNAPSHOT_TTL_MS="0",
                HERDR_CONFIG_PATH=str(root / "config/herdr/config.toml"),
                COCKPIT_CONFIG=str(root / "cockpit.toml"))
+    if inherited_agent_dir is not None:
+        env["PI_CODING_AGENT_DIR"] = str(inherited_agent_dir)
     manifest_path = root / fixture_resources.MANIFEST
     if manifest_path.exists():
         env["COCKPIT_FIXTURE_CREATION_ID"] = json.loads(manifest_path.read_text())["creation_id"]
@@ -179,7 +205,8 @@ def configure_action_launcher(root):
         'description = "Fixture direct binding"\n')
 
 
-def start(with_plugins=False, with_action_launcher=False):
+def start(with_plugins=False, with_action_launcher=False, inherit_omp_auth=False):
+    inherited_agent_dir = inherited_omp_agent_dir() if inherit_omp_auth else None
     root = Path(tempfile.mkdtemp(prefix="cpol-", dir="/tmp"))
     session = "polish-" + root.name[5:]
     for folder in ["config/herdr", "state", "cache", "data", "runtime", "tmp", "omp-agent", "omp-sessions", "native-cache", "repositories/sample", "plain/nested", "evidence", "www"]:
@@ -196,6 +223,13 @@ def start(with_plugins=False, with_action_launcher=False):
         f'version = 1\nrepository_roots = ["{root}/repositories"]\n'
         f'worktree_root = "{root}/worktrees"\n'
         f'state_root = "{root}/cockpit-state"\n')
+    if inherited_agent_dir is not None:
+        overlay = root / "omp-smoke.yml"
+        overlay.write_text("autoResume: false\n")
+        with (root / "cockpit.toml").open("a") as config:
+            config.write('\n[orchestration]\nextra_args = ["--config", '
+                         + json.dumps(str(overlay))
+                         + ', "--no-extensions", "--no-skills", "--no-rules", "--no-context-files"]\n')
     fixture = root / "repositories/sample"
     (fixture / "README.md").write_text('---\ntitle: Polish fixture\n---\n# Sample project\n\n## Summary\n\nOriginal source coordinates survive rendered Markdown.\n\n## Detail\n\nSelect this text to leave a comment.\n')
     (fixture / "sample.txt").write_text(''.join(f'Original line {i}\n' for i in range(1, 81)))
@@ -213,7 +247,7 @@ def start(with_plugins=False, with_action_launcher=False):
     (root / "runtime.json").write_text(json.dumps(ledger, indent=2))
     fixture_resources.create(root, session)
     try:
-        env = environment(root)
+        env = environment(root, inherited_agent_dir)
         fixture_server = launch(root, "fixture", [sys.executable, "-u", "-c",
             "from http.server import ThreadingHTTPServer,SimpleHTTPRequestHandler; from functools import partial; import sys; "
             "server=ThreadingHTTPServer(('127.0.0.1',0),partial(SimpleHTTPRequestHandler,directory=sys.argv[1])); "
@@ -264,11 +298,13 @@ if __name__ == "__main__":
                         help="copy the owner's Files and Reviewr plugins into the fixture")
     parser.add_argument("--with-action-launcher", action="store_true",
                         help="copy the owner's action launcher and configure harmless marker and persistent tab actions")
+    parser.add_argument("--inherit-omp-auth", action="store_true",
+                        help="start with the existing default-profile OMP agent directory (writable auth and cache state)")
     parser.add_argument("--creation-id")
     parser.add_argument("--scratch-path")
     args = parser.parse_args()
     if args.action == "start":
-        start(args.with_plugins, args.with_action_launcher)
+        start(args.with_plugins, args.with_action_launcher, args.inherit_omp_auth)
     elif args.action == "stop":
         stop(args.root)
     elif args.action == "rpc":

@@ -1,12 +1,12 @@
 import type {
   OrchestrationAction, OrchestrationMutationRequest, OrchestrationMutationResponse,
-  OrchestrationSnapshotRequest, OrchestrationSnapshot, OrchestrationWaitRequest, OrchestrationWaitResponse,
-  LiaisonLookupRequest, LiaisonLookupResponse, CheckOutcome, Integration, SourceOutput, CleanupItem, OwnedResourceIdentity,
+  OrchestrationSnapshotRequest, OrchestrationSnapshot, OrchestrationWaitRequest, OrchestrationWaitResponse, InboxRequest, InboxView,
+  LiaisonLookupRequest, LiaisonLookupResponse, CheckOutcome, Integration, SourceOutput, CleanupItem, OwnedResourceIdentity, AgentSendTarget,
 } from "../protocol/generated/v1";
 import {
   wireOrchestrationAction, wireOrchestrationMutationRequest, wireOrchestrationMutationResponse,
-  wireOrchestrationSnapshotRequest, wireOrchestrationSnapshot, wireOrchestrationWaitRequest, wireOrchestrationWaitResponse,
-  wireLiaisonLookupRequest, wireLiaisonLookupResponse, type TypedWirePolicy, type WireOwners,
+  wireOrchestrationSnapshotRequest, wireOrchestrationSnapshot, wireOrchestrationWaitRequest, wireOrchestrationWaitResponse, wireInboxRequest, wireInboxView,
+  wireLiaisonLookupRequest, wireLiaisonLookupResponse, wireAgentSendTarget, type TypedWirePolicy, type WireOwners,
 } from "../protocol/generated/validate";
 import { CockpitClientError, validateSessionId } from "./CockpitClient";
 import { parseWorkspaceSetupRequest } from "./projectProtocol";
@@ -98,6 +98,7 @@ const labels = rootMessage("Invalid orchestration", {
   OrchestrationAction: "action", OrchestrationSnapshotRequest: "snapshot request", OrchestrationSnapshot: "snapshot",
   OrchestrationMutationRequest: "mutation request", OrchestrationMutationResponse: "mutation response",
   OrchestrationActionResult: "mutation result", OrchestrationWaitRequest: "wait request", OrchestrationWaitResponse: "wait response",
+  InboxRequest: "inbox request", InboxView: "inbox",
   LiaisonLookupRequest: "liaison lookup request", LiaisonLookupResponse: "liaison lookup response",
 });
 const POLICY = definePolicy({
@@ -117,7 +118,7 @@ const POLICY = definePolicy({
       "ResumeCause", "SupervisorStartResult",
       "WorkerStartResult", "TaskScopeUpdateResult",
       "AgentLaunchReceipt",
-      "Report", "SetupSummary", "AttachmentReference", "CheckOutcome", "IntegrationMapping", "IntegrationRecord", "IntegrationRecordResult",
+      "SetupSummary", "AttachmentReference", "CheckOutcome", "IntegrationMapping", "IntegrationRecord", "IntegrationRecordResult",
       "SourceOutput[code]", "SourceOutput[non_code]", "Integration[pending]", "Integration[not_applicable]", "Integration[integrated]",
       "ResourceSourceIdentity", "ResourceRequest", "ResourceRequestRecord", "ResourceRelease", "ResourceBuildRegistration",
       "OrchestrationAction[integration_record]", "OrchestrationAction[resource_request]",
@@ -132,6 +133,9 @@ const POLICY = definePolicy({
       "OrchestrationAction[resource_register]", "OrchestrationAction[cleanup_finish]",
       "OrchestrationActionResult[resource_registered]", "OrchestrationActionResult[cleanup_finished]",
       "LiaisonLookupRequest", "LiaisonLookupResponse",
+      "InboxRequest", "InboxView", "InboxObservation", "InboxOwner", "InboxLocation", "InboxSource", "InboxText",
+      "InboxRequestEcho", "InboxQuestion", "InboxReceipt", "InboxRun", "InboxTaskLink", "InboxThread",
+      "HandoffBinding", "HandoffBindingRecord", "BoundCheckout", "HandoffRecord", "ThreadCard", "AgentSendTarget",
       "OrchestrationAction[supervisor_start]", "OrchestrationAction[run_attach]",
       "OrchestrationAction[worker_start]", "OrchestrationAction[task_scope_update]", "OrchestrationAction[task_schedule]", "OrchestrationAction[task_schedule_cancel]", "OrchestrationAction[worker_replace]",
       "OrchestrationAction[run_register]", "OrchestrationAction[task_unassign]",
@@ -167,6 +171,9 @@ const POLICY = definePolicy({
       "CleanupReason", "CleanupEffectReceipt", "CleanupItem", "OwnedResourceRecord", "ResourceRegister", "CleanupFinish",
       "CleanupFinishResult", "CleanupResourceSummary", "RunCleanupSummary", "RestorationSummary",
       "LiaisonLookupRequest", "LiaisonLookupResponse", "LiaisonCandidate",
+      "InboxRequest", "InboxView", "InboxObservation", "InboxOwner", "InboxLocation", "InboxSource", "InboxText",
+      "InboxRequestEcho", "InboxQuestion", "InboxReceipt", "InboxRun", "InboxTaskLink", "InboxThread",
+      "HandoffBinding", "HandoffBindingRecord", "BoundCheckout", "HandoffRecord", "ThreadCard", "AgentSendTarget",
       "ErrorResponse", "RootSummary", "TaskBoard", "TaskProject", "TaskView", "Task", "TaskStep", "TaskStepProgress", "TaskDependencies",
       "TaskDependencyBlocker", "SetupSummary", "DispatchState", "Annotation", "ActorRef", "Report",
       "Message", "TaskIntent", "RunObservation", "RuntimeObservation", "Attention", "UnmanagedAgent"]),
@@ -221,6 +228,14 @@ const POLICY = definePolicy({
         "OrchestrationAction[run_resume]": ["run_id"], "OrchestrationAction[task_unassign]": ["root_id", "task_id"],
         Message: ["message_id", "to_run_id", "in_reply_to", "escalated_from"],
         AnswerReceipt: ["message_id"], QuestionStatus: ["run_id", "question_message_id"],
+        InboxOwner: ["root_id"], InboxLocation: ["workspace_id", "tab_id", "pane_id"],
+        "InboxSource[owner]": ["run_id"], "InboxSource[owner_card]": ["run_id"], "InboxSource[worker]": ["run_id"],
+        InboxText: ["message_id"], InboxRequestEcho: ["message_id", "to_run_id"],
+        InboxQuestion: ["run_id", "question_message_id"], InboxReceipt: ["message_id", "to_run_id", "attempt_run_id"],
+        InboxRun: ["run_id"], InboxTaskLink: ["root_id", "task_id"], HandoffRecord: ["task_id", "attempt_run_id"],
+        HandoffBinding: ["repository_id", "workspace_id"],
+        "OrchestrationAction[thread_handoff]": ["message_id", "to_run_id", "task_id"],
+        "OrchestrationAction[thread_mark_read]": ["through_message_id"], "OrchestrationAction[thread_link]": ["root_id", "task_id"],
         TaskIntent: ["intent_id", "root_id", "task_id", "run_id", "supervisor_run_id", "result_message_id"], TaskAssignmentIntent: ["root_id"],
         RunObservation: ["run_id", "workspace_id", "pane_id", "tab_id"], "RuntimeObservation[fresh]": ["endpoint_identity"], Attention: ["run_id", "task_id"],
         RootSummary: ["root_id"], UnmanagedAgent: ["workspace_id", "tab_id", "pane_id"],
@@ -291,7 +306,8 @@ const POLICY = definePolicy({
         "SourceOutput[code]": ["task_revision"], "SourceOutput[non_code]": ["task_revision"],
         "Integration[integrated]": ["accepted_task_revision"], IntegrationRecord: ["expected_task_revision"],
         "OrchestrationAction[report]": ["original_task_revision"], "OrchestrationAction[message_send]": ["original_task_revision"],
-        OrchestrationSnapshot: ["tasks_token", "state_store_id"], OrchestrationWaitRequest: ["after_tasks_token"], OrchestrationWaitResponse: ["tasks_token"],
+        OrchestrationSnapshot: ["tasks_token", "state_store_id"], InboxView: ["tasks_token", "state_store_id"], HandoffRecord: ["task_revision"],
+        "OrchestrationAction[thread_handoff]": ["expected_task_revision"], OrchestrationWaitRequest: ["after_tasks_token"], OrchestrationWaitResponse: ["tasks_token"],
         "OrchestrationAction[task_create]": ["expected_doc_revision", "source_revision"], "OrchestrationAction[task_assignment_resolve]": ["expected_task_revision"], "OrchestrationAction[task_update]": ["expected_task_revision"],
         "OrchestrationAction[task_dependencies_set]": ["expected_task_revision", "expected_doc_revision"], "OrchestrationAction[task_step_add]": ["expected_task_revision"], "OrchestrationAction[task_step_rename]": ["expected_task_revision"],
         "OrchestrationAction[task_step_set_checked]": ["expected_task_revision"], "OrchestrationAction[task_step_move]": ["expected_task_revision"], "OrchestrationAction[task_step_remove]": ["expected_task_revision"], "OrchestrationAction[tasks_assign_ids]": ["expected_doc_revision"],
@@ -301,7 +317,7 @@ const POLICY = definePolicy({
         "OrchestrationAction[accept]": ["expected_task_revision"], "OrchestrationActionResult[task_ids]": ["doc_revision"],
       }),
       ...refine(uuid, {
-        RunRetirement: ["retirement_id"], TaskAssignmentIntent: ["task_id"], "OrchestrationAction[task_create]": ["task_id", "follow_up_of"], "OrchestrationAction[task_assign]": ["task_id"], "OrchestrationAction[task_assignment_resolve]": ["task_id"],
+        RunRetirement: ["retirement_id"], TaskAssignmentIntent: ["task_id"], "OrchestrationAction[task_create]": ["task_id", "follow_up_of", "thread_id"], "OrchestrationAction[task_assign]": ["task_id"], "OrchestrationAction[task_assignment_resolve]": ["task_id"],
         "OrchestrationAction[task_step_add]": ["step_id", "parent_step_id", "before_step_id"], "OrchestrationAction[task_step_rename]": ["step_id"], "OrchestrationAction[task_step_set_checked]": ["step_id"],
         "OrchestrationAction[task_step_move]": ["step_id", "parent_step_id", "before_step_id"], "OrchestrationAction[task_step_remove]": ["step_id"],
         Run: ["checkout_claim_id"], ExecutionAttachment: ["attachment_id"], ResumeRecord: ["operation_id", "decision_id"],
@@ -313,7 +329,7 @@ const POLICY = definePolicy({
         IntegrationRecord: ["operation_id"], IntegrationRecordResult: ["operation_id"],
         ResourceRequest: ["operation_id"], ResourceRequestRecord: ["request_id"],
         ResourceRelease: ["request_id"], ResourceBuildRegistration: ["request_id"],
-        "OrchestrationAction[report]": ["original_claim_id"], "OrchestrationAction[message_send]": ["original_claim_id"],
+        "OrchestrationAction[report]": ["original_claim_id", "thread_id"], "OrchestrationAction[message_send]": ["original_claim_id"],
         OwnedGitIdentity: ["creation_operation_id"], OwnedSpaceIdentity: ["creation_operation_id"],
         OwnedFilesystemIdentity: ["creation_operation_id"], OwnedFixtureIdentity: ["creation_operation_id"],
         OwnedAttemptDirectoryIdentity: ["creation_operation_id"],
@@ -331,11 +347,16 @@ const POLICY = definePolicy({
         "OrchestrationAction[task_schedule_cancel]": ["operation_id", "root_id", "task_id"],
         "OrchestrationAction[worker_replace]": ["operation_id", "root_id", "task_id"],
         "OrchestrationActionResult[task_scheduled]": ["operation_id", "task_id"],
+        Message: ["thread_id"], QuestionStatus: ["thread_id"], InboxThread: ["thread_id"],
+        "OrchestrationAction[thread_handoff]": ["thread_id"], "OrchestrationAction[thread_mark_read]": ["thread_id"],
+        "OrchestrationAction[thread_link]": ["thread_id"],
       }),
       ...refine(timestamp, {
         Report: ["at"], RunRetirement: ["created_at", "updated_at"],
         Run: ["created_at", "updated_at"], DispatchState: ["updated_at"], Annotation: ["at"],
         Message: ["created_at", "acked_at"], AnswerReceipt: ["created_at", "acked_at"], QuestionStatus: ["asked_at"],
+        "InboxObservation[fresh]": ["observed_at"], InboxText: ["at"], InboxRequestEcho: ["created_at"],
+        InboxQuestion: ["asked_at"], InboxReceipt: ["created_at", "acked_at"], InboxThread: ["updated_at"],
         RunObservation: ["state_changed_at"], "RuntimeObservation[fresh]": ["observed_at"], Attention: ["since"], UnmanagedAgent: ["state_changed_at"],
         "RetirementState[close_intent]": ["at"], "RetirementState[retired]": ["at"], "RetirementState[retained]": ["at"], "RetirementState[unknown]": ["at"],
         ExecutionAttachment: ["updated_at"], ResumeRecord: ["updated_at"], LiaisonCandidate: ["updated_at"],
@@ -343,7 +364,7 @@ const POLICY = definePolicy({
         CleanupEffectReceipt: ["updated_at"], CleanupItem: ["updated_at"],
         TaskSchedule: ["scheduled_at"], OwnedProcessScope: ["captured_at"],
       }),
-      ...refine(session, { OrchestrationSnapshotRequest: ["session_id"], OrchestrationMutationRequest: ["session_id"], OrchestrationSnapshot: ["session_id"], Run: ["session_id"], RunLocation: ["session_id"], RetirementIdentity: ["session_id"], LiaisonLookupRequest: ["session_id"], OwnedSpaceIdentity: ["session_id"] }),
+      ...refine(session, { InboxRequest: ["session_id"], InboxView: ["session_id"], OrchestrationSnapshotRequest: ["session_id"], OrchestrationMutationRequest: ["session_id"], OrchestrationSnapshot: ["session_id"], Run: ["session_id"], RunLocation: ["session_id"], RetirementIdentity: ["session_id"], LiaisonLookupRequest: ["session_id"], OwnedSpaceIdentity: ["session_id"] }),
       ...refine(stepTitle, { "OrchestrationAction[task_step_add]": ["title"], "OrchestrationAction[task_step_rename]": ["title"] }),
       ...refine(decimalU64, { NativeShellIdentity: ["executable_device", "executable_inode"], DirectoryIdentity: ["device", "inode"],
         OwnedFilesystemIdentity: ["device", "inode", "manifest_device", "manifest_inode"], OwnedProcessScope: ["cgroup_device", "cgroup_inode"],
@@ -478,6 +499,13 @@ const POLICY = definePolicy({
 function malformed(label: string): never { throw new CockpitClientError("malformed_response", `Invalid orchestration ${label}`); }
 export function parseOrchestrationAction(value: unknown): OrchestrationAction { return parseWire(value, wireOrchestrationAction, POLICY); }
 export function parseOrchestrationSnapshotRequest(value: unknown): OrchestrationSnapshotRequest { return parseWire(value, wireOrchestrationSnapshotRequest, POLICY); }
+export function parseAgentSendTarget(value: unknown): AgentSendTarget { return parseWire(value, wireAgentSendTarget, POLICY); }
+export function parseInboxRequest(value: unknown): InboxRequest { return parseWire(value, wireInboxRequest, POLICY); }
+export function matchInboxView(value: unknown, request: InboxRequest): InboxView {
+  const view = parseWire(value, wireInboxView, POLICY);
+  if (view.session_id !== request.session_id) malformed("inbox identity");
+  return view;
+}
 export function parseOrchestrationMutationRequest(value: unknown): OrchestrationMutationRequest { return parseWire(value, wireOrchestrationMutationRequest, POLICY); }
 export function parseOrchestrationWaitRequest(value: unknown): OrchestrationWaitRequest { return parseWire(value, wireOrchestrationWaitRequest, POLICY); }
 export function parseOrchestrationSnapshot(value: unknown): OrchestrationSnapshot {

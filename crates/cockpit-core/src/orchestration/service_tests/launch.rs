@@ -336,19 +336,15 @@ fn captured_message_context_uses_durable_task_and_project() {
     let worker = fixture.start(&root, &task);
     let locked = fixture.service.store.lock().unwrap();
     let mut state = locked.read().unwrap();
-    messages::append(&mut state, messages::AppendMessage {
-        from: ActorRef::Run { run_id: worker.clone() }, to_run_id: &root, message_id: "digest-test",
-        kind: MessageKind::Observation, text: "ready", in_reply_to: None, report: None,
-        stale: false, escalated_from: None,
-    }).unwrap();
+    messages::append(&mut state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Run { run_id: worker.clone() }, to_run_id: &root, message_id: "digest-test",
+    kind: MessageKind::Observation, text: "ready", in_reply_to: None, report: None,
+    stale: false, escalated_from: None, }).unwrap();
     for message_id in [format!("observation:{worker}:runtime_blocked:1:1"),
         format!("dispatch-failure:{worker}:1:1:plan:failed"),
         format!("scheduled-task:{}", task.task_id), "dispatch-failure:missing:1:1".into()] {
-        messages::append(&mut state, messages::AppendMessage {
-            from: ActorRef::Dispatcher, to_run_id: &root, message_id: &message_id,
-            kind: MessageKind::Observation, text: "notice", in_reply_to: None, report: None,
-            stale: false, escalated_from: None,
-        }).unwrap();
+        messages::append(&mut state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher, to_run_id: &root, message_id: &message_id,
+        kind: MessageKind::Observation, text: "notice", in_reply_to: None, report: None,
+        stale: false, escalated_from: None, }).unwrap();
     }
     locked.save(&mut state).unwrap();
     let messages = state.messages.clone();

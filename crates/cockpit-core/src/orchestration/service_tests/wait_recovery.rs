@@ -162,11 +162,9 @@ async fn housekeeping_is_silent_but_remains_in_inbox_after_ack() {
     let after = fixture.state().messages.iter().filter(|message| message.to_run_id == root)
         .map(|message| message.seq).max().unwrap_or(0);
     fixture.seed_state(|state| {
-        messages::append(state, messages::AppendMessage {
-            from: ActorRef::Dispatcher, to_run_id: &root, message_id: "cleanup:resource:integration_pending",
-            kind: MessageKind::Observation, text: "Cleanup awaits integration.", in_reply_to: None,
-            report: None, stale: false, escalated_from: None,
-        }).unwrap();
+        messages::append(state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher, to_run_id: &root, message_id: "cleanup:resource:integration_pending",
+        kind: MessageKind::Observation, text: "Cleanup awaits integration.", in_reply_to: None,
+        report: None, stale: false, escalated_from: None, }).unwrap();
     });
     assert!(!fixture.service.wait_inbox(caller, after, Duration::ZERO).await.unwrap().pending);
     let pulled = fixture.apply(&actor, OrchestrationAction::InboxPull { after_seq: 0, limit: 100 }).unwrap();

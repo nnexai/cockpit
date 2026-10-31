@@ -323,7 +323,7 @@ impl Context {
         let input = if matches!(&request.action,
             OrchestrationAction::SupervisorStart { .. } | OrchestrationAction::RunResume { .. }
                 | OrchestrationAction::WorkerStart { .. } | OrchestrationAction::WorkerReplace { .. }
-                | OrchestrationAction::ResourceRegister { .. })
+                | OrchestrationAction::ResourceRegister { .. } | OrchestrationAction::ThreadHandoff { .. })
         {
             let projects = cockpit_core::projects::ProjectService::new(
                 self.configuration.clone(), self.adapter.clone(),

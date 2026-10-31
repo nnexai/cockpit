@@ -8,7 +8,7 @@ use std::{
 use cap_fs_ext::DirExt;
 use cap_std::fs::Dir;
 use cockpit_protocol::orchestration::{
-    IntentState, Message, OperatorOrigin, Run, TaskIntent, TaskOwnership,
+    ActorRef, IntentState, Message, OperatorOrigin, Run, TaskIntent, TaskOwnership,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -48,6 +48,29 @@ pub(crate) struct OrchestrationState {
     pub resource_sequence: u64,
     #[serde(default)]
     pub owned_resources: Vec<cockpit_protocol::orchestration::OwnedResourceRecord>,
+    #[serde(default)]
+    pub thread_links: Vec<ThreadLinkRecord>,
+    #[serde(default)]
+    pub thread_reads: Vec<ThreadReadRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ThreadLinkRecord {
+    pub thread_id: String,
+    pub root_id: String,
+    pub task_id: String,
+    pub linked_by: ActorRef,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ThreadReadRecord {
+    pub thread_id: String,
+    pub through_message_id: String,
+    pub origin: ActorRef,
+    pub at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,7 +105,7 @@ pub(crate) struct AssignmentIntent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum DurableOperationKind { SupervisorStart, RunResume, RunAttach, RunRegister, TaskUnassign, WorkerStart, TaskScopeUpdate, IntegrationRecord, Report, MessageSend, ResourceRequest, ResourceRegister, CleanupFinish, TaskSchedule, TaskScheduleCancel, WorkerReplace, ScopeRelease }
+pub(crate) enum DurableOperationKind { SupervisorStart, RunResume, RunAttach, RunRegister, TaskUnassign, WorkerStart, TaskScopeUpdate, IntegrationRecord, Report, MessageSend, ThreadHandoff, ResourceRequest, ResourceRegister, CleanupFinish, TaskSchedule, TaskScheduleCancel, WorkerReplace, ScopeRelease }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DurableOperationRecord {
@@ -132,6 +155,8 @@ impl Default for OrchestrationState {
             resource_requests: Vec::new(),
             resource_sequence: 0,
             owned_resources: Vec::new(),
+            thread_links: Vec::new(),
+            thread_reads: Vec::new(),
         }
     }
 }
@@ -566,6 +591,8 @@ mod tests {
             text,
             in_reply_to: None,
             report: None,
+            thread_id: None,
+            handoff: None,
             stale: false,
             escalated_from: None,
             stage: DeliveryStage::Acked,

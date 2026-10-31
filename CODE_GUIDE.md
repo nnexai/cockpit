@@ -9,6 +9,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Change | Current owner |
 | --- | --- |
 | Shell composition | `src/app/App.tsx`; `src/app/shell/Workbench.tsx`; `src/app/shell/WorkbenchContent.tsx` |
+| Inbox screen and structured thread cards | `src/app/inbox/Inbox.tsx`; `src/app/inbox/inbox.css`; Workbench shell retains the existing Space-oriented canvas |
 | Session hooks | `src/app/shell/useOrderedSession.ts`; `src/app/shell/useSessionStream.ts`; `src/app/shell/useSessionControl.ts` |
 | Recovery and sidebar state | `src/app/shell/useSessionRecovery.ts`; `src/app/shell/useSidebarState.ts`; `src/app/shell/useWorkbenchUI.ts` |
 | Workbench state/actions/input | `src/app/shell/useWorkbenchState.ts`; `src/app/shell/useWorkbenchActions.ts`; `src/app/shell/useWorkbenchInput.ts` |
@@ -173,6 +174,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Role credentials/same-worker scope | `crates/cockpit-core/src/orchestration/credentials.rs`; `crates/cockpit-core/src/orchestration/scope_intents.rs`; `crates/cockpit-core/src/orchestration/mutate/tasks.rs` |
 | Source acceptance/integration/send-back | `crates/cockpit-core/src/orchestration/mutate/intents.rs`; `crates/cockpit-core/src/orchestration/mutate/integration.rs` (live Result claim versus immutable accepted source, actual target catalog and proof CAS); `crates/cockpit-core/src/orchestration/mutate/grants.rs` (send-back) |
 | Scheduler/placement/input-aware dispatch/Herdr/escalation | `crates/cockpit-core/src/orchestration/dispatch.rs` (`resolve_schedule_target`, `render_run_bootstrap`); `crates/cockpit-core/src/orchestration/herdr.rs`; `crates/cockpit-core/src/orchestration/escalation.rs`; exact close capability guard in `crates/cockpit-herdr/src/cli/orchestration.rs` |
+| Inbox projection, threads and handoff authority | `crates/cockpit-core/src/orchestration/inbox_view.rs`; `crates/cockpit-core/src/orchestration/threads.rs`; `crates/cockpit-protocol/src/orchestration.rs` |
 | Messages/inbox/reports | `crates/cockpit-core/src/orchestration/messages.rs`; `crates/cockpit-core/src/orchestration/messages/inbox.rs`; `crates/cockpit-core/src/orchestration/messages/report.rs` |
 | Ownership projection/routing | `crates/cockpit-core/src/orchestration/projection.rs`; `crates/cockpit-core/src/orchestration/routing.rs` |
 | Event-driven cleanup/capture/ref watches/blockers | `crates/cockpit-core/src/orchestration/cleanup.rs` (`capture_owned_resources(projects, herdr)`, `cleanup_queue`, `cleanup_ref_watch_paths`, `cleanup_owned_resources`); shared service `watch_cleanup_refs` |
@@ -363,6 +365,8 @@ Notes UI surfaces live in `src/app/notes/`: `NotesView` owns the single Notes ba
 
 Use `cockpit-cli notes <area> --help` for payload/revision sources and `cockpit-cli task|run|inbox|route --help` for caller/lifecycle contracts. `run context` is the orchestration entry; the separate `cockpit-cli context --current` command reads Space/Library context. `cockpit-cli library add` saves and selects for the current Space through the existing Library add-with-target operation; see `cockpit-cli library add --help` for current/explicit targeting and input options. `cockpit-cli skills list` discovers portable guides; `cockpit-cli skills show NAME` reads without installation. Installation targeting, collision/refusal, serialized writes and same-UID race limits remain in [DECISIONS](DECISIONS.md).
 
+Inbox handoffs carry `thread_id` and optional task/current-attempt and explicit placement bindings to the owner. The owned-root guidance in `integrations/agent-skills/cockpit-cli-orchestration/SKILL.md` directs the liaison to interpret the request, retain the thread in real reports and honor those bindings. The optional hook passes correlated facts as untrusted data; its capture is not proof of model consumption. `run --operator handoff`, `task link` and root `run report --thread` syntax and restrictions are in [configuration](docs/configuration.md#inbox-and-liaison-workflow).
+
 `cockpit-cli tags list|add TAG|remove TAG` reads or edits the calling Space by default; `list --all` lists tagged live Spaces in the session. The standalone CLI calls the same `SpaceTagService` as HTTP/native without initializing Library/providers; `cockpit-cli tags --help` and [configuration](docs/configuration.md#space-tags) cover explicit targeting, JSON and exit statuses.
 
 ## Development and verification recipes
@@ -399,6 +403,8 @@ python3 scripts/verify/ui_polish_runtime.py stop "$ROOT"
 ```
 
 `scripts/verify/ui_polish_runtime.py` creates isolated runtime resources; `scripts/verify/resource_guard.py` checks executable/session/socket/ownership before Herdr commands. Both clients must address the same owned fixture. These are future-verification commands, not a claim that this documentation change exercised the product.
+
+For a real model-backed smoke, only with explicit user permission, `start --inherit-omp-auth` points the fixture at the owner's existing default-profile OMP agent directory and its **shared writable** `agent.db`; this is not isolated authentication. It does not copy credentials or use an auth broker. HOME, XDG roots, native cache and sessions remain fixture-private; a fixture-only OMP overlay sets `autoResume: false` and disables extensions, skills, rules and context files for the launch. No global settings are changed. Without this opt-in, the fixture uses its private OMP agent directory.
 
 `start` prints only the root after its own gateway serves HTTP. `runtime.json` records `gateway_url` as the exact loopback origin without a trailing slash, suitable for the browser URL and `Origin` header; `fixture_url` instead addresses the separate annotation test page. Startup failure exits nonzero, retains the root and logs, and prints the explicit `stop` command without automatically stopping any process.
 

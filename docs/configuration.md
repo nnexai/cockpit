@@ -131,6 +131,8 @@ Closing a supervisor terminal stops its agent and leaves it stopped; background 
 
 Core task/schedule/replacement/credential/messaging/cleanup authority is harness-neutral; OMP auth export, session files and native detection are not prerequisites. Herdr-supported agent interactions, credential CLI and optional harness hooks are allowed adapters. OMP's thin public-API hook is the first optional adapter, not exclusive support or a requirement for Claude Code, Copilot, Codex or other configured harnesses. It is per-launch, with no custom tool gates, global installs/settings, raw terminal typing or draft replacement. Extension-free credential CLI remains complete. A different harness can use configured literal prompt/hook argv only when that hook API is compatible; otherwise disable the OMP hook and use CLI. No obsolete `omp_extension`, `COCKPIT_OMP_EXTENSION` or orchestration `model` alias is supported. [OMP quota executable](#omp-quota-executable) selection remains separate.
 
+Inbox intake routes to the existing owner liaison, normally OMP with its already configured provider/authentication; it does not choose direct Claude or Codex based on availability and requires no future JE V or Decision API. Existing alternative harness configuration remains supported. Inbox and Workbench are distinct screens: work threads and optional explicit bindings are not retargeted by a selected Space.
+
 Project/checkout identity uses canonical local filesystem paths, device/inode and Git common/worktree directories, not a host machine identity. One orchestration store serves one trusted workstation; cross-workstation `state_root` sharing is unsupported. Checkout claims conflict by key/path overlap regardless of host. Missing OS machine identity does not block supervisor startup, project resolution or ordinary claims; physical process/reboot/build/cleanup proofs that require it fail closed.
 
 A supervisor whose launch recorded no process identity reports `root_main_identity_unrecorded`. The operator may explicitly confirm that it has stopped after closing its old terminal. Cockpit requires fresh evidence that the old owned terminal is absent, revokes only that supervisor's old credential and keeps its tasks and history. If the terminal is still present or safety cannot be proven, recovery refuses without closing it or launching a replacement. Workers, checkout claims and cleanup never accept this confirmation.
@@ -214,7 +216,22 @@ The Code stop gate requires a clean exact accepted source HEAD and current Accep
 
 ### Inbox and liaison workflow
 
-The short inline bootstrap and `run brief` supply role/task context and commands. Workers execute their authorized stages autonomously; the liaison handles questions, review/acceptance, target integration and cleanup blockers. Human decisions occur in its terminal conversation. `inbox next` combines durable waiting, pulling and capture bookkeeping internally, without a separate ACK model turn:
+The short inline bootstrap and `run brief` supply role/task context and commands. Workers execute their authorized stages autonomously; the liaison handles questions, review/acceptance, target integration and cleanup blockers. Human decisions can be answered in Inbox or in the liaison terminal conversation.
+
+The following commands illustrate the actual thread contract; IDs and content must come from the real request and owner, not invented consumption:
+
+```sh
+# Local operator; omit --owner to use the preferred liaison.
+cockpit-cli run --operator handoff --text "Investigate the build" --owner ROOT_ID
+# Reuse the returned thread and optionally constrain its target.
+cockpit-cli run --operator handoff --thread THREAD_ID --text "Also check the tests" --owner ROOT_ID --task TASK_ID --repository REPOSITORY --branch BRANCH --base-ref BASE
+# Credentialed owning root: publish a real question and card to its thread.
+cockpit-cli run report --kind needs-input --thread THREAD_ID --summary "Which scope?" --title "Choose scope" --next "Choose a scope" --choice "Sample only" --choice "Stop"
+```
+
+`run handoff` also accepts `--space` and `--task-revision`; omitted task revision is read from current state. `task link TASK_ID --thread THREAD_ID` associates a task with a thread in its root. A card requires both `--title` and `--next` with `--thread`; `--recommend`, repeated `--choice` and `--project` are optional. Only the owning root publishes its thread reports. The question key is `(run_id, question_message_id)` and a reply must still target that run's current non-stale question in the thread; changing Space or focusing a pane does not resolve it. Explicit Mark read handles a result separately. UI unmanaged sends validate the expected opaque target without adopting it; `agent send REF --text TEXT` resolves a reference without that reviewed-target fence.
+
+`inbox next` combines durable waiting, pulling and capture bookkeeping internally, without a separate ACK model turn:
 
 ```sh
 cockpit-cli task show --self --json

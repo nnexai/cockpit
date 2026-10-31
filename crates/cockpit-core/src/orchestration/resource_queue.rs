@@ -433,7 +433,7 @@ fn notify_grant(state: &mut OrchestrationState, index: usize) -> Result<(), Insp
     let root_id = run.root_id.clone();
     let text = format!("Build resource granted: request_id={id}; output_root={}. Register the owned build process before treating this grant as running.",
         record.resource_key);
-    messages::append(state, messages::AppendMessage { from: ActorRef::Run { run_id: root_id },
+    messages::append(state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Run { run_id: root_id },
         to_run_id: &run_id, message_id: &message_id, kind: MessageKind::Instruction, text: &text,
         in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     Ok(())

@@ -236,16 +236,14 @@ impl Fixture {
         if self.run(root_id).stage == RunStage::Starting {
             self.root_actor(root_id);
         }
-        task_result(self.operator(OrchestrationAction::TaskCreate {
-            root_id: root_id.into(),
-            title: title.into(),
-            task_id: id(),
-            description: "Canonical task body".into(),
-            depends_on: Vec::new(),
-            follow_up_of: None,
-            expected_doc_revision: None,
-            source_revision: None,
-        }))
+        task_result(self.operator(OrchestrationAction::TaskCreate { thread_id: None, root_id: root_id.into(),
+        title: title.into(),
+        task_id: id(),
+        description: "Canonical task body".into(),
+        depends_on: Vec::new(),
+        follow_up_of: None,
+        expected_doc_revision: None,
+        source_revision: None, }))
     }
 
     fn start(&self, parent: &str, task: &Task) -> String {
@@ -495,17 +493,15 @@ fn report(
     outcome: Option<ReportOutcome>,
     plan: Option<&str>,
 ) -> OrchestrationAction {
-    OrchestrationAction::Report {
-        message_id: id(),
-        kind,
-        outcome,
-        summary: "Explicit worker evidence".into(),
-        plan: plan.map(str::to_owned),
-        source_output: None,
-        to_run_id: None,
-        original_task_revision: None,
-        original_claim_id: None,
-    }
+    OrchestrationAction::Report { thread_id: None, card: None, message_id: id(),
+    kind,
+    outcome,
+    summary: "Explicit worker evidence".into(),
+    plan: plan.map(str::to_owned),
+    source_output: None,
+    to_run_id: None,
+    original_task_revision: None,
+    original_claim_id: None, }
 }
 
 fn run_result(response: OrchestrationMutationResponse) -> (String, u32) {
@@ -559,6 +555,7 @@ mod launch;
 mod lifecycle;
 mod result_recovery;
 mod task_ownership;
+mod threads;
 mod wait_recovery;
 
 // Review preserves current authority, incarnation, and worker evidence.

@@ -64,6 +64,21 @@ pub struct OrchestrationSnapshot {
     pub unmanaged_agents: Vec<UnmanagedAgent>,
     pub attention: Vec<Attention>, // Public run list and read-only Overview projection.
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSendTarget {
+    pub endpoint_identity: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub agent_kind: String,
+    pub agent_name: Option<String>,
+    pub native_session_id: Option<String>,
+    pub native_session_file: Option<String>,
+    pub state_changed_at: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct UnmanagedAgent {
     pub workspace_id: String,
@@ -74,6 +89,8 @@ pub struct UnmanagedAgent {
     pub agent_name: String,
     pub agent_status: Option<String>,
     pub state_changed_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_target: Option<AgentSendTarget>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct RootSummary {
@@ -1160,6 +1177,52 @@ pub enum ReportOutcome {
     Succeeded,
     Failed,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffBinding {
+    pub repository_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub branch: Option<String>,
+    pub base_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffBindingRecord {
+    pub requested: HandoffBinding,
+    pub repository_common_dir: Option<String>,
+    pub workspace_checkout: Option<BoundCheckout>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct BoundCheckout {
+    pub path: String,
+    pub common_dir: Option<String>,
+    pub branch: Option<String>,
+    pub head: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct HandoffRecord {
+    pub task_id: Option<String>,
+    pub task_revision: Option<String>,
+    pub attempt_run_id: Option<String>,
+    pub binding: Option<HandoffBindingRecord>,
+    pub origin: OperatorOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadCard {
+    pub title: String,
+    pub next: String,
+    pub recommendation: Option<String>,
+    pub choices: Vec<String>,
+    pub project: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Report {
     pub message_id: String,
@@ -1168,6 +1231,8 @@ pub struct Report {
     pub summary: String,
     pub plan: Option<String>,
     pub source_output: Option<SourceOutput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card: Option<ThreadCard>,
     pub at: String,
 }
 
@@ -1200,6 +1265,10 @@ pub struct Message {
     pub text: String, // ≤ 16 KiB UTF-8
     pub in_reply_to: Option<String>,
     pub report: Option<Report>, // kind == Report
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<HandoffRecord>,
     pub stale: bool,            // sender attempt superseded / caller mismatch evidence
     pub escalated_from: Option<String>,
     pub stage: DeliveryStage,
@@ -1211,6 +1280,8 @@ pub struct QuestionStatus {
     pub run_id: String,
     pub question_message_id: String,
     pub asked_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
     pub receipt: QuestionReceipt,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1316,6 +1387,128 @@ pub struct Attention {
     pub since: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct InboxRequest { pub session_id: String }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxView {
+    pub session_id: String,
+    pub state_store_id: String,
+    #[ts(type = "number")] pub revision: u64,
+    pub tasks_token: String,
+    pub observation: InboxObservation,
+    pub owners: Vec<InboxOwner>,
+    pub threads: Vec<InboxThread>,
+    pub unmanaged_agents: Vec<UnmanagedAgent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "status", rename_all = "snake_case")]
+#[ts(tag = "status", rename_all = "snake_case")]
+pub enum InboxObservation { Fresh { observed_at: String }, Unavailable { error: ErrorResponse } }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum OwnerAvailability { Available, Starting, Absent, Unknown }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxOwner {
+    pub root_id: String,
+    pub label: String,
+    pub kind: RunKind,
+    pub stage: RunStage,
+    pub harness: String,
+    pub availability: OwnerAvailability,
+    pub location: Option<InboxLocation>,
+    pub undelivered: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxLocation {
+    pub workspace_id: String, pub workspace_label: String,
+    pub tab_id: String, pub tab_label: String, pub pane_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum InboxState { NeedsYou, Underway, Handled }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum InboxNeed { Decision, Answer }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(tag = "kind", rename_all = "snake_case")]
+pub enum InboxSource {
+    Recorded,
+    User,
+    Owner { run_id: String, harness: String },
+    OwnerCard { run_id: String, harness: String },
+    Worker { run_id: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxText { pub text: String, pub source: InboxSource, pub message_id: Option<String>, pub at: Option<String> }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxRequestEcho {
+    pub message_id: String, pub text: String, pub created_at: String,
+    pub to_run_id: String, pub handoff: HandoffRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxQuestion {
+    pub run_id: String,
+    pub question_message_id: String,
+    pub asked_at: String,
+    pub text: InboxText,
+    pub choices: Vec<String>,
+    pub receipt: QuestionReceipt,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxReceipt {
+    pub message_id: String, pub kind: MessageKind, pub to_run_id: String,
+    pub attempt_run_id: Option<String>, pub stage: DeliveryStage,
+    pub created_at: String, pub acked_at: Option<String>, pub stale: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxRun {
+    pub run_id: String, pub attempt: u32, pub stage: RunStage, pub harness: String,
+    pub presence: Presence, pub agent_status: Option<String>,
+    pub location: Option<InboxLocation>,
+    pub cleanup: Vec<CleanupResourceSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxTaskLink {
+    pub root_id: String, pub task_id: String, pub title: String,
+    pub project: Option<TaskProject>, pub lane: TaskLane, pub run: Option<InboxRun>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxThread {
+    pub thread_id: String,
+    pub state: InboxState,
+    pub need: Option<InboxNeed>,
+    pub owner_root_ids: Vec<String>,
+    pub title: InboxText,
+    pub next: Option<InboxText>,
+    pub project: Option<String>,
+    pub request: Option<InboxRequestEcho>,
+    pub questions: Vec<InboxQuestion>,
+    pub recommendation: Option<InboxText>,
+    pub reply: Option<InboxText>,
+    pub unread_result_message_id: Option<String>,
+    pub tasks: Vec<InboxTaskLink>,
+    pub receipts: Vec<InboxReceipt>,
+    pub facts: Vec<InboxText>,
+    pub updated_at: String,
+}
+
 // ---------- actions ----------
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -1333,6 +1526,8 @@ pub enum OrchestrationAction {
         follow_up_of: Option<String>,
         expected_doc_revision: Option<String>,
         source_revision: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
     }, // ordinary independent creation: own-root agent; relationships: root main or operator
     TaskAssign {
         root_id: String,
@@ -1514,6 +1709,27 @@ pub enum OrchestrationAction {
         intent_id: String,
         apply: bool,
     }, // operator
+    ThreadHandoff {
+        message_id: String,
+        thread_id: String,
+        to_run_id: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_task_revision: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        binding: Option<HandoffBinding>,
+    },
+    ThreadMarkRead {
+        thread_id: String,
+        through_message_id: String,
+    },
+    ThreadLink {
+        root_id: String,
+        task_id: String,
+        thread_id: String,
+    },
     // messaging: agent (and operator for Instruction/Answer/CancelRequest)
     Report {
         message_id: String,
@@ -1527,6 +1743,10 @@ pub enum OrchestrationAction {
         original_task_revision: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         original_claim_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        card: Option<ThreadCard>,
     },
     MessageSend {
         message_id: String,
@@ -1639,6 +1859,52 @@ pub enum OrchestrationActionResult {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn inbox_contract_round_trips_and_legacy_fields_remain_optional() {
+        let report = json!({
+            "message_id": "m", "kind": "progress", "outcome": null,
+            "summary": "Working", "plan": null, "source_output": null, "at": "now"
+        });
+        let old: Report = serde_json::from_value(report.clone()).unwrap();
+        assert!(old.card.is_none());
+        assert_eq!(serde_json::to_value(old).unwrap(), report);
+
+        let message = json!({
+            "message_id": "m", "to_run_id": "r", "seq": 1, "from": {"type": "operator"},
+            "kind": "instruction", "text": "work", "in_reply_to": null, "report": null,
+            "stale": false, "escalated_from": null, "stage": "stored", "created_at": "now", "acked_at": null
+        });
+        let old: Message = serde_json::from_value(message.clone()).unwrap();
+        assert!(old.thread_id.is_none() && old.handoff.is_none());
+        assert_eq!(serde_json::to_value(old).unwrap(), message);
+
+        let question = json!({"run_id": "r", "question_message_id": "m", "asked_at": "now",
+            "receipt": {"status": "unresolved"}});
+        let old: QuestionStatus = serde_json::from_value(question.clone()).unwrap();
+        assert!(old.thread_id.is_none());
+        assert_eq!(serde_json::to_value(old).unwrap(), question);
+
+        let handoff = json!({
+            "action": "thread_handoff", "message_id": "m", "thread_id": "t",
+            "to_run_id": "r", "text": "Please investigate",
+            "task_id": "task", "expected_task_revision": "rev",
+            "binding": {"repository_id": "repo", "workspace_id": null, "branch": "feature", "base_ref": "main"}
+        });
+        let action: OrchestrationAction = serde_json::from_value(handoff.clone()).unwrap();
+        assert_eq!(serde_json::to_value(action).unwrap(), handoff);
+        let mut forged = handoff;
+        forged["binding"]["origin"] = json!("native");
+        assert!(serde_json::from_value::<OrchestrationAction>(forged).is_err());
+
+        for wire in [
+            json!({"action": "thread_mark_read", "thread_id": "t", "through_message_id": "m"}),
+            json!({"action": "thread_link", "root_id": "r", "task_id": "task", "thread_id": "t"}),
+        ] {
+            let action: OrchestrationAction = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(action).unwrap(), wire);
+        }
+    }
 
     #[test]
     fn resume_and_attachment_requests_cannot_assert_credentials_or_exit_proof() {
