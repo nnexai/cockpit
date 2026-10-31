@@ -808,7 +808,7 @@
 }
 /* The add trigger ends before the Git action, never on top of it. Neither changes name width on hover. */
 .space-tag-add-anchor { position: relative; flex: none; width: 0; margin-left: -6px; }
-.space-name-line:has(> .space-git-action.is-quiet) .space-tag-add-anchor { position: absolute; right: 26px; margin: 0; }
+.space-name-line:not(:has(> .space-cpu)):has(> .space-git-action.is-quiet) .space-tag-add-anchor { position: absolute; right: 26px; margin: 0; }
 .space-tag-add { position: absolute; top: -10px; right: 0; z-index: 3; visibility: hidden; background: var(--surface-hover); white-space: nowrap; }
 .space-tree-row.is-selected .space-tag-add { background: var(--select-fill); }
 .space-tree-row:is(:hover, :focus-within, .is-selected) .space-tag-add,
