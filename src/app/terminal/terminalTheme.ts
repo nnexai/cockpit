@@ -32,10 +32,16 @@ export const TERMINAL_THEME = {
 
 // 12.5pt: 12pt (16px) rendered too dense and 13pt (17.33px) too large next to Ghostty/kitty.
 const TERMINAL_FONT_SIZE = (12.5 * 96) / 72;
+// Compact phones in portrait or landscape without shrinking short desktop windows.
+export const MOBILE_TERMINAL_QUERY = "(max-width: 600px), (max-height: 500px) and (pointer: coarse)";
+const MOBILE_TERMINAL_FONT_SIZE = 12;
 
 // Iosevka's advance is 0.5em, so an even device-pixel font size gives whole-pixel
 // cells. Fractional cells make the WebGL glyph atlas resample and look soft.
 export function snapTerminalFontSize(dpr = globalThis.devicePixelRatio || 1): number {
-  return Math.max(2, Math.round((TERMINAL_FONT_SIZE * dpr) / 2) * 2) / dpr;
+  const fontSize = typeof matchMedia === "function" && matchMedia(MOBILE_TERMINAL_QUERY).matches
+    ? MOBILE_TERMINAL_FONT_SIZE
+    : TERMINAL_FONT_SIZE;
+  return Math.max(2, Math.round((fontSize * dpr) / 2) * 2) / dpr;
 }
 export const TERMINAL_FONT_FAMILY = '"IosevkaTerm Nerd Font Mono", ui-monospace, "FiraCode Nerd Font Mono", "Hack Nerd Font Mono", "IBM Plex Mono", "Noto Sans Mono", monospace';

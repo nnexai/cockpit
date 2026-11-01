@@ -1,10 +1,9 @@
 import { useRef } from "react";
-import type { FitAddon } from "@xterm/addon-fit";
 import type { Terminal } from "@xterm/xterm";
 import type { TerminalCommand, TerminalOpenRequest } from "../../protocol/generated/v1";
 import type { TerminalRefs } from "./paneState";
 import { terminalCellGeometry, terminalScreenBounds, validTerminalGrid, type TerminalGrid } from "./cockpitTerminal";
-import { snapTerminalFontSize } from "./terminalTheme";
+import { MOBILE_TERMINAL_QUERY, snapTerminalFontSize } from "./terminalTheme";
 
 /** How long a resize may go unanswered before the next one is sent anyway. */
 const RESIZE_ANSWER_TIMEOUT_MS = 150;
@@ -78,7 +77,7 @@ export function useTerminalResize(refs: TerminalRefs, scratch = false) {
     desiredViewportGridRef.current = initialGrid;
     renderedGridRef.current = initialGrid;
   };
-  const observeViewport = (host: HTMLElement, terminal: Terminal, fit: FitAddon) => {
+  const observeViewport = (host: HTMLElement, terminal: Terminal) => {
     let resizeFrame: number | null = null;
     let disposed = false;
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
@@ -94,7 +93,6 @@ export function useTerminalResize(refs: TerminalRefs, scratch = false) {
     const onDprChange = () => {
       if (disposed) return;
       terminal.options.fontSize = snapTerminalFontSize();
-      fit.fit();
       requestViewportSizing();
       watchDpr();
     };
@@ -104,9 +102,19 @@ export function useTerminalResize(refs: TerminalRefs, scratch = false) {
       dprQuery?.addEventListener("change", onDprChange, { once: true });
     };
     watchDpr();
+    // A viewport breakpoint can change without this pane's dimensions changing
+    // (for example, a hidden tab). Keep its font and proposed grid in sync.
+    const mobileQuery = typeof matchMedia === "function" ? matchMedia(MOBILE_TERMINAL_QUERY) : null;
+    const onMobileChange = () => {
+      if (disposed) return;
+      terminal.options.fontSize = snapTerminalFontSize();
+      requestViewportSizing();
+    };
+    mobileQuery?.addEventListener("change", onMobileChange);
     return () => {
       disposed = true;
       dprQuery?.removeEventListener("change", onDprChange);
+      mobileQuery?.removeEventListener("change", onMobileChange);
       observer?.disconnect();
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
       if (resizeInFlightRef.current) window.clearTimeout(resizeInFlightRef.current.timer);

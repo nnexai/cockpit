@@ -109,7 +109,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
     onCellGeometryRef.current?.(terminalCellGeometry(terminal));
     sizing.seedGrid(terminal);
     setTerminalReady(true);
-    const disposeViewport = sizing.observeViewport(host, terminal, fit);
+    const disposeViewport = sizing.observeViewport(host, terminal);
     return () => {
       disposeViewport();
       terminal.dispose();

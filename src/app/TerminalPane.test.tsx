@@ -114,6 +114,7 @@ vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }));
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => mocks.native.enabled, invoke: mocks.native.invoke }));
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
+const mobileTerminalQuery = "(max-width: 600px), (max-height: 500px) and (pointer: coarse)";
 const request = {
   session_id: "session",
   pane_id: "pane",
@@ -883,6 +884,112 @@ describe("TerminalPane fitting and pointer ownership", () => {
       lineHeight: 1,
       scrollbar: { showScrollbar: false, width: 8 },
     });
+  });
+
+  it("updates mobile terminal sizing across viewport and pixel-ratio changes", async () => {
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    vi.stubGlobal("devicePixelRatio", 1);
+    let width = 390;
+    let height = 844;
+    let coarse = true;
+    const listeners = new Map<string, Set<() => void>>();
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      get matches() { return query === mobileTerminalQuery && (width <= 600 || (height <= 500 && coarse)); },
+      addEventListener: (_type: string, listener: () => void) => {
+        if (!listeners.has(query)) listeners.set(query, new Set());
+        listeners.get(query)!.add(listener);
+      },
+      removeEventListener: (_type: string, listener: () => void) => listeners.get(query)?.delete(listener),
+    }));
+    const notify = (query: string) => [...(listeners.get(query) ?? [])].forEach((listener) => listener());
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, false, {
+          request: { session_id: "session", pane_id: "pane", target_kind: "scratch" },
+        })} />);
+        await settle();
+      });
+      const terminal = mocks.terminals.at(-1)!;
+      expect(terminal.options.fontSize).toBe(12);
+      expect(openTerminal).toHaveBeenCalledOnce();
+      await act(async () => { messages[0]!(message("owned")); });
+      mocks.fitProposals.push([90, 28]);
+      mocks.fitDimensions.push([90, 28]);
+      await act(async () => {
+        width = 1024;
+        height = 400;
+        coarse = false;
+        notify(mobileTerminalQuery);
+      });
+      expect(terminal.options.fontSize).toBe(16);
+      expect(sent).toContainEqual(expect.objectContaining({ type: "terminal.resize", cols: 90, rows: 28 }));
+      expect(openTerminal).toHaveBeenCalledOnce();
+      await act(async () => {
+        width = 844;
+        height = 390;
+        coarse = true;
+        notify(mobileTerminalQuery);
+      });
+      expect(terminal.options.fontSize).toBe(12);
+      await act(async () => {
+        vi.stubGlobal("devicePixelRatio", 1.5);
+        notify("(resolution: 1dppx)");
+      });
+      expect(terminal.options.fontSize).toBe(12);
+    } finally {
+      await act(async () => root.unmount());
+      expect(listeners.get(mobileTerminalQuery)?.size).toBe(0);
+      expect(listeners.get("(resolution: 1.5dppx)")?.size).toBe(0);
+      host.remove();
+    }
+  });
+
+  it("requests the new mobile grid without fitting over an authoritative frame", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    vi.stubGlobal("devicePixelRatio", 1);
+    let mobile = false;
+    let onMobileChange: (() => void) | undefined;
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      get matches() { return query === mobileTerminalQuery && mobile; },
+      addEventListener: (_type: string, listener: () => void) => {
+        if (query === mobileTerminalQuery) onMobileChange = listener;
+      },
+      removeEventListener: vi.fn(),
+    }));
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
+      await act(async () => {
+        messages[0]!(message("owned"));
+        messages[0]!({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream",
+          seq: "1", encoding: "ansi", width: 80, height: 24, full: true, bytes: btoa("frame") });
+        await settle();
+      });
+      const terminal = mocks.terminals.at(-1)!;
+      const fit = mocks.fits.at(-1)!;
+      fit.fit.mockClear();
+      sent.length = 0;
+      mocks.fitProposals.push([100, 30]);
+      await act(async () => { mobile = true; onMobileChange?.(); });
+      expect(terminal.options.fontSize).toBe(12);
+      expect(fit.fit).not.toHaveBeenCalled();
+      expect(sent).toContainEqual(expect.objectContaining({ type: "terminal.resize", cols: 100, rows: 30 }));
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
   });
 
   it("defers a changed viewport resize until authoritative terminal ownership", async () => {
