@@ -199,3 +199,20 @@ it("shows a distinct terminal title and exposes its full text, but suppresses re
     expect(host.querySelector('[data-row-id="b:two"] .agent-purpose')).toBeNull();
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
+
+it("shows current activity while preserving the full session title for accessibility", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "unavailable", response: null, pending: new Set(), notes: new Map(), announcement: "", activate: vi.fn(), seen: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const agent = { ...snapshot.agents[0]!, title: "Terminal", session_title: "Session title", working_description: "Editing files", idle_summary: "Finished reviewing", status: "idle" };
+  const props: ComponentProps<typeof Agents> = { snapshot: { ...snapshot, agents: [agent] }, attention, live: true, spaces: [], tabs: [], selectedPaneId: null, pendingPaneId: null, loading: false, hasSession: true, onSelect: vi.fn(), focusRef: { current: null }, view: "all", onViewChange: vi.fn() };
+  try {
+    await act(async () => root.render(createElement(Agents, props)));
+    const row = host.querySelector<HTMLButtonElement>('[data-row-id="a:one"]')!;
+    expect(row.querySelector(".agent-purpose")?.textContent).toBe("Finished reviewing");
+    expect(row.getAttribute("aria-label")).toContain("Session title");
+    expect(row.getAttribute("aria-label")).toContain("Finished reviewing");
+    await act(async () => root.render(createElement(Agents, { ...props, snapshot: { ...snapshot, agents: [{ ...agent, status: "working" }] } })));
+    expect(row.querySelector(".agent-purpose")?.textContent).toBe("Editing files");
+    expect(row.getAttribute("aria-label")).not.toContain("Finished reviewing");
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});

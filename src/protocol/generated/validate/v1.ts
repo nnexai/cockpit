@@ -317,6 +317,11 @@ export const wireAgentSummary: WireDescriptor<V1.AgentSummary> = struct<V1.Agent
   "name": req(str),
   "status": req(str),
   "title": req(nullable(str), { fill: null }),
+  "session_title": opt(str, OMIT, { fill: null, rustOmits: true }),
+  "working_description": opt(str, OMIT, { fill: null, rustOmits: true }),
+  "idle_summary": opt(str, OMIT, { fill: null, rustOmits: true }),
+  "native_session_id": opt(str, OMIT, { fill: null, rustOmits: true }),
+  "terminal_id": opt(str, OMIT, { fill: null, rustOmits: true }),
   "focused": req(bool),
   "state_change_seq": req(u53),
 });

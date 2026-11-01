@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import type { SessionSnapshotResponse } from "../../protocol/generated/v1";
 import { returnFocusFromSidebar } from "../input/shortcuts";
 import type { AgentAttentionState } from "../session/agentAttention";
+import { agentContext } from "../session/agentContext";
 import { deriveAgentQueue, type AgentsView, type AttentionRow } from "./agentAttentionModel";
 import { StateGlyph } from "./StateGlyph";
 import { SidebarSkeleton } from "./SidebarSkeleton";
@@ -55,9 +56,9 @@ export function Agents({ snapshot, attention, live, spaces, tabs, selectedPaneId
     const pending = agent.pane_id === pendingPaneId;
     const selected = agent.pane_id === selectedPaneId && !pending;
     const flag = row.flag === "unseen" ? "Unseen" : row.flag === "done" ? "Done" : row.flag === "blocked" ? "Blocked" : null;
-    const purpose = agent.title?.trim();
-    const purposeLine = purpose && ![agent.name, location, spaceLabel, tabLabel].some(value => value?.trim().toLocaleLowerCase() === purpose.toLocaleLowerCase()) ? purpose : null;
-    const description = [location, agent.name, status.word, purposeLine, row.unseen ? row.display === "working" ? "earlier result not seen" : "not seen" : null].filter(Boolean).join(", ");
+    const context = agentContext(agent, [location, spaceLabel, tabLabel]);
+    const purposeLine = context.activity || context.title;
+    const description = [location, agent.name, status.word, context.title ? `${context.titleLabel}: ${context.title}` : null, context.activity ? `${context.activityLabel}: ${context.activity}` : null, row.unseen ? row.display === "working" ? "earlier result not seen" : "not seen" : null].filter(Boolean).join(", ");
     const title = [description, row.unseen && row.display === "done" && agent.status !== "done" ? "Completion retained until seen" : null, row.completionAt ? `Completed ${row.completionAt}${row.inferred ? " (inferred)" : ""}` : null].filter(Boolean).join(" · ");
     const note = attention.notes.get(agent.pane_id);
     return <div className="agent-row-group" key={row.key}>

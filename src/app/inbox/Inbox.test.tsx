@@ -29,7 +29,7 @@ function fixture() {
   return { client, waits };
 }
 function directFixture() {
-  const target = (pane: string, name: string, stamp = "now") => ({ endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: pane, terminal_id: `terminal-${pane}`, agent_kind: "omp", agent_name: name, native_session_id: null, native_session_file: null, state_changed_at: stamp });
+  const target = (pane: string, name: string, stamp = "now") => ({ endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: pane, terminal_id: `terminal-${pane}`, agent_kind: name, agent_name: name, native_session_id: null, native_session_file: null, state_changed_at: stamp });
   const agent = (pane: string, name: string, stamp = "now") => ({ workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Tab", pane_id: pane, agent_name: name, agent_status: "idle", state_changed_at: stamp, expected_target: target(pane, name, stamp) });
   const snapshot = (status: "idle" | "working" | "done" = "idle", seq = 1) => ({ session_id: "a", server_instance: "server", panes: ["a", "b"].map(id => ({ id, terminal_id: `terminal-${id}` })), agents: ["a", "b"].map((id, i) => ({ pane_id: id, space_id: "space", tab_id: "tab", name: i ? "Beta" : "Alpha", status: i ? "idle" : status, state_change_seq: seq, focused: false })) } as unknown as SessionSnapshotResponse);
   const inbox = view("a"); inbox.unmanaged_agents = [agent("a", "Alpha"), agent("b", "Beta")];
@@ -180,9 +180,48 @@ describe("Inbox", () => {
     expect(client.orchestrationSnapshot).toHaveBeenCalledWith({ session_id: "a", root_id: "owner" });
     expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "thread_handoff", thread_id: "thread", to_run_id: "owner", task_id: "task-id", expected_task_revision: "revision" });
   });
+  it("keeps the original quiet-agent status fallback when no context is available", async () => {
+    const f = directFixture();
+    await flush(() => f.app.render());
+    const row = Array.from(host.querySelectorAll<HTMLButtonElement>(".inbox-row")).find(b => b.textContent?.includes("Alpha"))!;
+    expect(row.classList.contains("is-quiet")).toBe(true);
+    expect(row.querySelector(".inbox-meta")).toBeNull();
+    expect(row.querySelector(".inbox-row-next")?.textContent).toBe("Space · idle");
+    await flush(() => f.choose("Alpha"));
+    expect(host.querySelector('[aria-label="Session context"]')).toBeNull();
+  });
+  it("shows direct session context only for the matching live occupant", async () => {
+    const f = directFixture();
+    const target = { ...f.inbox.unmanaged_agents[0]!.expected_target!, agent_kind: "omp", native_session_id: "session-one" };
+    f.inbox.unmanaged_agents[0] = { ...f.inbox.unmanaged_agents[0]!, expected_target: target };
+    const base = f.snapshot();
+    const withContext = { ...base, agents: [{ ...base.agents[0]!, name: "omp", terminal_id: "terminal-a", native_session_id: "session-one", session_title: "Repair index", idle_summary: "Index repaired" }, base.agents[1]!] };
+    await flush(() => f.app.render("a", true, withContext));
+    const row = Array.from(host.querySelectorAll<HTMLButtonElement>(".inbox-row")).find(b => b.textContent?.includes("Alpha"))!;
+    expect(row.textContent).toContain("Index repaired");
+    expect(row.textContent).toContain("Repair index");
+    await flush(() => f.choose("Alpha"));
+    expect(host.querySelector(".inbox-content")?.textContent).toContain("Repair index");
+    expect(host.querySelector(".inbox-head")?.textContent).toContain("Direct agent · idle");
+    expect(host.querySelector('[aria-label="Session context"]')?.textContent).toContain("Session title");
+    expect(host.querySelector('[aria-label="Session context"]')?.textContent).toContain("Session recap · OMP session");
+    expect(host.querySelector(".inbox-content")?.textContent).toContain("Index repaired");
+    const working = { ...withContext, agents: [{ ...withContext.agents[0]!, status: "working", working_description: "Rebuilding index" }, withContext.agents[1]!] };
+    await flush(() => f.app.render("a", true, working));
+    expect(host.querySelector(".inbox-content")?.textContent).toContain("Rebuilding index");
+    expect(host.querySelector(".inbox-content")?.textContent).not.toContain("Index repaired");
+    await flush(() => f.app.render("a", true, { ...withContext, agents: [{ ...withContext.agents[0]!, native_session_id: "replacement", session_title: "Different session", idle_summary: "Different update" }, withContext.agents[1]!] }));
+    expect(host.textContent).not.toContain("Different session");
+    await flush(() => f.app.render("a", true, { ...withContext, panes: [{ ...withContext.panes[0]!, terminal_id: "replacement-terminal" }, withContext.panes[1]!] }));
+    expect(host.querySelector(".inbox-content")?.textContent).not.toContain("Repair index");
+    expect(host.querySelector(".inbox-content")?.textContent).not.toContain("Index repaired");
+    await flush(() => f.app.render("a", true, { ...withContext, agents: [{ ...withContext.agents[0]!, name: "other-harness" }, withContext.agents[1]!] }));
+    expect(host.querySelector(".inbox-head")?.textContent).toContain("status unavailable");
+    expect(host.querySelector(".inbox-content")?.textContent).not.toContain("Repair index");
+  });
   it("sends a direct request only with the captured occupant identity", async () => {
     const { client } = fixture();
-    const target = { endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", agent_kind: "omp", agent_name: "Agent", native_session_id: null, native_session_file: null, state_changed_at: "now" };
+    const target = { endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", agent_kind: "Agent", agent_name: "Agent", native_session_id: null, native_session_file: null, state_changed_at: "now" };
     const inbox = view("a");
     inbox.unmanaged_agents = [{ workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Tab", pane_id: "pane", agent_name: "Agent", agent_status: "idle", state_changed_at: "now", expected_target: target }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
@@ -195,7 +234,7 @@ describe("Inbox", () => {
   });
   it("does not retarget a retained draft when the pane occupant changes", async () => {
     const { client, waits } = fixture();
-    const target = { endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", agent_kind: "omp", agent_name: "Agent", native_session_id: null, native_session_file: null, state_changed_at: "now" };
+    const target = { endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", agent_kind: "Agent", agent_name: "Agent", native_session_id: null, native_session_file: null, state_changed_at: "now" };
     const agent = { workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Tab", pane_id: "pane", agent_name: "Agent", agent_status: "idle", state_changed_at: "now", expected_target: target };
     const inbox = view("a"); inbox.unmanaged_agents = [agent];
     vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce({ ...inbox, revision: 2, unmanaged_agents: [{ ...agent, expected_target: { ...target, native_session_id: "replacement" } }] });
@@ -212,7 +251,7 @@ describe("Inbox", () => {
   });
   it("retains a draft on stale identity and requires explicit reselection", async () => {
     const { client } = fixture();
-    const target = { endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", agent_kind: "omp", agent_name: "Agent", native_session_id: null, native_session_file: null, state_changed_at: "now" };
+    const target = { endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", agent_kind: "Agent", agent_name: "Agent", native_session_id: null, native_session_file: null, state_changed_at: "now" };
     const inbox = view("a"); inbox.unmanaged_agents = [{ workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Tab", pane_id: "pane", agent_name: "Agent", agent_status: "idle", state_changed_at: "now", expected_target: target }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     vi.mocked(client.orchestrationAgentSend).mockRejectedValueOnce(new CockpitClientError("http_error", "Changed", { operationCode: "stale_identity" }));

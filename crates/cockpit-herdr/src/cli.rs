@@ -35,6 +35,8 @@ mod extensions;
 mod operations;
 mod projects;
 mod orchestration;
+mod agent_context;
+mod agent_recap;
 mod quick_ask;
 mod transport;
 mod shell;
@@ -324,7 +326,10 @@ fn parse_snapshot(
         .try_fold(Vec::new(), |mut agents, (index, value)| {
             let context = format!("snapshot.agents[{index}]");
             let object = object(value, &context)?;
-            let title = sanitized_title(object, &context)?;
+            let title = optional_string(object, "title", &context)?
+                .map(|title| sanitize_terminal_text(&title))
+                .filter(|title| !title.trim().is_empty())
+                .or(sanitized_title(object, &context)?);
             let state_change_seq = object
                 .get("state_change_seq")
                 .map(|_| required_u64(object, "state_change_seq", &context))
@@ -354,6 +359,48 @@ fn parse_snapshot(
                 }
                 Some(_) => required_string(object, "agent", &context)?,
             };
+            // Only associate a journal with the exact OMP occupant Herdr reports.
+            let pane = panes.iter().find(|pane| pane.id == pane_id);
+            let matching_pane = pane.filter(|pane| {
+                pane.space_id == space_id && pane.tab_id == tab_id
+                    && pane.agent.as_deref() == Some(name.as_str())
+                    && object.get("terminal_id").and_then(Value::as_str)
+                        .is_none_or(|terminal| terminal == pane.terminal_id)
+            });
+            let terminal_id = matching_pane.map(|pane| pane.terminal_id.clone());
+            let session = object.get("agent_session").and_then(Value::as_object);
+            let omp_path = session.filter(|session| {
+                name == "omp"
+                    && session.get("agent").and_then(Value::as_str) == Some("omp")
+                    && session.get("source").and_then(Value::as_str) == Some("herdr:omp")
+                    && session.get("kind").and_then(Value::as_str) == Some("path")
+            }).and_then(|session| session.get("value").and_then(Value::as_str));
+            let pane_session_matches = snapshot.get("panes").and_then(Value::as_array)
+                .and_then(|panes| panes.iter().find(|pane| pane.get("pane_id").and_then(Value::as_str) == Some(pane_id.as_str())))
+                .and_then(|pane| pane.get("agent_session"))
+                .filter(|session| !session.is_null())
+                .is_none_or(|pane_session| object.get("agent_session") == Some(pane_session));
+            let context = terminal_id.as_ref().filter(|_| pane_session_matches).and(omp_path)
+                .and_then(agent_context::read_omp_context);
+            let native_session_id = context.as_ref().map(|context| context.native_session_id.clone());
+            let session_title = context.as_ref().and_then(|context| context.session_title.clone());
+            let working_description = if status == "working" {
+                context.as_ref().and_then(|context| context.working_description.clone())
+            } else {
+                None
+            };
+            // OMP recaps have no turn ID. Require a complete final turn in the
+            // bounded journal tail and a strictly later whole-second recap.
+            // Ambiguous or interrupted turns deliberately have no recap.
+            let idle_summary = if matches!(status.as_str(), "idle" | "done") {
+                context.as_ref().and_then(|context| {
+                    let turn = context.latest_turn_timestamp?;
+                    let (recap, created_at) = agent_recap::read_recap(&context.native_session_id)?;
+                    (created_at > turn).then_some(recap)
+                })
+            } else {
+                None
+            };
             agents.push(AgentSummary {
                 pane_id,
                 space_id,
@@ -361,6 +408,11 @@ fn parse_snapshot(
                 name,
                 status,
                 title,
+                session_title,
+                working_description,
+                idle_summary,
+                native_session_id,
+                terminal_id,
                 focused,
                 state_change_seq,
             });
@@ -2549,6 +2601,39 @@ mod tests {
         assert_eq!(identified.agents[0].pane_id, "pane-a");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn omp_context_requires_matching_agent_session_and_terminal() {
+        let path = std::env::temp_dir().join(format!("cockpit-agent-context-{}.jsonl", std::process::id()));
+        std::fs::write(&path, concat!(
+            "{\"type\":\"title\",\"title\":\"Investigate snapshots\"}\n",
+            "{\"type\":\"session\",\"id\":\"session-a\"}\n",
+            "{\"type\":\"custom\",\"customType\":\"tool_execution_start\",\"data\":{\"toolCallId\":\"call-a\",\"intent\":\"Reading snapshots\"}}\n",
+        )).unwrap();
+        let mut raw: Value = serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
+        raw["result"]["snapshot"]["panes"][0]["agent"] = json!("omp");
+        raw["result"]["snapshot"]["agents"][0]["agent"] = json!("omp");
+        raw["result"]["snapshot"]["agents"][0]["terminal_id"] = json!("term-a");
+        let native = json!({"source":"herdr:omp","agent":"omp","kind":"path","value":path.to_str().unwrap()});
+        raw["result"]["snapshot"]["agents"][0]["agent_session"] = native.clone();
+        raw["result"]["snapshot"]["panes"][0]["agent_session"] = native;
+        let snapshot = parse_snapshot(raw.clone(), "default", "fixture-endpoint").unwrap();
+        let agent = &snapshot.agents[0];
+        assert_eq!(agent.native_session_id.as_deref(), Some("session-a"));
+        assert_eq!(agent.terminal_id.as_deref(), Some("term-a"));
+        assert_eq!(agent.session_title.as_deref(), Some("Investigate snapshots"));
+        assert_eq!(agent.working_description.as_deref(), Some("Reading snapshots"));
+
+        raw["result"]["snapshot"]["agents"][0]["agent_status"] = json!("idle");
+        assert_eq!(parse_snapshot(raw.clone(), "default", "fixture-endpoint").unwrap().agents[0].working_description, None);
+        raw["result"]["snapshot"]["panes"][0]["agent_session"]["value"] = json!("/different");
+        assert_eq!(parse_snapshot(raw.clone(), "default", "fixture-endpoint").unwrap().agents[0].native_session_id, None);
+        raw["result"]["snapshot"]["panes"][0]["agent_session"] = Value::Null;
+        raw["result"]["snapshot"]["agents"][0]["terminal_id"] = json!("another-terminal");
+        assert_eq!(parse_snapshot(raw, "default", "fixture-endpoint").unwrap().agents[0].native_session_id, None);
+        std::fs::remove_file(path).unwrap();
+    }
+
     #[test]
     fn snapshot_server_instance_tracks_endpoint_and_ignores_geometry() {
         let mut raw: Value = serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
@@ -2997,6 +3082,17 @@ mod tests {
             })),
             Some("renamed pane".into())
         );
+    }
+
+    #[test]
+    fn agent_title_prefers_reported_metadata_and_falls_back() {
+        let mut raw: Value = serde_json::from_str(include_str!("../tests/fixtures/session-snapshot.json")).unwrap();
+        raw["result"]["snapshot"]["agents"][0]["title"] = json!("\u{1b}[31mReported task\u{1b}[0m");
+        let snapshot = parse_snapshot(raw.clone(), "default", "fixture-endpoint").unwrap();
+        assert_eq!(snapshot.agents[0].title.as_deref(), Some("Reported task"));
+        raw["result"]["snapshot"]["agents"][0]["title"] = json!("  ");
+        let snapshot = parse_snapshot(raw, "default", "fixture-endpoint").unwrap();
+        assert_eq!(snapshot.agents[0].title.as_deref(), Some("Agent fallback"));
     }
 
     #[test]

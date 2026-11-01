@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
 import type { InboxLocation, InboxQuestion, InboxText, InboxThread, InboxView, OrchestrationAction, SessionSnapshotResponse, UnmanagedAgent } from "../../protocol/generated/v1";
 import type { AgentAttentionState } from "../session/agentAttention";
+import { agentContext, type AgentContext } from "../session/agentContext";
 import { deriveAgentQueue } from "../sidebar/agentAttentionModel";
 import { relativeTime } from "../library/libraryState";
 import { UiIcon, type UiIconName } from "../UiIcon";
@@ -118,7 +119,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     return () => { live = false; wake.current?.(); clearTimeout(timer); };
   }, [client, sessionId, current]);
   useEffect(() => { let live = true; void client.orchestrationLiaisonLookup({ session_id: sessionId, selected_root_id: null }).then(result => { if (live && result.status === "resolved" && result.preferred_root_id) setOwner(current => current || result.preferred_root_id!); }).catch(() => {}); return () => { live = false; }; }, [client, sessionId]);
-  const runtimeIdentity = snapshot?.session_id === sessionId ? JSON.stringify([snapshot.server_instance, snapshot.spaces?.map(space => [space.id, space.label]), snapshot.tabs?.map(tab => [tab.id, tab.label]), snapshot.panes.map(pane => [pane.id, pane.terminal_id, pane.space_id, pane.tab_id, pane.agent, pane.agent_status]), snapshot.agents.map(agent => [agent.pane_id, agent.name, agent.status, agent.state_change_seq])]) : null;
+  const runtimeIdentity = snapshot?.session_id === sessionId ? JSON.stringify([snapshot.server_instance, snapshot.spaces?.map(space => [space.id, space.label]), snapshot.tabs?.map(tab => [tab.id, tab.label]), snapshot.panes.map(pane => [pane.id, pane.terminal_id, pane.space_id, pane.tab_id, pane.agent, pane.agent_status]), snapshot.agents.map(agent => [agent.pane_id, agent.name, agent.status, agent.state_change_seq, agent.native_session_id])]) : null;
   const previousRuntime = useRef<string | null>(null);
   useEffect(() => {
     if (!current) return;
@@ -127,21 +128,35 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     if (previous !== null && previous !== runtimeIdentity) { refreshVersion.current++; wake.current?.(); }
   }, [current, runtimeIdentity]);
   const queue = snapshot?.session_id === sessionId ? deriveAgentQueue(snapshot, attention.response, attention.availability, true).visible : [];
-  const relevant = (agent: UnmanagedAgent) => queue.some(row => row.agent.pane_id === agent.pane_id && row.agent.name === agent.agent_name && row.terminalId && row.flag);
+  const matchingAgent = (agent: UnmanagedAgent) => {
+    const target = agent.expected_target;
+    if (!target || !target.terminal_id || target.pane_id !== agent.pane_id || target.workspace_id !== agent.workspace_id || target.tab_id !== agent.tab_id || (target.agent_name !== null && target.agent_name !== agent.agent_name)) return undefined;
+    return queue.find(row => row.agent.pane_id === agent.pane_id && row.agent.space_id === agent.workspace_id && row.agent.tab_id === agent.tab_id && row.agent.name === target.agent_kind && row.terminalId === target.terminal_id && (!target.native_session_id || !row.agent.native_session_id || target.native_session_id === row.agent.native_session_id));
+  };
+  const relevant = (agent: UnmanagedAgent) => !!matchingAgent(agent)?.flag || (!agent.expected_target && queue.some(row => row.agent.pane_id === agent.pane_id && row.agent.name === agent.agent_name && row.terminalId && row.flag));
+  const contextFor = (agent: UnmanagedAgent) => {
+    const target = agent.expected_target;
+    const row = matchingAgent(agent);
+    if (!target || !row || (target.native_session_id && (target.native_session_id !== row.agent.native_session_id || target.terminal_id !== row.agent.terminal_id))) return null;
+    const agentForDisplay = target.native_session_id ? row.agent : { ...row.agent, session_title: undefined, working_description: undefined, idle_summary: undefined };
+    return agentContext(agentForDisplay, [agent.workspace_label, agent.tab_label, `${agent.workspace_label} · ${agent.tab_label}`]);
+  };
   const count = (view?.threads.filter(t => t.state === "needs_you").length ?? 0) + (view?.unmanaged_agents.filter(relevant).length ?? 0);
   const preview = view?.threads.find(t => t.state === "needs_you")?.title.text ?? view?.unmanaged_agents.find(relevant)?.agent_name ?? null;
   useEffect(() => { if (current) onAttentionChange?.({ count, preview }); }, [current, count, preview, onAttentionChange]);
   const thread = view?.threads.find(t => t.thread_id === selected);
   const direct = selectedAgent?.agent;
-  const liveDirect = direct && queue.find(row => row.agent.pane_id === direct.pane_id && row.agent.name === direct.agent_name && row.agent.space_id === direct.workspace_id && row.agent.tab_id === direct.tab_id && row.terminalId === selectedAgent?.terminalId && row.terminalId);
+  const matchedDirect = direct ? matchingAgent(direct) : undefined;
+  const liveDirect = matchedDirect?.terminalId === selectedAgent?.terminalId ? matchedDirect : undefined;
   const key = direct ? JSON.stringify(["agent", direct.pane_id]) : selected ?? "new";
   const text = drafts[key] ?? "";
   const setText = (value: string) => { setDrafts(d => ({ ...d, [key]: value })); };
   const select = (id: string | null) => { selectionVersion.current++; setDirectOutcome(null); setError(""); setSelected(id); setSelectedAgent(null); setSelectedQuestion(""); setTaskId(""); setMobileDetail(true); };
-  const selectAgent = (agent: UnmanagedAgent) => { selectionVersion.current++; setDirectOutcome(null); setError(""); setSelected(`agent:${agent.pane_id}`); setSelectedAgent({ agent: { ...agent, expected_target: agent.expected_target ? { ...agent.expected_target } : agent.expected_target }, terminalId: queue.find(row => row.agent.pane_id === agent.pane_id && row.agent.name === agent.agent_name)?.terminalId ?? null }); setDirectStale(false); setSelectedQuestion(""); setMobileDetail(true); };
+  const selectAgent = (agent: UnmanagedAgent) => { selectionVersion.current++; setDirectOutcome(null); setError(""); setSelected(`agent:${agent.pane_id}`); setSelectedAgent({ agent: { ...agent, expected_target: agent.expected_target ? { ...agent.expected_target } : agent.expected_target }, terminalId: matchingAgent(agent)?.terminalId ?? null }); setDirectStale(false); setSelectedQuestion(""); setMobileDetail(true); };
   const latestDirect = direct && view?.unmanaged_agents.find(agent => agent.pane_id === direct.pane_id);
   const directTargetMatches = !!direct?.expected_target && !!latestDirect?.expected_target && JSON.stringify(direct.expected_target) === JSON.stringify(latestDirect.expected_target);
   const directReady = !!direct && !!liveDirect && (liveDirect.agent.status === "idle" || liveDirect.agent.status === "done") && directTargetMatches && direct.expected_target?.pane_id === direct.pane_id && direct.expected_target.workspace_id === direct.workspace_id && direct.expected_target.tab_id === direct.tab_id && direct.expected_target.terminal_id === selectedAgent?.terminalId && (direct.expected_target.agent_name === null || direct.expected_target.agent_name === direct.agent_name) && !directStale && !directUncertain[direct.pane_id];
+  const directContext = direct && directTargetMatches && liveDirect ? contextFor(latestDirect!) : null;
   const visibleOutcome = directOutcome && direct && directOutcome.pane === direct.pane_id && directOutcome.target === JSON.stringify(direct.expected_target) ? directOutcome : null;
   const open = (location: InboxLocation | null) => { if (location && view?.observation.status === "fresh" && snapshot?.session_id === sessionId && (!direct || liveDirect)) void onOpenLocation(location).catch(e => setError(e instanceof Error ? e.message : "Could not open session")); };
   const execute = async (operation: Pending) => {
@@ -233,9 +248,9 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
       {attention.availability === "unavailable" && <p role="status" className="inbox-note"><UiIcon name="alert" />Agent attention unavailable.</p>}
       {view && !view.threads.some(t => t.state === "needs_you") && !view.unmanaged_agents.some(relevant) && <p className="inbox-empty"><UiIcon name="check-circle" />Nothing needs you right now.</p>}
       {view?.threads.filter(t => t.state === "needs_you").map(t => <ThreadRow key={t.thread_id} thread={t} selected={selected === t.thread_id} onSelect={() => select(t.thread_id)} />)}
-      {view?.unmanaged_agents.filter(relevant).map(a => <button type="button" className="inbox-row" data-tone="decision" key={a.pane_id} aria-current={selected === `agent:${a.pane_id}`} onClick={() => selectAgent(a)}><span className="inbox-kic" aria-hidden="true"><UiIcon name="user" /></span><span className="inbox-row-body"><span className="inbox-meta"><span className="inbox-meta-t">{a.workspace_label} · {a.tab_label}</span></span><strong>{a.agent_name}</strong><span className="inbox-row-next">{a.agent_status || "Status unknown"}</span></span><span className="inbox-act" aria-hidden="true">Open <UiIcon name="right" /></span></button>)}
+      {view?.unmanaged_agents.filter(relevant).map(a => <AgentRow key={a.pane_id} agent={a} context={contextFor(a)} selected={selected === `agent:${a.pane_id}`} onSelect={() => selectAgent(a)} />)}
       {otherThreads.length > 0 && <details className="inbox-others"><summary><UiIcon name="right" />Other work · {otherThreads.length}</summary>{(["underway", "handled"] as const).map(state => otherThreads.some(t => t.state === state) && <div key={state}><h2>{state === "underway" ? "Underway" : "Handled"}</h2>{otherThreads.filter(t => t.state === state).map(t => <ThreadRow key={t.thread_id} thread={t} selected={selected === t.thread_id} onSelect={() => select(t.thread_id)} />)}</div>)}</details>}
-      {view && view.unmanaged_agents.some(a => !relevant(a)) && <details className="inbox-others"><summary><UiIcon name="right" />Other agents</summary>{view.unmanaged_agents.filter(a => !relevant(a)).map(a => <button type="button" className="inbox-row is-quiet" data-tone="unknown" key={a.pane_id} aria-current={selected === `agent:${a.pane_id}`} onClick={() => selectAgent(a)}><span className="inbox-kic is-sm"><UiIcon name="user" /></span><span className="inbox-row-body"><strong>{a.agent_name}</strong><span className="inbox-row-next">{a.workspace_label} · {a.agent_status || "unknown"}</span></span></button>)}</details>}
+      {view && view.unmanaged_agents.some(a => !relevant(a)) && <details className="inbox-others"><summary><UiIcon name="right" />Other agents</summary>{view.unmanaged_agents.filter(a => !relevant(a)).map(a => <AgentRow key={a.pane_id} agent={a} context={contextFor(a)} selected={selected === `agent:${a.pane_id}`} quiet onSelect={() => selectAgent(a)} />)}</details>}
     </aside>
     <main className="inbox-detail"><button type="button" className="inbox-back" onClick={() => setMobileDetail(false)}>‹ Inbox</button>
       {thread ? <div className="inbox-content">
@@ -248,7 +263,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
           {view?.owners.filter(o => thread.owner_root_ids.includes(o.root_id) && (!o.location || o.availability !== "available")).map(o => <span className="inbox-offline" key={o.root_id}><UiIcon name="offline" />{ownerLabel(view, o.root_id)} · {o.availability === "starting" ? "starting" : o.availability === "absent" ? "not running" : "status unknown"}</span>)}
           {thread.unread_result_message_id && <button type="button" className={`inbox-btn${thread.need === "answer" ? " is-primary" : ""}`} disabled={busy} onClick={() => void markRead()}><UiIcon name="check" />Mark read</button>}</div>
         <Evidence thread={thread} view={view} displayed={displayed} />
-      </div> : direct ? <div className="inbox-content"><div className="inbox-head" data-tone="unknown"><span className="inbox-kic is-lg"><UiIcon name="user" /></span><div><h2>{direct.agent_name}</h2><p className="inbox-facts"><span>{direct.workspace_label} · {direct.tab_label}</span><span>Direct agent · {liveDirect?.agent.status || "status unavailable"}</span></p></div></div><div className="inbox-actions"><button type="button" className="inbox-btn" onClick={() => open({ workspace_id: direct.workspace_id, workspace_label: direct.workspace_label, tab_id: direct.tab_id, tab_label: direct.tab_label, pane_id: direct.pane_id })}>Open session</button></div></div> : <div className="inbox-content"><h2>New work</h2><p>Send a request to a liaison.</p></div>}
+      </div> : direct ? <div className="inbox-content"><div className="inbox-head" data-tone="unknown"><span className="inbox-kic is-lg"><UiIcon name="user" /></span><div><h2>{direct.agent_name}</h2><p className="inbox-facts"><span>{direct.workspace_label} · {direct.tab_label}</span><span>Direct agent · {liveDirect?.agent.status || "status unavailable"}</span></p></div></div>{(directContext?.title || directContext?.activity) && <section aria-label="Session context">{directContext.title && <div className="inbox-update inbox-session-context" dir="auto"><small>{directContext.titleLabel}</small>{directContext.title}</div>}{directContext.activity && <div className="inbox-update inbox-session-context" dir="auto"><small>{directContext.activityLabel} · OMP session</small>{directContext.activity}</div>}</section>}<div className="inbox-actions"><button type="button" className="inbox-btn" onClick={() => open({ workspace_id: direct.workspace_id, workspace_label: direct.workspace_label, tab_id: direct.tab_id, tab_label: direct.tab_label, pane_id: direct.pane_id })}>Open session</button></div></div> : <div className="inbox-content"><h2>New work</h2><p>Send a request to a liaison.</p></div>}
       <form className="inbox-compose" data-mode={mode} onSubmit={e => { e.preventDefault(); void send(); }}>
         <div className="inbox-compose-head">
           {thread && (questions.length > 0 || !!selectedQuestion) && <div className="inbox-seg" role="group" aria-label="Message type"><button type="button" aria-pressed={mode === "followup"} disabled={!!pending} onClick={() => setSelectedQuestion("")}>Follow up</button>{questions.length > 0 && <button type="button" aria-pressed={mode === "answer"} aria-disabled={!chosenQuestion && questions.length > 1} title={!chosenQuestion && questions.length > 1 ? "Pick a question above first" : undefined} disabled={!!pending} onClick={() => { if (questions.length === 1) setSelectedQuestion(questionKey(questions[0])); }}>Answer</button>}</div>}
@@ -264,6 +279,13 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
       </form>
     </main>
   </section>;
+}
+function AgentRow({ agent, context, selected, quiet = false, onSelect }: { agent: UnmanagedAgent; context: AgentContext | null; selected: boolean; quiet?: boolean; onSelect(): void }) {
+  const preview = context?.activity || context?.title;
+  if (!preview) return quiet
+    ? <button type="button" className="inbox-row is-quiet" data-tone="unknown" aria-current={selected} onClick={onSelect}><span className="inbox-kic is-sm"><UiIcon name="user" /></span><span className="inbox-row-body"><strong>{agent.agent_name}</strong><span className="inbox-row-next">{agent.workspace_label} · {agent.agent_status || "unknown"}</span></span></button>
+    : <button type="button" className="inbox-row" data-tone="decision" aria-current={selected} onClick={onSelect}><span className="inbox-kic" aria-hidden="true"><UiIcon name="user" /></span><span className="inbox-row-body"><span className="inbox-meta"><span className="inbox-meta-t">{agent.workspace_label} · {agent.tab_label}</span></span><strong>{agent.agent_name}</strong><span className="inbox-row-next">{agent.agent_status || "Status unknown"}</span></span><span className="inbox-act" aria-hidden="true">Open <UiIcon name="right" /></span></button>;
+  return <button type="button" className={`inbox-row${quiet ? " is-quiet" : ""}`} data-tone={quiet ? "unknown" : "decision"} aria-current={selected} onClick={onSelect} title={[agent.workspace_label, agent.tab_label, agent.agent_name, agent.agent_status, context?.title && `${context.titleLabel}: ${context.title}`, context?.activity && `${context.activityLabel}: ${context.activity}`].filter(Boolean).join(" · ")}><span className={`inbox-kic${quiet ? " is-sm" : ""}`} aria-hidden="true"><UiIcon name="user" /></span><span className="inbox-row-body"><span className="inbox-meta"><span className="inbox-meta-t">{agent.workspace_label} · {agent.tab_label} · {agent.agent_status || "Status unknown"}</span></span><strong>{agent.agent_name}</strong>{context?.activity && context.title && <span className="inbox-sr">{context.titleLabel}: {context.title}</span>}<span className="inbox-row-next"><span className="inbox-sr">{context?.activity ? context.activityLabel : context?.titleLabel}: </span>{preview}</span></span>{!quiet && <span className="inbox-act" aria-hidden="true">Open <UiIcon name="right" /></span>}</button>;
 }
 function ThreadRow({ thread, selected, onSelect }: { thread: InboxThread; selected: boolean; onSelect(): void }) {
   const state = tone(thread), quiet = thread.state !== "needs_you";

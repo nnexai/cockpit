@@ -299,7 +299,7 @@ export type PaneSummary = { id: string, terminal_id: string, space_id: string, t
  */
 cwd?: string, };
 
-export type AgentSummary = { pane_id: string, space_id: string, tab_id: string, name: string, status: string, title: string | null, focused: boolean, state_change_seq: number, };
+export type AgentSummary = { pane_id: string, space_id: string, tab_id: string, name: string, status: string, title: string | null, session_title?: string, working_description?: string, idle_summary?: string, native_session_id?: string, terminal_id?: string, focused: boolean, state_change_seq: number, };
 
 export type HerdrShellStatus = "live" | "connecting" | "disconnected" | "unsupported";
 

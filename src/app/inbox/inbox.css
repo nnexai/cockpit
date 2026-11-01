@@ -85,6 +85,7 @@
 .inbox-recommendation .ui-icon{margin-top:2px}
 .inbox-update{margin-top:14px;font-size:14px;color:var(--text-secondary)}
 .inbox-update small{display:block;margin-bottom:1px;font-size:12px;color:var(--text-muted)}
+.inbox-session-context{white-space:pre-line}
 .inbox-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
 .inbox-btn{display:inline-flex;align-items:center;gap:7px;min-height:38px;max-width:100%;padding:0 12px;border:1px solid var(--border-strong);border-radius:var(--radius-control);font-size:13.5px;color:var(--text-secondary)}
 .inbox-btn:hover:not(:disabled){background:var(--surface-hover);color:var(--text-primary)}

@@ -413,7 +413,7 @@ mod tests {
                 focused_space_id: None, focused_tab_id: None, focused_pane_id: None, herdr_shell: None,
                 spaces: vec![], tabs: vec![],
                 panes: if present { vec![PaneSummary { id: "pane".into(), terminal_id: "terminal".into(), space_id: "space".into(), tab_id: "tab".into(), title: None, focused: false, agent: Some("agent".into()), agent_status: "idle".into(), revision: 0, cwd: None }] } else { vec![] },
-                agents: if present { vec![AgentSummary { pane_id: "pane".into(), space_id: "space".into(), tab_id: "tab".into(), name: "agent".into(), status: "idle".into(), title: None, focused: false, state_change_seq: self.seq.load(Ordering::SeqCst) as u64 }] } else { vec![] },
+                agents: if present { vec![AgentSummary { pane_id: "pane".into(), space_id: "space".into(), tab_id: "tab".into(), name: "agent".into(), status: "idle".into(), title: None, session_title: None, working_description: None, idle_summary: None, native_session_id: None, terminal_id: None, focused: false, state_change_seq: self.seq.load(Ordering::SeqCst) as u64 }] } else { vec![] },
             })
         }
         async fn focus(&self, _: &str, _: &FocusRequest) -> Result<FocusResponse, InspectionError> { unused() }

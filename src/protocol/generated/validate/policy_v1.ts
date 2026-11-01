@@ -339,6 +339,11 @@ export interface WireFields {
   "AgentSummary.name": (V1.AgentSummary)["name"];
   "AgentSummary.status": (V1.AgentSummary)["status"];
   "AgentSummary.title": (V1.AgentSummary)["title"];
+  "AgentSummary.session_title": (V1.AgentSummary)["session_title"];
+  "AgentSummary.working_description": (V1.AgentSummary)["working_description"];
+  "AgentSummary.idle_summary": (V1.AgentSummary)["idle_summary"];
+  "AgentSummary.native_session_id": (V1.AgentSummary)["native_session_id"];
+  "AgentSummary.terminal_id": (V1.AgentSummary)["terminal_id"];
   "AgentSummary.focused": (V1.AgentSummary)["focused"];
   "AgentSummary.state_change_seq": (V1.AgentSummary)["state_change_seq"];
   "SessionSnapshotResponse.session_id": (V1.SessionSnapshotResponse)["session_id"];
@@ -541,7 +546,7 @@ export interface WireFieldNames {
   "SpaceSummary": "id" | "label" | "number" | "tab_count" | "pane_count" | "focused" | "agent_status" | "git";
   "TabSummary": "id" | "space_id" | "label" | "number" | "pane_count" | "focused" | "focused_pane_id";
   "PaneSummary": "id" | "terminal_id" | "space_id" | "tab_id" | "title" | "focused" | "agent" | "agent_status" | "revision" | "cwd";
-  "AgentSummary": "pane_id" | "space_id" | "tab_id" | "name" | "status" | "title" | "focused" | "state_change_seq";
+  "AgentSummary": "pane_id" | "space_id" | "tab_id" | "name" | "status" | "title" | "session_title" | "working_description" | "idle_summary" | "native_session_id" | "terminal_id" | "focused" | "state_change_seq";
   "SessionSnapshotResponse": "session_id" | "server_instance" | "version" | "protocol" | "focused_space_id" | "focused_tab_id" | "focused_pane_id" | "spaces" | "tabs" | "panes" | "agents" | "herdr_shell";
   "PaneOutputResponse": "pane_id" | "text" | "revision";
   "SessionSummary": "id" | "label" | "is_default" | "running";
@@ -729,7 +734,7 @@ export interface WireCheckpointFieldNames {
   "SpaceSummary": "id" | "label" | "number" | "tab_count" | "pane_count" | "focused" | "agent_status" | "git";
   "TabSummary": "id" | "space_id" | "label" | "number" | "pane_count" | "focused" | "focused_pane_id";
   "PaneSummary": "id" | "terminal_id" | "space_id" | "tab_id" | "title" | "focused" | "agent" | "agent_status" | "revision" | "cwd";
-  "AgentSummary": "pane_id" | "space_id" | "tab_id" | "name" | "status" | "title" | "focused" | "state_change_seq";
+  "AgentSummary": "pane_id" | "space_id" | "tab_id" | "name" | "status" | "title" | "session_title" | "working_description" | "idle_summary" | "native_session_id" | "terminal_id" | "focused" | "state_change_seq";
   "SessionSnapshotResponse": "session_id" | "server_instance" | "version" | "protocol" | "focused_space_id" | "focused_tab_id" | "focused_pane_id" | "spaces" | "tabs" | "panes" | "agents" | "herdr_shell";
   "PaneOutputResponse": "pane_id" | "text" | "revision";
   "SessionSummary": "id" | "label" | "is_default" | "running";
@@ -795,6 +800,11 @@ export type WireOmittableField =
   | "PaneSummary.agent"
   | "PaneSummary.cwd"
   | "AgentSummary.title"
+  | "AgentSummary.session_title"
+  | "AgentSummary.working_description"
+  | "AgentSummary.idle_summary"
+  | "AgentSummary.native_session_id"
+  | "AgentSummary.terminal_id"
   | "SessionSnapshotResponse.focused_space_id"
   | "SessionSnapshotResponse.focused_tab_id"
   | "SessionSnapshotResponse.focused_pane_id"
@@ -825,6 +835,11 @@ export type WireOmittableField =
 
 export type WireOptionalField =
   | "PaneSummary.cwd"
+  | "AgentSummary.session_title"
+  | "AgentSummary.working_description"
+  | "AgentSummary.idle_summary"
+  | "AgentSummary.native_session_id"
+  | "AgentSummary.terminal_id"
   | "SessionSnapshotResponse.herdr_shell"
   | "TerminalOpenRequest.target_kind"
   | never;
