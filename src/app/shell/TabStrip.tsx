@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { UiIcon } from "../UiIcon";
 import { StateGlyph, spaceGlyphShape } from "../sidebar/StateGlyph";
 import type { SpaceStatus } from "../sidebar/spaceTree";
@@ -64,17 +64,36 @@ export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, br
   const [dragIntent, setDragIntent] = useState<DragIntent | null>(null);
   const [dropMark, setDropMark] = useState<DropMark>(null);
   const [dragMessage, setDragMessage] = useState<string | null>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const [touchNavigation, setTouchNavigation] = useState(() => window.matchMedia?.("(max-width: 800px) and (pointer: coarse)").matches === true);
+  useEffect(() => {
+    const query = window.matchMedia?.("(max-width: 800px) and (pointer: coarse)");
+    if (!query) return;
+    const update = () => setTouchNavigation(query.matches);
+    update();
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    const selected = strip?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    if (!strip || !selected) return;
+    const viewport = strip.getBoundingClientRect();
+    const tab = selected.getBoundingClientRect();
+    if (tab.left < viewport.left) strip.scrollLeft += tab.left - viewport.left;
+    else if (tab.right > viewport.right) strip.scrollLeft += tab.right - viewport.right;
+  }, [selectedTabId]);
   const flagBlocked = !sidebarOpen && agentBlocked;
   const sidebarLabel = `${sidebarOpen ? "Hide sidebar" : "Show sidebar"}${flagBlocked ? " (an agent is blocked)" : ""}`;
   return <nav className="tab-toolbar" aria-label="Tabs"><button type="button" className="tab-icon-button" aria-label={sidebarLabel} title={withShortcut(sidebarLabel, "toggle-sidebar")} aria-expanded={sidebarOpen} aria-controls="cockpit-sidebar" onClick={onToggleSidebar}><UiIcon name={sidebarOpen ? "sidebar-open" : "sidebar"} />{flagBlocked ? <span className="tab-attention-dot" aria-hidden="true" /> : null}</button>
     {!sidebarOpen && spaceContext ? <span className="tab-space-context" title={`${spaceContext.label} · ${spaceContext.status.className === "unknown" ? "No agent" : spaceContext.status.word}${spaceContext.branch ? ` · ${spaceContext.branch}` : ""}`}><StateGlyph shape={spaceGlyphShape(spaceContext.status)} /><span className="tab-space-name">{spaceContext.label}</span>{spaceContext.branch ? <span className="tab-space-branch">{spaceContext.branch}</span> : null}</span> : null}
-    <div className="tab-strip" role="tablist">{tabs.map((tab, index) => {
+    <div ref={stripRef} className="tab-strip" role="tablist">{tabs.map((tab, index) => {
     const displayedNumber = index + 1;
     const label = liaisonTab && tab.id === liaisonTab.id && tab.label === liaisonTab.launchTag ? "Supervisor" : tab.label;
     const redundantLabel = tabLabelIsRedundant(label, displayedNumber);
     const accessibleLabel = redundantLabel ? `Tab ${displayedNumber}` : `Tab ${displayedNumber}: ${label}`;
     const side = dropMark?.targetId === tab.id ? dropMark.side : null;
-    return <div className={`tab-item${tab.id === selectedTabId ? " is-selected" : ""}${side ? ` drop-${side}` : ""}`} key={tab.id} draggable={!busy && editingId !== tab.id}
+    return <div className={`tab-item${tab.id === selectedTabId ? " is-selected" : ""}${side ? ` drop-${side}` : ""}`} key={tab.id} draggable={!busy && editingId !== tab.id && !touchNavigation}
       onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }}
       onDragEnd={() => { setDragIntent(null); setDropMark(null); }}
       onDragEnter={(event) => { if (!busy) event.preventDefault(); }}
@@ -96,12 +115,12 @@ export function TabStrip({ tabs, selectedTabId, editingId, busy, browserOpen, br
       onContextMenu={(event) => onContext(event, { kind: "tab", id: tab.id })}>
       {editingId === tab.id
         ? <InlineRename label={tab.label} ariaLabel={`Rename tab ${tab.label}`} onCancel={() => onEdit(null)} onCommit={(label) => { const accepted = mutate(`tab:${tab.id}`, { type: "tab_rename", tab_id: tab.id, label }); if (accepted) onEdit(null); return accepted; }} />
-        : <button type="button" disabled={busy} draggable={!busy} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={displayedNumber <= 9 ? withShortcut(redundantLabel ? `Tab ${displayedNumber}` : label, `select-tab-${displayedNumber as 1}`) : redundantLabel ? `Tab ${displayedNumber}` : label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="n">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{label}</span>}{widgetDots.has(tab.id) ? <span className="widget-dot"><span className="sr-only">widget</span></span> : null}</button>}
+        : <button type="button" disabled={busy} draggable={!busy && !touchNavigation} role="tab" aria-selected={tab.id === selectedTabId} aria-label={accessibleLabel} className="tab-button" title={displayedNumber <= 9 ? withShortcut(redundantLabel ? `Tab ${displayedNumber}` : label, `select-tab-${displayedNumber as 1}`) : redundantLabel ? `Tab ${displayedNumber}` : label} onDragStart={(event) => { if (!busy) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("application/x-cockpit-tab", tab.id); event.dataTransfer.setData("text/plain", `tab:${tab.id}`); setDragIntent({ kind: "tab", sourceId: tab.id, order: tabs.map((candidate) => candidate.id) }); setDragMessage(null); } }} onClick={() => onSelect(tab)} onDoubleClick={() => onEdit(tab.id)}><span className="n">{displayedNumber}</span>{redundantLabel ? null : <span className="tab-label">{label}</span>}{widgetDots.has(tab.id) ? <span className="widget-dot"><span className="sr-only">widget</span></span> : null}</button>}
       {waitingTabId === tab.id ? <span className="liaison-tab-dot" title="Waiting for you"><span className="sr-only">waiting for you</span></span> : null}
     </div>;
   })}
     <button type="button" disabled={busy} className="tab-add" aria-label="Create tab" title={withShortcut("New tab", "new-tab")} onClick={onCreate}><UiIcon name="plus" /></button></div>{dragMessage ? <span className="resource-inline-status tab-drag-status" role="status">{dragMessage}</span> : null}<div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" />{widgetsPending ? <button type="button" className="tab-strip-action" aria-label="Show widgets" disabled={busy} onClick={onWidgets}>Widgets <span className="widget-dot" aria-hidden="true" /></button> : null}<button type="button" className="tab-icon-button" aria-label="Go to Space, agent or widget" title={withShortcut("Go to Space, agent or widget", "quick-switch")} onClick={onQuickSwitch}><UiIcon name="search" /></button><button type="button" className="tab-icon-button" disabled={busy || Boolean(browserDisabledReason)} aria-label="Browser" aria-pressed={browserOpen} title={browserDisabledReason ?? withShortcut(browserOpen ? "Close Browser (stops it and deletes its profile: cookies, logins, site data)" : "Open browser for tab", "toggle-browser")} onClick={onBrowserToggle}><UiIcon name="browser" /></button><button type="button" className="tab-icon-button" aria-label="Library" aria-pressed={libraryOpen} title={withShortcut(libraryOpen ? "Close Library" : "Open Library", "toggle-library")} onClick={onLibraryToggle}><UiIcon name="library" /></button><LibraryProblems /><button type="button" className="tab-icon-button" aria-label="Notes" aria-controls="cockpit-notes" aria-pressed={notesOpen} title={notesOpen ? "Close Notes" : "Open Notes"} onClick={onNotesToggle}><UiIcon name="file" /></button><button type="button" className="tab-icon-button" aria-label="Commands" title={withShortcut("Commands", "help")} onClick={onCommands}><UiIcon name="command" /></button></div>
-    <div className="tab-strip-actions"><UpdateChip client={updateClient} onUpdate={onUpdate} /></div>
+    <div className="tab-strip-actions tab-update-group"><UpdateChip client={updateClient} onUpdate={onUpdate} /></div>
     <div className="tab-strip-actions"><span className="tab-strip-separator" aria-hidden="true" /><button type="button" className="tab-icon-button" aria-label={`${supervisorAction}${liaisonWaiting && !inLiaisonPane ? ", waiting for you" : ""}`} aria-pressed={liaisonRunning ? inLiaisonPane : undefined} aria-keyshortcuts={ariaKeyShortcuts("liaison")} disabled={supervisorActionDisabled} title={supervisorActionReason ?? withShortcut(supervisorAction, "liaison")} onClick={onSupervisor}><UiIcon name="supervisor" />{liaisonWaiting && !inLiaisonPane ? <span className="tab-attention-dot is-waiting" aria-hidden="true" /> : null}</button></div>
   </nav>;
 }
