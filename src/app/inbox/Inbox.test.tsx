@@ -56,12 +56,61 @@ function openSession() {
 }
 
 describe("Inbox", () => {
+  it("acknowledges the selected completion without opening the terminal and keeps its detail when it leaves attention", async () => {
+    const completion = completionAttention();
+    const options = { attention: completion.state, onOpenLocation: vi.fn(async () => {}) };
+    const f = directFixture(options);
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
+    expect(completion.seen).toHaveBeenCalledTimes(1);
+    expect(completion.seen.mock.calls[0]![0]).toMatchObject({ terminalId: "terminal-a", completion: { epoch: 1, seq: 1 } });
+    expect(options.onOpenLocation).not.toHaveBeenCalled();
+    expect(host.querySelector(".inbox")?.getAttribute("data-detail")).toBe("true");
+    options.attention = { ...completion.state, response: null };
+    await flush(() => f.app.render());
+    expect(host.querySelector(".inbox-detail")?.textContent).toContain("Alpha");
+    expect(host.querySelector(".inbox-others")?.textContent).toContain("Alpha");
+    await flush(() => f.choose("Alpha"));
+    expect(completion.seen).toHaveBeenCalledTimes(1);
+  });
+  it("captures the selected completion even if a newer completion arrives while acknowledgement is pending", async () => {
+    const completion = completionAttention();
+    let resolve!: (value: boolean) => void;
+    completion.seen.mockImplementationOnce(() => new Promise<boolean>(done => { resolve = done; }));
+    const options = { attention: completion.state, onOpenLocation: vi.fn(async () => {}) };
+    const f = directFixture(options);
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
+    const captured = completion.seen.mock.calls[0]![0];
+    options.attention = completionAttention(2).state;
+    await flush(() => f.app.render("a", true, f.snapshot("done", 2)));
+    await flush(() => resolve(true));
+    expect(captured.completion).toMatchObject({ epoch: 1, seq: 1 });
+    expect(options.attention.seen).not.toHaveBeenCalled();
+    expect(host.querySelector(".inbox-detail")?.textContent).toContain("Alpha");
+  });
+  it("selects without acknowledging an unsafe direct target", async () => {
+    const completion = completionAttention();
+    const f = directFixture({ attention: completion.state, onOpenLocation: vi.fn(async () => {}) });
+    f.inbox.unmanaged_agents[0]!.expected_target!.native_session_id = "different-session";
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
+    expect(completion.seen).not.toHaveBeenCalled();
+    expect(host.querySelector(".inbox-detail")?.textContent).toContain("Alpha");
+  });
+  it("does not acknowledge selection when the inbox observation is unavailable", async () => {
+    const completion = completionAttention();
+    const f = directFixture({ attention: completion.state, onOpenLocation: vi.fn(async () => {}) });
+    f.inbox.observation = { status: "unavailable", error: { code: "unavailable", message: "Unavailable" } };
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
+    expect(completion.seen).not.toHaveBeenCalled();
+    expect(host.querySelector(".inbox-detail")?.textContent).toContain("Alpha");
+  });
+
   it("acknowledges only the completion captured when a direct session is opened", async () => {
     const completion = completionAttention(), focus = deferredFocus();
     const options = { attention: completion.state, onOpenLocation: vi.fn(() => focus.promise) };
     const f = directFixture(options);
     await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
-    expect(completion.seen).not.toHaveBeenCalled();
+    expect(completion.seen).toHaveBeenCalledTimes(1);
+    completion.seen.mockClear();
     await flush(openSession);
     expect(options.onOpenLocation).toHaveBeenCalledTimes(1);
     expect(completion.seen).not.toHaveBeenCalled();
@@ -76,7 +125,7 @@ describe("Inbox", () => {
     const completion = completionAttention(), focus = deferredFocus();
     const options = { attention: completion.state, onOpenLocation: vi.fn(() => focus.promise) };
     const f = directFixture(options);
-    await flush(() => f.app.render()); await flush(() => f.choose("Alpha")); await flush(openSession);
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha")); completion.seen.mockClear(); await flush(openSession);
     await flush(() => focus.reject(new Error("focus rejected")));
     expect(completion.seen).not.toHaveBeenCalled();
     expect(host.textContent).toContain("focus rejected");
@@ -88,7 +137,7 @@ describe("Inbox", () => {
   it("does not acknowledge if the terminal identity changes while focus is pending", async () => {
     const completion = completionAttention(), focus = deferredFocus();
     const f = directFixture({ attention: completion.state, onOpenLocation: () => focus.promise });
-    await flush(() => f.app.render()); await flush(() => f.choose("Alpha")); await flush(openSession);
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha")); completion.seen.mockClear(); await flush(openSession);
     await flush(() => f.app.render("a", true, { ...f.snapshot(), panes: [{ ...f.snapshot().panes[0]!, terminal_id: "replacement" }, f.snapshot().panes[1]!] }));
     await flush(() => focus.resolve());
     expect(completion.seen).not.toHaveBeenCalled();
@@ -96,7 +145,7 @@ describe("Inbox", () => {
   it("does not acknowledge after the selection changes while focus is pending", async () => {
     const completion = completionAttention(), focus = deferredFocus();
     const f = directFixture({ attention: completion.state, onOpenLocation: () => focus.promise });
-    await flush(() => f.app.render()); await flush(() => f.choose("Alpha")); await flush(openSession);
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha")); completion.seen.mockClear(); await flush(openSession);
     await flush(() => f.choose("Beta")); await flush(() => focus.resolve());
     expect(completion.seen).not.toHaveBeenCalled();
   });

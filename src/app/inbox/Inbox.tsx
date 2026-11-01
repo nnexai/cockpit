@@ -152,7 +152,14 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const text = drafts[key] ?? "";
   const setText = (value: string) => { setDrafts(d => ({ ...d, [key]: value })); };
   const select = (id: string | null) => { selectionVersion.current++; setDirectOutcome(null); setError(""); setSelected(id); setSelectedAgent(null); setSelectedQuestion(""); setTaskId(""); setMobileDetail(true); };
-  const selectAgent = (agent: UnmanagedAgent) => { selectionVersion.current++; setDirectOutcome(null); setError(""); setSelected(`agent:${agent.pane_id}`); setSelectedAgent({ agent: { ...agent, expected_target: agent.expected_target ? { ...agent.expected_target } : agent.expected_target }, terminalId: matchingAgent(agent)?.terminalId ?? null }); setDirectStale(false); setSelectedQuestion(""); setMobileDetail(true); };
+  const selectAgent = (agent: UnmanagedAgent) => {
+    const row = matchingAgent(agent);
+    const target = agent.expected_target;
+    selectionVersion.current++; setDirectOutcome(null); setError(""); setSelected(`agent:${agent.pane_id}`); setSelectedAgent({ agent: { ...agent, expected_target: target ? { ...target } : target }, terminalId: row?.terminalId ?? null }); setDirectStale(false); setSelectedQuestion(""); setMobileDetail(true);
+    // Selection opens the captured result, independently of terminal focus.
+    // Never acknowledge a row whose direct target cannot be matched safely.
+    if (current && view?.session_id === sessionId && view.observation.status === "fresh" && snapshot?.session_id === sessionId && row?.canSeen && target && (!target.native_session_id || target.native_session_id === row.agent.native_session_id)) void attention.seen(row);
+  };
   const latestDirect = direct && view?.unmanaged_agents.find(agent => agent.pane_id === direct.pane_id);
   const directTargetMatches = !!direct?.expected_target && !!latestDirect?.expected_target && JSON.stringify(direct.expected_target) === JSON.stringify(latestDirect.expected_target);
   const directReady = !!direct && !!liveDirect && (liveDirect.agent.status === "idle" || liveDirect.agent.status === "done") && directTargetMatches && direct.expected_target?.pane_id === direct.pane_id && direct.expected_target.workspace_id === direct.workspace_id && direct.expected_target.tab_id === direct.tab_id && direct.expected_target.terminal_id === selectedAgent?.terminalId && (direct.expected_target.agent_name === null || direct.expected_target.agent_name === direct.agent_name) && !directStale && !directUncertain[direct.pane_id];
