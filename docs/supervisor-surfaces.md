@@ -4,7 +4,7 @@ This is the current UI/source map and review inventory, not a record of checks r
 
 ## Product surfaces
 
-Inbox is a separate switchable work-oriented screen; Workbench retains its Space/worktree hierarchy, real terminals and existing controls. Inbox collects human questions, requested results and other work across owners, with a compact preview in Workbench. A liaison's real terminal remains its full conversation; its compact read-only rail and optional Board/Graph Overview retain task history. Human answers can be sent through Inbox to the exact current question or given in the liaison conversation.
+Inbox is a separate switchable work-oriented screen; Workbench retains its Space/worktree hierarchy, real terminals and existing controls. A compact global bar stays visible on both screens, with flat Workbench and Inbox buttons and an accent edge marking the current view. Inbox collects human questions, requested results and other work across owners. Its badge counts threads needing the user plus relevant unmanaged agents; a preview appears in Workbench when space permits. A liaison's real terminal remains its full conversation; its compact read-only rail and optional Board/Graph Overview retain task history. Human answers can be sent through Inbox to the exact current question or given in the liaison conversation.
 
 Batch completion leaves the session's personal liaison Active for later work across projects; worker `run done` and source cleanup do not retire it. Root completion is conversational, not another operational button.
 

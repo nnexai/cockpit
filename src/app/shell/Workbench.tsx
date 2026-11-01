@@ -207,10 +207,10 @@ export function Workbench(props: WorkbenchProps) {
     await runtime.supervisorTerminal(location.pane_id);
   };
   const currentSpace = byId(runtime.spaces, runtime.confirmedSpaceId);
-  return <><nav className="inbox-switcher" aria-label="Application views">
-    <button type="button" aria-current={!inboxOpen ? "page" : undefined} onClick={() => setInboxOpen(false)}><UiIcon name="grid" /> Workbench</button>
-    <button type="button" aria-current={inboxOpen ? "page" : undefined} disabled={!inboxOpen && runtime.modalOpen} onClick={() => setInboxOpen(true)}><UiIcon name="comment" /> Inbox{inboxAttention.count > 0 && <span className="inbox-switcher-count">{inboxAttention.count}</span>}</button>
-    {!inboxOpen && inboxAttention.preview && <span className="inbox-switcher-preview">{inboxAttention.preview}</span>}
+  return <><nav className="view-bar" aria-label="Application views">
+    <button type="button" aria-current={!inboxOpen ? "page" : undefined} onClick={() => setInboxOpen(false)}><UiIcon name="grid" /> <span className="view-bar-label">Workbench</span></button>
+    <button type="button" aria-current={inboxOpen ? "page" : undefined} aria-label={inboxAttention.count > 0 ? `Inbox, ${inboxAttention.count} ${inboxAttention.count === 1 ? "item" : "items"} needing attention` : undefined} disabled={!inboxOpen && runtime.modalOpen} onClick={() => setInboxOpen(true)}><UiIcon name="comment" /> <span className="view-bar-label">Inbox</span>{inboxAttention.count > 0 && <span className="view-bar-count" aria-hidden="true">{inboxAttention.count}</span>}</button>
+    {!inboxOpen && inboxAttention.preview && <span className="view-bar-preview" title={inboxAttention.preview}>{inboxAttention.preview}</span>}
   </nav>
     <Inbox client={props.client} sessionId={props.state.sessionId} active={inboxOpen} currentSpace={currentSpace ? { id: currentSpace.id, label: currentSpace.label } : null} attention={runtime.attention} snapshot={props.state.sync === "live" ? runtime.snapshot : null} onOpenLocation={openInboxLocation} onAttentionChange={setInboxAttention} />
     <div className="inbox-workbench" hidden={inboxOpen}><WorkbenchContent {...props} {...runtime} {...actions} inboxActive={inboxOpen} onUpdate={installUpdate} closedWidgets={closedWidgets} liaisonAction={{ label: liaisonLabel, reason: liaisonReason, running, inPane: inLiaisonPane, toggle: toggleLiaison }} ask={ask} quickTerminalOpen={Boolean(quickTerminal)} commandActions={commandActions} commandFailureMessage={commandFailureMessage} commandStatus={commandStatus} />

@@ -85,6 +85,7 @@
   --z-indicator: 70;
   --compact-control-size: 28px;
   --control-height: 32px;
+  --view-bar-height: var(--control-height);
   --menu-control-height: 29px;
   --color-hex-0006: #0006;
   --color-hex-0008: #0008;
