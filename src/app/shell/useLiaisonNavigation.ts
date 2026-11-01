@@ -18,6 +18,14 @@ export function useLiaisonNavigation({ state, selection, onFocus }: WorkbenchPro
     const location = run?.attachment?.location;
     if (run && (orchestration?.runtime.status !== "fresh" || !location || run.attachment?.state === "revoked" || location.session_id !== state.sessionId || location.endpoint_identity !== orchestration.runtime.endpoint_identity || !orchestration.runtime.runs.some(observation => observation.run_id === run.run_id && observation.presence === "present" && observation.pane_id === pane.id && observation.workspace_id === pane.space_id && observation.tab_id === pane.tab_id))) throw new Error("The conversation's current Herdr location is not confirmed.");
     if (supervisorNavigationAck.current) throw new Error("Another terminal navigation is awaiting acknowledgement.");
+    // The focus coordinator intentionally skips the RPC for an already
+    // confirmed pane, so there will be no accepted token in that case.
+    if (!state.focusPending && snapshot.focused_pane_id === pane.id) {
+      setSupervisorNavigationError(null);
+      openConversation();
+      onFocus({ kind: "pane", target_id: pane.id }, { spaceId: pane.space_id, tabId: pane.tab_id, paneId: pane.id });
+      return;
+    }
     const promise = new Promise<void>((resolve, reject) => {
       supervisorNavigationAck.current = { sessionId: state.sessionId, token: state.focusToken + 1, resolve, reject };
     });
@@ -42,12 +50,12 @@ export function useLiaisonNavigation({ state, selection, onFocus }: WorkbenchPro
       setSupervisorNavigation(null);
       return;
     }
-    if (ack && state.focusToken === ack.token && !state.focusPending && state.snapshot?.focused_pane_id === supervisorNavigation) {
+    if (ack && state.focusToken === ack.token && state.focusAcceptedToken === ack.token && !state.focusPending && state.snapshot?.focused_pane_id === supervisorNavigation) {
       supervisorNavigationAck.current?.resolve();
       supervisorNavigationAck.current = null;
       setSupervisorNavigation(null);
     }
-  }, [supervisorNavigation, selection.paneId, state.sessionId, state.sync, state.focusToken, state.focusPending, state.focusError, state.snapshot]);
+  }, [supervisorNavigation, selection.paneId, state.sessionId, state.sync, state.focusToken, state.focusAcceptedToken, state.focusPending, state.focusError, state.snapshot]);
   useEffect(() => () => {
     supervisorNavigationAck.current?.reject(new Error("Workbench closed before terminal focus was confirmed."));
     supervisorNavigationAck.current = null;

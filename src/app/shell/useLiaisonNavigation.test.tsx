@@ -53,7 +53,7 @@ it("releases a superseded navigation so a later Go to liaison can focus and comp
   let retry!: Promise<void>;
   act(() => { retry = f.navigation.supervisorTerminal("liaison"); });
   await f.render();
-  await f.update(state => ({ ...state, focusPending: null, snapshot: { ...snapshot, focused_pane_id: "liaison" } }));
+  await f.update(state => ({ ...state, focusAcceptedToken: state.focusToken, focusPending: null, snapshot: { ...snapshot, focused_pane_id: "liaison" } }));
   await expect(retry).resolves.toBeUndefined();
   expect(f.onFocus).toHaveBeenCalledTimes(2);
 });
@@ -70,7 +70,7 @@ it("does not mistake another focus intent or a delayed target snapshot for its a
   let retry!: Promise<void>;
   act(() => { retry = f.navigation.supervisorTerminal("liaison"); });
   await f.render();
-  await f.update(state => ({ ...state, focusPending: null, snapshot: { ...snapshot, focused_pane_id: "liaison" } }));
+  await f.update(state => ({ ...state, focusAcceptedToken: state.focusToken, focusPending: null, snapshot: { ...snapshot, focused_pane_id: "liaison" } }));
   await expect(retry).resolves.toBeUndefined();
 });
 
@@ -80,7 +80,30 @@ it("keeps waiting when a same-tab viewer transition reissues the same pane focus
   act(() => { navigation = f.navigation.supervisorTerminal("liaison"); });
   await f.render();
   await f.update(state => sessionReducer(state, { type: "focus/request", epoch: state.epoch, sessionId: "session", token: state.focusToken + 1, request: { kind: "pane", target_id: "liaison" } }));
-  await f.update(state => ({ ...state, focusPending: null, snapshot: { ...snapshot, focused_pane_id: "liaison" } }));
+  await f.update(state => ({ ...state, focusAcceptedToken: state.focusToken, focusPending: null, snapshot: { ...snapshot, focused_pane_id: "liaison" } }));
   await expect(navigation).resolves.toBeUndefined();
   expect(f.navigation.supervisorNavigationError).toBeNull();
+});
+
+it("waits for accepted focus even if the target snapshot arrives first, and rejects a failed request", async () => {
+  const f = fixture(); await f.render();
+  let navigation!: Promise<void>;
+  act(() => { navigation = f.navigation.supervisorTerminal("liaison"); });
+  const result = vi.fn();
+  const settled = navigation.then(() => result("resolved"), error => result(error.message));
+  await f.render();
+  await f.update(state => ({ ...state, focusPending: null, snapshot: { ...snapshot, focused_pane_id: "liaison" } }));
+  expect(result).not.toHaveBeenCalled();
+  await f.update(state => ({ ...state, focusError: { code: "focus_rejected", message: "rejected" } }));
+  await settled;
+  expect(result).toHaveBeenCalledWith("rejected");
+});
+
+it("completes navigation to an already confirmed pane without waiting for an RPC", async () => {
+  const f = fixture(); await f.render();
+  await f.update(state => ({ ...state, snapshot: { ...snapshot, focused_pane_id: "liaison" } }));
+  let navigation!: Promise<void>;
+  act(() => { navigation = f.navigation.supervisorTerminal("liaison"); });
+  await expect(navigation).resolves.toBeUndefined();
+  expect(f.onFocus).toHaveBeenCalledWith({ kind: "pane", target_id: "liaison" }, { spaceId: "space", tabId: "tab", paneId: "liaison" });
 });

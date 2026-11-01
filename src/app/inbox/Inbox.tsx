@@ -72,8 +72,8 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const pendingRead = useRef<Promise<InboxView> | null>(null);
   const mounted = useRef(true);
   const lock = useRef(false);
-  const liveScope = useRef({ current, snapshot });
-  liveScope.current = { current, snapshot };
+  const liveScope = useRef({ current, snapshot, view, attention });
+  liveScope.current = { current, snapshot, view, attention };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { if (!current) { selectionVersion.current++; setDirectOutcome(null); } }, [current]);
   useEffect(() => {
@@ -158,7 +158,25 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const directReady = !!direct && !!liveDirect && (liveDirect.agent.status === "idle" || liveDirect.agent.status === "done") && directTargetMatches && direct.expected_target?.pane_id === direct.pane_id && direct.expected_target.workspace_id === direct.workspace_id && direct.expected_target.tab_id === direct.tab_id && direct.expected_target.terminal_id === selectedAgent?.terminalId && (direct.expected_target.agent_name === null || direct.expected_target.agent_name === direct.agent_name) && !directStale && !directUncertain[direct.pane_id];
   const directContext = direct && directTargetMatches && liveDirect ? contextFor(latestDirect!) : null;
   const visibleOutcome = directOutcome && direct && directOutcome.pane === direct.pane_id && directOutcome.target === JSON.stringify(direct.expected_target) ? directOutcome : null;
-  const open = (location: InboxLocation | null) => { if (location && view?.observation.status === "fresh" && snapshot?.session_id === sessionId && (!direct || liveDirect)) void onOpenLocation(location).catch(e => setError(e instanceof Error ? e.message : "Could not open session")); };
+  const open = (location: InboxLocation | null) => {
+    if (!location || !current || view?.observation.status !== "fresh" || snapshot?.session_id !== sessionId || (direct && (!liveDirect || !directTargetMatches))) return;
+    // Capture the completion at the click, not after navigation: a later
+    // completion must remain unseen even if it arrives while focus is pending.
+    const row = direct && liveDirect?.canSeen ? liveDirect : null;
+    const target = direct?.expected_target;
+    const attempt = selectionVersion.current;
+    const instance = snapshot.server_instance;
+    void onOpenLocation(location).then(() => {
+      if (!row || !target || !mounted.current || selectionVersion.current !== attempt) return;
+      const latest = liveScope.current;
+      if (!latest.current || latest.snapshot?.session_id !== sessionId || latest.snapshot.server_instance !== instance || latest.view?.observation.status !== "fresh") return;
+      const agent = latest.view.unmanaged_agents.find(item => item.pane_id === row.agent.pane_id);
+      if (!agent?.expected_target || agent.expected_target.endpoint_identity !== target.endpoint_identity || agent.expected_target.workspace_id !== target.workspace_id || agent.expected_target.tab_id !== target.tab_id || agent.expected_target.pane_id !== target.pane_id || agent.expected_target.terminal_id !== target.terminal_id || agent.expected_target.agent_kind !== target.agent_kind || agent.expected_target.agent_name !== target.agent_name || agent.expected_target.native_session_id !== target.native_session_id || agent.expected_target.native_session_file !== target.native_session_file) return;
+      const currentRow = deriveAgentQueue(latest.snapshot, latest.attention.response, latest.attention.availability, true).visible.find(item => item.agent.pane_id === row.agent.pane_id);
+      if (!currentRow || currentRow.terminalId !== row.terminalId || currentRow.agent.name !== row.agent.name || currentRow.agent.space_id !== row.agent.space_id || currentRow.agent.tab_id !== row.agent.tab_id || currentRow.agent.native_session_id !== row.agent.native_session_id) return;
+      void latest.attention.seen(row);
+    }).catch(e => { if (mounted.current && selectionVersion.current === attempt) setError(e instanceof Error ? e.message : "Could not open session"); });
+  };
   const execute = async (operation: Pending) => {
     if (lock.current || !view || operation.store !== view.state_store_id) { if (view && operation.store !== view.state_store_id) setError("Session state changed. The original request has been retained and cannot be retried here."); return; }
     lock.current = true; setBusy(true); setError(""); setPending(operation);

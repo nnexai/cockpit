@@ -3,8 +3,9 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
-import type { InboxView, OrchestrationWaitResponse, SessionSnapshotResponse } from "../../protocol/generated/v1";
+import type { InboxLocation, InboxView, OrchestrationWaitResponse, SessionSnapshotResponse } from "../../protocol/generated/v1";
 import type { AgentAttentionState } from "../session/agentAttention";
+import type { AttentionRow } from "../sidebar/agentAttentionModel";
 import { Inbox } from "./Inbox";
 
 const attention = { availability: "ready", response: null } as AgentAttentionState;
@@ -12,9 +13,9 @@ const view = (session_id: string): InboxView => ({ session_id, state_store_id: `
 let root: Root | null = null, host: HTMLDivElement;
 afterEach(() => { if (root) act(() => root!.unmount()); root = null; host?.remove(); });
 async function flush(fn: () => void = () => {}) { await act(async () => { fn(); for (let i = 0; i < 8; i++) await Promise.resolve(); }); }
-function setup(client: CockpitClient, sessionId = "a", directSnapshot?: SessionSnapshotResponse) {
+function setup(client: CockpitClient, sessionId = "a", directSnapshot?: SessionSnapshotResponse, options?: { attention: AgentAttentionState; onOpenLocation: (location: InboxLocation) => Promise<void> }) {
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
-  const render = (id: string, active = true, snapshot = directSnapshot) => root!.render(createElement(Inbox, { client, sessionId: id, active, currentSpace: null, snapshot: snapshot ?? { session_id: id, server_instance: "server", panes: [], agents: [] } as unknown as SessionSnapshotResponse, attention, onOpenLocation: async () => {} }));
+  const render = (id: string, active = true, snapshot = directSnapshot) => root!.render(createElement(Inbox, { client, sessionId: id, active, currentSpace: null, snapshot: snapshot ?? { session_id: id, server_instance: "server", panes: [], agents: [] } as unknown as SessionSnapshotResponse, attention: options?.attention ?? attention, onOpenLocation: options?.onOpenLocation ?? (async () => {}) }));
   return { render: (id = sessionId, active = true, snapshot = directSnapshot) => render(id, active, snapshot) };
 }
 function text(value: string) {
@@ -28,19 +29,77 @@ function fixture() {
   const client = { orchestrationInbox: vi.fn(async ({ session_id }: { session_id: string }) => view(session_id)), orchestrationLiaisonLookup: vi.fn(async () => ({ status: "resolved", preferred_root_id: "owner", lookup_revision: 1, roots: [] })), orchestrationWait: vi.fn((_request: unknown, signal?: AbortSignal) => new Promise<OrchestrationWaitResponse>((resolve, reject) => { waits.push(resolve); signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }); })), orchestrationMutate: vi.fn(), orchestrationAgentSend: vi.fn(async () => {}) } as unknown as CockpitClient;
   return { client, waits };
 }
-function directFixture() {
+function directFixture(options?: { attention: AgentAttentionState; onOpenLocation: (location: InboxLocation) => Promise<void> }) {
   const target = (pane: string, name: string, stamp = "now") => ({ endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: pane, terminal_id: `terminal-${pane}`, agent_kind: name, agent_name: name, native_session_id: null, native_session_file: null, state_changed_at: stamp });
   const agent = (pane: string, name: string, stamp = "now") => ({ workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Tab", pane_id: pane, agent_name: name, agent_status: "idle", state_changed_at: stamp, expected_target: target(pane, name, stamp) });
   const snapshot = (status: "idle" | "working" | "done" = "idle", seq = 1) => ({ session_id: "a", server_instance: "server", panes: ["a", "b"].map(id => ({ id, terminal_id: `terminal-${id}` })), agents: ["a", "b"].map((id, i) => ({ pane_id: id, space_id: "space", tab_id: "tab", name: i ? "Beta" : "Alpha", status: i ? "idle" : status, state_change_seq: seq, focused: false })) } as unknown as SessionSnapshotResponse);
   const inbox = view("a"); inbox.unmanaged_agents = [agent("a", "Alpha"), agent("b", "Beta")];
   const { client, waits } = fixture();
   vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
-  const app = setup(client, "a", snapshot());
+  const app = setup(client, "a", snapshot(), options);
   const choose = (name: string) => Array.from(host.querySelectorAll(".inbox-row")).find(b => b.textContent?.includes(name))!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   return { client, waits, inbox, agent, snapshot, app, choose };
 }
 
+function completionAttention(seq = 1) {
+  const seen = vi.fn(async (_row: AttentionRow) => true);
+  const state = { ...attention, seen, response: { session_id: "a", server_instance: "server", epoch: 1, refused: null, records: [{ pane_id: "a", terminal_id: "terminal-a", agent: "Alpha", last: { epoch: 1, seq, status: "idle", observed_at: "now" }, completion: { epoch: 1, seq, at: "now", inferred: true }, acked: null }] } } as AgentAttentionState;
+  return { state, seen };
+}
+function deferredFocus() {
+  let resolve!: () => void, reject!: (error: Error) => void;
+  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+function openSession() {
+  Array.from(host.querySelectorAll<HTMLButtonElement>(".inbox-detail button")).find(button => button.textContent === "Open session")!.click();
+}
+
 describe("Inbox", () => {
+  it("acknowledges only the completion captured when a direct session is opened", async () => {
+    const completion = completionAttention(), focus = deferredFocus();
+    const options = { attention: completion.state, onOpenLocation: vi.fn(() => focus.promise) };
+    const f = directFixture(options);
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
+    expect(completion.seen).not.toHaveBeenCalled();
+    await flush(openSession);
+    expect(options.onOpenLocation).toHaveBeenCalledTimes(1);
+    expect(completion.seen).not.toHaveBeenCalled();
+    const newer = completionAttention(2);
+    options.attention = newer.state;
+    await flush(() => f.app.render("a", true, f.snapshot("done", 2)));
+    await flush(() => focus.resolve());
+    expect(newer.seen).toHaveBeenCalledTimes(1);
+    expect(newer.seen.mock.calls[0]![0]).toMatchObject({ terminalId: "terminal-a", completion: { epoch: 1, seq: 1 } });
+  });
+  it("does not acknowledge rejected focus or a stale selected target", async () => {
+    const completion = completionAttention(), focus = deferredFocus();
+    const options = { attention: completion.state, onOpenLocation: vi.fn(() => focus.promise) };
+    const f = directFixture(options);
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha")); await flush(openSession);
+    await flush(() => focus.reject(new Error("focus rejected")));
+    expect(completion.seen).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("focus rejected");
+    await flush(() => f.app.render("a", true, { ...f.snapshot(), panes: [{ ...f.snapshot().panes[0]!, terminal_id: "replacement" }, f.snapshot().panes[1]!] }));
+    await flush(openSession);
+    expect(options.onOpenLocation).toHaveBeenCalledTimes(1);
+    expect(completion.seen).not.toHaveBeenCalled();
+  });
+  it("does not acknowledge if the terminal identity changes while focus is pending", async () => {
+    const completion = completionAttention(), focus = deferredFocus();
+    const f = directFixture({ attention: completion.state, onOpenLocation: () => focus.promise });
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha")); await flush(openSession);
+    await flush(() => f.app.render("a", true, { ...f.snapshot(), panes: [{ ...f.snapshot().panes[0]!, terminal_id: "replacement" }, f.snapshot().panes[1]!] }));
+    await flush(() => focus.resolve());
+    expect(completion.seen).not.toHaveBeenCalled();
+  });
+  it("does not acknowledge after the selection changes while focus is pending", async () => {
+    const completion = completionAttention(), focus = deferredFocus();
+    const f = directFixture({ attention: completion.state, onOpenLocation: () => focus.promise });
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha")); await flush(openSession);
+    await flush(() => f.choose("Beta")); await flush(() => focus.resolve());
+    expect(completion.seen).not.toHaveBeenCalled();
+  });
   it("waits session-wide and refetches only when changed", async () => {
     const { client, waits } = fixture(), app = setup(client);
     await flush(() => app.render());
