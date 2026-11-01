@@ -38,7 +38,7 @@ export function WorkbenchCanvas(props: WorkbenchContentProps) {
         client, request: { session_id: state.sessionId!, pane_id: pane.id }, selected, presented: selected && !props.overviewOpen,
         controlAllowed: selected && !props.overviewOpen && !browserInputActive && !modalOpen && state.sync === "live" && snapshot?.focused_pane_id === pane.id && !state.focusPending && !state.focusError,
         controlPending: pending, focusEpoch: state.epoch, focusToken: state.focusToken, terminalMouseInput,
-        deferAttachment: state.sync !== "live" && !(state.sync === "loading" && attachedPaneIds.current.has(pane.id)), focusOnAttach: active && !props.overviewOpen && !attachFocusSuppressed,
+        deferAttachment: state.sync !== "live" && !(state.sync === "loading" && attachedPaneIds.current.has(pane.id)), focusOnAttach: active && !props.overviewOpen && !attachFocusSuppressed && !props.editing,
         onRequestControl: () => selectLeaf(pane.id), onSelect: () => selectLeaf(pane.id), onPrepared: () => {
           onPanePrepared(pane.id);
           if (active && switching && pane.id === hostTab.focusedPaneId) setPaintedTab(hostTab);

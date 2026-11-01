@@ -32,7 +32,7 @@ export function ShortcutKeys({ text }: { text: string }) {
 }
 
 export function CommandOverlay({ actions, statusContent, onSwitchSession, onDismiss }: { actions: CommandAction[]; statusContent?: ReactNode; onSwitchSession: () => void; onDismiss: () => void }) {
-  const ref = useModalFocus<HTMLElement>(onDismiss);
+  const ref = useModalFocus<HTMLElement>(onDismiss, true);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const activeRowRef = useRef<HTMLButtonElement | null>(null);
   const [query, setQuery] = useState("");

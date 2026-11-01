@@ -44,7 +44,7 @@ Press Ctrl+B, release it, then press the key. Shift and other modifier keys keep
 | Ctrl+B p | Previous tab |
 | Ctrl+B n | Next tab |
 | Ctrl+B c | New tab |
-| Ctrl+B Shift+T | Rename tab |
+| Ctrl+B Shift+T | Rename tab. Enter or leaving the field saves; Escape cancels. Blank names are discarded. |
 | Ctrl+B Shift+X | Close tab. Asks for confirmation. |
 | Ctrl+B Shift+N | New Space. Creates a bare Herdr workspace. |
 | Ctrl+B Shift+W | Rename Space |

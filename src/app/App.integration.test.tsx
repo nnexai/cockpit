@@ -2163,3 +2163,79 @@ describe("external focus during local terminal creation", () => {
     expect(Number.parseFloat(leaf("pane-4").style.top)).toBeGreaterThan(Number.parseFloat(leaf("tab-1:files").style.top));
   });
 });
+
+describe("tab rename", () => {
+  function editTab(): HTMLInputElement {
+    act(() => button("Tab 1: Alpha tab").dispatchEvent(new MouseEvent("dblclick", { bubbles: true })));
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Rename tab Alpha tab"]');
+    if (!input) throw new Error("Missing tab rename input");
+    return input;
+  }
+
+  function typeName(input: HTMLInputElement, value: string): void {
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  it.each(["Enter", "blur"])("commits on %s and retains the authoritative label", async (completion) => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    const input = editTab();
+    typeName(input, "  Renamed tab  ");
+    if (completion === "Enter") press(input, "Enter");
+    else act(() => button("Tab 2: Second tab").focus());
+    expect(fixture.mutateCalls).toHaveBeenCalledExactlyOnceWith("session-1", { type: "tab_rename", tab_id: "tab-1", label: "Renamed tab" });
+
+    const renamed = snapshot("session-1");
+    renamed.tabs[0].label = "Renamed tab";
+    fixture.queueSnapshot("session-1", Promise.resolve(renamed));
+    fixture.resolveMutation(0, mutationResponse("session-1", renamed));
+    await settle();
+    expect(button("Tab 1: Renamed tab")).toBeTruthy();
+    fixture.emitSnapshot("session-1", 1, 2, renamed);
+    await settle();
+    expect(button("Tab 1: Renamed tab")).toBeTruthy();
+  });
+
+  it("cancels on Escape or an empty name without sending a mutation", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    let input = editTab();
+    typeName(input, "Discard me");
+    press(input, "Escape");
+    expect(button("Tab 1: Alpha tab")).toBeTruthy();
+    input = editTab();
+    typeName(input, "   ");
+    act(() => button("Tab 2: Second tab").focus());
+    expect(button("Tab 1: Alpha tab")).toBeTruthy();
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+  });
+
+  it("keeps the editor focused when Rename tab is chosen from Commands", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    await openCommand("Rename tab");
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Rename tab Alpha tab"]');
+    expect(input).toBeTruthy();
+    expect(document.activeElement).toBe(input);
+    expect(fixture.mutateCalls).not.toHaveBeenCalled();
+    typeName(input!, "From commands");
+    act(() => button("Tab 2: Second tab").focus());
+    expect(fixture.mutateCalls).toHaveBeenCalledExactlyOnceWith("session-1", { type: "tab_rename", tab_id: "tab-1", label: "From commands" });
+  });
+
+  it("opens rename from the tab context menu and preserves other tab actions", async () => {
+    const fixture = new AppFixture();
+    await mount(fixture);
+    act(() => button("Tab 1: Alpha tab").dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2 })));
+    expect(button("Close")).toBeTruthy();
+    click(button("Rename"));
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="Rename tab Alpha tab"]');
+    expect(input).toBeTruthy();
+    typeName(input!, "Menu rename");
+    press(input!, "Enter");
+    expect(fixture.mutateCalls).toHaveBeenCalledExactlyOnceWith("session-1", { type: "tab_rename", tab_id: "tab-1", label: "Menu rename" });
+  });
+});

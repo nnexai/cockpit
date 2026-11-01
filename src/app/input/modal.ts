@@ -10,16 +10,17 @@ export function nextModalFocusIndex(current: number, count: number, shiftKey: bo
 
 /**
  * Focus the first control on mount, close on Escape, and give focus back to the
- * opener on unmount. Escape is a window (bubble) listener, so a menu or picker
- * inside the dialog that handles its own Escape closes first.
+ * opener on unmount unless preserving focus moved by the closing action. Escape
+ * is a window (bubble) listener, so nested menus and pickers close first.
  */
-export function useModalFocus<T extends HTMLElement>(onDismiss: () => void): RefObject<T | null> {
+export function useModalFocus<T extends HTMLElement>(onDismiss: () => void, preserveNewFocus = false): RefObject<T | null> {
   const ref = useRef<T | null>(null);
   const opener = useRef<HTMLElement | null>(null);
   const dismissRef = useRef(onDismiss);
   dismissRef.current = onDismiss;
   useEffect(() => {
     opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const modal = ref.current;
     ref.current?.querySelector<HTMLElement>(FOCUSABLE)?.focus();
     const escape = (event: KeyboardEvent) => {
       if (document.querySelector("[data-server-modal]")) return;
@@ -31,7 +32,9 @@ export function useModalFocus<T extends HTMLElement>(onDismiss: () => void): Ref
     window.addEventListener("keydown", escape);
     return () => {
       window.removeEventListener("keydown", escape);
-      if (opener.current?.isConnected && !opener.current.closest("[inert]")) opener.current.focus();
+      const active = document.activeElement;
+      const focusMoved = preserveNewFocus && active instanceof HTMLElement && active !== document.body && !modal?.contains(active);
+      if (!focusMoved && opener.current?.isConnected && !opener.current.closest("[inert]")) opener.current.focus();
     };
   }, []);
   return ref;
