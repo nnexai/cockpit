@@ -89,7 +89,7 @@ Widgets are trusted run-local HTML or declarative choices in an active opaque if
 
 Widget documents automatically include the reusable `.cw` component styles; Jira ticket and Confluence page examples are linked from [CODE_GUIDE](CODE_GUIDE.md). Styles do not change widget trust or lifecycle.
 
-The existing bottom strip presents read-only OMP-owned Codex, Claude and Copilot usage. A shared private cache and cross-process schedule connect native and browser hosts without independent sign-in or GitHub quota collection. Anonymous allowlisted values retain source freshness and distinct unavailable, unknown, zero and unlimited states.
+The existing bottom strip presents read-only OMP-owned Codex, Claude and Copilot usage. Its details show available reset countdowns on desktop and mobile; missing provider reset times remain blank. A shared private cache and cross-process schedule connect native and browser hosts without independent sign-in or GitHub quota collection. Anonymous allowlisted values retain source freshness and distinct unavailable, unknown, zero and unlimited states.
 
 ## Supervisor lifecycle and authority
 

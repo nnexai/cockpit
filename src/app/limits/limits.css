@@ -108,6 +108,6 @@
   .limits-window, .limits-chip-meter, .limits-age { display: inline-block; }
 }
 @media (max-width: 480px) {
-  .limits-row { grid-template-columns: 44px 36px minmax(0, 1fr); gap: 8px; }
-  .limits-row-meter, .limits-row .limits-reset { display: none; }
+  .limits-row { grid-template-columns: 44px 36px minmax(0, 1fr) auto; gap: 8px; }
+  .limits-row-meter { display: none; }
 }
