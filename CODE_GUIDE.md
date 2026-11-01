@@ -344,6 +344,8 @@ Herdr snapshot/stream → session ordering → authoritative membership/focus re
 
 Herdr client-shell projection → runtime shortcut aliases → confirmed-focus command invocation → singleton popup metadata → `src/app/ServerPopup.tsx` reusing terminal attachment. Decoder provenance, input gating, disconnected retention, focus return and the active 120×40 shell-subscription resize caveat are specified in [DECISIONS](DECISIONS.md), not inferred from local layout geometry.
 
+Each non-scratch terminal attachment reconciles its host dimensions once after its first authoritative frame paints. The opening grid may predate settled layout; the paint-time reconciliation reuses the owned-stream, unchanged-grid and single-in-flight resize guards. Later frames remain authoritative and do not trigger repeated viewport corrections.
+
 Shared terminal creation in `src/app/terminal/cockpitTerminal.ts` installs xterm's WebLinks addon and uses the same handler for OSC 8 hyperlinks. Ctrl+click (Cmd+click on macOS) opens only HTTP(S) links; plain click and drag selection do not open links. Native uses the official Tauri opener plugin with HTTP(S)-only capability scope and automatic page-link interception disabled; the web client opens an isolated new browser tab.
 
 ### Browser and trusted widgets

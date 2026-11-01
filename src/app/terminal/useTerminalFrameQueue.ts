@@ -60,7 +60,12 @@ export function useTerminalFrameQueue(refs: TerminalRefs, resize: TerminalResize
             readinessRender = terminal.onRender(() => {
               readinessRender?.dispose();
               readinessRender = null;
-              if (!cancelled() && isLatest() && terminalRef.current === terminal) { setFramePainted(true); onReadyRef.current?.(); }
+              if (!cancelled() && isLatest() && terminalRef.current === terminal) {
+                setFramePainted(true);
+                onReadyRef.current?.();
+                // The open grid can predate settled layout; reconcile after the first frame paints.
+                if (!scratch && !cancelled() && isLatest() && terminalRef.current === terminal) resize.requestViewportSizing();
+              }
             });
             terminal.refresh(0, terminal.rows - 1);
           }

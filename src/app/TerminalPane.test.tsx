@@ -689,6 +689,53 @@ describe("TerminalPane fitting and pointer ownership", () => {
     }
   });
 
+  it("reconciles the open grid once after the first authoritative frame paints", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client, openTerminal } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const frame = (seq: number, width: number, height: number) => ({
+      type: "frame" as const, session_id: "session", pane_id: "pane", stream_id: "stream",
+      seq: String(seq), encoding: "ansi" as const, width, height, full: seq === 1, bytes: btoa("frame"),
+    });
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
+      expect(openTerminal.mock.calls[0]?.[0]).toMatchObject({ cols: 80, rows: 24 });
+      const terminal = mocks.terminals.at(-1)!;
+      mocks.fits.at(-1)!.fit.mockImplementation(() => {});
+      const screen = terminal.element!.querySelector<HTMLElement>(".xterm-screen")!;
+      screen.getBoundingClientRect = () => {
+        const width = terminal.cols * 10;
+        const height = terminal.rows * 16;
+        return { left: 0, top: 0, width, height, right: width, bottom: height, x: 0, y: 0, toJSON: () => ({}) };
+      };
+      act(() => messages[0]!(message("owned")));
+      expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([]);
+
+      mocks.fitProposals.push([58, 17]);
+      await act(async () => { messages[0]!(frame(1, 80, 24)); await settle(); });
+      expect(sent.filter((command) => command.type === "terminal.resize")).toEqual([expect.objectContaining({ cols: 58, rows: 17 })]);
+
+      await act(async () => {
+        terminal.emitRender();
+        messages[0]!(frame(2, 58, 17));
+        await settle();
+        mocks.observers[0]!.callback([], mocks.observers[0] as unknown as ResizeObserver);
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(sent.filter((command) => command.type === "terminal.resize")).toHaveLength(1);
+      expect(terminal.cols).toBe(58);
+      expect(terminal.rows).toBe(17);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
   it("measures viewport changes after a frame without locally reflowing the rendered grid", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
@@ -1041,7 +1088,6 @@ describe("TerminalPane fitting and pointer ownership", () => {
     vi.useFakeTimers();
     vi.stubGlobal("ResizeObserver", mocks.MockResizeObserver);
     mocks.fitDimensions.push([80, 24]);
-    mocks.fitProposals.push([80, 24], [120, 40], [90, 20], [90, 20], [70, 15], [70, 15]);
     const sent: TerminalCommand[] = [];
     const messages: Array<(value: TerminalStreamMessage) => void> = [];
     const { client } = makeClient(sent, messages);
@@ -1056,18 +1102,23 @@ describe("TerminalPane fitting and pointer ownership", () => {
     };
     try {
       await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
+      let viewport = { cols: 80, rows: 24 };
+      mocks.fits.at(-1)!.proposeDimensions.mockImplementation(() => viewport);
       act(() => {
         messages[0]!(message("owned"));
         messages[0]!(frame(1, 80, 24));
       });
       await act(async () => { await settle(); });
+      viewport = { cols: 120, rows: 40 };
       await observe();
       expect(grids()).toEqual(["120x40"]);
+      viewport = { cols: 90, rows: 20 };
       await observe();
       expect(grids()).toEqual(["120x40"]);
       act(() => messages[0]!(frame(2, 120, 40)));
       await act(async () => { await settle(); });
       expect(grids()).toEqual(["120x40", "90x20"]);
+      viewport = { cols: 70, rows: 15 };
       await observe();
       expect(grids()).toEqual(["120x40", "90x20"]);
       await vi.advanceTimersByTimeAsync(150);

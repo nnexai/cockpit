@@ -2,6 +2,16 @@
 
 These are historical observations, not proof of the current checkout. Each named original source occurrence is reproduced verbatim, including mixed current-rule/result paragraphs, obsolete wording, dates and limitations. Current architecture, rules and source owners live in the root documents. Undated cohorts retain source context rather than an invented run date.
 
+## Mobile first-frame terminal sizing correction (2026-11-01)
+
+The user reported that physical Chrome phone scrolling and keyboard visibility still failed after the earlier mobile delivery. The earlier keyboard geometry check measured the Inbox composer, not the OMP terminal prompt; it was not physical IME acceptance.
+
+In disposable session `polish-mzirjjoy`, a real OMP terminal opened at 130×37 while its mobile host was only 364 px wide, leaving a 780 px screen until an unrelated resize event. With one reconciliation after the first authoritative frame paints, two fresh loads each sent exactly one correcting resize to 58×45 without a new viewport event and settled at a 348 px screen inside the host. The 54 affected TerminalPane tests passed, including the new first-frame regression and existing one-in-flight resize coalescing behavior; the App integration suite and production frontend build also passed in the preceding affected run.
+
+A separate headless Chrome using an actual DPR-3 compositor (`--force-device-scale-factor=3`, no DPR-3 CDP override) displayed normally sized, readable OMP output. Trusted touch changed visible lines 87–120 to 68–112 and retained that view for 2.5 seconds. CDP-only DPR-3 emulation instead reported CSS-sized device-pixel content boxes and produced misleading giant WebGL glyphs; that harness artifact was not patched in product code.
+
+With the actual DPR-3 compositor, simulated keyboard geometry on the actual OMP helper textarea placed both helper and screen bottoms at 390 within a visible bottom of 436; a separate browser viewport shrink placed both at 374 within 420. Scroll positions remained zero and screenshots showed normal-sized glyphs and the prompt. These remain simulated IME conditions, not proof of physical Chrome keyboard behavior. The user's smaller mobile font change is preserved. Physical-phone scrolling and automatic keyboard visibility require a device retest after the hosted rollout.
+
 ## Mobile terminal and Inbox direct send (2026-11-01)
 
 The frontend production build and final five-file affected suite passed (164 tests). Focused host direct-send tests passed five cases, including idle-or-done readiness and rejection while working. Independent high-severity review found no findings; the existing jsdom canvas and Vite chunk diagnostics were not suppressed.
