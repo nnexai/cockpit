@@ -14,18 +14,60 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
   const mouseModeRef = useRef(false);
   const lastMouseMotionAt = useRef(0);
   const touchPointers = useRef(new Set<number>());
-  const touchGesture = useRef<{ id: number; x: number; y: number; originY: number; time: number; lines: number; direction: number; dragging: boolean; dead: boolean; selectedAtStart: boolean } | null>(null);
+  const touchGesture = useRef<{ id: number; x: number; y: number; lastY: number; time: number; lastTime: number; remainder: number; direction: number; velocity: number; dragging: boolean; dead: boolean; suppressTap: boolean; selectedAtStart: boolean } | null>(null);
+  const inertiaFrame = useRef<number | null>(null);
+  const cancelInertia = () => {
+    if (inertiaFrame.current !== null) cancelAnimationFrame(inertiaFrame.current);
+    inertiaFrame.current = null;
+  };
+  const scrollTouch = (gesture: NonNullable<typeof touchGesture.current>, delta: number, x: number, y: number) => {
+    const terminal = terminalRef.current;
+    const bounds = terminal && (terminalScreenBounds(terminal) ?? hostRef.current?.getBoundingClientRect());
+    if (!terminal || !bounds || bounds.height <= 0 || terminal.rows <= 0 || !delta) return;
+    const direction = Math.sign(delta);
+    if (gesture.direction && direction !== gesture.direction) gesture.remainder = 0;
+    gesture.direction = direction;
+    gesture.remainder += delta;
+    const cellHeight = bounds.height / terminal.rows;
+    const lines = Math.min(65535, Math.floor(Math.abs(gesture.remainder) / cellHeight));
+    if (lines > 0) {
+      sendInput(terminalTouchScrollCommand(direction > 0 ? "up" : "down", lines, x, y, bounds, terminal.cols, terminal.rows));
+      gesture.remainder -= direction * lines * cellHeight;
+    }
+  };
+  const startInertia = (gesture: NonNullable<typeof touchGesture.current>, x: number, y: number) => {
+    let velocity = Math.max(-2.5, Math.min(2.5, gesture.velocity));
+    if (Math.abs(velocity) < 0.15 || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    let last = performance.now();
+    const started = last;
+    const step = (now: number) => {
+      inertiaFrame.current = null;
+      if ((gesture.selectedAtStart && !refs.selectedRef.current) || now - started > 700) return;
+      const elapsed = Math.max(0, Math.min(48, now - last));
+      last = now;
+      const decay = Math.exp(-elapsed / 220);
+      scrollTouch(gesture, velocity * 220 * (1 - decay), x, y);
+      velocity *= decay;
+      if (Math.abs(velocity) >= 0.05) inertiaFrame.current = requestAnimationFrame(step);
+    };
+    inertiaFrame.current = requestAnimationFrame(step);
+  };
   useEffect(() => {
     const host = hostRef.current;
     if (!host || scratch) return;
     const touch = (event: TouchEvent) => {
       if (!terminalRef.current?.element?.contains(event.target as Node)) return;
+      if (event.type === "touchcancel" || event.touches?.length > 1) {
+        cancelInertia();
+        if (touchGesture.current) touchGesture.current.dead = true;
+      }
       event.stopPropagation();
       if (event.type === "touchend" && event.cancelable) event.preventDefault();
     };
-    const contextMenu = () => { if (touchGesture.current) touchGesture.current.dead = true; };
+    const contextMenu = () => { cancelInertia(); if (touchGesture.current) touchGesture.current.dead = true; };
+    const selectionChange = () => { cancelInertia(); if (touchGesture.current) touchGesture.current.dead = true; };
     const lostCapture = (event: PointerEvent) => {
-      if (touchGesture.current?.id === event.pointerId) touchGesture.current.dead = true;
+      if (touchGesture.current?.id === event.pointerId) { cancelInertia(); touchGesture.current.dead = true; }
     };
     const compatibilityMouse = (event: MouseEvent) => {
       const capabilities = (event as MouseEvent & { sourceCapabilities?: { firesTouchEvents: boolean } | null }).sourceCapabilities;
@@ -38,18 +80,30 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
     for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"] as const) host.addEventListener(type, touch, options);
     host.addEventListener("contextmenu", contextMenu, true);
     host.addEventListener("lostpointercapture", lostCapture, true);
+    document.addEventListener("selectionchange", selectionChange);
+    host.addEventListener("keydown", cancelInertia, true);
+    document.addEventListener("visibilitychange", cancelInertia);
+    window.addEventListener("resize", cancelInertia);
     host.addEventListener("mousedown", compatibilityMouse, true);
     return () => {
       for (const type of ["touchstart", "touchmove", "touchend", "touchcancel"] as const) host.removeEventListener(type, touch, options);
       host.removeEventListener("contextmenu", contextMenu, true);
       host.removeEventListener("lostpointercapture", lostCapture, true);
+      document.removeEventListener("selectionchange", selectionChange);
+      host.removeEventListener("keydown", cancelInertia, true);
+      document.removeEventListener("visibilitychange", cancelInertia);
+      window.removeEventListener("resize", cancelInertia);
+      cancelInertia();
       host.removeEventListener("mousedown", compatibilityMouse, true);
       touchPointers.current.clear();
       touchGesture.current = null;
     };
   }, [hostRef, terminalRef, scratch]);
   useEffect(() => {
-    if (!refs.selectedRef.current && touchGesture.current?.selectedAtStart) touchGesture.current.dead = true;
+    if (!refs.selectedRef.current) {
+      cancelInertia();
+      if (touchGesture.current?.selectedAtStart) touchGesture.current.dead = true;
+    }
   }, [refs.selectedRef.current]);
   const releaseCapturedPointer = () => {
     const active = activeMousePointer.current;
@@ -78,6 +132,7 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
   };
   const handleWheel = (terminal: Terminal, event: WheelEvent): boolean => {
     if (scratch) return true;
+      cancelInertia();
       if (event.deltaY === 0) return true;
       event.preventDefault();
       requestControl();
@@ -88,6 +143,8 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
   const handlers: Pick<DOMAttributes<HTMLDivElement>, "onPointerDownCapture" | "onPointerMoveCapture" | "onPointerUpCapture" | "onPointerCancel"> = {
     onPointerDownCapture: (event) => {
       const button = terminalMouseButton(event.button);
+      const interruptedInertia = inertiaFrame.current !== null;
+      cancelInertia();
       if (scratch) return;
       if (event.pointerType === "touch") {
         if (!touchGesture.current && !terminalRef.current?.element?.contains(event.target as Node)) return;
@@ -95,7 +152,7 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
         if (touchGesture.current || touchPointers.current.size > 1) {
           if (touchGesture.current) touchGesture.current.dead = true;
         } else {
-          touchGesture.current = { id: event.pointerId, x: event.clientX, y: event.clientY, originY: event.clientY, time: event.timeStamp, lines: 0, direction: 0, dragging: false, dead: false, selectedAtStart: refs.selectedRef.current };
+          touchGesture.current = { id: event.pointerId, x: event.clientX, y: event.clientY, lastY: event.clientY, time: event.timeStamp, lastTime: event.timeStamp, remainder: 0, direction: 0, velocity: 0, dragging: false, dead: false, suppressTap: interruptedInertia, selectedAtStart: refs.selectedRef.current };
         }
         return;
       }
@@ -116,27 +173,22 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
         if (!gesture || gesture.dead || gesture.id !== event.pointerId) return;
         if (!gesture.dragging) {
           if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) <= 10) return;
+          if (Math.abs(event.clientX - gesture.x) > Math.abs(event.clientY - gesture.y)) {
+            gesture.dead = true;
+            return;
+          }
           gesture.dragging = true;
           requestControl({ focus: false });
         }
-        const terminal = terminalRef.current;
-        const bounds = terminal && (terminalScreenBounds(terminal) ?? hostRef.current?.getBoundingClientRect());
-        if (!terminal || !bounds || bounds.height <= 0 || terminal.rows <= 0) return;
-        const delta = event.clientY - gesture.originY;
-        const direction = Math.sign(delta);
-        if (direction && gesture.direction && direction !== gesture.direction) {
-          gesture.originY = event.clientY;
-          gesture.lines = 0;
-          gesture.direction = 0;
-          return;
+        const delta = event.clientY - gesture.lastY;
+        const elapsed = event.timeStamp - gesture.lastTime;
+        if (elapsed > 0) {
+          const sample = delta / elapsed;
+          gesture.velocity = Math.sign(sample) !== Math.sign(gesture.velocity) ? sample : gesture.velocity * 0.35 + sample * 0.65;
         }
-        if (direction) gesture.direction = direction;
-        const total = Math.floor(Math.abs(delta) / (bounds.height / terminal.rows));
-        const lines = Math.min(65535, total - gesture.lines);
-        if (lines > 0) {
-          sendInput(terminalTouchScrollCommand(direction > 0 ? "up" : "down", lines, event.clientX, event.clientY, bounds, terminal.cols, terminal.rows));
-          gesture.lines += lines;
-        }
+        gesture.lastY = event.clientY;
+        gesture.lastTime = event.timeStamp;
+        scrollTouch(gesture, delta, event.clientX, event.clientY);
         return;
       }
       const active = activeMousePointer.current;
@@ -155,12 +207,15 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
       if (event.pointerType === "touch" && !scratch) {
         const gesture = touchGesture.current;
         touchPointers.current.delete(event.pointerId);
-        if (gesture && !gesture.dead && gesture.id === event.pointerId && !gesture.dragging && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) <= 10 && event.timeStamp - gesture.time < 500) {
+        if (gesture && !gesture.dead && !gesture.suppressTap && gesture.id === event.pointerId && !gesture.dragging && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) <= 10 && event.timeStamp - gesture.time < 500) {
           requestControl();
           if (terminalMouseInput && mouseModeRef.current) {
             sendPointerMouse("down", "left", event);
             sendPointerMouse("up", "left", event);
           }
+        }
+        else if (gesture && !gesture.dead && gesture.id === event.pointerId && gesture.dragging && event.timeStamp - gesture.lastTime < 80) {
+          startInertia(gesture, event.clientX, event.clientY);
         }
         if (touchPointers.current.size === 0) touchGesture.current = null;
         return;
@@ -176,6 +231,7 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
     },
     onPointerCancel: (event) => {
       if (event.pointerType === "touch" && !scratch) {
+        cancelInertia();
         touchPointers.current.delete(event.pointerId);
         if (touchGesture.current) touchGesture.current.dead = true;
         if (touchPointers.current.size === 0) touchGesture.current = null;

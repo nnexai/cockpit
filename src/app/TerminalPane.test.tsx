@@ -1212,7 +1212,7 @@ describe("TerminalPane fitting and pointer ownership", () => {
       touch("pointermove", 20, 96.7);
       touch("pointermove", 30, 113.4);
       touch("pointermove", 40, 130.1);
-      touch("pointerup", 50, 130.1);
+      touch("pointerup", 130, 130.1);
       screen.dispatchEvent(end);
       expect(end.defaultPrevented).toBe(true);
       expect(sent.filter(command => command.type === "terminal.scroll").map(command => command.type === "terminal.scroll" && [command.direction, command.lines])).toEqual([["up", 1], ["up", 1], ["up", 1]]);
@@ -1241,7 +1241,7 @@ describe("TerminalPane fitting and pointer ownership", () => {
       touch("pointermove", 330, 100);
       touch("pointermove", 340, 120);
       touch("pointerup", 350, 120);
-      expect(sent.filter(command => command.type === "terminal.scroll").map(command => command.type === "terminal.scroll" && command.direction)).toEqual(["down", "down", "up"]);
+      expect(sent.filter(command => command.type === "terminal.scroll").map(command => command.type === "terminal.scroll" && command.direction)).toEqual(["down", "down", "up", "up"]);
       expect(terminal.focus).not.toHaveBeenCalled();
       sent.length = 0;
       touch("pointerdown", 400, 80);
@@ -1262,6 +1262,131 @@ describe("TerminalPane fitting and pointer ownership", () => {
     } finally {
       document.removeEventListener("touchstart", documentTouch);
       await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+  it("scrolls reversals from the latest movement and bounds fling inertia", async () => {
+    vi.stubGlobal("matchMedia", coarseMatchMedia);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true)} />); await settle(); });
+      await act(async () => { messages[0]!(message("owned")); messages[0]!(mouseMode(true)); });
+      const terminal = mocks.terminals.at(-1)!;
+      const screen = terminal.element!.querySelector(".xterm-screen")!;
+      const frames = new Map<number, FrameRequestCallback>();
+      let frameId = 0;
+      let now = performance.now();
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      const tick = (ms: number) => {
+        now += ms;
+        const callbacks = [...frames.values()];
+        frames.clear();
+        callbacks.forEach(callback => callback(now));
+      };
+      const touch = (type: string, time: number, y: number, pointerId = 1) =>
+        screen.dispatchEvent(pointer(type, time, 0, { pointerType: "touch", pointerId, y }));
+      const scrolls = () => sent.filter((command): command is Extract<TerminalCommand, { type: "terminal.scroll" }> => command.type === "terminal.scroll");
+
+      touch("pointerdown", 1, 100);
+      touch("pointermove", 20, 200);
+      touch("pointermove", 40, 180);
+      expect(scrolls().map(({ direction, lines }) => [direction, lines])).toEqual([["up", 6], ["down", 1]]);
+      touch("pointerup", 50, 180);
+      const beforeFling = scrolls().length;
+      for (let i = 0; i < 60; i++) tick(16);
+      expect(scrolls().length).toBeGreaterThan(beforeFling);
+      expect(scrolls().slice(beforeFling).every(command => command.direction === "down")).toBe(true);
+      expect(scrolls().slice(beforeFling).reduce((total, command) => total + command.lines, 0)).toBeLessThanOrEqual(34);
+      expect(frames.size).toBe(0);
+      expect(sent.some(command => command.type === "terminal.input" || command.type === "terminal.mouse")).toBe(false);
+      expect(terminal.focus).not.toHaveBeenCalled();
+
+      sent.length = 0;
+      screen.dispatchEvent(pointer("pointerdown", 900, 0, { pointerType: "touch", x: 100, y: 100 }));
+      screen.dispatchEvent(pointer("pointermove", 910, 0, { pointerType: "touch", x: 160, y: 115 }));
+      screen.dispatchEvent(pointer("pointermove", 920, 0, { pointerType: "touch", x: 165, y: 180 }));
+      screen.dispatchEvent(pointer("pointerup", 930, 0, { pointerType: "touch", x: 165, y: 180 }));
+      expect(sent).toEqual([]);
+      expect(frames.size).toBe(0);
+
+      sent.length = 0;
+      touch("pointerdown", 1000, 100);
+      touch("pointermove", 1020, 150);
+      touch("pointerup", 1200, 150);
+      expect(frames.size).toBe(0);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("cancels touch inertia on new interactions, selection changes, cancellation and unmount", async () => {
+    vi.stubGlobal("matchMedia", coarseMatchMedia);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    let unmounted = false;
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
+      await act(async () => { messages[0]!(message("owned")); });
+      const screen = mocks.terminals.at(-1)!.element!.querySelector(".xterm-screen")!;
+      const frames = new Map<number, FrameRequestCallback>();
+      let frameId = 0;
+      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { frames.set(++frameId, callback); return frameId; });
+      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      const touch = (type: string, time: number, y: number, pointerId = 1) =>
+        screen.dispatchEvent(pointer(type, time, 0, { pointerType: "touch", pointerId, y }));
+      const fling = (time: number) => {
+        touch("pointerdown", time, 100);
+        touch("pointermove", time + 20, 150);
+        touch("pointerup", time + 30, 150);
+        expect(frames.size).toBe(1);
+      };
+      // React replaces a zero event timestamp with Date.now(), invalidating the velocity sample.
+      fling(1);
+      touch("pointerdown", 40, 100);
+      expect(frames.size).toBe(0);
+      touch("pointerdown", 50, 100, 2);
+      touch("pointermove", 60, 160);
+      touch("pointerup", 70, 160);
+      touch("pointerup", 80, 100, 2);
+      expect(frames.size).toBe(0);
+      fling(90);
+      touch("pointerdown", 125, 100);
+      touch("pointerup", 130, 100);
+      expect(mocks.terminals.at(-1)!.focus).not.toHaveBeenCalled();
+      expect(frames.size).toBe(0);
+      fling(140);
+      document.dispatchEvent(new Event("selectionchange"));
+      expect(frames.size).toBe(0);
+      fling(200);
+      touch("pointercancel", 240, 150);
+      expect(frames.size).toBe(0);
+      fling(300);
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false, { selected: false })} />); await settle(); });
+      expect(frames.size).toBe(0);
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
+      vi.stubGlobal("matchMedia", (query: string) => Object.assign(coarseMatchMedia(query), { matches: query === "(prefers-reduced-motion: reduce)" || query === "(pointer: coarse)" }));
+      touch("pointerdown", 375, 100);
+      touch("pointermove", 385, 150);
+      touch("pointerup", 390, 150);
+      expect(frames.size).toBe(0);
+      vi.stubGlobal("matchMedia", coarseMatchMedia);
+      fling(400);
+      await act(async () => root.unmount());
+      unmounted = true;
+      expect(frames.size).toBe(0);
+    } finally {
+      if (!unmounted) await act(async () => root.unmount());
       host.remove();
     }
   });
