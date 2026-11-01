@@ -71,3 +71,14 @@ export function terminalScrollCommand(event: WheelEvent, bounds: TerminalBounds 
     modifiers: terminalModifierBits(event),
   };
 }
+
+export function terminalTouchScrollCommand(direction: "up" | "down", lines: number, clientX: number, clientY: number, bounds: TerminalBounds, cols: number, rows: number): TerminalCommand {
+  return {
+    type: "terminal.scroll",
+    direction,
+    lines: Math.min(65535, lines),
+    source: "wheel",
+    ...terminalCellPosition(clientX, clientY, bounds, cols, rows),
+    modifiers: 0,
+  };
+}

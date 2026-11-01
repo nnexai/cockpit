@@ -153,13 +153,14 @@ async function settle() {
   await Promise.resolve();
 }
 
-function pointer(type: string, timeStamp: number, button = 0, options: { pointerId?: number; shiftKey?: boolean } = {}) {
+function pointer(type: string, timeStamp: number, button = 0, options: { pointerId?: number; shiftKey?: boolean; pointerType?: string; x?: number; y?: number } = {}) {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperties(event, {
     button: { value: button },
-    clientX: { value: 120 },
-    clientY: { value: 80 },
+    clientX: { value: options.x ?? 120 },
+    clientY: { value: options.y ?? 80 },
     pointerId: { value: options.pointerId ?? 1 },
+    pointerType: { value: options.pointerType ?? "mouse" },
     shiftKey: { value: options.shiftKey ?? false },
     ctrlKey: { value: false },
     altKey: { value: false },
@@ -167,6 +168,16 @@ function pointer(type: string, timeStamp: number, button = 0, options: { pointer
     timeStamp: { value: timeStamp },
   });
   return event;
+}
+
+function coarseMatchMedia(query: string): MediaQueryList {
+  return Object.assign(new EventTarget(), {
+    matches: query === "(pointer: coarse)",
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+  }) as MediaQueryList;
 }
 
 function paneProps(client: CockpitClient, terminalMouseInput: boolean, overrides: Partial<Parameters<typeof TerminalPane>[0]> = {}) {
@@ -1011,6 +1022,112 @@ describe("TerminalPane fitting and pointer ownership", () => {
         await act(async () => secondRoot!.unmount());
         secondRootUnmounted = true;
       }
+      host.remove();
+    }
+  });
+  it("routes touch gestures to Herdr without focus, xterm touch handling, or duplicate mouse input", async () => {
+    vi.stubGlobal("matchMedia", coarseMatchMedia);
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    const documentTouch = vi.fn();
+    document.addEventListener("touchstart", documentTouch);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, true)} />); await settle(); });
+      await act(async () => { messages[0]!(message("owned")); messages[0]!(mouseMode(true)); });
+      const terminal = mocks.terminals.at(-1)!;
+      expect(terminal.focus).not.toHaveBeenCalled();
+      const screen = terminal.element!.querySelector(".xterm-screen")!;
+      const touch = (type: string, time: number, y: number, pointerId = 1, x = 120) =>
+        screen.dispatchEvent(pointer(type, time, 0, { pointerType: "touch", pointerId, x, y }));
+      const start = new Event("touchstart", { bubbles: true, cancelable: true });
+      const end = new Event("touchend", { bubbles: true, cancelable: true });
+      screen.dispatchEvent(start);
+      expect(documentTouch).not.toHaveBeenCalled();
+      expect(start.defaultPrevented).toBe(false);
+      touch("pointerdown", 0, 80);
+      touch("pointermove", 10, 89.9);
+      expect(sent).toEqual([]);
+      touch("pointermove", 20, 96.7);
+      touch("pointermove", 30, 113.4);
+      touch("pointermove", 40, 130.1);
+      touch("pointerup", 50, 130.1);
+      screen.dispatchEvent(end);
+      expect(end.defaultPrevented).toBe(true);
+      expect(sent.filter(command => command.type === "terminal.scroll").map(command => command.type === "terminal.scroll" && [command.direction, command.lines])).toEqual([["up", 1], ["up", 1], ["up", 1]]);
+      expect(sent.some(command => command.type === "terminal.input" || command.type === "terminal.mouse")).toBe(false);
+      expect(terminal.focus).not.toHaveBeenCalled();
+      sent.length = 0;
+      touch("pointerdown", 100, 80);
+      touch("pointerup", 200, 80);
+      expect(terminal.focus).toHaveBeenCalledOnce();
+      expect(sent.map(command => command.type === "terminal.mouse" && command.kind)).toEqual(["down", "up"]);
+      const compat = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      Object.defineProperty(compat, "sourceCapabilities", { value: { firesTouchEvents: true } });
+      const seenMouse = vi.fn();
+      screen.addEventListener("mousedown", seenMouse);
+      screen.dispatchEvent(compat);
+      expect(seenMouse).not.toHaveBeenCalled();
+      const realMouse = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      Object.defineProperty(realMouse, "sourceCapabilities", { value: { firesTouchEvents: false } });
+      screen.dispatchEvent(realMouse);
+      expect(seenMouse).toHaveBeenCalledOnce();
+      sent.length = 0;
+      terminal.focus.mockClear();
+      touch("pointerdown", 300, 80);
+      touch("pointermove", 310, 60);
+      touch("pointermove", 320, 40);
+      touch("pointermove", 330, 100);
+      touch("pointermove", 340, 120);
+      touch("pointerup", 350, 120);
+      expect(sent.filter(command => command.type === "terminal.scroll").map(command => command.type === "terminal.scroll" && command.direction)).toEqual(["down", "down", "up"]);
+      expect(terminal.focus).not.toHaveBeenCalled();
+      sent.length = 0;
+      touch("pointerdown", 400, 80);
+      touch("pointerdown", 410, 80, 2);
+      touch("pointermove", 420, 120);
+      touch("pointerup", 430, 120);
+      touch("pointerup", 440, 80, 2);
+      touch("pointerdown", 500, 80);
+      touch("pointercancel", 510, 80);
+      touch("pointerup", 520, 80);
+      touch("pointerdown", 600, 80);
+      touch("pointerup", 1100, 80);
+      touch("pointerdown", 1200, 80);
+      screen.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      touch("pointerup", 1210, 80);
+      expect(sent).toEqual([]);
+      expect(terminal.focus).not.toHaveBeenCalled();
+    } finally {
+      document.removeEventListener("touchstart", documentTouch);
+      await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("does not restore retained terminal focus from frames on coarse pointers", async () => {
+    vi.stubGlobal("matchMedia", coarseMatchMedia);
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient([], messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => { root.render(<TerminalPane {...paneProps(client, false)} />); await settle(); });
+      await act(async () => { messages[0]!(message("owned")); });
+      const terminal = mocks.terminals.at(-1)!;
+      expect(terminal.focus).not.toHaveBeenCalled();
+      const input = document.createElement("textarea");
+      terminal.element!.append(input);
+      input.focus();
+      terminal.write.mockImplementationOnce((_data, done) => { input.remove(); done?.(); });
+      act(() => messages[0]!({ type: "frame", session_id: "session", pane_id: "pane", stream_id: "stream", seq: "1", encoding: "utf8", width: 80, height: 24, full: true, bytes: btoa("frame") }));
+      expect(terminal.focus).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
       host.remove();
     }
   });

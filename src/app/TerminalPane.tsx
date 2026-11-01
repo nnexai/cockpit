@@ -121,7 +121,7 @@ export function TerminalPane({ client, request, selected, presented = true, cont
   useTerminalClipboardEffects(clipboard, { controlAllowed, controlPending, focusEpoch, focusToken, ownership });
 
   useEffect(() => {
-    if (selected && presented && controlAllowed && ownership === "owned" && terminalReady && !deferAttachment && focusOnAttachRef.current) terminalRef.current?.focus();
+    if (selected && presented && controlAllowed && ownership === "owned" && terminalReady && !deferAttachment && focusOnAttachRef.current && window.matchMedia?.("(pointer: coarse)").matches !== true) terminalRef.current?.focus();
   }, [controlAllowed, deferAttachment, focusEpoch, ownership, presented, selected, terminalReady]);
   useXtermInputBindings(refs, request, control, clipboard, sizing, pointer);
   useEffect(() => {

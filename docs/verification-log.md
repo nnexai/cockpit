@@ -2,6 +2,14 @@
 
 These are historical observations, not proof of the current checkout. Each named original source occurrence is reproduced verbatim, including mixed current-rule/result paragraphs, obsolete wording, dates and limitations. Current architecture, rules and source owners live in the root documents. Undated cohorts retain source context rather than an invented run date.
 
+## Mobile terminal and Inbox direct send (2026-11-01)
+
+The frontend production build and final five-file affected suite passed (164 tests). Focused host direct-send tests passed five cases, including idle-or-done readiness and rejection while working. Independent high-severity review found no findings; the existing jsdom canvas and Vite chunk diagnostics were not suppressed.
+
+In disposable session `polish-umqyqer0`, trusted CDP touch on a coarse mobile viewport scrolled a 240-line terminal from offset 0 to 6 with zero PTY input bytes; a tap focused its textarea. An Alt+mouse pane produced six SGR wheel reports and exactly one click down/up pair, without arrow bytes or a duplicate compatibility click. Real unmanaged OMP direct sends received HTTP submission confirmation; the UI showed Submitted, not confirmed read. A controllable Herdr fixture reported working and the live header updated while retaining the submission note without a failure alert. The actual agent subsequently reported done. Against the corrected host and frontend, selecting that completed agent enabled a new explicit send and received a submission acknowledgement with no error and the submitted draft cleared. Submission receipts alone do not prove model consumption.
+
+A simulated visual viewport resize to height 420 and top 16 placed the composer bottom at 436, retained the unsent draft and kept document scroll at zero; simulated scale 2 preserved the layout and the hook tests cover retaining zoomed page pan. Physical IME/OS keyboard and iOS were not verified. Live installation and the draft-preserving hosted rollout are recorded in the local deployment receipt.
+
 ## Inbox routing and Workbench (2026-11-01)
 
 Selected checks: final core run passed 1,246 tests with one ignored; the targeted private CLI no-extension test passed one; frontend production build passed. An initial frontend run had 107 files passing and two failing out of 109; after an incidental assertion correction the affected 221 tests passed, and the latest Inbox suite passed 12 tests. Python fixture tests passed five. These are separate runs, not a single all-workspace-green pass.

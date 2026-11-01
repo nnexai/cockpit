@@ -14,8 +14,8 @@ afterEach(() => { if (root) act(() => root!.unmount()); root = null; host?.remov
 async function flush(fn: () => void = () => {}) { await act(async () => { fn(); for (let i = 0; i < 8; i++) await Promise.resolve(); }); }
 function setup(client: CockpitClient, sessionId = "a", directSnapshot?: SessionSnapshotResponse) {
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
-  const render = (id: string, active = true) => root!.render(createElement(Inbox, { client, sessionId: id, active, currentSpace: null, snapshot: directSnapshot ?? { session_id: id, server_instance: "server", panes: [], agents: [] } as unknown as SessionSnapshotResponse, attention, onOpenLocation: async () => {} }));
-  return { render: (id = sessionId, active = true) => render(id, active) };
+  const render = (id: string, active = true, snapshot = directSnapshot) => root!.render(createElement(Inbox, { client, sessionId: id, active, currentSpace: null, snapshot: snapshot ?? { session_id: id, server_instance: "server", panes: [], agents: [] } as unknown as SessionSnapshotResponse, attention, onOpenLocation: async () => {} }));
+  return { render: (id = sessionId, active = true, snapshot = directSnapshot) => render(id, active, snapshot) };
 }
 function text(value: string) {
   const field = host.querySelector(".inbox:not([hidden]) textarea") as HTMLTextAreaElement;
@@ -27,6 +27,17 @@ function fixture() {
   const waits: Array<(value: OrchestrationWaitResponse) => void> = [];
   const client = { orchestrationInbox: vi.fn(async ({ session_id }: { session_id: string }) => view(session_id)), orchestrationLiaisonLookup: vi.fn(async () => ({ status: "resolved", preferred_root_id: "owner", lookup_revision: 1, roots: [] })), orchestrationWait: vi.fn((_request: unknown, signal?: AbortSignal) => new Promise<OrchestrationWaitResponse>((resolve, reject) => { waits.push(resolve); signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }); })), orchestrationMutate: vi.fn(), orchestrationAgentSend: vi.fn(async () => {}) } as unknown as CockpitClient;
   return { client, waits };
+}
+function directFixture() {
+  const target = (pane: string, name: string, stamp = "now") => ({ endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: pane, terminal_id: `terminal-${pane}`, agent_kind: "omp", agent_name: name, native_session_id: null, native_session_file: null, state_changed_at: stamp });
+  const agent = (pane: string, name: string, stamp = "now") => ({ workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Tab", pane_id: pane, agent_name: name, agent_status: "idle", state_changed_at: stamp, expected_target: target(pane, name, stamp) });
+  const snapshot = (status: "idle" | "working" | "done" = "idle", seq = 1) => ({ session_id: "a", server_instance: "server", panes: ["a", "b"].map(id => ({ id, terminal_id: `terminal-${id}` })), agents: ["a", "b"].map((id, i) => ({ pane_id: id, space_id: "space", tab_id: "tab", name: i ? "Beta" : "Alpha", status: i ? "idle" : status, state_change_seq: seq, focused: false })) } as unknown as SessionSnapshotResponse);
+  const inbox = view("a"); inbox.unmanaged_agents = [agent("a", "Alpha"), agent("b", "Beta")];
+  const { client, waits } = fixture();
+  vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+  const app = setup(client, "a", snapshot());
+  const choose = (name: string) => Array.from(host.querySelectorAll(".inbox-row")).find(b => b.textContent?.includes(name))!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  return { client, waits, inbox, agent, snapshot, app, choose };
 }
 
 describe("Inbox", () => {
@@ -214,5 +225,114 @@ describe("Inbox", () => {
     await flush(submit);
     expect(client.orchestrationAgentSend).toHaveBeenCalledTimes(1);
     expect(host.textContent).toContain("reselect the agent");
+  });
+  it("keeps the submission receipt through working and idle while preserving the target fence", async () => {
+    const f = directFixture();
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
+    await flush(() => text("Hello")); await flush(submit);
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+    expect(host.textContent).toContain("Submitted to Alpha’s terminal. Not confirmed read.");
+    vi.mocked(f.client.orchestrationInbox).mockResolvedValue({ ...f.inbox, revision: 2, unmanaged_agents: [f.agent("a", "Alpha", "later"), f.agent("b", "Beta")] });
+    await flush(() => f.app.render("a", true, f.snapshot("working", 2)));
+    expect(host.querySelector(".inbox-head")?.textContent).toContain("working");
+    expect(host.textContent).toContain("Submitted to Alpha’s terminal");
+    expect(host.textContent).not.toContain("Direct messages are available only");
+    expect(host.textContent).not.toContain("Agent identity changed");
+    await flush(() => f.app.render("a", true, f.snapshot("idle", 3)));
+    expect(host.textContent).toContain("Submitted to Alpha’s terminal");
+    await flush(() => text("Another"));
+    await flush(submit);
+    expect(f.client.orchestrationAgentSend).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("reselect the agent");
+  });
+
+  it("requires reselection after submission and allows a completed agent to receive another message", async () => {
+    const f = directFixture();
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
+    await flush(() => text("First")); await flush(submit);
+    expect(host.textContent).toContain("Submitted to Alpha’s terminal. Not confirmed read.");
+    await flush(() => f.app.render("a", true, f.snapshot("done", 2)));
+    expect(host.querySelector(".inbox-head")?.textContent).toContain("done");
+    expect(host.textContent).toContain("Submitted to Alpha’s terminal. Not confirmed read.");
+    await flush(() => text("Second")); await flush(submit);
+    expect(f.client.orchestrationAgentSend).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("Submitted to Alpha’s terminal. Not confirmed read.");
+    await flush(() => f.choose("Alpha")); await flush(submit);
+    expect(f.client.orchestrationAgentSend).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(f.client.orchestrationAgentSend).mock.calls[1]![0]).toMatchObject({ reference: "a", text: "Second", expected_target: f.agent("a", "Alpha").expected_target });
+    expect(host.textContent).toContain("Submitted to Alpha’s terminal. Not confirmed read.");
+  });
+
+  it("does not dispatch to a working agent", async () => {
+    const f = directFixture();
+    await flush(() => f.app.render("a", true, f.snapshot("working", 2)));
+    await flush(() => f.choose("Alpha")); await flush(() => text("Wait")); await flush(submit);
+    expect(f.client.orchestrationAgentSend).not.toHaveBeenCalled();
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Wait");
+  });
+
+  it.each(["agent_not_idle", "herdr_prompt_deferred", "agent_blocked", "agent_not_ready"])("keeps the draft and requires reselection after %s", async code => {
+    const f = directFixture();
+    vi.mocked(f.client.orchestrationAgentSend).mockRejectedValueOnce(new CockpitClientError("http_error", "Busy", { operationCode: code }));
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
+    await flush(() => text("Keep this")); await flush(submit);
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Keep this");
+    expect(host.textContent).toContain("Not sent. Alpha is busy.");
+    expect(host.textContent).not.toContain("Delivery is uncertain");
+    await flush(() => f.app.render("a", true, f.snapshot("working", 2)));
+    await flush(() => f.app.render("a", true, f.snapshot("idle", 3)));
+    await flush(submit);
+    expect(f.client.orchestrationAgentSend).toHaveBeenCalledTimes(1);
+    await flush(() => f.choose("Alpha")); await flush(submit);
+    expect(f.client.orchestrationAgentSend).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["herdr_outcome_unknown", "transport_error", "request_not_dispatched", "toString"])("never replays an uncertain %s outcome after reselection", async code => {
+    const f = directFixture();
+    vi.mocked(f.client.orchestrationAgentSend).mockRejectedValueOnce(new CockpitClientError("http_error", "Unknown", { operationCode: code }));
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
+    await flush(() => text("Keep this")); await flush(submit);
+    expect(host.textContent).toContain("Delivery is uncertain");
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Keep this");
+    await flush(() => f.app.render("a", true, f.snapshot("working", 2)));
+    await flush(() => f.app.render("a", true, f.snapshot("idle", 3)));
+    await flush(() => f.choose("Alpha")); await flush(submit);
+    expect(host.textContent).toContain("Delivery is uncertain");
+    expect(f.client.orchestrationAgentSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats a network failure without a code as uncertain", async () => {
+    const f = directFixture();
+    vi.mocked(f.client.orchestrationAgentSend).mockRejectedValueOnce(new Error("Network unavailable"));
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
+    await flush(() => text("Keep this")); await flush(submit);
+    await flush(() => f.choose("Alpha")); await flush(submit);
+    expect(host.textContent).toContain("Delivery is uncertain");
+    expect(f.client.orchestrationAgentSend).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["accepted", "busy", "uncertain", "stale"])("does not attribute a late %s outcome to a different recipient", async outcome => {
+    const f = directFixture();
+    let resolve!: () => void, reject!: (error: Error) => void;
+    vi.mocked(f.client.orchestrationAgentSend).mockImplementationOnce(() => new Promise<void>((yes, no) => { resolve = yes; reject = no; }));
+    await flush(() => f.app.render()); await flush(() => f.choose("Alpha"));
+    await flush(() => text("Hello")); await flush(submit);
+    await flush(() => f.choose("Beta"));
+    await flush(() => {
+      if (outcome === "accepted") resolve();
+      else reject(new CockpitClientError("http_error", "Alpha failure", { operationCode: outcome === "busy" ? "agent_not_idle" : outcome === "stale" ? "stale_identity" : "herdr_outcome_unknown" }));
+    });
+    expect(host.querySelector(".inbox-head")?.textContent).toContain("Beta");
+    expect(host.textContent).not.toContain("Submitted to Alpha");
+    expect(host.textContent).not.toContain("Not sent.");
+    expect(host.textContent).not.toContain("Alpha failure");
+    expect(host.textContent).not.toContain("Delivery is uncertain");
+    await flush(() => f.choose("Alpha"));
+    expect(host.textContent).not.toContain("Submitted to Alpha");
+    if (outcome === "uncertain") {
+      expect(host.textContent).toContain("Delivery is uncertain");
+      await flush(submit);
+      expect(f.client.orchestrationAgentSend).toHaveBeenCalledTimes(1);
+    }
   });
 });

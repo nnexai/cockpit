@@ -14,6 +14,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Recovery and sidebar state | `src/app/shell/useSessionRecovery.ts`; `src/app/shell/useSidebarState.ts`; `src/app/shell/useWorkbenchUI.ts` |
 | Workbench state/actions/input | `src/app/shell/useWorkbenchState.ts`; `src/app/shell/useWorkbenchActions.ts`; `src/app/shell/useWorkbenchInput.ts` |
 | Workarea and canvas | `src/app/shell/useWorkarea.ts`; `src/app/shell/WorkbenchCanvas.tsx`; `src/app/shell/model.ts` |
+| Visible mobile viewport | `src/app/shell/useVisibleViewport.ts`; `src/app/App.tsx`; `src/app/styles/shell.css`; `index.html` viewport policy |
 | Viewer/widget/liaison shell coordination | `src/app/shell/useViewerSources.ts`; `src/app/shell/useWidgetWindowState.ts`; `src/app/shell/useLiaisonNavigation.ts` |
 | Commands and tab strip | `src/app/shell/commands.ts`; `src/app/shell/CommandOverlay.tsx`; `src/app/shell/TabStrip.tsx` |
 | Space/agent quick switcher | `src/app/shell/quickSwitch.ts`; `src/app/shell/QuickSwitcher.tsx`; shared `rankFuzzyMatches` in `src/app/input/fileNavigation.ts`; `Workbench.tsx` re-resolves current-session IDs and dispatches sidebar focus callbacks after modal close |
@@ -38,8 +39,8 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Modal/file picker input | `src/app/input/modal.ts`; `src/app/input/fileIndexCache.ts`; `src/app/input/fileNavigation.ts` |
 | Terminal and server popup | `src/app/TerminalPane.tsx`; `src/app/ServerPopup.tsx`; `src/app/terminal/cockpitTerminal.ts` |
 | Terminal attachment/control | `src/app/terminal/useTerminalAttachment.ts`; `src/app/terminal/useTerminalControl.ts`; `src/app/terminal/paneState.ts` |
-| Terminal frame/pointer/resize | `src/app/terminal/useTerminalFrameQueue.ts`; `src/app/terminal/useTerminalPointer.ts`; `src/app/terminal/useTerminalResize.ts` |
-| Terminal input bindings | `src/app/terminal/useXtermInputBindings.ts`; `src/app/terminal/terminalInput.ts`; `src/app/terminal/terminalMouse.ts` |
+| Terminal frame/pointer/resize | `src/app/terminal/useTerminalFrameQueue.ts`; `src/app/terminal/useTerminalPointer.ts` (touch scroll/tap and pointer handling); `src/app/terminal/useTerminalResize.ts` |
+| Terminal input bindings | `src/app/terminal/useXtermInputBindings.ts`; `src/app/terminal/terminalInput.ts`; `src/app/terminal/terminalMouse.ts`; attachment and popup focus in `useTerminalAttachment.ts` and `src/app/ServerPopup.tsx` |
 | Terminal clipboard/theme | `src/app/terminal/terminalClipboard.ts`; `src/app/terminal/terminalTheme.ts` |
 
 ### Browser and source viewer frontend

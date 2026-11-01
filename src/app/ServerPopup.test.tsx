@@ -6,15 +6,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../client/CockpitClient";
 
 const observedPopupStyle = vi.hoisted(() => vi.fn());
+const popupReady = vi.hoisted(() => ({ current: false }));
 vi.mock("./TerminalPane", async () => {
   const React = await vi.importActual<typeof ReactTypes>("react");
   return {
-    TerminalPane: () => {
+    TerminalPane: (props: { onStateChange?: (state: { ready: boolean; error: string | null }) => void }) => {
       React.useLayoutEffect(() => {
         const popup = document.querySelector<HTMLElement>(".server-popup");
         if (popup) observedPopupStyle({ left: popup.style.left, top: popup.style.top, width: popup.style.width, height: popup.style.height });
+        if (popupReady.current) props.onStateChange?.({ ready: true, error: null });
       }, []);
-      return React.createElement("div");
+      return React.createElement("textarea", { className: "xterm-helper-textarea" });
     },
   };
 });
@@ -29,6 +31,8 @@ afterEach(async () => {
   workbench?.remove();
   workbench = null;
   observedPopupStyle.mockReset();
+  popupReady.current = false;
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -56,6 +60,25 @@ describe("ServerPopup geometry", () => {
     />));
 
     expect(observedPopupStyle).toHaveBeenCalledWith({ left: "180px", top: "170px", width: "640px", height: "420px" });
+  });
+});
+
+describe("ServerPopup touch focus", () => {
+  it("keeps the keyboard closed on a coarse-pointer scrim press", async () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    popupReady.current = true;
+    workbench = document.createElement("div");
+    document.body.append(workbench);
+    root = createRoot(workbench);
+    await act(async () => root?.render(<ServerPopup
+      client={{} as CockpitClient} sessionId="session"
+      popup={{ terminal_id: "popup", title: "Agent Inbox", width: null, height: null }}
+      live error={null} focusEpoch={1} terminalMouseInput={false} onReconnect={() => undefined}
+    />));
+    const textarea = workbench.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")!;
+    textarea.focus();
+    workbench.querySelector(".server-popup-scrim")!.dispatchEvent(new Event("pointerdown", { bubbles: true }));
+    expect(document.activeElement).toBe(workbench.querySelector(".server-popup"));
   });
 });
 

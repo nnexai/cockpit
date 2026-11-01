@@ -62,7 +62,7 @@ export function ServerPopup({ client, sessionId, popup, live, error, focusEpoch,
   const message = !live ? `Disconnected from Herdr. The popup is still open; reconnect to continue.${error ? ` ${error}` : ""}` : !terminalState.ready && !terminalState.error ? "Connecting to popup…" : null;
   return <div className="server-popup-scrim" data-server-modal onPointerDown={event => {
     if (event.target !== event.currentTarget) return;
-    if (inputLive) rootRef.current?.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")?.focus({ preventScroll: true });
+    if (inputLive && window.matchMedia?.("(pointer: coarse)").matches !== true) rootRef.current?.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")?.focus({ preventScroll: true });
     else rootRef.current?.focus({ preventScroll: true });
   }} onKeyDown={event => {
     if (!inputLive) {

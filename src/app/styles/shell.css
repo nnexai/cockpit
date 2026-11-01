@@ -2,6 +2,12 @@
   box-sizing: border-box;
 }
 
+:root {
+  --app-height: 100vh;
+  --app-height: 100dvh;
+  --app-top: 0px;
+}
+
 html,
 body,
 #root {
@@ -11,7 +17,7 @@ body,
 }
 
 body {
-  min-height: 100vh;
+  min-height: var(--app-height);
   overflow: hidden;
   background: var(--app-bg);
   color: var(--text-primary);
@@ -41,7 +47,9 @@ summary:focus-visible {
 
 .app-shell {
   position: relative;
-  min-height: 100vh;
+  top: var(--app-top);
+  min-height: 0;
+  height: var(--app-height);
   background: var(--app-bg);
 }
 
@@ -116,12 +124,12 @@ summary:focus-visible {
 @media (max-width: 600px) {
   .view-bar-preview { display: none; }
 }
-.inbox-workbench .workbench { height: calc(100dvh - var(--view-bar-height)); }
-.app-shell > .inbox-root { height: calc(100dvh - var(--view-bar-height)); }
+.inbox-workbench .workbench { height: calc(var(--app-height) - var(--view-bar-height)); }
+.app-shell > .inbox-root { height: calc(var(--app-height) - var(--view-bar-height)); }
 
 .workbench {
   display: flex;
-  height: 100dvh;
+  height: var(--app-height);
   min-height: 0;
 }
 

@@ -14,6 +14,7 @@ type Pending = { action: OrchestrationAction; text: string; store: string; key: 
 const source = (value: InboxText) => value.source.kind === "owner_card" ? `AI synthesis · ${value.source.harness}` : value.source.kind === "owner" ? `Owner · ${value.source.harness}` : value.source.kind === "worker" ? "Worker claim" : value.source.kind === "user" ? "Your request" : "Recorded fact";
 const questionKey = (question: InboxQuestion) => JSON.stringify([question.run_id, question.question_message_id]);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const directBusyCodes: Record<string, true> = { agent_not_idle: true, herdr_prompt_deferred: true, agent_blocked: true, agent_not_ready: true };
 const ownerLabel = (view: InboxView | null, runId: string) => {
   const owner = view?.owners.find(o => o.root_id === runId);
   return owner?.label.trim() && !uuid.test(owner.label.trim()) ? owner.label : owner?.harness ? `${owner.harness} owner` : "Owner";
@@ -62,6 +63,8 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const [busy, setBusy] = useState(false);
   const [directUncertain, setDirectUncertain] = useState<Record<string, boolean>>({});
   const [directStale, setDirectStale] = useState(false);
+  const [directOutcome, setDirectOutcome] = useState<{ pane: string; target: string; kind: "submitted" | "busy"; name: string } | null>(null);
+  const selectionVersion = useRef(0);
   const wake = useRef<(() => void) | null>(null);
   const refreshVersion = useRef(0);
   const revisionFloor = useRef(0);
@@ -71,6 +74,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const liveScope = useRef({ current, snapshot });
   liveScope.current = { current, snapshot };
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => { if (!current) { selectionVersion.current++; setDirectOutcome(null); } }, [current]);
   useEffect(() => {
     if (!current) return;
     let live = true, timer: number | undefined;
@@ -132,12 +136,13 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const liveDirect = direct && queue.find(row => row.agent.pane_id === direct.pane_id && row.agent.name === direct.agent_name && row.agent.space_id === direct.workspace_id && row.agent.tab_id === direct.tab_id && row.terminalId === selectedAgent?.terminalId && row.terminalId);
   const key = direct ? JSON.stringify(["agent", direct.pane_id]) : selected ?? "new";
   const text = drafts[key] ?? "";
-  const setText = (value: string) => setDrafts(d => ({ ...d, [key]: value }));
-  const select = (id: string | null) => { setSelected(id); setSelectedAgent(null); setSelectedQuestion(""); setTaskId(""); setMobileDetail(true); };
-  const selectAgent = (agent: UnmanagedAgent) => { setSelected(`agent:${agent.pane_id}`); setSelectedAgent({ agent: { ...agent, expected_target: agent.expected_target ? { ...agent.expected_target } : agent.expected_target }, terminalId: queue.find(row => row.agent.pane_id === agent.pane_id && row.agent.name === agent.agent_name)?.terminalId ?? null }); setDirectStale(false); setSelectedQuestion(""); setMobileDetail(true); };
+  const setText = (value: string) => { setDrafts(d => ({ ...d, [key]: value })); };
+  const select = (id: string | null) => { selectionVersion.current++; setDirectOutcome(null); setError(""); setSelected(id); setSelectedAgent(null); setSelectedQuestion(""); setTaskId(""); setMobileDetail(true); };
+  const selectAgent = (agent: UnmanagedAgent) => { selectionVersion.current++; setDirectOutcome(null); setError(""); setSelected(`agent:${agent.pane_id}`); setSelectedAgent({ agent: { ...agent, expected_target: agent.expected_target ? { ...agent.expected_target } : agent.expected_target }, terminalId: queue.find(row => row.agent.pane_id === agent.pane_id && row.agent.name === agent.agent_name)?.terminalId ?? null }); setDirectStale(false); setSelectedQuestion(""); setMobileDetail(true); };
   const latestDirect = direct && view?.unmanaged_agents.find(agent => agent.pane_id === direct.pane_id);
   const directTargetMatches = !!direct?.expected_target && !!latestDirect?.expected_target && JSON.stringify(direct.expected_target) === JSON.stringify(latestDirect.expected_target);
-  const directReady = !!direct && !!liveDirect && liveDirect.agent.status === "idle" && directTargetMatches && direct.expected_target?.pane_id === direct.pane_id && direct.expected_target.workspace_id === direct.workspace_id && direct.expected_target.tab_id === direct.tab_id && direct.expected_target.terminal_id === selectedAgent?.terminalId && (direct.expected_target.agent_name === null || direct.expected_target.agent_name === direct.agent_name) && !directStale && !directUncertain[direct.pane_id];
+  const directReady = !!direct && !!liveDirect && (liveDirect.agent.status === "idle" || liveDirect.agent.status === "done") && directTargetMatches && direct.expected_target?.pane_id === direct.pane_id && direct.expected_target.workspace_id === direct.workspace_id && direct.expected_target.tab_id === direct.tab_id && direct.expected_target.terminal_id === selectedAgent?.terminalId && (direct.expected_target.agent_name === null || direct.expected_target.agent_name === direct.agent_name) && !directStale && !directUncertain[direct.pane_id];
+  const visibleOutcome = directOutcome && direct && directOutcome.pane === direct.pane_id && directOutcome.target === JSON.stringify(direct.expected_target) ? directOutcome : null;
   const open = (location: InboxLocation | null) => { if (location && view?.observation.status === "fresh" && snapshot?.session_id === sessionId && (!direct || liveDirect)) void onOpenLocation(location).catch(e => setError(e instanceof Error ? e.message : "Could not open session")); };
   const execute = async (operation: Pending) => {
     if (lock.current || !view || operation.store !== view.state_store_id) { if (view && operation.store !== view.state_store_id) setError("Session state changed. The original request has been retained and cannot be retried here."); return; }
@@ -157,15 +162,27 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     if (!view || !current || snapshot?.session_id !== sessionId || !text.trim() || busy || pending || lock.current) return;
     if (selected && !thread && !direct) { setError("This work is no longer available. Your draft is preserved."); return; }
     if (direct) {
-      if (!directReady || !direct.expected_target || view.observation.status !== "fresh") return;
-      lock.current = true; setBusy(true); setError("");
+      if (!directReady || visibleOutcome || !direct.expected_target || view.observation.status !== "fresh") return;
+      const attempt = selectionVersion.current;
+      const outcome = { pane: direct.pane_id, target: JSON.stringify(direct.expected_target), name: direct.agent_name };
+      lock.current = true; setBusy(true); setError(""); setDirectOutcome(null);
       try {
         await client.orchestrationAgentSend({ session_id: sessionId, reference: direct.pane_id, text, expected_target: direct.expected_target });
-        if (mounted.current) setDrafts(d => d[key] === text ? { ...d, [key]: "" } : d);
+        if (mounted.current) {
+          setDrafts(d => d[key] === text ? { ...d, [key]: "" } : d);
+          if (selectionVersion.current === attempt) setDirectOutcome({ ...outcome, kind: "submitted" });
+        }
       } catch (e) {
         if (mounted.current) {
-          if (e instanceof CockpitClientError && e.operationCode === "stale_identity") { setDirectStale(true); setError("The agent identity changed. Your draft is preserved; review and reselect the agent."); }
-          else { setDirectUncertain(previous => ({ ...previous, [direct.pane_id]: true })); setError(`${e instanceof Error ? e.message : "Delivery not confirmed"}. Check the agent before sending again; your draft is preserved.`); }
+          const selectedAttempt = selectionVersion.current === attempt;
+          if (e instanceof CockpitClientError && e.operationCode === "stale_identity") {
+            if (selectedAttempt) { setDirectStale(true); setError("The agent identity changed. Your draft is preserved; review and reselect the agent."); }
+          } else if (e instanceof CockpitClientError && Object.prototype.hasOwnProperty.call(directBusyCodes, e.operationCode ?? "")) {
+            if (selectedAttempt) setDirectOutcome({ ...outcome, kind: "busy" });
+          } else {
+            setDirectUncertain(previous => ({ ...previous, [outcome.pane]: true }));
+            if (selectedAttempt) setError(`${e instanceof Error ? e.message : "Delivery not confirmed"}. Check the agent before sending again; your draft is preserved.`);
+          }
         }
       } finally { lock.current = false; if (mounted.current) setBusy(false); refreshVersion.current++; wake.current?.(); }
       return;
@@ -231,7 +248,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
           {view?.owners.filter(o => thread.owner_root_ids.includes(o.root_id) && (!o.location || o.availability !== "available")).map(o => <span className="inbox-offline" key={o.root_id}><UiIcon name="offline" />{ownerLabel(view, o.root_id)} · {o.availability === "starting" ? "starting" : o.availability === "absent" ? "not running" : "status unknown"}</span>)}
           {thread.unread_result_message_id && <button type="button" className={`inbox-btn${thread.need === "answer" ? " is-primary" : ""}`} disabled={busy} onClick={() => void markRead()}><UiIcon name="check" />Mark read</button>}</div>
         <Evidence thread={thread} view={view} displayed={displayed} />
-      </div> : direct ? <div className="inbox-content"><div className="inbox-head" data-tone="unknown"><span className="inbox-kic is-lg"><UiIcon name="user" /></span><div><h2>{direct.agent_name}</h2><p className="inbox-facts"><span>{direct.workspace_label} · {direct.tab_label}</span><span>Direct agent · {direct.agent_status || "status unknown"}</span></p></div></div><div className="inbox-actions"><button type="button" className="inbox-btn" onClick={() => open({ workspace_id: direct.workspace_id, workspace_label: direct.workspace_label, tab_id: direct.tab_id, tab_label: direct.tab_label, pane_id: direct.pane_id })}>Open session</button></div></div> : <div className="inbox-content"><h2>New work</h2><p>Send a request to a liaison.</p></div>}
+      </div> : direct ? <div className="inbox-content"><div className="inbox-head" data-tone="unknown"><span className="inbox-kic is-lg"><UiIcon name="user" /></span><div><h2>{direct.agent_name}</h2><p className="inbox-facts"><span>{direct.workspace_label} · {direct.tab_label}</span><span>Direct agent · {liveDirect?.agent.status || "status unavailable"}</span></p></div></div><div className="inbox-actions"><button type="button" className="inbox-btn" onClick={() => open({ workspace_id: direct.workspace_id, workspace_label: direct.workspace_label, tab_id: direct.tab_id, tab_label: direct.tab_label, pane_id: direct.pane_id })}>Open session</button></div></div> : <div className="inbox-content"><h2>New work</h2><p>Send a request to a liaison.</p></div>}
       <form className="inbox-compose" data-mode={mode} onSubmit={e => { e.preventDefault(); void send(); }}>
         <div className="inbox-compose-head">
           {thread && (questions.length > 0 || !!selectedQuestion) && <div className="inbox-seg" role="group" aria-label="Message type"><button type="button" aria-pressed={mode === "followup"} disabled={!!pending} onClick={() => setSelectedQuestion("")}>Follow up</button>{questions.length > 0 && <button type="button" aria-pressed={mode === "answer"} aria-disabled={!chosenQuestion && questions.length > 1} title={!chosenQuestion && questions.length > 1 ? "Pick a question above first" : undefined} disabled={!!pending} onClick={() => { if (questions.length === 1) setSelectedQuestion(questionKey(questions[0])); }}>Answer</button>}</div>}
@@ -241,9 +258,9 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
         </div>
         {questions.length > 1 && !chosenQuestion && <p className="inbox-note" aria-live="polite">Pick a question above to answer it.</p>}
         {error && <p role="alert" className="inbox-note" data-tone="error" title={error}><UiIcon name="alert" />{error}</p>}
-        {direct && (directUncertain[direct.pane_id] ? <p role="status" className="inbox-note">Delivery is uncertain. Open the session to inspect it; no automatic retry is safe.</p> : !directReady && <p role="status" className="inbox-note">{!direct.expected_target ? "Agent identity is unavailable. Your draft is preserved; reselect when available." : directStale || !directTargetMatches || !liveDirect ? "Agent identity changed or is unavailable. Review and reselect the agent; your draft is preserved." : "Direct messages are available only when this agent is idle."}</p>)}
+        {direct && (directUncertain[direct.pane_id] ? <p role="status" className="inbox-note">Delivery is uncertain. Open the session to inspect it; no automatic retry is safe.</p> : directStale ? <p role="status" className="inbox-note">Agent identity changed or is unavailable. Review and reselect the agent; your draft is preserved.</p> : visibleOutcome ? <p role="status" className="inbox-note">{visibleOutcome.kind === "busy" ? `Not sent. ${visibleOutcome.name} is busy. Your draft is kept; reselect the agent when it is ready.` : `Submitted to ${visibleOutcome.name}’s terminal. Not confirmed read. To send another, reselect the agent once it is ready.`}</p> : !directReady && <p role="status" className="inbox-note">{!direct.expected_target ? "Agent identity is unavailable. Your draft is preserved; reselect when available." : !directTargetMatches || !liveDirect ? "Agent identity changed or is unavailable. Review and reselect the agent; your draft is preserved." : "Direct messages are available only when this agent is ready."}</p>)}
         <div className="inbox-compose-row"><textarea aria-label={direct ? "Message agent" : chosenQuestion ? "Answer question" : thread ? "Follow up with owner" : "Your request"} placeholder={direct ? `Message ${direct.agent_name}…` : chosenQuestion ? "Type an answer or tap a choice" : thread ? questions.length ? "Add an instruction. Doesn’t answer the question" : "Follow up…" : "Describe the work or ask a question"} value={text} onChange={e => { setText(e.target.value); e.currentTarget.style.height = "auto"; e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 96)}px`; }} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && e.nativeEvent.keyCode !== 229) { e.preventDefault(); e.currentTarget.form?.querySelector<HTMLButtonElement>('button[type="submit"]:not(:disabled)')?.click(); } }} disabled={!!pending} rows={1} enterKeyHint="send" />
-          {pending ? <button type="button" className="inbox-send is-retry" disabled={busy || snapshot?.session_id !== sessionId} onClick={() => void execute(pending)}>Retry original request</button> : <button type="submit" className="inbox-send" disabled={!view || snapshot?.session_id !== sessionId || !text.trim() || busy || view.observation.status !== "fresh" || (!!direct && !directReady)}><UiIcon name="send" />{mode === "answer" ? "Answer" : mode === "new" ? "Start" : mode === "direct" ? "Send direct" : "Send"}</button>}</div>
+          {pending ? <button type="button" className="inbox-send is-retry" disabled={busy || snapshot?.session_id !== sessionId} onClick={() => void execute(pending)}>Retry original request</button> : <button type="submit" className="inbox-send" disabled={!view || snapshot?.session_id !== sessionId || !text.trim() || busy || view.observation.status !== "fresh" || (!!direct && (!directReady || !!visibleOutcome))}><UiIcon name="send" />{mode === "answer" ? "Answer" : mode === "new" ? "Start" : mode === "direct" ? "Send direct" : "Send"}</button>}</div>
       </form>
     </main>
   </section>;

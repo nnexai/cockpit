@@ -23,6 +23,17 @@
   display: none;
 }
 
+.terminal-host .xterm,
+.terminal-host .xterm-viewport,
+.terminal-host .xterm-screen {
+  touch-action: pinch-zoom;
+  overscroll-behavior: none;
+}
+
+@media (pointer: coarse) {
+  .terminal-host .xterm-helper-textarea { font-size: 16px; }
+}
+
 .terminal-overlay {
   position: absolute;
   right: 8px;

@@ -53,8 +53,8 @@ export function useTerminalControl(refs: TerminalRefs, request: TerminalPaneRequ
     for (const command of pendingCommands.current) sendStreamCommand(stream, command);
     clearPendingCommands();
   };
-  const requestControl = () => {
-    if (selectedRef.current && presentedRef.current && controlAllowedRef.current && ownershipRef.current === "owned") terminalRef.current?.focus();
+  const requestControl = (options?: { focus?: boolean }) => {
+    if (options?.focus !== false && selectedRef.current && presentedRef.current && controlAllowedRef.current && ownershipRef.current === "owned") terminalRef.current?.focus();
     onRequestControlRef.current?.();
     if (!selectedRef.current) onSelectRef.current?.();
     if (controlAllowedRef.current && ownershipRef.current === "owned") return;

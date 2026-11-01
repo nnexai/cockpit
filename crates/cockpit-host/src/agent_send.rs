@@ -57,6 +57,14 @@ fn check_direct_target(
     Ok(())
 }
 
+fn check_ready_pane(reference: &str, pane: Option<&RuntimePane>) -> Result<(), InspectionError> {
+    if !pane.is_some_and(|p| p.pane_id == reference && p.agent_status.as_deref().is_some_and(|status|
+        status.eq_ignore_ascii_case("idle") || status.eq_ignore_ascii_case("done"))) {
+        return Err(InspectionError::new("agent_not_idle", "Agent is not ready or is unavailable"));
+    }
+    Ok(())
+}
+
 pub async fn send_to_agent<F>(
     service: &OrchestrationService, adapter: &HerdrCliAdapter, session: &str,
     root: Option<String>, reference: &str, text: String, origin: OperatorOrigin, announce: bool, idle_only: bool,
@@ -78,9 +86,7 @@ where F: FnOnce(&cockpit_protocol::orchestration::OrchestrationSnapshot, &str) -
     }
     let run_ref = resolve_run(&snapshot, reference)?;
     let pane = candidates.first().copied();
-    if idle_only && !pane.is_some_and(|p| p.pane_id == reference && p.agent_status.as_deref().is_some_and(|status| status.eq_ignore_ascii_case("idle"))) {
-        return Err(InspectionError::new("agent_not_idle", "Agent is no longer idle or is unavailable"));
-    }
+    if idle_only { check_ready_pane(reference, pane)?; }
     let pane_run = pane.and_then(|pane| {
         let mut matching = snapshot.runs.iter().filter(|run| run.stage != RunStage::Closed && location_pane(run) == Some(pane.pane_id.as_str()));
         let first = matching.next();
@@ -156,6 +162,23 @@ mod tests {
         };
         (RuntimeView { endpoint_identity: "endpoint".into(), boot_id: None, peer_process: None,
             focused_workspace_id: None, workspaces: vec![], panes: vec![observed] }, target)
+    }
+
+    #[test]
+    fn direct_send_readiness_accepts_idle_and_done_but_rejects_busy_or_missing() {
+        let mut observed = pane("pane", "alpha", "space");
+        for status in ["idle", "IDLE", "done", "DONE"] {
+            observed.agent_status = Some(status.into());
+            assert!(check_ready_pane("pane", Some(&observed)).is_ok(), "{status}");
+        }
+        for status in ["working", "blocked", "unknown"] {
+            observed.agent_status = Some(status.into());
+            assert_eq!(check_ready_pane("pane", Some(&observed)).unwrap_err().code, "agent_not_idle");
+        }
+        observed.agent_status = None;
+        assert_eq!(check_ready_pane("pane", Some(&observed)).unwrap_err().code, "agent_not_idle");
+        assert_eq!(check_ready_pane("other", Some(&observed)).unwrap_err().code, "agent_not_idle");
+        assert_eq!(check_ready_pane("pane", None).unwrap_err().code, "agent_not_idle");
     }
 
     #[test]

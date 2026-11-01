@@ -10,8 +10,10 @@ import { useOrderedSession } from "./shell/useOrderedSession";
 import { useSessionControl } from "./shell/useSessionControl";
 import { useAutoResync, useResyncControl } from "./shell/useSessionRecovery";
 import { useSessionStream, type SessionStreamHandle } from "./shell/useSessionStream";
+import { useVisibleViewport } from "./shell/useVisibleViewport";
 
 export function App({ client }: { client: CockpitClient }) {
+  useVisibleViewport();
   const [status, setStatus] = useState<CockpitStatus | null>(null);
   const [statusError, setStatusError] = useState<StatusError | null>(null);
   const [statusAttempt, setStatusAttempt] = useState(0);

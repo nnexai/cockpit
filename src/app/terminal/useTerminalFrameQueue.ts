@@ -64,7 +64,7 @@ export function useTerminalFrameQueue(refs: TerminalRefs, resize: TerminalResize
             });
             terminal.refresh(0, terminal.rows - 1);
           }
-          if (frame.retainedFocus && selectedRef.current && presentedRef.current && controlAllowedRef.current && ownershipRef.current === "owned" && document.activeElement === document.body) terminal.focus();
+          if (frame.retainedFocus && selectedRef.current && presentedRef.current && controlAllowedRef.current && ownershipRef.current === "owned" && document.activeElement === document.body && window.matchMedia?.("(pointer: coarse)").matches !== true) terminal.focus();
         } catch {
           if (!cancelled() && isLatest()) fail("terminal_frame", "Terminal could not render a frame");
         } finally {
