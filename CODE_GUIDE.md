@@ -13,7 +13,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Session hooks | `src/app/shell/useOrderedSession.ts`; `src/app/shell/useSessionStream.ts`; `src/app/shell/useSessionControl.ts` |
 | Recovery and sidebar state | `src/app/shell/useSessionRecovery.ts`; `src/app/shell/useSidebarState.ts`; `src/app/shell/useWorkbenchUI.ts` |
 | Workbench state/actions/input | `src/app/shell/useWorkbenchState.ts`; `src/app/shell/useWorkbenchActions.ts`; `src/app/shell/useWorkbenchInput.ts` |
-| Workarea and canvas | `src/app/shell/useWorkarea.ts`; `src/app/shell/WorkbenchCanvas.tsx`; `src/app/shell/model.ts` |
+| Workarea and canvas | `src/app/shell/useWorkarea.ts`; `src/app/shell/WorkbenchCanvas.tsx`; `src/app/shell/useWidgetWindowState.ts` observes the selected canvas and rebinds when the workbench remounts; `src/app/shell/model.ts` |
 | Visible mobile viewport | `src/app/shell/useVisibleViewport.ts`; `src/app/App.tsx`; `src/app/styles/shell.css`; `index.html` viewport policy |
 | Viewer/widget/liaison shell coordination | `src/app/shell/useViewerSources.ts`; `src/app/shell/useWidgetWindowState.ts`; `src/app/shell/useLiaisonNavigation.ts` |
 | Commands and tab strip | `src/app/shell/commands.ts`; `src/app/shell/CommandOverlay.tsx`; `src/app/shell/TabStrip.tsx` |

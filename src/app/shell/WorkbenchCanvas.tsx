@@ -8,7 +8,7 @@ import type { Rect } from "../layout/solveLayout";
 import type { WorkbenchContentProps } from "./WorkbenchContent";
 
 export function WorkbenchCanvas(props: WorkbenchContentProps) {
-  const { client, state, ctx, tabLayout, snapshot, spaces, allTabs, modalOpen, onFocus, browserInputActive, mutationBusy, selectLeaf, zoom, closeLeaf, onRetry, openContext, terminalMouseInput, attachedPaneIds, attachFocusSuppressed, onPanePrepared, switching, setPaintedTab, onReconnect, registerStream, canvasRef, setAttachFocusSuppressed, canvasTabs, area, popup, popupPending, registerTransient, setPrefixHint } = props;
+  const { client, state, ctx, tabLayout, snapshot, spaces, allTabs, modalOpen, onFocus, browserInputActive, mutationBusy, selectLeaf, zoom, closeLeaf, onRetry, openContext, terminalMouseInput, attachedPaneIds, attachFocusSuppressed, onPanePrepared, switching, setPaintedTab, onReconnect, registerStream, bindCanvas, setAttachFocusSuppressed, canvasTabs, area, popup, popupPending, registerTransient, setPrefixHint } = props;
   const dispatchCanvas = (action: LayoutAction) => {
     if (action.type === "select-leaf") { props.onSelectLeaf(action.tabId, action.leafId); return; }
     if (action.type === "zoom-toggle") {
@@ -49,7 +49,7 @@ export function WorkbenchCanvas(props: WorkbenchContentProps) {
         },
       } : null} />;
   };
-  return <div ref={canvasRef} aria-hidden={props.overviewOpen || undefined} inert={props.overviewOpen} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: props.overviewOpen ? "absolute" : "relative", inset: props.overviewOpen ? 0 : undefined, visibility: props.overviewOpen ? "hidden" : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
+  return <div ref={bindCanvas} aria-hidden={props.overviewOpen || undefined} inert={props.overviewOpen} data-suppress-attach-focus={attachFocusSuppressed || undefined} style={{ position: props.overviewOpen ? "absolute" : "relative", inset: props.overviewOpen ? 0 : undefined, visibility: props.overviewOpen ? "hidden" : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }} onPointerDownCapture={() => setAttachFocusSuppressed(false)}
     onContextMenu={event => { const pane = (event.target as HTMLElement).closest<HTMLElement>("[data-leaf-id]"); if (pane?.dataset.leafId) { selectLeaf(pane.dataset.leafId); openContext(event, { kind: "pane", id: pane.dataset.leafId }); } }}>
     {canvasTabs.length ? canvasTabs.map(hostTab => <div key={hostTab.tabId} style={{ position: switching ? "absolute" : "relative", inset: switching ? 0 : undefined, flex: "1 1 0", minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", visibility: props.overviewOpen || switching && hostTab.tabId === tabLayout?.tabId ? "hidden" : "visible", pointerEvents: props.overviewOpen || hostTab.tabId !== tabLayout?.tabId ? "none" : undefined }} inert={props.overviewOpen || hostTab.tabId !== tabLayout?.tabId}><TabCanvas tab={hostTab} area={area} inputBlocked={Boolean(popup || popupPending || props.overviewOpen)} renderLeaf={(leaf, rect) => renderLeaf(hostTab, leaf, rect)} dispatch={dispatchCanvas} registerTransient={registerTransient} announce={setPrefixHint} /></div>) : <div className="empty-main"><strong>No panes</strong><span>Create a tab or select another space.</span></div>}
   </div>;

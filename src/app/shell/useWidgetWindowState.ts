@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { solveLayout, type Rect } from "../layout/solveLayout";
 import { useWidgets, widgetKey, type WidgetStore } from "../widgets/widgetStore";
 import type { WorkbenchProps } from "./Workbench";
@@ -6,12 +6,17 @@ import type { WorkareaController } from "./useWorkarea";
 import type { Tab } from "./model";
 import type { Space } from "../sidebar/spaceTree";
 export interface WidgetWindowState {
-  canvasRef: RefObject<HTMLDivElement | null>; area: Rect; widgets: WidgetStore;
+  canvasRef: RefObject<HTMLDivElement | null>; bindCanvas: (element: HTMLDivElement | null) => void; area: Rect; widgets: WidgetStore;
   widgetDots: Set<string>; widgetsPending: boolean; showWidgets(): void;
 }
 export function useWidgetWindowState({ client, ctx, state, tabLayout, selection, onWidgetAnnouncement }: WorkbenchProps, workarea: WorkareaController, selectedTab: Tab | undefined, sourcePaneId: string | null, spaces: Space[], allTabs: Tab[], tabs: Tab[]): WidgetWindowState {
   const terminalVisible = workarea.view.kind === "terminal";
   const canvasRef = useRef<HTMLDivElement>(null);
+  const [canvasElement, setCanvasElement] = useState<HTMLDivElement | null>(null);
+  const bindCanvas = useCallback((element: HTMLDivElement | null) => {
+    canvasRef.current = element;
+    setCanvasElement(element);
+  }, []);
   const [area, setArea] = useState<Rect>({ x: 0, y: 0, width: 800, height: 600 });
   const widgets = useWidgets(client);
   const widgetRevision = widgets.getSnapshot();
@@ -53,7 +58,7 @@ export function useWidgetWindowState({ client, ctx, state, tabLayout, selection,
     widgets.show(selectedTab.id);
   };
   useLayoutEffect(() => {
-    const element = Array.from(canvasRef.current?.querySelectorAll<HTMLElement>(".tab-canvas") ?? []).find(node => node.closest<HTMLElement>("[data-tab-id]")?.dataset.tabId === selection.tabId);
+    const element = Array.from(canvasElement?.querySelectorAll<HTMLElement>(".tab-canvas") ?? []).find(node => node.closest<HTMLElement>("[data-tab-id]")?.dataset.tabId === selection.tabId);
     if (!element || !terminalVisible) return;
     const measure = () => {
       const rect = element.getBoundingClientRect();
@@ -64,6 +69,6 @@ export function useWidgetWindowState({ client, ctx, state, tabLayout, selection,
     observer?.observe(element);
     window.addEventListener("resize", measure);
     return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
-  }, [terminalVisible, selection.tabId, tabLayout?.zoomLeafId]);
-  return { canvasRef, area, widgets, widgetDots, widgetsPending, showWidgets };
+  }, [canvasElement, terminalVisible, selection.tabId, tabLayout?.zoomLeafId]);
+  return { canvasRef, bindCanvas, area, widgets, widgetDots, widgetsPending, showWidgets };
 }
