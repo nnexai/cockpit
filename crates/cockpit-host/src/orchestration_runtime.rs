@@ -315,10 +315,28 @@ async fn resolve_physical_mutation_input(
                 let run = &runs[index];
                 if selected_root_id.as_deref() == Some(run.run_id.as_str())
                     && cockpit_core::orchestration::root_checkout_reselection_pending(run)
-                    && let Some(target @ DispatchTarget::ExistingSpace { .. }) = target {
-                    let mut resolved = resolve_start_target(projects, herdr, &request.session_id, target).await?;
-                    resolved.reselected_checkout = resolved.checkout.take();
-                    Ok(resolved)
+                    && let Some(DispatchTarget::ExistingSpace { workspace_id }) = target {
+                    let boot = cockpit_core::orchestration::project_identity::local_boot_marker()
+                        .ok_or_else(|| InspectionError::new("checkout_reselection_unavailable", "Local boot identity is unavailable"))?;
+                    let runtime = herdr.runtime(&request.session_id).await?;
+                    let identity_reselection = run.dispatch.as_ref().and_then(|dispatch| dispatch.error.as_ref())
+                        .is_some_and(|error| error.code == "retained_space_identity_unproven");
+                    let cwd = if identity_reselection {
+                        if runtime.workspaces.iter().filter(|space| &space.workspace_id == workspace_id).count() != 1 {
+                            return Err(InspectionError::new("workspace_missing", "The selected Space is not unique in the fresh runtime"));
+                        }
+                        &run.checkout.as_ref().ok_or_else(|| InspectionError::new("checkout_reselection_unavailable", "Saved checkout is unavailable"))?.path
+                    } else { &authoritative_workspace(&runtime, workspace_id)?.cwd };
+                    let (project, checkout) = resolve_directory(
+                        Path::new(cwd), None, Some(workspace_id.clone()),
+                    ).await?;
+                    if cockpit_core::orchestration::project_identity::local_boot_marker().as_deref() != Some(boot.as_str()) {
+                        return Err(InspectionError::new("checkout_reselection_unavailable", "Local boot changed during Space observation"));
+                    }
+                    Ok(ResolvedMutationInput {
+                        project: Some(project), reselected_checkout: Some(checkout),
+                        reselected_endpoint: Some(runtime.endpoint_identity), reselected_boot: Some(boot), ..Default::default()
+                    })
                 } else {
                     resolve_resume_input(service, herdr, run).await
                 }
@@ -673,9 +691,11 @@ fn root_candidate(run: &Run, modern_binding: bool) -> LiaisonCandidate {
         .and_then(|_| run.dispatch.as_ref()?.error.as_ref());
     let retryable_refusal = refused_launch.is_some_and(|error|
         (error.code == "harness_resume_unsupported" && resume_supported(&run.launch_config))
-            || (matches!(error.code.as_str(), "workspace_missing" | "retained_space_identity_unproven" | "retained_space_checkout_changed")
+            || (matches!(error.code.as_str(), "workspace_missing" | "retained_space_checkout_changed")
                 && run.kind == RunKind::Supervisor));
+    let dead_unregistered_launch = project_identity::retryable_dead_unregistered_resume(run);
     let resume = if incompatible_live { RootResumeAvailability::Blocked }
+    else if dead_unregistered_launch { RootResumeAvailability::Available }
     else if refused_launch.is_some() {
         if retryable_refusal { RootResumeAvailability::Available }
         else { RootResumeAvailability::Blocked }
@@ -686,7 +706,7 @@ fn root_candidate(run: &Run, modern_binding: bool) -> LiaisonCandidate {
         Some(ResumePhase::Blocked) => RootResumeAvailability::Blocked,
         _ => RootResumeAvailability::Available,
     }};
-    let connection = if refused_launch.is_some() && !incompatible_live {
+    let connection = if dead_unregistered_launch || refused_launch.is_some() && !incompatible_live {
         RootConnection::Disconnected
     } else if resume == RootResumeAvailability::InProgress {
         RootConnection::Reconnecting

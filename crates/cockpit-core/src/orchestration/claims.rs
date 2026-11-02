@@ -66,6 +66,7 @@ pub struct RootMainRecoveryProof {
     pub(crate) dispatch: Option<cockpit_protocol::orchestration::DispatchState>,
     pub(crate) retained_checkout: Option<cockpit_protocol::orchestration::CheckoutIdentity>,
     pub(crate) idle_shell: Option<cockpit_protocol::orchestration::NativeShellIdentity>,
+    pub(crate) launch_scope: Option<crate::process_scope::ScopeObservation>,
     pub(crate) basis: RootExitBasis,
 }
 
@@ -460,7 +461,7 @@ mod tests {
         dispatch.endpoint_identity = Some("endpoint".into());
         root.dispatch = Some(dispatch);
         let proof = RootMainRecoveryProof { run_id: id.clone(), session_id: "session".into(),
-            attachment: root.attachment.clone().unwrap(), dispatch: root.dispatch.clone(), retained_checkout: None, idle_shell: None,
+            attachment: root.attachment.clone().unwrap(), dispatch: root.dispatch.clone(), retained_checkout: None, idle_shell: None, launch_scope: None,
             basis: RootExitBasis::ExactIncarnation };
         original.runs.push(root);
         let holder = worker(&mut original, "independent-worker");

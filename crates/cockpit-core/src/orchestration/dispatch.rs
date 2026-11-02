@@ -39,11 +39,27 @@ fn dispatch_actionable(run: &Run) -> bool {
         DispatchStep::SetupPending | DispatchStep::SetupRunning | DispatchStep::LaunchIntent
         | DispatchStep::LaunchPending | DispatchStep::LaunchUnknown => true,
         DispatchStep::MoveIntent | DispatchStep::MoveUnknown | DispatchStep::Placed => true,
-        DispatchStep::NeedsReview => recovery_close_pending(run),
+        DispatchStep::NeedsReview => recovery_close_pending(run) || stalled_root_resume(run),
         DispatchStep::SetupUnknown => dispatch.recovery.is_some(),
         DispatchStep::Launched => scope_creation_pending(run),
         _ => false,
     })
+}
+
+/// Settling review metadata does not prove process exit or authorize replacement.
+pub(super) fn stalled_root_resume(run: &Run) -> bool {
+    matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)
+        && run.run_id == run.root_id && run.parent_run_id.is_none()
+        && run.stage == RunStage::Starting
+        && !super::mutate::resume::effect_free_reserved_resume_launch(run)
+        && !recovery_close_pending(run)
+        && run.dispatch.as_ref().zip(run.attachment.as_ref()).is_some_and(|(dispatch, attachment)|
+            dispatch.step == DispatchStep::NeedsReview && dispatch.error.is_some()
+                && dispatch.launch_attempt == attachment.launch_attempt
+                && run.resume.as_ref().is_some_and(|resume|
+                    resume.run_id == run.run_id
+                        && resume.phase == cockpit_protocol::orchestration::ResumePhase::Launching
+                        && resume.replacement_attachment_epoch == Some(attachment.epoch)))
 }
 
 pub(super) fn plan_failed_before_effects(run: &Run) -> bool {
@@ -180,6 +196,8 @@ pub struct Dispatcher {
     library: Arc<LibraryService>,
     pub(super) herdr: Arc<dyn OrchestrationHerdr>,
     settings: DispatcherSettings,
+    #[cfg(target_os = "macos")]
+    launch_path: tokio::sync::OnceCell<std::ffi::OsString>,
 }
 
 impl Dispatcher {
@@ -196,6 +214,8 @@ impl Dispatcher {
             library,
             herdr,
             settings,
+            #[cfg(target_os = "macos")]
+            launch_path: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -719,6 +739,9 @@ impl Dispatcher {
             DispatchStep::NeedsReview if recovery_close_pending(&run) => {
                 finish_owned_launch_recovery(&self.service, self.herdr.as_ref(), &run, self.settings.start_timeout_ms).await
             }
+            DispatchStep::NeedsReview if stalled_root_resume(&run) => {
+                self.service.settle_stalled_root_resume(&run).map(|_| ())
+            }
             _ => Ok(()),
         }
     }
@@ -1028,10 +1051,20 @@ impl Dispatcher {
             .ok_or_else(|| InspectionError::new("setup_missing", "No setup receipt"))?;
         let runtime = self.herdr.runtime(&run.session_id).await?;
         let retained_restart = initial_retained_restart(&self.service, run, &runtime)?;
-        let workspace_id = if let Some(server_proven) = retained_restart {
-            match if server_proven { resume_staging_choice(run, &runtime) } else { None } {
+        let require_checkout = retained_restart.is_some_and(|(_, explicitly_reselected)| explicitly_reselected);
+        let workspace_id = if let Some((server_proven, explicitly_reselected)) = retained_restart {
+            let retained = if explicitly_reselected { setup.workspace_id.clone() }
+                else if server_proven { resume_staging_choice(run, &runtime) } else { None };
+            match retained {
                 Some(retained) => retained,
-                None => self.staging_space(run).await?,
+                None => {
+                    let staging = self.staging_space(run).await?;
+                    if setup.workspace_id.as_ref() == Some(&staging) {
+                        return Err(InspectionError::new("retained_space_identity_unproven",
+                            "The retained Space is not proven on this server with the saved checkout; select another staging Space before retrying"));
+                    }
+                    staging
+                }
             }
         } else if matches!(run.target.as_ref(), Some(DispatchTarget::ExistingSpace { .. })) {
             setup.workspace_id.clone().ok_or_else(|| InspectionError::new("setup_receipt_missing", "Existing Space receipt is missing"))?
@@ -1077,6 +1110,10 @@ impl Dispatcher {
             Some(base) => Some(base.clone()),
             None => setup_base_commit(setup, &checkout).await?,
         };
+        #[cfg(target_os = "macos")]
+        let launch_path = self.launch_path.get_or_init(crate::quick_ask::discovery_path).await
+            .to_str().ok_or_else(|| InspectionError::new(
+                "launch_environment_unverified", "The initialized shell PATH is not UTF-8"))?;
         let (reserved, credential_file) = self.service.reserve_dispatch_launch(run, project, checkout, base_commit, input_facts.as_ref())?;
         let run = &reserved;
         let attachment = run.attachment.as_ref().ok_or_else(|| InspectionError::new("attachment_missing", "Launch attachment is missing"))?;
@@ -1117,7 +1154,7 @@ impl Dispatcher {
         let launch = crate::process_scope::agent_launch(
             &self.settings.cli_path, std::path::Path::new(&configuration.state_root),
             crate::process_scope::AgentLaunchIdentity {
-                store_identity: self.service.store_identity(), run_id: &run.run_id, kind: &run.kind, epoch: attachment.epoch,
+                store_identity: self.service.store_identity(), run_id: &run.run_id, kind: &run.kind, epoch: attachment.epoch, require_checkout,
             },
             &format!("Cockpit {:?} {}", run.kind, run.run_id),
             run.launch_config.process_scope, command,
@@ -1169,6 +1206,8 @@ impl Dispatcher {
                         })?,
                 ),
             ]);
+            #[cfg(target_os = "macos")]
+            env.insert("PATH".into(), launch_path.into());
             if let Some(path) = &self.settings.config_path {
                 env.insert("COCKPIT_CONFIG_PATH".into(), path_text(path)?);
             }
@@ -1212,6 +1251,7 @@ impl Dispatcher {
                     &super::herdr::DirectAgentTabRequest {
                         endpoint_identity: runtime.endpoint_identity.clone(),
                         workspace_id: workspace_id.clone(),
+                        verify_workspace: require_checkout,
                         cwd: setup.checkout_path.clone(),
                         label: tag.clone(),
                         env,
@@ -1441,6 +1481,35 @@ impl Dispatcher {
         }
         let project = run.project.as_ref().ok_or_else(|| InspectionError::new("project_missing", "Placed actor lost its source project"))?;
         let checkout = run.checkout.as_ref().ok_or_else(|| InspectionError::new("checkout_missing", "Placed actor lost its starting checkout"))?;
+        let reselected = {
+            let locked = self.service.store.lock()?;
+            let state = locked.read_shared()?;
+            has_reselection(&state, &run)
+        };
+        if reselected {
+            let runtime = self.herdr.runtime(&run.session_id).await?;
+            let current = {
+                let locked = self.service.store.lock()?;
+                let state = locked.read_shared()?;
+                reselected_space_matches(&state, &run, &runtime)
+            };
+            let exact = runtime.endpoint_identity == location.endpoint_identity
+                && location.terminal_id.is_some()
+                && runtime.panes.iter().filter(|pane| pane.workspace_id == location.workspace_id
+                    && pane.tab_id == location.tab_id && pane.pane_id == location.pane_id
+                    && pane.terminal_id == location.terminal_id && pane.tab_label == location.launch_tag).count() == 1
+                && runtime.panes.iter().filter(|pane| pane.terminal_id == location.terminal_id).count() == 1;
+            if !current || !exact || super::project_identity::revalidate_checkout(checkout).is_err() {
+                self.service.record_latch_release_unknown(&run, ErrorResponse {
+                    code: "reselected_space_changed".into(),
+                    message: "The selected Space, terminal or checkout changed before launch; the waiting harness was not released.".into(),
+                })?;
+                return Ok(());
+            }
+            env.insert("COCKPIT_LAUNCH_CHECKOUT_DEVICE".into(), checkout.directory_identity.device.clone());
+            env.insert("COCKPIT_LAUNCH_CHECKOUT_INODE".into(), checkout.directory_identity.inode.clone());
+            env.insert("COCKPIT_LAUNCH_CHECKOUT_PATH".into(), checkout.path.clone());
+        }
         let input_facts = self.actual_launch_input_facts(&run, project, checkout).await?;
         let Some(intent) = self.service.record_latch_release_intent(&run, input_facts.as_ref())? else { return Ok(()) };
         match crate::process_scope::release_latch(&latch, &env) {
@@ -1517,15 +1586,48 @@ fn resume_staging_choice(run: &Run, runtime: &RuntimeView) -> Option<String> {
         .then(|| retained.clone())
 }
 
+fn has_reselection(state: &super::store::OrchestrationState, run: &Run) -> bool {
+    run.resume.as_ref().is_some_and(|resume| state.operations.iter().any(|operation|
+        operation.operation_id == resume.operation_id && operation.run_id.as_deref() == Some(run.run_id.as_str())
+            && operation.kind == super::store::DurableOperationKind::RunResume && operation.result.is_none()
+            && operation.effect_receipts.iter().any(|receipt| matches!(receipt, super::store::DurableEffectReceipt::ReselectedSpace { .. }))))
+}
+
+fn reselected_space_matches(state: &super::store::OrchestrationState, run: &Run, runtime: &RuntimeView) -> bool {
+    let (Some(resume), Some(attachment), Some(space), Some(boot)) = (
+        run.resume.as_ref(), run.attachment.as_ref(),
+        run.setup.as_ref().and_then(|setup| setup.workspace_id.as_ref()),
+        super::project_identity::local_boot_marker(),
+    ) else { return false };
+    run.kind == RunKind::Supervisor
+        && runtime.workspaces.iter().filter(|workspace| &workspace.workspace_id == space).count() == 1
+        && state.operations.iter().find(|operation| operation.operation_id == resume.operation_id
+            && operation.kind == super::store::DurableOperationKind::RunResume
+            && operation.run_id.as_deref() == Some(run.run_id.as_str()) && operation.result.is_none())
+            .is_some_and(|operation| operation.effect_receipts.iter().any(|receipt| matches!(receipt,
+                super::store::DurableEffectReceipt::ReselectedSpace { workspace_id, endpoint_identity, boot: recorded_boot, attachment_id, attachment_epoch }
+                    if workspace_id == space && endpoint_identity == &runtime.endpoint_identity && recorded_boot == &boot
+                        && attachment_id == &attachment.attachment_id && *attachment_epoch == attachment.epoch)))
+}
+
 /// `None` for an ordinary launch. A retained checkout restart answers whether
 /// its recorded Space ID still names the same server's Space; when that is
 /// unproven (for example after a Herdr restart) the restart stages a fresh
 /// Space instead of trusting or refusing the old ID.
 fn initial_retained_restart(
     service: &OrchestrationService, expected: &Run, runtime: &RuntimeView,
-) -> Result<Option<bool>, InspectionError> {
+) -> Result<Option<(bool, bool)>, InspectionError> {
     use cockpit_protocol::orchestration::{AttachmentState, OwnedResourceIdentity, ResumePhase};
-    if !resumed_checkout_epoch(expected) { return Ok(None); }
+    if !resumed_checkout_epoch(expected) {
+        if expected.resume.is_some() {
+            let locked = service.store.lock()?;
+            let state = locked.read_shared()?;
+            if has_reselection(&state, expected) {
+                return Err(InspectionError::new("retained_space_identity_unproven", "The explicitly selected Space or checkout changed before launch"));
+            }
+        }
+        return Ok(None);
+    }
     let locked = service.store.lock()?;
     let state = locked.read_shared()?;
     let run = state.runs.iter().find(|run| run.run_id == expected.run_id)
@@ -1552,6 +1654,10 @@ fn initial_retained_restart(
         return Err(InspectionError::new("checkout_claim_conflict", "Retained restart lost its exact reserved checkout transition"));
     }
     let previous = resume.previous_attachment_epoch.expect("checked epoch");
+    let explicitly_reselected = reselected_space_matches(&state, run, runtime);
+    if has_reselection(&state, run) && !explicitly_reselected {
+        return Err(InspectionError::new("retained_space_identity_unproven", "The explicitly selected Space or Herdr peer changed before launch"));
+    }
     let recorded = state.operations.iter().find(|operation| operation.operation_id == resume.operation_id)
         .and_then(|operation| operation.effect_receipts.iter().find_map(|receipt| match receipt {
             super::store::DurableEffectReceipt::Launch { attachment_epoch, dispatch, .. } if *attachment_epoch == previous =>
@@ -1576,14 +1682,14 @@ fn initial_retained_restart(
                     && dispatch.pre_move_scope.as_ref().is_some_and(|scope|
                         peer.kernel_boot_id.as_deref() == Some(scope.kernel_boot_id.as_str())))
     };
-    let server_proven = recorded.is_some_and(|dispatch| launched_on_this_server(dispatch)
+    let server_proven = explicitly_reselected || recorded.is_some_and(|dispatch| launched_on_this_server(dispatch)
         || dispatch.source_location.as_ref().is_some_and(|location|
             matches_server(&location.endpoint_identity, location.boot_id.as_ref(), location.peer_process.as_ref())))
         || state.owned_resources.iter().filter(|resource| resource.run_id == run.run_id).any(|resource|
             matches!(&resource.identity, OwnedResourceIdentity::WorkerTerminal { identity }
                 if identity.attachment_epoch == Some(previous)
                     && matches_server(&identity.endpoint_identity, identity.herdr_boot_id.as_ref(), identity.herdr_peer.as_ref())));
-    Ok(Some(server_proven))
+    Ok(Some((server_proven, explicitly_reselected)))
 }
 
 fn restarts_in_retained_space(run: &Run) -> bool {

@@ -62,9 +62,15 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
   const retainedScopeMatches = !retained.current || retained.current.scope.sessionId === state.sessionId && retained.current.scope.stateStoreId === snapshot?.state_store_id;
   const actionable = fresh && !observer.busy && !state.focusPending && !state.focusError && lookup?.status === "resolved" && retainedScopeMatches;
   const live = root && root.stage !== "closed" && root.stage !== "reported";
-  const initialStarting = !!root && (root.stage === "queued" || root.stage === "starting") && !root.resume;
+  // An unconfirmed initial launch is not evidence that its process exited.
+  // Offer the existing guarded recovery rather than leaving the root Starting forever.
+  const initialLaunchUnconfirmed = !!root && !root.resume && candidate?.connection !== "connected"
+    && (root.dispatch?.step === "launch_unknown" || root.dispatch?.step === "needs_review");
+  const replacementLaunchUnconfirmed = !!root && root.resume?.phase === "launching"
+    && root.dispatch?.step === "launch_unknown" && candidate?.resume === "available";
+  const initialStarting = !!root && (root.stage === "queued" || root.stage === "starting") && !root.resume && !initialLaunchUnconfirmed;
   const retainedConfirmation = retained.current?.confirmation;
-  const reselect = !!live && candidate?.connection === "disconnected" && candidate.resume === "blocked" && candidate.cause?.code === "checkout_identity_changed";
+  const reselect = !!live && candidate?.connection === "disconnected" && candidate.resume === "blocked" && ["checkout_identity_changed", "retained_space_identity_unproven"].includes(candidate.cause?.code ?? "");
   const retainedStart = retained.current?.action.action === "supervisor_start" ? retained.current.action : null;
   const reselectSpaceMatches = !!selection.spaceId && selection.spaceId === root?.setup?.workspace_id && selection.spaceId === state.snapshot?.focused_space_id
     && (!retainedStart || retainedStart.selected_root_id === rootId && retainedStart.target?.target === "existing_space" && retainedStart.target.workspace_id === selection.spaceId);
@@ -76,7 +82,7 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
     : retained.current && retainedScopeMatches ? retained.current.action.action === "supervisor_start" ? retained.current.action.selected_root_id ? "reselect" : "start" : "resume"
     : candidate.connection === "connected" ? null
     : reselect && !retained.current ? "reselect"
-    : candidate.resume === "in_progress" || candidate.resume === "blocked" && root.resume?.phase !== "blocked" || initialStarting ? "pending"
+    : candidate.resume === "in_progress" || candidate.resume === "blocked" && root.resume?.phase !== "blocked" && !initialLaunchUnconfirmed || initialStarting ? "pending"
     : candidate.stop_confirmable ? "confirm"
     : candidate.resume === "available" || candidate.resume === "blocked" ? "resume" : "pending";
   const pendingReason = kind !== "pending" ? null : candidate?.resume === "in_progress" ? "Resuming…" : candidate?.cause?.message ?? (initialStarting ? "Starting…" : "Supervisor unavailable");
@@ -84,7 +90,7 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
   const actionEnabled = actionable && (kind === "start" || kind === "resume" || kind === "confirm" || kind === "reselect" && reselectSpaceMatches);
   const startAvailable = actionEnabled || actionable && observation?.presence === "present" && !!observation.pane_id;
   const tasks = root && snapshot?.board?.root_id === root.run_id ? snapshot.board.tasks : [];
-  const status = !fresh ? "Offline" : observer.busy ? root ? "Resuming…" : "Starting…" : candidate?.resume === "blocked" && candidate.cause ? plainError(candidate.cause.code, candidate.cause.message).text : root?.resume && ["reconciling", "launching"].includes(root.resume.phase) ? "Resuming…" : root?.stage === "starting" || root?.stage === "queued" ? "Starting…" : null;
+  const status = !fresh ? "Offline" : observer.busy ? root ? "Resuming…" : "Starting…" : candidate?.resume === "blocked" && candidate.cause ? plainError(candidate.cause.code, candidate.cause.message).text : (initialLaunchUnconfirmed || replacementLaunchUnconfirmed) && root.dispatch?.error ? plainError(root.dispatch.error.code, root.dispatch.error.message).text : initialLaunchUnconfirmed || replacementLaunchUnconfirmed ? "Supervisor start is unconfirmed. Check the existing terminal before resuming." : root?.resume && ["reconciling", "launching"].includes(root.resume.phase) ? "Resuming…" : initialStarting ? "Starting…" : null;
   const actionReason = actionEnabled || !actionLabel ? null : state.sync !== "live" ? "Offline" : lookup?.status !== "resolved" ? lookup?.message ?? "Checking supervisor…" : !fresh || observer.busy ? status : kind === "pending" ? pendingReason : kind === "reselect" && !reselectSpaceMatches ? "Select the supervisor's original Space to resume in its folder." : retainedScopeMatches ? "Supervisor unavailable" : "The original request is kept.";
   const perform = async (operation: RetainedOperation) => {
     const result = await observer.mutateResult(operation.action, operation.scope);
@@ -125,7 +131,7 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
     const failure = observer.mutationFailure.current;
     if (!result && operation.action.action === "supervisor_start" && operation.action.selected_root_id
         && failure instanceof CockpitClientError && failure.operationCode
-        && ["checkout_reselection_unavailable", "checkout_reselection_identity_mismatch", "checkout_reselection_space_mismatch", "checkout_identity_changed", "project_identity_conflict", "project_identity_unavailable", "workspace_not_found"].includes(failure.operationCode)) {
+        && ["checkout_reselection_unavailable", "checkout_reselection_identity_mismatch", "checkout_reselection_space_mismatch", "checkout_identity_changed", "retained_space_identity_unproven", "project_identity_conflict", "project_identity_unavailable", "workspace_not_found"].includes(failure.operationCode)) {
       retained.current = null;
       setNavigationError(plainError(failure.operationCode, failure.message).text);
     }
@@ -164,7 +170,7 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
       if (result?.result === "run_resumed" && result.resume.resume.operation_id === operation.action.operation_id) {
         if (result.resume.resume.phase === "blocked") {
           const cause = result.resume.resume.cause;
-          if (cause?.code === "checkout_identity_changed") setRecovery(null);
+          if (cause && ["checkout_identity_changed", "retained_space_identity_unproven"].includes(cause.code)) setRecovery(null);
           else setRecovery(previous => previous ? { ...previous, retry: false, unavailable: false, message: cause ? plainError(cause.code, cause.message).text : "The supervisor could not be started." } : null);
         } else setRecovery(null);
         return;

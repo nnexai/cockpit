@@ -513,6 +513,68 @@ async fn resume_dead_root_accepts_fresh_original_and_restored_idle_shells() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn initial_unknown_direct_launch_requires_exact_exit_and_fresh_receipt() {
+    let fixture = Fixture::new();
+    let live = ForegroundPty::new();
+    let mut run = root_with_process(live.shell.process.pid);
+    run.stage = RunStage::Starting;
+    let attachment = run.attachment.as_mut().unwrap();
+    attachment.conversation = None;
+    attachment.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
+    attachment.shell = Some(live.shell.clone());
+    attachment.location.as_mut().unwrap().native_session_id = None;
+    let process = attachment.process.clone().unwrap();
+    let dispatch = run.dispatch.as_mut().unwrap();
+    dispatch.step = DispatchStep::LaunchUnknown;
+    dispatch.agent_started = false;
+    dispatch.latch_state = Some(AgentLatchState::Released);
+    dispatch.pre_move_scope = Some(OwnedProcessScope {
+        kind: ScopeKind::SystemdUserScope, unit: "fixture.scope".into(), invocation_id: "fixture".into(),
+        control_group: "/fixture".into(), cgroup_device: "1".into(), cgroup_inode: "2".into(),
+        machine_id: run.attachment.as_ref().unwrap().machine_id.clone().unwrap(),
+        kernel_boot_id: process.kernel_boot_id.clone().unwrap(), member: process, captured_at: "2026-10-06T00:00:00Z".into(),
+    });
+    let mut retried = run.clone();
+    retried.attachment.as_mut().unwrap().epoch = 2;
+    retried.attachment.as_mut().unwrap().launch_attempt = 2;
+    retried.dispatch.as_mut().unwrap().launch_attempt = 2;
+    retried.resume = Some(serde_json::from_value(serde_json::json!({
+        "operation_id": uuid::Uuid::new_v4().to_string(), "run_id": retried.run_id,
+        "previous_attachment_epoch": 1, "replacement_attachment_epoch": 2,
+        "fresh_conversation": true, "phase": "launching", "cause": null,
+        "decision_id": null, "updated_at": "2026-10-06T00:00:00Z"
+    })).unwrap());
+    assert_ne!(root_candidate(&retried, false).resume, RootResumeAvailability::Available);
+    fixture.publish(&[run.clone()]);
+    let live_result = resolve_resume_input(&fixture.service, &empty_observation(), &run).await.unwrap();
+    assert!(live_result.root_main_recovery.is_none(), "an in-flight process is never exit proof");
+    drop(live);
+
+    fixture.publish(&[run.clone()]);
+    let resolved = resolve_resume_input(&fixture.service, &empty_observation(), &run).await.unwrap();
+    let mut unprovable = run.clone();
+    unprovable.attachment.as_mut().unwrap().machine_id = None;
+    fixture.publish(&[unprovable.clone()]);
+    let missing_identity = resolve_resume_input(&fixture.service, &empty_observation(), &unprovable).await.unwrap();
+    assert!(missing_identity.root_main_recovery.is_none(), "unavailable OS evidence is not exit proof");
+    assert!(resolved.root_main_recovery.is_none(), "an unverified historical scope cannot authorize replacement");
+    fixture.publish(&[run.clone()]);
+    let result = resume_result(fixture.service.mutate_resolved(
+        &Actor::Operator(OperatorOrigin::Browser), resume_request(&run), &resolved).unwrap());
+    assert_eq!(result.resume.phase, ResumePhase::Blocked);
+    assert_eq!(fixture.service.run_for_review("fixture", &run.run_id).unwrap().attachment.unwrap().epoch, 1);
+    fixture.publish(&[retried.clone()]);
+    assert_eq!(root_candidate(&retried, false).resume, RootResumeAvailability::Available);
+    let observed = resolve_resume_input(&fixture.service, &empty_observation(), &retried).await.unwrap();
+    assert!(observed.root_main_recovery.is_none());
+    let second = resume_result(fixture.service.mutate_resolved(
+        &Actor::Operator(OperatorOrigin::Browser), resume_request(&retried), &observed).unwrap());
+    assert_eq!(second.resume.phase, ResumePhase::Blocked);
+    assert_eq!(fixture.service.run_for_review("fixture", &run.run_id).unwrap().attachment.unwrap().epoch, 2);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 async fn resume_root_refuses_live_missing_container_and_unsettled_dispatch() {
     let fixture = Fixture::new();
     let live = ForegroundPty::new();
@@ -932,7 +994,7 @@ fn root_lookup_projects_effect_free_refusal_but_preserves_inflight_launch() {
         ("omp", "workspace_missing", None, DispatchStep::NeedsReview,
             RootResumeAvailability::Available, RootConnection::Disconnected, None),
         ("omp", "retained_space_identity_unproven", None, DispatchStep::NeedsReview,
-            RootResumeAvailability::Available, RootConnection::Disconnected, None),
+            RootResumeAvailability::Blocked, RootConnection::Disconnected, Some(ResumeCauseClass::Recover)),
         ("omp", "retained_space_checkout_changed", None, DispatchStep::NeedsReview,
             RootResumeAvailability::Available, RootConnection::Disconnected, None),
         ("omp", "workspace_missing", Some("launch-in-flight"), DispatchStep::NeedsReview,

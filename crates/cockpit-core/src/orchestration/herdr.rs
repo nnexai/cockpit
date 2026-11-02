@@ -80,6 +80,8 @@ pub struct AgentTabRequest {
 pub struct DirectAgentTabRequest {
     pub endpoint_identity: String,
     pub workspace_id: String,
+    /// Require a fresh, unique target Space on the pinned endpoint before launch.
+    pub verify_workspace: bool,
     pub cwd: String,
     pub label: String,
     pub env: BTreeMap<String, String>,
@@ -158,6 +160,7 @@ mod tests {
         let request = DirectAgentTabRequest {
             endpoint_identity: "endpoint".into(),
             workspace_id: "workspace".into(),
+            verify_workspace: false,
             cwd: "/work/repository".into(),
             label: "launch-tag".into(),
             env: BTreeMap::new(),

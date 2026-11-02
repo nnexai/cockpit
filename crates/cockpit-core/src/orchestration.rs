@@ -98,6 +98,10 @@ pub struct ResolvedMutationInput {
     pub checkout: Option<CheckoutIdentity>,
     /// Fresh checkout selected explicitly from the retained root Space.
     pub reselected_checkout: Option<CheckoutIdentity>,
+    /// Herdr peer observed with the explicitly reselected Space and checkout.
+    pub reselected_endpoint: Option<String>,
+    /// Local kernel boot observed with the reselected Herdr peer.
+    pub reselected_boot: Option<String>,
     pub checkout_branch: Option<String>,
     pub handoff_binding: Option<HandoffBindingRecord>,
     /// Placement resolved from fresh project/Space evidence before scheduled start.

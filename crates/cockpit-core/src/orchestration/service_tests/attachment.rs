@@ -687,6 +687,118 @@ fn fresh_supervisor_fences_only_root_and_replays_without_another_launch() {
     caller.conversation = Some(ConversationIdentity { harness: "omp".into(), session_id: id() });
     fixture.apply(&fresh_actor, OrchestrationAction::RunRegister { operation_id: id() }).unwrap();
 }
+#[test]
+fn failed_fresh_supervisor_retry_keeps_intent_and_repairs_effect_free_reservation() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    fixture.setup(&root);
+    let (_, checkout) = project_identity::resolve_owned_directory(&fixture.root).unwrap();
+    fixture.seed_run(&root, |run| {
+        run.launch_config.harness_kind = "omp".into();
+        run.launch_config.command = "omp".into();
+        run.launch_config.extra_args.clear();
+        run.checkout = Some(checkout.clone());
+    });
+    fixture.launch_and_bind(&root);
+    fixture.create_task(&root, "Keep this task across fresh retry");
+    fixture.seed_run(&root, |run| run.resume = Some(restoration_resume(run, ResumePhase::Blocked)));
+    let old = fixture.run(&root);
+    fixture.operator(OrchestrationAction::RunStartFreshSupervisor {
+        run_id: root.clone(), operation_id: id(), expected_attachment_epoch: old.attachment.as_ref().unwrap().epoch,
+    });
+    let fresh = fixture.run(&root).resume.unwrap();
+    fixture.launch_tab(&root);
+    fixture.seed_run(&root, |run| {
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.process = None;
+        attachment.shell = None;
+        attachment.machine_id = None;
+        let dispatch = run.dispatch.as_mut().unwrap();
+        dispatch.step = DispatchStep::NeedsReview;
+        dispatch.error = Some(cockpit_protocol::ErrorResponse { code: "owned_launch_tab_unsafe".into(), message: "Review".into() });
+        let resume = run.resume.as_mut().unwrap();
+        resume.phase = ResumePhase::Blocked;
+    });
+    fixture.operator(fixture.resume_action(&root));
+    let blocked = fixture.run(&root);
+    let resumed = blocked.resume.as_ref().unwrap();
+    assert_eq!(resumed.fresh_conversation, Some(true));
+    assert_eq!(resumed.previous_conversation, fresh.previous_conversation);
+
+    // Reproduce a reservation written by a version that lost the fresh intent.
+    fixture.seed_state(|state| {
+        for credential in state.credentials.iter_mut().filter(|credential| credential.run_id == root) {
+            credential.state = credentials::CredentialState::Revoked;
+        }
+        let run = state.runs.iter_mut().find(|run| run.run_id == root).unwrap();
+        let previous = run.attachment.as_ref().unwrap();
+        let epoch = previous.epoch + 1;
+        let attempt = previous.launch_attempt + 1;
+        run.attachment = Some(reserved_attachment(epoch, attempt));
+        let mut dispatch = crate::orchestration::dispatch(DispatchStep::NeedsReview);
+        dispatch.launch_attempt = attempt;
+        dispatch.staging_workspace_id = run.setup.as_ref().unwrap().workspace_id.clone();
+        dispatch.error = Some(cockpit_protocol::ErrorResponse { code: "resume_session_unavailable".into(), message: "Resume has no registered conversation".into() });
+        run.dispatch = Some(dispatch);
+        let resume = run.resume.as_mut().unwrap();
+        resume.previous_attachment_epoch = Some(epoch - 1);
+        resume.replacement_attachment_epoch = Some(epoch);
+        resume.fresh_conversation = None;
+        resume.previous_conversation = None;
+        resume.phase = ResumePhase::Blocked;
+        resume.cause = Some(ResumeCause { code: "resume_session_unavailable".into(), message: "Resume has no registered conversation".into(), class: ResumeCauseClass::Recover });
+    });
+    let baseline = fixture.state();
+    for fault in 0..5 {
+        fixture.seed_state(|state| {
+            if fault == 0 {
+                state.operations.retain(|operation| operation.operation_id != fresh.operation_id);
+            } else {
+                let run = state.runs.iter_mut().find(|run| run.run_id == root).unwrap();
+                if fault == 1 {
+                    run.dispatch.as_mut().unwrap().launch_tag = Some("uncertain-launch".into());
+                } else if fault == 2 {
+                    run.attachment.as_mut().unwrap().process = Some(NativeProcessIdentity {
+                        pid: 42, start_ticks: 123, kernel_boot_id: Some("kernel-one".into()),
+                    });
+                } else if fault == 3 {
+                    run.kind = RunKind::Adopted;
+                } else {
+                    run.checkout = None;
+                }
+            }
+        });
+        let before = fixture.run(&root);
+        fixture.operator(fixture.resume_action(&root));
+        let after = fixture.run(&root);
+        assert_eq!(after.resume.unwrap().phase, ResumePhase::Blocked);
+        assert_eq!(serde_json::to_value(after.attachment).unwrap(), serde_json::to_value(before.attachment).unwrap());
+        assert_eq!(serde_json::to_value(after.dispatch).unwrap(), serde_json::to_value(before.dispatch).unwrap());
+        fixture.seed_state(|state| {
+            let revision = state.revision;
+            *state = baseline.clone();
+            state.revision = revision;
+        });
+    }
+    let before = fixture.run(&root);
+    let attachment = before.attachment.clone();
+    let task_bytes = fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap();
+    let action = fixture.resume_action(&root);
+    let response = fixture.operator(action.clone());
+    let OrchestrationActionResult::RunResumed { resume } = response.result else { unreachable!() };
+    let OrchestrationAction::RunResume { operation_id, .. } = &action else { unreachable!() };
+    assert_eq!(&resume.resume.operation_id, operation_id);
+    let repaired = fixture.run(&root);
+    assert_eq!(serde_json::to_value(&repaired.attachment).unwrap(), serde_json::to_value(&attachment).unwrap());
+    assert_eq!(repaired.resume.as_ref().unwrap().phase, ResumePhase::Launching);
+    assert_eq!(repaired.resume.as_ref().unwrap().fresh_conversation, Some(true));
+    assert_eq!(repaired.resume.as_ref().unwrap().previous_conversation, fresh.previous_conversation);
+    assert_eq!(repaired.dispatch.as_ref().unwrap().step, DispatchStep::SetupPending);
+    assert_eq!(fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap(), task_bytes);
+    fixture.operator(action);
+    assert_eq!(fixture.run(&root).attachment.unwrap().attachment_id, attachment.unwrap().attachment_id);
+}
+
 
 #[test]
 fn fresh_supervisor_rejects_agents_workers_and_unsettled_launches() {
@@ -1543,6 +1655,72 @@ fn explicit_checkout_reselection_recovers_reserved_root_without_rotating_authori
     assert!(start.duplicate);
     assert_eq!(fixture.state_bytes(), bytes);
 }
+#[test]
+fn operator_reselects_unproven_space_with_current_peer_and_checkout() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (mut project, checkout) = project_identity::resolve_owned_directory(&fixture.root).unwrap();
+    project.source_workspace_id = Some("test-space".into());
+    fixture.operator(OrchestrationAction::RunResume {
+        run_id: root.clone(), operation_id: id(), expected_attachment_epoch: Some(1),
+        confirmed_stopped_attachment_id: None,
+    });
+    fixture.seed_run(&root, |run| {
+        run.stage = RunStage::Starting;
+        run.attachment = Some(reserved_attachment(2, 2));
+        let resume = run.resume.as_mut().unwrap();
+        resume.phase = ResumePhase::Launching;
+        resume.previous_attachment_epoch = Some(1);
+        resume.replacement_attachment_epoch = Some(2);
+        resume.cause = None;
+        run.project = Some(project.clone());
+        run.checkout = Some(checkout.clone());
+        run.setup = Some(SetupSummary {
+            operation_id: None, generation: None, workspace_id: Some("test-space".into()),
+            checkout_path: checkout.path.clone(), repository_id: None, branch: None, base: None,
+            base_commit: None, ownership: None, effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
+        });
+        let mut dispatch = dispatch(DispatchStep::NeedsReview);
+        dispatch.launch_attempt = 2;
+        dispatch.staging_workspace_id = Some("test-space".into());
+        dispatch.error = Some(cockpit_protocol::ErrorResponse {
+            code: "retained_space_identity_unproven".into(), message: "Space needs re-selection".into(),
+        });
+        run.dispatch = Some(dispatch);
+    });
+    let before = fixture.run(&root);
+    let request = |space: &str| OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: None,
+        action: OrchestrationAction::SupervisorStart {
+            operation_id: id(), target: Some(DispatchTarget::ExistingSpace { workspace_id: space.into() }),
+            label: None, selected_root_id: Some(root.clone()),
+        },
+    };
+    let actor = Actor::Operator(OperatorOrigin::Browser);
+    let mut resolved = ResolvedMutationInput { project: Some(project), reselected_checkout: Some(checkout), ..Default::default() };
+    let saved = fixture.state_bytes();
+    assert_code(fixture.service.mutate_resolved(&actor, request("test-space"), &resolved), "checkout_reselection_unavailable");
+    assert_eq!(fixture.state_bytes(), saved);
+    resolved.reselected_endpoint = Some("unix-socket:/test:pid=1:uid=1:gid=1:start=1".into());
+    resolved.reselected_boot = Some("wrong-boot".into());
+    assert_code(fixture.service.mutate_resolved(&actor, request("test-space"), &resolved), "checkout_reselection_unavailable");
+    assert_eq!(fixture.state_bytes(), saved);
+    resolved.reselected_boot = project_identity::local_boot_marker();
+    assert_code(fixture.service.mutate_resolved(&actor, request("other-space"), &resolved), "checkout_reselection_space_mismatch");
+    assert_eq!(fixture.state_bytes(), saved);
+    fixture.service.mutate_resolved(&actor, request("test-space"), &resolved).unwrap();
+    let after = fixture.run(&root);
+    assert_eq!(after.dispatch.as_ref().unwrap().step, DispatchStep::SetupPending);
+    assert_eq!(serde_json::to_value(&after.attachment).unwrap(), serde_json::to_value(&before.attachment).unwrap());
+    let state = fixture.state();
+    let owner = state.operations.iter().find(|operation| operation.operation_id == after.resume.as_ref().unwrap().operation_id).unwrap();
+    assert!(owner.effect_receipts.iter().any(|receipt| matches!(receipt,
+        store::DurableEffectReceipt::ReselectedSpace { workspace_id, endpoint_identity, boot, attachment_id, attachment_epoch }
+        if workspace_id == "test-space" && endpoint_identity == resolved.reselected_endpoint.as_ref().unwrap()
+            && Some(boot) == resolved.reselected_boot.as_ref()
+            && attachment_id == &after.attachment.as_ref().unwrap().attachment_id && *attachment_epoch == 2)));
+}
+
 
 
 #[cfg(target_os = "linux")]
@@ -1970,6 +2148,48 @@ async fn unrecorded_root_operator_confirmation_recovers_and_keeps_tasks() {
         assert_code(apply_confirmed_root(&fixture, stale, &input), "attachment_conflict");
         assert_eq!(fixture.state_bytes(), bytes);
         assert_code(fixture.apply(&actor, report(ReportKind::Progress, None, None)), "job_unauthorized");
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn reviewed_failed_replacement_requires_confirmation_and_safe_container() {
+    for pane_present in [true, false] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        unrecorded_root(&fixture, &root);
+        fixture.create_task(&root, "Keep task during reviewed replacement recovery");
+        fixture.seed_run(&root, |run| {
+            run.stage = RunStage::Starting;
+            let dispatch = run.dispatch.as_mut().unwrap();
+            dispatch.step = DispatchStep::NeedsReview;
+            dispatch.error = Some(cockpit_protocol::ErrorResponse {
+                code: "owned_launch_tab_unsafe".into(), message: "Review".into(),
+            });
+            let mut resume = restoration_resume(run, ResumePhase::Blocked);
+            resume.cause = Some(ResumeCause { code: "owned_launch_tab_unsafe".into(),
+                message: "Review".into(), class: ResumeCauseClass::Recover });
+            run.resume = Some(resume);
+        });
+        let old = fixture.run(&root);
+        assert!(project_identity::root_stop_confirmable(&old));
+        let tasks = fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap();
+        let shell = RootRecoveryPty::new();
+        let mut runtime = root_recovery_runtime(&old, &shell.shell);
+        if !pane_present { runtime.runtime.panes.clear(); }
+        let input = fixture.service.observe_confirmed_root_stop(&runtime, &old,
+            &old.attachment.as_ref().unwrap().attachment_id).await;
+        let response = apply_confirmed_root(&fixture, confirmed_root_action(&fixture, &root), &input).unwrap();
+        let OrchestrationActionResult::RunResumed { resume } = response.result else { unreachable!() };
+        if pane_present {
+            assert_eq!(resume.resume.phase, ResumePhase::Blocked);
+            assert_eq!(resume.resume.cause.unwrap().code, "consumer_activity_unproven");
+            assert_eq!(serde_json::to_value(fixture.run(&root).attachment).unwrap(), serde_json::to_value(old.attachment).unwrap());
+        } else {
+            assert_eq!(resume.resume.phase, ResumePhase::Launching);
+            assert_eq!(fixture.run(&root).attachment.unwrap().epoch, old.attachment.unwrap().epoch + 1);
+        }
+        assert_eq!(fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap(), tasks);
     }
 }
 

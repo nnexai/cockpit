@@ -1484,20 +1484,23 @@ describe("liaison conversation and compact task rail", () => {
     }
     expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
   });
-  it.each(["space-1", "other-space"])("offers checkout reselection only in the retained Space (saved %s)", async savedSpace => {
+  it.each([
+    ["space-1", "checkout_identity_changed"], ["other-space", "checkout_identity_changed"],
+    ["space-1", "retained_space_identity_unproven"], ["other-space", "retained_space_identity_unproven"],
+  ])("offers reselection only in the retained Space (saved %s, cause %s)", async (savedSpace, cause) => {
     const fixture = new AppFixture(), current = orchestrationFixture([taskFixture("Existing work")]);
     current.runs[0].stage = "starting";
     current.runs[0].setup = { operation_id: null, generation: null, workspace_id: savedSpace, checkout_path: "/project", repository_id: null, branch: null, base: null, base_commit: null, ownership: null, effects: [], warnings: [], project_workspace_id: null };
     current.runs[0].resume = { operation_id: "original", run_id: "root", previous_attachment_epoch: 1, phase: "launching", cause: null, decision_id: null, replacement_attachment_epoch: 2, updated_at: "2026-10-07T12:00:00Z" };
     current.runs[0].attachment = { ...current.runs[0].attachment!, state: "reserved", location: null, epoch: 2 };
     if (current.runtime.status === "fresh") current.runtime.runs[0] = { ...current.runtime.runs[0], presence: "missing", actual_agent: false, pane_id: null };
-    bindLiaison(fixture, () => current, () => ({ connection: "disconnected", resume: "blocked", cause: { code: "checkout_identity_changed", message: "Physical checkout changed", class: "decision" } }));
+    bindLiaison(fixture, () => current, () => ({ connection: "disconnected", resume: "blocked", cause: { code: cause, message: "Physical checkout changed", class: "decision" } }));
     vi.mocked(fixture.client.orchestrationMutate).mockImplementation(async request => {
       if (request.action.action !== "supervisor_start") throw new Error("Expected selected-root start");
       return { revision: 2, result: { result: "supervisor_started", start: { root_id: "root", outcome: "resuming", operation_id: request.action.operation_id, resume_operation_id: "original", duplicate: false } } };
     });
     await mount(fixture);
-    expect(container.textContent).toContain("The saved checkout no longer matches the current directory or worktree");
+    if (cause === "checkout_identity_changed") expect(container.textContent).toContain("The saved checkout no longer matches the current directory or worktree");
     expect(button("Resume in this folder").disabled).toBe(savedSpace !== "space-1");
     if (savedSpace === "space-1") {
       click(button("Resume in this folder")); await settle();
@@ -1673,6 +1676,58 @@ describe("liaison conversation and compact task rail", () => {
     expect(button("Start supervisor").disabled).toBe(true);
     click(button("Start supervisor")); await settle();
     expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+  it.each(["launch_unknown", "needs_review"] as const)("offers guarded recovery for an initial %s without assuming exit", async step => {
+    const fixture = new AppFixture();
+    const root = runFixture({ stage: "starting", resume: null, dispatch: {
+      step, launch_attempt: 1, launch_tag: "ck-root-1-1", endpoint_identity: "fixture-endpoint",
+      agent_started: false, error: { code: "launch_outcome_unknown", message: "The original launch is unconfirmed." },
+      updated_at: "2026-10-07T12:00:00Z", recovery: null, scope_unit: null, pre_move_scope: null,
+      latch: null, latch_state: null, source_location: null, move_operation_id: null, staging_workspace_id: null,
+    } });
+    const current = orchestrationFixture([], [root]);
+    bindLiaison(fixture, () => current, () => ({ connection: "unknown", resume: "available", stop_confirmable: false }));
+    vi.mocked(fixture.client.orchestrationMutate).mockRejectedValue(new Error("Inspection not confirmed"));
+    await mount(fixture);
+    expect(button("Resume supervisor").disabled).toBe(false);
+    click(button("Resume supervisor")); await settle();
+    expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toEqual({
+      action: "run_resume", run_id: "root", operation_id: expect.any(String), expected_attachment_epoch: 1,
+    });
+  });
+  it("does not offer a second launch while the initial launch is still pending", async () => {
+    const fixture = new AppFixture();
+    const root = runFixture({ stage: "starting", resume: null, dispatch: {
+      step: "launch_pending", launch_attempt: 1, launch_tag: "ck-root-1-1", endpoint_identity: "fixture-endpoint",
+      agent_started: false, error: null, updated_at: "2026-10-07T12:00:00Z", recovery: null,
+      scope_unit: null, pre_move_scope: null, latch: null, latch_state: null, source_location: null,
+      move_operation_id: null, staging_workspace_id: null,
+    } });
+    bindLiaison(fixture, () => orchestrationFixture([], [root]), () => ({ connection: "unknown", resume: "available" }));
+    await mount(fixture);
+    expect(button("Start supervisor").disabled).toBe(true);
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+  it("offers another guarded Resume when the replacement launch is proven no longer running", async () => {
+    const fixture = new AppFixture();
+    const root = runFixture({ stage: "starting", resume: {
+      operation_id: "previous", run_id: "root", previous_attachment_epoch: 1, replacement_attachment_epoch: 2,
+      phase: "launching", cause: null, decision_id: null, updated_at: "2026-10-07T12:00:00Z",
+    }, dispatch: {
+      step: "launch_unknown", launch_attempt: 2, launch_tag: "ck-root-1-2", endpoint_identity: "fixture-endpoint",
+      agent_started: false, error: { code: "launch_outcome_unknown", message: "The replacement launch is unconfirmed." },
+      updated_at: "2026-10-07T12:00:00Z", recovery: null, scope_unit: null, pre_move_scope: null,
+      latch: null, latch_state: null, source_location: null, move_operation_id: null, staging_workspace_id: null,
+    } });
+    root.attachment!.epoch = 2;
+    bindLiaison(fixture, () => orchestrationFixture([], [root]), () => ({ connection: "disconnected", resume: "available" }));
+    vi.mocked(fixture.client.orchestrationMutate).mockRejectedValue(new Error("Inspection not confirmed"));
+    await mount(fixture);
+    expect(button("Resume supervisor").disabled).toBe(false);
+    click(button("Resume supervisor")); await settle();
+    expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toMatchObject({
+      action: "run_resume", run_id: "root", expected_attachment_epoch: 2,
+    });
   });
   it("does not dispatch a Resume that only joins an effect-free refused launch", async () => {
     const fixture = new AppFixture(), waits: Deferred<OrchestrationWaitResponse>[] = [];

@@ -1021,6 +1021,8 @@ impl OrchestrationHerdr for CountingHerdr {
         assert_eq!(session, "test-session");
         assert_eq!(request.endpoint_identity, "endpoint");
         assert_eq!(request.workspace_id, "space");
+        #[cfg(target_os = "macos")]
+        assert_eq!(request.env.get("PATH").map(String::as_str), crate::quick_ask::discovery_path().await.to_str());
         let separator = request.command.iter().rposition(|argument| argument == "--").expect("literal harness boundary");
         assert_eq!(request.command.get(1).map(String::as_str), Some("agent-exec"));
         if let Some(expected) = &self.expected_command {
@@ -1305,6 +1307,101 @@ async fn blocked_task_physical_observation_does_not_grant_task_or_writer_authori
     assert_eq!(serde_json::to_value(&after.messages).unwrap(),
         serde_json::to_value(&before.messages).unwrap());
     assert_eq!(serde_json::to_value(current.attachment.as_ref().and_then(|attachment| attachment.location.as_ref())).unwrap(), location);
+}
+
+fn reviewed_resume_fixture() -> ReviewFixture {
+    use cockpit_protocol::orchestration::{AttachmentState, ResumePhase, ResumeRecord};
+    let mut fixture = ReviewFixture::new(RunStage::Starting);
+    fixture.change(|run| {
+        let run_id = run.run_id.clone();
+        let attachment = test_attachment(run);
+        attachment.epoch = 2;
+        attachment.launch_attempt = 4;
+        attachment.state = AttachmentState::Connecting;
+        attachment.process = None;
+        attachment.shell = None;
+        attachment.conversation = None;
+        attachment.machine_id = None;
+        let dispatch = run.dispatch.as_mut().unwrap();
+        dispatch.step = DispatchStep::NeedsReview;
+        dispatch.launch_attempt = 4;
+        dispatch.agent_started = false;
+        dispatch.error = Some(ErrorResponse {
+            code: "owned_launch_tab_unsafe".into(), message: "Recorded terminal cannot be safely reviewed".into(),
+        });
+        run.resume = Some(ResumeRecord {
+            operation_id: uuid::Uuid::new_v4().to_string(), run_id,
+            previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+            fresh_conversation: Some(true), previous_conversation: None, session_namespace: None,
+            phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: run.updated_at.clone(),
+        });
+    });
+    fixture.run = fixture.current().1;
+    fixture
+}
+
+#[tokio::test]
+async fn reviewed_root_resume_blocks_without_replacing_or_proving_exit() {
+    use cockpit_protocol::orchestration::ResumePhase;
+    let fixture = reviewed_resume_fixture();
+    let _credential = fixture.staged_auth(&fixture.run);
+    let before = fixture.service.store.lock().unwrap().read().unwrap();
+    assert!(!before.credentials.is_empty());
+    let adapter = Arc::new(CountingHerdr::new(runtime(), false, false));
+    let dispatcher = fixture.dispatcher(Arc::clone(&adapter));
+    assert!(dispatch_actionable(&fixture.run));
+    dispatcher.step(&fixture.run).await.unwrap();
+    let after = fixture.service.store.lock().unwrap().read().unwrap();
+    let current = after.runs.iter().find(|run| run.run_id == fixture.run.run_id).unwrap();
+    assert_eq!(current.resume.as_ref().unwrap().phase, ResumePhase::Blocked);
+    assert_eq!(current.resume.as_ref().unwrap().cause.as_ref().unwrap().code, "owned_launch_tab_unsafe");
+    assert_eq!(serde_json::to_value(&current.attachment).unwrap(), serde_json::to_value(&fixture.run.attachment).unwrap());
+    assert_eq!(serde_json::to_value(&current.dispatch).unwrap(), serde_json::to_value(&fixture.run.dispatch).unwrap());
+    assert_eq!(serde_json::to_value(&after.credentials).unwrap(), serde_json::to_value(&before.credentials).unwrap());
+    assert_eq!(serde_json::to_value(&after.checkout_claims).unwrap(), serde_json::to_value(&before.checkout_claims).unwrap());
+    assert_eq!(serde_json::to_value(&after.task_ownership).unwrap(), serde_json::to_value(&before.task_ownership).unwrap());
+    assert_eq!(adapter.runtime_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(adapter.create_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(adapter.start_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert!(!dispatch_actionable(current));
+    assert!(super::super::project_identity::root_stop_confirmable(current));
+}
+
+#[test]
+fn stale_review_cannot_block_new_resume_operation() {
+    use cockpit_protocol::orchestration::ResumePhase;
+    let fixture = reviewed_resume_fixture();
+    let reviewed = fixture.run.clone();
+    fixture.change(|run| run.resume.as_mut().unwrap().operation_id = uuid::Uuid::new_v4().to_string());
+    let before = fixture.current();
+    fixture.service.settle_stalled_root_resume(&reviewed).unwrap();
+    let after = fixture.current();
+    assert_eq!(before.0, after.0);
+    assert_eq!(after.1.resume.unwrap().phase, ResumePhase::Launching);
+}
+
+#[test]
+fn effect_free_review_keeps_existing_retry_path() {
+    use cockpit_protocol::orchestration::AttachmentState;
+    let fixture = reviewed_resume_fixture();
+    fixture.change(|run| {
+        let attachment = test_attachment(run);
+        attachment.state = AttachmentState::Reserved;
+        attachment.location = None;
+        attachment.process = None;
+        attachment.shell = None;
+        attachment.process_scope = None;
+        attachment.conversation = None;
+        attachment.launch_attempt = 1;
+        let dispatch = run.dispatch.as_mut().unwrap();
+        *dispatch = crate::orchestration::dispatch(DispatchStep::NeedsReview);
+        dispatch.launch_attempt = 1;
+        dispatch.error = Some(ErrorResponse { code: "workspace_missing".into(), message: "Space missing".into() });
+    });
+    let run = fixture.current().1;
+    assert!(super::super::mutate::resume::effect_free_reserved_resume_launch(&run));
+    assert!(!stalled_root_resume(&run));
+    assert!(!dispatch_actionable(&run));
 }
 
 #[tokio::test]
@@ -2497,6 +2594,48 @@ async fn resumed_supervisor_uses_retained_space_or_fresh_focused_staging() {
     }
 }
 
+#[tokio::test]
+async fn resumed_supervisor_does_not_launch_in_unproven_retained_space() {
+    use cockpit_protocol::orchestration::{AttachmentState, ResumePhase, ResumeRecord};
+    use std::sync::atomic::Ordering;
+    for preserved_staging in [false, true] {
+        let fixture = ReviewFixture::new(RunStage::Starting);
+        let (_, checkout) = super::super::project_identity::resolve_owned_directory(&fixture.root).unwrap();
+        fixture.change(|run| {
+            run.checkout = Some(checkout.clone());
+            run.setup = Some(SetupSummary {
+                operation_id: None, generation: None, workspace_id: Some("space".into()),
+                checkout_path: checkout.path.clone(), repository_id: None, branch: None, base: None,
+                base_commit: None, ownership: None, effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
+            });
+            let attachment = test_attachment(run);
+            attachment.epoch = 2;
+            attachment.state = AttachmentState::Reserved;
+            attachment.location = None;
+            attachment.process = None;
+            attachment.shell = None;
+            attachment.conversation = None;
+            run.resume = Some(ResumeRecord {
+                operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
+                previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+                fresh_conversation: Some(true), previous_conversation: None, session_namespace: None,
+                phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: now(),
+            });
+            let mut dispatch = crate::orchestration::dispatch(DispatchStep::SetupPending);
+            if preserved_staging { dispatch.staging_workspace_id = Some("space".into()); }
+            run.dispatch = Some(dispatch);
+        });
+        let run = fixture.current().1;
+        let mut observed = runtime();
+        observed.workspaces[0].cwd = checkout.path.clone();
+        let adapter = Arc::new(CountingHerdr::new(observed, false, false));
+        let dispatcher = fixture.dispatcher(Arc::clone(&adapter));
+        let error = dispatcher.launch(&run).await.unwrap_err();
+        assert_eq!(error.code, "retained_space_identity_unproven");
+        assert_eq!(adapter.create_calls.load(Ordering::SeqCst), 0);
+    }
+}
+
 #[test]
 fn in_place_supervisor_restart_proves_its_server_from_the_previous_launch_receipt() {
     use cockpit_protocol::orchestration::{
@@ -2563,14 +2702,54 @@ fn in_place_supervisor_restart_proves_its_server_from_the_previous_launch_receip
         observed.peer_process = Some(peer);
         initial_retained_restart(&fixture.service, &run, &observed).unwrap()
     };
-    assert_eq!(observe(endpoint, peer.clone()), Some(true), "same server process in the same boot");
-    assert_eq!(observe(endpoint, NativeProcessIdentity { kernel_boot_id: Some("boot-b".into()), ..peer.clone() }), Some(false),
+    assert_eq!(observe(endpoint, peer.clone()), Some((true, false)), "same server process in the same boot");
+    assert_eq!(observe(endpoint, NativeProcessIdentity { kernel_boot_id: Some("boot-b".into()), ..peer.clone() }), Some((false, false)),
         "pid and start ticks name a different process after reboot");
     assert_eq!(observe("unix-socket:/run/herdr.sock:pid=8:uid=1:gid=1:start=120",
-        NativeProcessIdentity { pid: 8, start_ticks: 120, ..peer.clone() }), Some(false),
+        NativeProcessIdentity { pid: 8, start_ticks: 120, ..peer.clone() }), Some((false, false)),
         "a restarted Herdr server cannot vouch for the old Space ID; the restart stages a fresh Space");
-    assert_eq!(observe(endpoint, NativeProcessIdentity { pid: 9, ..peer.clone() }), Some(false),
+    assert_eq!(observe(endpoint, NativeProcessIdentity { pid: 9, ..peer.clone() }), Some((false, false)),
         "the endpoint must encode the observed socket peer");
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let operation = state.operations.iter_mut().find(|operation| operation.operation_id == operation_id).unwrap();
+        operation.effect_receipts = vec![DurableEffectReceipt::ReselectedSpace {
+            workspace_id: "retained-space".into(), endpoint_identity: endpoint.into(),
+            boot: super::super::project_identity::local_boot_marker().unwrap(),
+            attachment_id: run.attachment.as_ref().unwrap().attachment_id.clone(), attachment_epoch: 2,
+        }];
+        locked.save(&mut state).unwrap();
+    }
+    let mut observed = runtime();
+    observed.workspaces.push(super::super::herdr::RuntimeWorkspace {
+        workspace_id: "retained-space".into(), label: "Retained".into(), cwd: "/different-pane-cwd".into(),
+    });
+    observed.endpoint_identity = endpoint.into();
+    assert_eq!(initial_retained_restart(&fixture.service, &run, &observed).unwrap(), Some((true, true)));
+    observed.endpoint_identity = "unix-socket:/run/herdr.sock:pid=8:uid=1:gid=1:start=120".into();
+    assert_eq!(initial_retained_restart(&fixture.service, &run, &observed).unwrap_err().code, "retained_space_identity_unproven");
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let operation = state.operations.iter_mut().find(|operation| operation.operation_id == operation_id).unwrap();
+        let DurableEffectReceipt::ReselectedSpace { boot, .. } = &mut operation.effect_receipts[0] else { unreachable!() };
+        *boot = "other-boot".into();
+        locked.save(&mut state).unwrap();
+    }
+    observed.endpoint_identity = endpoint.into();
+    assert_eq!(initial_retained_restart(&fixture.service, &run, &observed).unwrap_err().code, "retained_space_identity_unproven");
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let operation = state.operations.iter_mut().find(|operation| operation.operation_id == operation_id).unwrap();
+        let DurableEffectReceipt::ReselectedSpace { boot, attachment_epoch, .. } = &mut operation.effect_receipts[0] else { unreachable!() };
+        *boot = super::super::project_identity::local_boot_marker().unwrap();
+        *attachment_epoch = 3;
+        locked.save(&mut state).unwrap();
+    }
+    observed.endpoint_identity = endpoint.into();
+    assert_eq!(initial_retained_restart(&fixture.service, &run, &observed).unwrap_err().code, "retained_space_identity_unproven");
 }
 
 #[test]

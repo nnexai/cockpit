@@ -122,6 +122,30 @@ fn validate_orchestration_close_snapshot(result: &Value, pane_id: &str) -> Resul
     // Stock pane.close preserves any other pane/tab in linked or non-Git Spaces.
     Ok(())
 }
+fn validate_direct_workspace(result: &Value, workspace_id: &str) -> Result<(), InspectionError> {
+    let refuse = || InspectionError::new(
+        "stale_identity",
+        "Target Space could not be verified; direct tab creation was not dispatched",
+    );
+    if result.get("type").and_then(Value::as_str) != Some("session_snapshot") {
+        return Err(refuse());
+    }
+    let workspaces = result.get("snapshot").and_then(|snapshot| snapshot.get("workspaces"))
+        .and_then(Value::as_array).ok_or_else(refuse)?;
+    if workspace_id.is_empty() || workspaces.iter().any(|workspace| {
+        workspace.get("workspace_id").and_then(Value::as_str).is_none_or(str::is_empty)
+    }) {
+        return Err(refuse());
+    }
+    let mut matching = workspaces.iter().filter(|workspace| {
+        workspace.get("workspace_id").and_then(Value::as_str) == Some(workspace_id)
+    });
+    if matching.next().is_none() || matching.next().is_some() {
+        return Err(refuse());
+    }
+    Ok(())
+}
+
 
 fn validate_agent_tab_request(request: &AgentTabRequest) -> Result<(), InspectionError> {
     validate_tab_request(&request.cwd, &request.label, &request.launch_tag, &request.env)
@@ -273,7 +297,8 @@ fn launch_environment(env: &BTreeMap<String, String>) -> Result<Value, Inspectio
     for (key, value) in env {
         let allowed = matches!(
             key.as_str(),
-            "COCKPIT_RUN_ID"
+            "PATH"
+                | "COCKPIT_RUN_ID"
                 | "COCKPIT_RUN_ATTEMPT"
                 | "COCKPIT_ROOT_ID"
                 | "COCKPIT_LAUNCH_TAG"
@@ -666,6 +691,15 @@ impl OrchestrationHerdr for HerdrCliAdapter {
                 "herdr_outcome_unknown",
                 "Launch tag already exists; reconcile the recorded launch intent instead of replaying it",
             ));
+        }
+        if request.verify_workspace {
+            let (snapshot, _) = self.socket_request_with_identity(
+                session_id, "session.snapshot", json!({}), Some(&request.endpoint_identity),
+            ).await.map_err(|error| InspectionError::new(
+                "stale_identity",
+                format!("Target Space snapshot unavailable; direct tab creation was not dispatched: {}", error.message),
+            ))?;
+            validate_direct_workspace(&snapshot, &request.workspace_id)?;
         }
         // One supported effect, never agent.start, terminal typing or a retry.
         let (result, _) = self.socket_request_with_identity(
@@ -1272,6 +1306,7 @@ mod tests {
         DirectAgentTabRequest {
             endpoint_identity: "endpoint".into(),
             workspace_id: "workspace".into(),
+            verify_workspace: false,
             cwd: "/work/repository".into(),
             label: "launch-tag".into(),
             env: BTreeMap::from([
@@ -1282,6 +1317,37 @@ mod tests {
             ]),
             launch_tag: "launch-tag".into(),
             command: vec!["/usr/bin/python3".into(), "agent.py".into(), "literal ; $(text)".into()],
+        }
+    }
+
+    #[test]
+    fn direct_workspace_fence_requires_one_known_workspace() {
+        let snapshot = json!({
+            "type": "session_snapshot",
+            "snapshot": {
+                "workspaces": [
+                    {"workspace_id": "workspace"},
+                    {"workspace_id": "other"},
+                ],
+            }
+        });
+        assert!(validate_direct_workspace(&snapshot, "workspace").is_ok());
+        for change in 0..7 {
+            let mut invalid = snapshot.clone();
+            let mut id = "workspace";
+            match change {
+                0 => invalid["snapshot"]["workspaces"] = json!([]),
+                1 => {
+                    let duplicate = invalid["snapshot"]["workspaces"][0].clone();
+                    invalid["snapshot"]["workspaces"].as_array_mut().unwrap().push(duplicate);
+                }
+                2 => invalid["snapshot"]["workspaces"][0]["workspace_id"] = json!("foreign"),
+                3 => invalid["snapshot"]["workspaces"][1]["workspace_id"] = Value::Null,
+                4 => invalid["snapshot"]["workspaces"][1]["workspace_id"] = json!(""),
+                5 => id = "",
+                _ => invalid["type"] = json!("unexpected"),
+            }
+            assert_eq!(validate_direct_workspace(&invalid, id).unwrap_err().code, "stale_identity", "change {change}");
         }
     }
 
@@ -1440,7 +1506,7 @@ mod tests {
         use tokio::net::{UnixListener, UnixStream};
         use super::super::{HerdrCliConfig, NEXT_REQUEST_ID};
 
-        for outcome in 0..4 {
+        for outcome in 0..5 {
             let socket = std::env::temp_dir().join(format!(
                 "cockpit-herdr-direct-{}-{}.sock",
                 std::process::id(), NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
@@ -1453,6 +1519,7 @@ mod tests {
             let mut request = direct_launch_request();
             request.endpoint_identity = endpoint.clone();
             request.workspace_id = "space-a".into();
+            request.verify_workspace = outcome == 4;
             let fixture: Value = serde_json::from_str(include_str!(
                 "../../tests/fixtures/session-snapshot.json"
             )).unwrap();
@@ -1474,17 +1541,23 @@ mod tests {
                 receipt["layout"]["workspace_id"] = json!("foreign-workspace");
             }
             let mut exchanges = vec![
-                ("session.snapshot", json!({}), json!({"result": before})),
-                ("layout.apply", direct_agent_tab_params(&request).unwrap(), if outcome >= 2 {
+                ("session.snapshot", json!({}), json!({"result": before.clone()})),
+            ];
+            if request.verify_workspace {
+                let mut selected = before;
+                selected["snapshot"]["workspaces"][0]["worktree"] = Value::Null;
+                selected["snapshot"]["panes"][0]["cwd"] = json!("/a/different/checkout");
+                exchanges.push(("session.snapshot", json!({}), json!({"result": selected})));
+            }
+            exchanges.push(("layout.apply", direct_agent_tab_params(&request).unwrap(), if outcome == 2 || outcome == 3 {
                     json!({"error":{
                         "code": if outcome == 2 { "request_outcome_unknown" } else { "layout_apply_failed" },
                         "message":"effect uncertain",
                     }})
                 } else {
                     json!({"result": receipt})
-                }),
-            ];
-            if outcome == 0 {
+                }));
+            if outcome == 0 || outcome == 4 {
                 exchanges.push(("session.snapshot", json!({}), json!({"result": after})));
             }
             let server = tokio::spawn(async move {
@@ -1504,7 +1577,7 @@ mod tests {
                 None, Some("fixture".into()), Some(socket.clone()),
             ).unwrap();
             let result = HerdrCliAdapter::new(config).create_direct_agent_tab("fixture", &request).await;
-            if outcome == 0 {
+            if outcome == 0 || outcome == 4 {
                 let location = result.unwrap();
                 assert_eq!(location.endpoint_identity, endpoint);
                 assert_eq!(location.workspace_id, "space-a");
@@ -1516,6 +1589,57 @@ mod tests {
             } else {
                 assert_eq!(result.unwrap_err().code, "herdr_outcome_unknown");
             }
+            server.await.unwrap();
+            std::fs::remove_file(socket).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn direct_workspace_fence_refuses_changed_fresh_snapshot_before_effect() {
+        use std::{sync::atomic::Ordering, time::Duration};
+        use tokio::net::{UnixListener, UnixStream};
+        use super::super::{HerdrCliConfig, NEXT_REQUEST_ID};
+
+        for change in 0..3 {
+            let socket = std::env::temp_dir().join(format!(
+                "cockpit-herdr-workspace-fence-{}-{}.sock",
+                std::process::id(), NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+            ));
+            let listener = UnixListener::bind(&socket).unwrap();
+            let probe = UnixStream::connect(&socket).await.unwrap();
+            let endpoint = HerdrCliAdapter::socket_peer_identity(&socket, &probe).unwrap();
+            drop(probe);
+            drop(listener.accept().await.unwrap());
+            let mut request = direct_launch_request();
+            request.endpoint_identity = endpoint;
+            request.workspace_id = "space-a".into();
+            request.verify_workspace = true;
+            let fixture: Value = serde_json::from_str(include_str!(
+                "../../tests/fixtures/session-snapshot.json"
+            )).unwrap();
+            let before = fixture["result"].clone();
+            let mut changed = before.clone();
+            match change {
+                0 => changed["snapshot"]["workspaces"] = json!([]),
+                1 => {
+                    let duplicate = changed["snapshot"]["workspaces"][0].clone();
+                    changed["snapshot"]["workspaces"].as_array_mut().unwrap().push(duplicate);
+                }
+                _ => changed["snapshot"]["workspaces"] = Value::Null,
+            }
+            let server = tokio::spawn(async move {
+                drop(reply_to_event_test_request(&listener, "session.snapshot", &before).await);
+                drop(reply_to_event_test_request(&listener, "session.snapshot", &changed).await);
+                assert!(tokio::time::timeout(Duration::from_millis(50), listener.accept()).await.is_err(),
+                    "layout.apply must not be dispatched when workspace verification fails");
+            });
+            let config = HerdrCliConfig::from_options(
+                None, Some("fixture".into()), Some(socket.clone()),
+            ).unwrap();
+            let error = HerdrCliAdapter::new(config).create_direct_agent_tab("fixture", &request)
+                .await.unwrap_err();
+            assert_eq!(error.code, "stale_identity", "change {change}");
             server.await.unwrap();
             std::fs::remove_file(socket).unwrap();
         }
@@ -1683,6 +1807,7 @@ mod tests {
     #[test]
     fn orchestration_launch_environment_is_harness_neutral_and_never_invents_conversation() {
         let env = BTreeMap::from([
+            ("PATH".into(), "/initialized/bin:/usr/bin".into()),
             ("COCKPIT_HARNESS".into(), "probe".into()),
             ("COCKPIT_HERDR_SESSION".into(), "physical-session".into()),
             ("COCKPIT_JOB_CREDENTIAL_FILE".into(), "/private/credential".into()),
@@ -1698,6 +1823,7 @@ mod tests {
     #[test]
     fn launch_environment_rejects_shell_and_unbounded_keys() {
         assert!(launch_environment(&BTreeMap::from([("SHELL".into(), "/bin/sh".into())])).is_err());
+        assert!(launch_environment(&BTreeMap::from([("PATH".into(), "/bin\nbad".into())])).is_err());
         assert!(
             launch_environment(&BTreeMap::from([(
                 "COCKPIT_CLI_PATH".into(),

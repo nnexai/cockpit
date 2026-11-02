@@ -105,7 +105,7 @@ fn include_nvm_clients(path: OsString, nvm: &Path) -> OsString {
     std::env::join_paths(paths).unwrap_or(path)
 }
 
-async fn discovery_path() -> OsString {
+pub(crate) async fn discovery_path() -> OsString {
     let fallback = std::env::var_os("PATH").unwrap_or_default();
     #[cfg(unix)]
     {

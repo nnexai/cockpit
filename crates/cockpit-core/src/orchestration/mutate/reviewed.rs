@@ -296,6 +296,36 @@ impl OrchestrationService {
         Ok(applied.revision())
     }
 
+    /// Preserve physical and capability receipts until explicitly reviewed by the operator.
+    pub(crate) fn settle_stalled_root_resume(&self, reviewed: &Run) -> Result<u64, InspectionError> {
+        let applied = self.with_reviewed_run(
+            reviewed,
+            RunLookup::Optional,
+            |_, current| {
+                Ok(recovery_review_matches(current, reviewed)
+                    && dispatch::stalled_root_resume(current)
+                    && current.resume.as_ref().zip(reviewed.resume.as_ref())
+                        .is_some_and(|(actual, expected)| actual.operation_id == expected.operation_id
+                            && actual.replacement_attachment_epoch == expected.replacement_attachment_epoch))
+            },
+            |state, index| {
+                let run = &mut state.runs[index];
+                let error = run.dispatch.as_ref().and_then(|dispatch| dispatch.error.as_ref())
+                    .expect("stalled launch has a review error");
+                let resume = run.resume.as_mut().expect("stalled launch has a resume");
+                resume.phase = ResumePhase::Blocked;
+                resume.cause = Some(ResumeCause {
+                    code: error.code.clone(), message: error.message.clone(), class: ResumeCauseClass::Recover,
+                });
+                resume.decision_id = None;
+                resume.updated_at = now();
+                run.updated_at = resume.updated_at.clone();
+                Ok(())
+            },
+        )?;
+        Ok(applied.revision())
+    }
+
 
     /// Record physical close evidence without granting attachment replacement.
     /// Only the owner Resume path can revoke the old epoch after proving every writer absent.

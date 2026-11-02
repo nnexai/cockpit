@@ -127,6 +127,7 @@ pub(crate) struct DurableOperationRecord {
 pub(crate) enum DurableEffectReceipt {
     Launch { attachment_id: String, attachment_epoch: u64, dispatch: cockpit_protocol::orchestration::DispatchState },
     Setup { setup: cockpit_protocol::orchestration::SetupSummary },
+    ReselectedSpace { workspace_id: String, endpoint_identity: String, boot: String, attachment_id: String, attachment_epoch: u64 },
     Stop { retirement: cockpit_protocol::orchestration::RunRetirement },
     ScopeRelease { unit: String, invocation_id: String, claim_id: String, outcome: ScopeReleaseOutcome },
     /// Semantic origin of a scheduled implicit borrow, not a physical effect.

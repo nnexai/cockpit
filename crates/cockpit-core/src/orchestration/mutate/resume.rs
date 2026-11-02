@@ -167,7 +167,9 @@ fn startup_registration_pending(state: &OrchestrationState, run: &Run) -> bool {
 pub fn effect_free_reserved_resume_launch(run: &Run) -> bool {
     let (Some(resume), Some(attachment), Some(dispatch)) = (&run.resume, &run.attachment, &run.dispatch) else { return false };
     run.stage == RunStage::Starting
-        && resume.phase == ResumePhase::Launching
+        && (resume.phase == ResumePhase::Launching || (resume.phase == ResumePhase::Blocked
+            && resume.cause.as_ref().is_some_and(|cause| cause.code == "resume_session_unavailable")
+            && dispatch.error.as_ref().is_some_and(|error| error.code == "resume_session_unavailable")))
         && resume.run_id == run.run_id
         && resume.replacement_attachment_epoch == Some(attachment.epoch)
         && resume.previous_attachment_epoch.is_some_and(|previous|
@@ -178,6 +180,7 @@ pub fn effect_free_reserved_resume_launch(run: &Run) -> bool {
         && attachment.process.is_none()
         && attachment.shell.is_none()
         && attachment.process_scope.is_none()
+        && attachment.machine_id.is_none()
         && dispatch.step == DispatchStep::NeedsReview
         && dispatch.launch_attempt > 0
         && dispatch.launch_attempt == attachment.launch_attempt
@@ -193,7 +196,7 @@ pub fn effect_free_reserved_resume_launch(run: &Run) -> bool {
         && (dispatch.staging_workspace_id.is_none()
             || (run.kind == RunKind::Supervisor && dispatch.error.as_ref().is_some_and(|error|
                 error.code == "workspace_missing"
-                    || (error.code == "checkout_identity_changed"
+                    || (matches!(error.code.as_str(), "checkout_identity_changed" | "resume_session_unavailable" | "retained_space_identity_unproven")
                         && run.setup.as_ref().and_then(|setup| setup.workspace_id.as_ref()) == dispatch.staging_workspace_id.as_ref()))))
         && dispatch.recovery.is_none()
 }
@@ -208,7 +211,8 @@ pub fn root_checkout_reselection_pending(run: &Run) -> bool {
         && run.setup.as_ref().and_then(|setup| setup.workspace_id.as_ref()).is_some()
         && effect_free_reserved_resume_launch(run)
         && run.dispatch.as_ref().and_then(|dispatch| dispatch.error.as_ref())
-            .is_some_and(|error| error.code == "checkout_identity_changed")
+            .is_some_and(|error| error.code == "checkout_identity_changed"
+                || (run.kind == RunKind::Supervisor && error.code == "retained_space_identity_unproven"))
 }
 
 
@@ -220,6 +224,33 @@ fn resume_operation_open(state: &OrchestrationState, run: &Run) -> bool {
         && !state.credentials.iter().any(|credential| credential.run_id == run.run_id
             && credential.state == credentials::CredentialState::Active
             && (credential.attachment_id != attachment.attachment_id || credential.attachment_epoch != attachment.epoch))
+}
+
+// Only an operator-created fresh conversation for this exact incarnation and
+// namespace can supply an intent lost by an older resume implementation.
+fn prior_fresh_resume(state: &OrchestrationState, run: &Run, epoch: u64) -> Option<ResumeRecord> {
+    let current = run.resume.as_ref()?;
+    let namespace = current.session_namespace.as_ref()?;
+    if current.fresh_conversation == Some(true) && current.replacement_attachment_epoch == Some(epoch) {
+        return Some(current.clone());
+    }
+    state.operations.iter().find_map(|operation| {
+        let Some(OrchestrationActionResult::RunResumed { resume }) = operation.result.as_ref() else { return None };
+        let saved = &resume.resume;
+        (operation.kind == DurableOperationKind::RunResume
+            && operation.principal_key == "operator"
+            && operation.operation_id == saved.operation_id
+            && operation.run_id.as_deref() == Some(run.run_id.as_str())
+            && resume.run_id == run.run_id && saved.run_id == run.run_id
+            && saved.fresh_conversation == Some(true)
+            && saved.replacement_attachment_epoch == Some(epoch)
+            && saved.session_namespace.as_ref() == Some(namespace)).then(|| saved.clone())
+    })
+}
+
+fn fresh_retry_has_retained_checkout(run: &Run) -> bool {
+    run.kind == RunKind::Supervisor && run.checkout.as_ref().zip(run.setup.as_ref())
+        .is_some_and(|(checkout, setup)| setup.workspace_id.is_some() && setup.checkout_path == checkout.path)
 }
 
 fn retryable_effect_free_resume_launch(state: &OrchestrationState, run: &Run) -> bool {
@@ -234,7 +265,8 @@ fn retryable_effect_free_resume_launch(state: &OrchestrationState, run: &Run) ->
 
 fn requeue_effect_free_launch(run: &mut Run) {
     let dispatch = run.dispatch.as_mut().expect("effect-free dispatch checked");
-    if dispatch.error.as_ref().is_some_and(|error| error.code == "workspace_missing") {
+    if dispatch.error.as_ref().is_some_and(|error| matches!(error.code.as_str(),
+        "workspace_missing" | "resume_session_unavailable" | "retained_space_identity_unproven")) {
         dispatch.staging_workspace_id = None;
     }
     dispatch.step = DispatchStep::SetupPending;
@@ -266,6 +298,31 @@ pub(super) fn reselect_root_checkout(ctx: &mut MutationCtx<'_>, index: usize, wo
         return Err(error("checkout_reselection_space_mismatch", "Re-selection must originate in the root's retained Space"));
     }
     project_identity::revalidate_checkout(fresh)?;
+    let identity_reselection = run.dispatch.as_ref().and_then(|dispatch| dispatch.error.as_ref())
+        .is_some_and(|error| error.code == "retained_space_identity_unproven");
+    if identity_reselection {
+        if fresh.directory_identity != saved.directory_identity {
+            return Err(error("checkout_identity_changed", "The saved checkout directory changed before Space re-selection"));
+        }
+        let boot = resolved.reselected_boot.as_deref().filter(|boot|
+            project_identity::local_boot_marker().as_deref() == Some(*boot))
+            .ok_or_else(|| error("checkout_reselection_unavailable", "Local boot identity changed during Space re-selection"))?;
+        let endpoint = resolved.reselected_endpoint.as_deref().filter(|endpoint|
+            endpoint.starts_with("unix-socket:") && !endpoint.contains(":pid=unknown")
+                && !endpoint.ends_with(":start=unavailable"))
+            .ok_or_else(|| error("checkout_reselection_unavailable", "Fresh local Herdr peer identity is required"))?;
+        let attachment = run.attachment.as_ref().expect("effect-free attachment checked");
+        let owner_id = run.resume.as_ref().expect("open resume checked").operation_id.clone();
+        let receipt = DurableEffectReceipt::ReselectedSpace {
+            workspace_id: workspace_id.into(), endpoint_identity: endpoint.into(), boot: boot.into(),
+            attachment_id: attachment.attachment_id.clone(), attachment_epoch: attachment.epoch,
+        };
+        let owner = ctx.state.operations.iter_mut().find(|operation| operation.operation_id == owner_id
+            && operation.kind == DurableOperationKind::RunResume && operation.result.is_none())
+            .expect("open resume operation checked");
+        owner.effect_receipts.retain(|entry| !matches!(entry, DurableEffectReceipt::ReselectedSpace { .. }));
+        owner.effect_receipts.push(receipt);
+    }
     let run = &mut ctx.state.runs[index];
     run.checkout = Some(fresh.clone());
     requeue_effect_free_launch(run);
@@ -310,8 +367,51 @@ pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> 
     }
     // New requests join an unsettled owner operation instead of starting another effect.
     let root_id = ctx.state.runs[index].root_id.clone();
+    // An older version could lose a fresh-conversation intent after fencing the
+    // prior attachment. Retry only the same effect-free reserved incarnation.
+    let recover_fresh = {
+        let run = &ctx.state.runs[index];
+        let resume = run.resume.as_ref();
+        if matches!(ctx.actor, Actor::Operator(_)) && expected_attachment_epoch.is_some()
+            && confirmed_stopped_attachment_id.is_none()
+            && fresh_retry_has_retained_checkout(run)
+            && run.run_id == run.root_id && run.parent_run_id.is_none()
+            && run.checkout_claim_id.is_none()
+            && !ctx.state.checkout_claims.iter().any(|claim| claim.state != claims::ClaimState::Released
+                && claim.holder.as_ref().is_some_and(|holder| holder.run_id == run.run_id))
+            && effect_free_reserved_resume_launch(run) && resume_operation_open(ctx.state, run)
+            && resume.is_some_and(|resume| resume.phase == ResumePhase::Blocked
+                && resume.cause.as_ref().is_some_and(|cause| cause.code == "resume_session_unavailable"))
+            && run.attachment.as_ref().is_some_and(|attachment| attachment.conversation.is_none()) {
+            resume.and_then(|resume| resume.previous_attachment_epoch)
+                .and_then(|epoch| prior_fresh_resume(ctx.state, run, epoch))
+        } else { None }
+    };
+    if let Some(fresh) = recover_fresh {
+        let old_owner = ctx.state.runs[index].resume.as_ref().expect("effect-free resume checked").operation_id.clone();
+        let receipts = ctx.state.operations.iter().find(|operation| operation.operation_id == old_owner
+            && operation.kind == DurableOperationKind::RunResume && operation.run_id.as_deref() == Some(run_id))
+            .expect("open resume operation checked").effect_receipts.clone();
+        settle_current_resume(ctx.state, index);
+        let run = &mut ctx.state.runs[index];
+        let resume = run.resume.as_mut().expect("effect-free resume checked");
+        resume.operation_id = operation_id.clone();
+        resume.fresh_conversation = Some(true);
+        resume.previous_conversation = fresh.previous_conversation;
+        resume.phase = ResumePhase::Launching;
+        resume.cause = None;
+        resume.updated_at = now();
+        let resumed = resume.clone();
+        requeue_effect_free_launch(run);
+        let result = OrchestrationActionResult::RunResumed { resume: RunResumeResult {
+            run_id: run_id.clone(), resume: resumed, duplicate: false,
+        }};
+        record(ctx, operation_id.clone(), DurableOperationKind::RunResume, &action, root_id, result.clone(), receipts)?;
+        return Ok(Applied::Machine(result));
+    }
     if let Some(current) = ctx.state.runs[index].resume.as_ref().filter(|r|
-        matches!(r.phase, ResumePhase::Reconciling | ResumePhase::Launching)) {
+        matches!(r.phase, ResumePhase::Reconciling | ResumePhase::Launching)
+            && !project_identity::retryable_dead_unregistered_resume(&ctx.state.runs[index])) {
         let result = OrchestrationActionResult::RunResumed { resume: RunResumeResult { run_id: run_id.clone(), resume: current.clone(), duplicate: false } };
         if retryable_effect_free_resume_launch(ctx.state, &ctx.state.runs[index]) {
             requeue_effect_free_launch(&mut ctx.state.runs[index]);
@@ -319,10 +419,15 @@ pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> 
         record(ctx, operation_id.clone(), DurableOperationKind::RunResume, &action, root_id, result.clone(), Vec::new())?;
         return Ok(Applied::Machine(result));
     }
+    let previous_fresh = fresh_retry_has_retained_checkout(&ctx.state.runs[index]).then(|| ctx.state.runs[index].attachment.as_ref()
+        .filter(|attachment| attachment.conversation.is_none())
+        .and_then(|attachment| prior_fresh_resume(ctx.state, &ctx.state.runs[index], attachment.epoch))).flatten();
     let session_namespace = ctx.state.runs[index].resume.as_ref().and_then(|resume| resume.session_namespace.clone());
     settle_current_resume(ctx.state, index);
     let resume = ResumeRecord { operation_id: operation_id.clone(), run_id: run_id.clone(), previous_attachment_epoch: old_epoch,
-        fresh_conversation: None, previous_conversation: None, session_namespace, phase: ResumePhase::Reconciling, cause: None, decision_id: None, replacement_attachment_epoch: None, updated_at: now() };
+        fresh_conversation: previous_fresh.as_ref().map(|_| true),
+        previous_conversation: previous_fresh.and_then(|fresh| fresh.previous_conversation),
+        session_namespace, phase: ResumePhase::Reconciling, cause: None, decision_id: None, replacement_attachment_epoch: None, updated_at: now() };
     ctx.state.runs[index].resume = Some(resume.clone());
     record(ctx, operation_id.clone(), DurableOperationKind::RunResume, &action, root_id,
         OrchestrationActionResult::RunResumed { resume: RunResumeResult {
@@ -484,6 +589,11 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
             return block(state, index, "harness_resume_unsupported", "The configured harness has no same-conversation resume arguments; the existing attachment is preserved");
         }
         let receipts = effects(&state.runs[index]);
+        // An unregistered initial direct launch has no saved conversation to
+        // resume. Its guarded root proof permits a new conversation on this run.
+        let initial_unregistered = state.runs[index].kind == RunKind::Supervisor
+            && state.runs[index].dispatch.as_ref().is_some_and(|d| d.step == DispatchStep::LaunchUnknown && !d.agent_started)
+            && current.conversation.is_none();
         let epoch = current.epoch.checked_add(1).filter(|n| *n <= MAX_SAFE_COUNTER).ok_or_else(|| error("orchestration_state_full", "Attachment epoch exhausted"))?;
         let launch_attempt = state.runs[index].dispatch.as_ref().map(|d| d.launch_attempt).unwrap_or(current.launch_attempt).checked_add(1)
             .ok_or_else(|| error("orchestration_state_full", "Launch attempt exhausted"))?;
@@ -519,6 +629,7 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
         }
         let resume = state.runs[index].resume.as_mut().expect("matched resume");
         resume.phase = ResumePhase::Launching;
+        if initial_unregistered { resume.fresh_conversation = Some(true); }
         resume.replacement_attachment_epoch = Some(epoch);
         resume.cause = None;
         resume.updated_at = now();

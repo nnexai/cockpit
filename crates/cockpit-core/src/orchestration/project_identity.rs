@@ -6,6 +6,25 @@ use crate::{InspectionError, process_identity, space_git};
 use super::{OrchestrationService, ResolvedMutationInput, claims::{AttachmentReference, RootExitBasis, RootMainRecoveryProof, WriterExitProof}};
 
 fn unavailable(text: &str) -> InspectionError { InspectionError::new("project_identity_unavailable", text) }
+
+/// A same-machine boot marker for short-lived operator Space re-selection.
+pub fn local_boot_marker() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    { process_identity::kernel_boot_id().map(|boot| format!("linux:{boot}")) }
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("/usr/sbin/sysctl").args(["-n", "kern.boottime"]).output().ok()?;
+        if !output.status.success() || output.stdout.len() > 256 { return None; }
+        let text = std::str::from_utf8(&output.stdout).ok()?.strip_prefix("{ sec = ")?;
+        let (seconds, rest) = text.split_once(", usec = ")?;
+        let (micros, _) = rest.split_once(" }")?;
+        let seconds = seconds.parse::<u64>().ok()?;
+        let micros = micros.parse::<u32>().ok()?;
+        (seconds > 0 && micros < 1_000_000).then(|| format!("darwin:{seconds}:{micros}"))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    { None }
+}
 fn path_text(path: &Path) -> Result<String, InspectionError> {
     path.to_str().map(str::to_owned).ok_or_else(|| unavailable("Physical directory is not UTF-8"))
 }
@@ -195,7 +214,7 @@ pub(crate) fn same_location(left: Option<&RunLocation>, right: Option<&RunLocati
 pub(crate) fn same_root_attachment(a: &ExecutionAttachment, b: &ExecutionAttachment) -> bool {
     a.attachment_id == b.attachment_id && a.epoch == b.epoch && a.state == b.state
         && a.process == b.process && a.shell == b.shell && a.machine_id == b.machine_id
-        && a.conversation == b.conversation && a.launch_mode == b.launch_mode
+        && a.conversation == b.conversation && a.launch_mode == b.launch_mode && a.process_scope == b.process_scope
         && a.launch_attempt == b.launch_attempt && same_location(a.location.as_ref(), b.location.as_ref())
 }
 
@@ -203,10 +222,43 @@ fn same_dispatch(a: Option<&DispatchState>, b: Option<&DispatchState>) -> bool {
     match (a, b) {
         (Some(a), Some(b)) => a.launch_attempt == b.launch_attempt && a.launch_tag == b.launch_tag
             && a.step == b.step && a.endpoint_identity == b.endpoint_identity && a.agent_started == b.agent_started
-            && a.updated_at == b.updated_at,
+            && a.updated_at == b.updated_at && a.scope_unit == b.scope_unit
+            && a.pre_move_scope == b.pre_move_scope && a.latch == b.latch && a.latch_state == b.latch_state
+            && same_location(a.source_location.as_ref(), b.source_location.as_ref())
+            && a.move_operation_id == b.move_operation_id && a.staging_workspace_id == b.staging_workspace_id,
         (None, None) => true,
         _ => false,
     }
+}
+
+// Only a recorded, released direct-process launch with no registered conversation
+// can be recovered from an unknown initial outcome. The exact process must be
+// positively absent; an unavailable OS identity is not exit evidence.
+fn initial_direct_launch_exited(run: &Run) -> bool {
+    let Some(dispatch) = &run.dispatch else { return false };
+    let Some(attachment) = &run.attachment else { return false };
+    let Some(process) = &attachment.process else { return false };
+    dispatch.step == DispatchStep::LaunchUnknown
+        && !dispatch.agent_started && attachment.conversation.is_none()
+        && attachment.launch_mode == Some(AttachmentLaunchMode::DirectProcess)
+        && attachment.shell.as_ref().is_some_and(|shell| shell.process == *process)
+        && dispatch.latch_state == Some(AgentLatchState::Released)
+        && dispatch.pre_move_scope.as_ref().is_some_and(|scope| scope.member == *process)
+        && super::launch_receipt_coherent(run)
+        && matches!(root_main_running(attachment), Ok(false))
+}
+/// Display and join eligibility only. The Resume operation still obtains and
+/// revalidates the full physical root/container proof before any replacement.
+pub fn retryable_dead_unregistered_resume(run: &Run) -> bool {
+    run.kind == RunKind::Supervisor && run.run_id == run.root_id && run.parent_run_id.is_none()
+        && run.resume.as_ref().is_some_and(|resume| resume.phase == ResumePhase::Launching
+            && resume.run_id == run.run_id
+            && resume.previous_attachment_epoch.is_some_and(|epoch|
+                epoch > 0 && epoch.checked_add(1) == resume.replacement_attachment_epoch)
+            && resume.replacement_attachment_epoch == run.attachment.as_ref().map(|a| a.epoch))
+        && run.dispatch.as_ref().zip(run.attachment.as_ref()).is_some_and(|(dispatch, attachment)|
+            dispatch.launch_attempt == attachment.launch_attempt)
+        && initial_direct_launch_exited(run)
 }
 
 fn root_recovery_run_target(run: &Run) -> Result<(), InspectionError> {
@@ -221,7 +273,8 @@ fn root_recovery_run_target(run: &Run) -> Result<(), InspectionError> {
         || attachment.location.as_ref().is_none_or(|location| location.session_id != run.session_id)
         || run.dispatch.as_ref().is_some_and(|dispatch|
             matches!(dispatch.step, DispatchStep::SetupRunning | DispatchStep::SetupUnknown
-                | DispatchStep::LaunchIntent | DispatchStep::LaunchPending | DispatchStep::LaunchUnknown)
+                | DispatchStep::LaunchIntent | DispatchStep::LaunchPending)
+            || dispatch.step == DispatchStep::LaunchUnknown && !initial_direct_launch_exited(run)
             || dispatch.launch_attempt != attachment.launch_attempt
             || attachment.location.as_ref().is_none_or(|location|
                 dispatch.endpoint_identity.as_deref() != Some(location.endpoint_identity.as_str())
@@ -333,6 +386,24 @@ fn root_main_alive(attachment: &ExecutionAttachment, basis: RootExitBasis) -> Re
         RootExitBasis::OperatorConfirmed => Err(root_unproven()),
     }
 }
+fn validate_unknown_launch_scope(run: &Run, observation: Option<&crate::process_scope::ScopeObservation>) -> Result<(), InspectionError> {
+    let unproven = || InspectionError::new("consumer_activity_unproven",
+        "The unregistered launch's exact process scope is not proven drained. The attachment is retained and no replacement was sent.");
+    let attachment = run.attachment.as_ref().ok_or_else(unproven)?;
+    let dispatch = run.dispatch.as_ref().ok_or_else(unproven)?;
+    let scope = dispatch.pre_move_scope.as_ref().ok_or_else(unproven)?;
+    let observed = observation.ok_or_else(unproven)?;
+    let age = super::parse_time(&observed.observed_at).map(|at| time::OffsetDateTime::now_utc() - at).ok_or_else(unproven)?;
+    if observed.scope != *scope || observed.state != crate::process_scope::ScopeState::Drained
+        || dispatch.scope_unit.as_deref() != Some(scope.unit.as_str())
+        || attachment.machine_id.as_deref() != Some(scope.machine_id.as_str())
+        || attachment.process.as_ref() != Some(&scope.member)
+        || age.is_negative() || age > time::Duration::seconds(10) {
+        return Err(unproven());
+    }
+    Ok(())
+}
+
 
 pub(crate) fn revalidate_root_recovery(state: &super::store::OrchestrationState, run: &Run, proof: &RootMainRecoveryProof) -> Result<(), InspectionError> {
     root_recovery_target(state, run)?;
@@ -346,6 +417,9 @@ pub(crate) fn revalidate_root_recovery(state: &super::store::OrchestrationState,
         || !same_root_attachment(attachment, &proof.attachment)
         || !same_dispatch(run.dispatch.as_ref(), proof.dispatch.as_ref()) || root_main_alive(attachment, proof.basis)? {
         return Err(root_unproven());
+    }
+    if run.dispatch.as_ref().is_some_and(|dispatch| dispatch.step == DispatchStep::LaunchUnknown) {
+        validate_unknown_launch_scope(run, proof.launch_scope.as_ref())?;
     }
     if run.kind == RunKind::Adopted && run.dispatch.is_none() {
         let checkout = run.checkout.as_ref().ok_or_else(root_unproven)?;
@@ -569,8 +643,15 @@ impl OrchestrationService {
             restored_root_receipt_checkout(expected)?;
             Some(fresh_root_checkout(&fresh_runtime, expected)?.clone())
         } else { None };
+        let launch_scope = if expected.dispatch.as_ref().is_some_and(|dispatch| dispatch.step == DispatchStep::LaunchUnknown) {
+            let scope = expected.dispatch.as_ref().and_then(|dispatch| dispatch.pre_move_scope.as_ref())
+                .ok_or_else(root_container_unproven)?;
+            let observed = crate::process_scope::observe(scope).await.map_err(|_| root_container_unproven())?;
+            validate_unknown_launch_scope(expected, Some(&observed))?;
+            Some(observed)
+        } else { None };
         let proof = RootMainRecoveryProof { run_id: expected.run_id.clone(), session_id: expected.session_id.clone(),
-            attachment: attachment.clone(), dispatch: expected.dispatch.clone(), retained_checkout, idle_shell, basis };
+            attachment: attachment.clone(), dispatch: expected.dispatch.clone(), retained_checkout, idle_shell, launch_scope, basis };
         let locked = self.store.lock()?;
         let state = locked.read_shared()?;
         let current = state.runs.iter().find(|run| run.run_id == expected.run_id).ok_or_else(root_unproven)?;
@@ -706,6 +787,40 @@ fn consumer_unproven() -> InspectionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unknown_direct_launch_requires_fresh_drained_scope_not_just_dead_main() {
+        let mut run: Run = serde_json::from_value(serde_json::json!({
+            "session_id":"fixture", "brief":"", "run_id":"root", "root_id":"root",
+            "kind":"supervisor", "label":"root", "attempt":1, "stage":"starting",
+            "launch_config":{"harness_kind":"fixture","command":"fixture","extra_args":[],"inbox_prompt_hints":false,"routes":[]},
+            "dispatch":{"launch_tag":"tag","endpoint_identity":"endpoint","scope_unit":"scope",
+                "agent_started":false,"step":"launch_unknown","launch_attempt":1,"updated_at":"2026-10-06T00:00:00Z"},
+            "attachment":{"attachment_id":"attachment","epoch":1,"state":"connecting","launch_mode":"direct_process",
+                "location":{"endpoint_identity":"endpoint","session_id":"fixture","workspace_id":"space","tab_id":"tab","pane_id":"pane","terminal_id":"terminal","launch_tag":"tag"},
+                "conversation":null,"process":{"pid":123,"start_ticks":1,"kernel_boot_id":"boot"},
+                "machine_id":"machine","launch_attempt":1,"updated_at":"2026-10-06T00:00:00Z"},
+            "annotations":[], "created_at":"2026-10-06T00:00:00Z","updated_at":"2026-10-06T00:00:00Z"
+        })).unwrap();
+        let member = run.attachment.as_ref().unwrap().process.clone().unwrap();
+        let scope = OwnedProcessScope {
+            kind: ScopeKind::SystemdUserScope, unit: "scope".into(), invocation_id: "invocation".into(),
+            control_group: "/scope".into(), cgroup_device: "1".into(), cgroup_inode: "2".into(),
+            machine_id: "machine".into(), kernel_boot_id: "boot".into(), member,
+            captured_at: "2026-10-06T00:00:00Z".into(),
+        };
+        run.dispatch.as_mut().unwrap().pre_move_scope = Some(scope.clone());
+        let mut observation = crate::process_scope::ScopeObservation {
+            scope, state: crate::process_scope::ScopeState::Populated,
+            observed_at: time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap(),
+        };
+        // A live descendant keeps the cgroup populated even after the main exits.
+        assert_eq!(validate_unknown_launch_scope(&run, Some(&observation)).unwrap_err().code, "consumer_activity_unproven");
+        observation.state = crate::process_scope::ScopeState::Drained;
+        assert!(validate_unknown_launch_scope(&run, Some(&observation)).is_ok());
+        observation.scope.invocation_id = "different".into();
+        assert!(validate_unknown_launch_scope(&run, Some(&observation)).is_err());
+        assert!(validate_unknown_launch_scope(&run, None).is_err());
+    }
     #[tokio::test]
     async fn plain_nested_directory_keeps_exact_project_but_distinct_checkout() {
         let root = std::env::temp_dir().join(format!("cockpit-project-identity-{}", uuid::Uuid::new_v4()));
