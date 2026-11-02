@@ -1405,6 +1405,145 @@ async fn assert_effect_free_resume_retry(error_code: &str) {
     }
 }
 
+#[test]
+fn explicit_checkout_reselection_recovers_reserved_root_without_rotating_authority() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let path = fixture.root.join("reselected-checkout");
+    std::fs::create_dir_all(&path).unwrap();
+    let (mut project, fresh) = project_identity::resolve_owned_directory(&path).unwrap();
+    project.source_workspace_id = Some("test-space".into());
+    fixture.create_task(&root, "Preserve canonical tasks across checkout reselection");
+    fixture.operator(OrchestrationAction::RunResume {
+        run_id: root.clone(), operation_id: id(), expected_attachment_epoch: Some(1),
+        confirmed_stopped_attachment_id: None,
+    });
+    fixture.seed_run(&root, |run| {
+        run.stage = RunStage::Starting;
+        run.attachment = Some(reserved_attachment(2, 2));
+        run.attachment.as_mut().unwrap().conversation = Some(ConversationIdentity {
+            harness: "omp".into(), session_id: "retained-conversation".into(),
+        });
+        let resume = run.resume.as_mut().unwrap();
+        resume.phase = ResumePhase::Launching;
+        resume.previous_attachment_epoch = Some(1);
+        resume.replacement_attachment_epoch = Some(2);
+        resume.cause = None;
+        let mut saved = fresh.clone();
+        saved.directory_identity.device = "previous-boot-device".into();
+        run.project = Some(project.clone());
+        run.checkout = Some(saved);
+        run.setup = Some(SetupSummary {
+            operation_id: None, generation: None, workspace_id: Some("test-space".into()),
+            checkout_path: fresh.path.clone(), repository_id: None, branch: None, base: None,
+            base_commit: None, ownership: None, effects: Vec::new(), warnings: Vec::new(),
+            project_workspace_id: None,
+        });
+        let mut refused = dispatch(DispatchStep::NeedsReview);
+        refused.launch_attempt = 2;
+        refused.staging_workspace_id = Some("test-space".into());
+        refused.error = Some(cockpit_protocol::ErrorResponse {
+            code: "checkout_identity_changed".into(), message: "Saved physical checkout no longer matches".into(),
+        });
+        run.dispatch = Some(refused);
+    });
+    let (credential, _) = credentials::stage_credential(fixture.service.base(), &fixture.run(&root), JobRole::Root).unwrap();
+    fixture.seed_state(|state| {
+        for old in state.credentials.iter_mut().filter(|old| old.run_id == root) {
+            old.state = credentials::CredentialState::Revoked;
+        }
+        state.credentials.push(credential);
+    });
+    let before = fixture.run(&root);
+    assert!(root_checkout_reselection_pending(&before));
+    for fault in 0..8 {
+        let mut changed = before.clone();
+        match fault {
+            0 => changed.dispatch.as_mut().unwrap().launch_tag = Some("possibly-created".into()),
+            1 => changed.dispatch.as_mut().unwrap().endpoint_identity = Some("endpoint".into()),
+            2 => changed.dispatch.as_mut().unwrap().staging_workspace_id = Some("foreign-space".into()),
+            3 => changed.dispatch.as_mut().unwrap().agent_started = true,
+            4 => changed.attachment.as_mut().unwrap().state = AttachmentState::Connecting,
+            5 => changed.attachment.as_mut().unwrap().epoch += 1,
+            6 => changed.checkout_claim_id = Some(id()),
+            7 => changed.parent_run_id = Some(id()),
+            _ => unreachable!(),
+        }
+        assert!(!root_checkout_reselection_pending(&changed), "fault {fault}");
+    }
+    let credentials = serde_json::to_value(&fixture.state().credentials).unwrap();
+    let tasks = fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap();
+    let resolved = ResolvedMutationInput {
+        project: Some(project), reselected_checkout: Some(fresh.clone()), ..Default::default()
+    };
+    let request = |space: &str| OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: None,
+        action: OrchestrationAction::SupervisorStart {
+            operation_id: id(), target: Some(DispatchTarget::ExistingSpace { workspace_id: space.into() }),
+            label: None, selected_root_id: Some(root.clone()),
+        },
+    };
+    let actor = Actor::Operator(OperatorOrigin::Browser);
+    fixture.service.mutate_resolved(&actor, OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: None,
+        action: OrchestrationAction::RunResume {
+            run_id: root.clone(), operation_id: id(), expected_attachment_epoch: Some(2),
+            confirmed_stopped_attachment_id: None,
+        },
+    }, &resolved).unwrap();
+    assert_eq!(fixture.run(&root).checkout, before.checkout);
+    assert_eq!(serde_json::to_value(&fixture.run(&root).dispatch).unwrap(), serde_json::to_value(&before.dispatch).unwrap());
+    let wrong = fixture.state_bytes();
+    assert_code(fixture.service.mutate_resolved(&actor, request("other-space"), &resolved), "checkout_reselection_space_mismatch");
+    assert_eq!(fixture.state_bytes(), wrong);
+    let mut bad = resolved.clone();
+    bad.reselected_checkout.as_mut().unwrap().directory_identity.inode = "stale".into();
+    assert_code(fixture.service.mutate_resolved(&actor, request("test-space"), &bad), "checkout_identity_changed");
+    assert_eq!(fixture.state_bytes(), wrong);
+    // Fresh resolution can race with closure before the mutation takes the lock.
+    // Neither a missing candidate nor another liaison may redirect this request.
+    for alternate in [false, true] {
+        fixture.seed_state(|state| {
+            let index = run_index(state, &root).unwrap();
+            state.runs[index].stage = RunStage::Closed;
+            if alternate {
+                let mut other = state.runs[index].clone();
+                other.run_id = id();
+                other.root_id = other.run_id.clone();
+                other.resume = None;
+                other.attachment = Some(reserved_attachment(1, 0));
+                other.stage = RunStage::Active;
+                state.runs.push(other);
+            }
+        });
+        let closed = fixture.state_bytes();
+        assert_code(fixture.service.mutate_resolved(&actor, request("test-space"), &resolved), "checkout_reselection_unavailable");
+        assert_eq!(fixture.state_bytes(), closed);
+        fixture.seed_state(|state| {
+            state.runs.retain(|run| run.run_id == root);
+            state.runs[0].stage = RunStage::Starting;
+        });
+    }
+    let request = request("test-space");
+    let result = fixture.service.mutate_resolved(&actor, request.clone(), &resolved).unwrap();
+    let OrchestrationActionResult::SupervisorStarted { start } = result.result else { unreachable!() };
+    assert_eq!(start.root_id, root);
+    assert_eq!(start.resume_operation_id.as_ref(), Some(&before.resume.as_ref().unwrap().operation_id));
+    let after = fixture.run(&root);
+    assert_eq!(after.checkout.as_ref(), Some(&fresh));
+    assert_eq!(after.dispatch.as_ref().unwrap().step, DispatchStep::SetupPending);
+    assert_eq!(after.dispatch.as_ref().unwrap().launch_attempt, before.dispatch.as_ref().unwrap().launch_attempt);
+    assert_eq!(serde_json::to_value(&after.attachment).unwrap(), serde_json::to_value(&before.attachment).unwrap());
+    assert_eq!(serde_json::to_value(&after.resume).unwrap(), serde_json::to_value(&before.resume).unwrap());
+    assert_eq!(serde_json::to_value(&fixture.state().credentials).unwrap(), credentials);
+    assert_eq!(fixture.service.store.tasks_dir().read(tasks_md::root_filename(&root).unwrap()).unwrap(), tasks);
+    let bytes = fixture.state_bytes();
+    let replay = fixture.service.mutate_resolved(&actor, request, &resolved).unwrap();
+    let OrchestrationActionResult::SupervisorStarted { start } = replay.result else { unreachable!() };
+    assert!(start.duplicate);
+    assert_eq!(fixture.state_bytes(), bytes);
+}
+
 
 #[cfg(target_os = "linux")]
 #[tokio::test]

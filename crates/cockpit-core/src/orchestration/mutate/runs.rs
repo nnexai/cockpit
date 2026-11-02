@@ -15,7 +15,22 @@ pub(in crate::orchestration) fn supervisor_start(
     if let Some(result) = super::resume::replay(ctx, operation_id, DurableOperationKind::SupervisorStart, &action)? {
         return Ok(Applied::Document(result));
     }
+    if ctx.resolved.is_some_and(|resolved| resolved.reselected_checkout.is_some()) {
+        let selected = selected_root_id.as_deref();
+        let preferred = preferred_liaison(&ctx.state.runs, ctx.session_id, selected);
+        if selected.is_none()
+            || preferred.is_none_or(|index| Some(ctx.state.runs[index].run_id.as_str()) != selected)
+            || !matches!(staging_target, Some(DispatchTarget::ExistingSpace { .. })) {
+            return Err(error("checkout_reselection_unavailable", "The selected root is no longer available for checkout re-selection"));
+        }
+    }
     if let Some(index) = preferred_liaison(&ctx.state.runs, ctx.session_id, selected_root_id.as_deref()) {
+                let run = &ctx.state.runs[index];
+                if selected_root_id.as_deref() == Some(run.run_id.as_str())
+                    && let Some(DispatchTarget::ExistingSpace { workspace_id }) = staging_target
+                    && ctx.resolved.is_some_and(|resolved| resolved.reselected_checkout.is_some()) {
+                    super::resume::reselect_root_checkout(ctx, index, workspace_id)?;
+                }
                 let run = &ctx.state.runs[index];
                 let root_id = run.run_id.clone();
                 let observed_connected = has_current_binding(ctx.state, run)

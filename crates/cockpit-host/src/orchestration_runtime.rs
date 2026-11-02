@@ -309,10 +309,19 @@ async fn resolve_physical_mutation_input(
             }
             Ok(resolved)
         }
-        OrchestrationAction::SupervisorStart { selected_root_id, .. } => {
+        OrchestrationAction::SupervisorStart { selected_root_id, target, .. } => {
             let (_, runs) = service.recorded_runs(&request.session_id)?;
             if let Some(index) = preferred_liaison(&runs, &request.session_id, selected_root_id.as_deref()) {
-                resolve_resume_input(service, herdr, &runs[index]).await
+                let run = &runs[index];
+                if selected_root_id.as_deref() == Some(run.run_id.as_str())
+                    && cockpit_core::orchestration::root_checkout_reselection_pending(run)
+                    && let Some(target @ DispatchTarget::ExistingSpace { .. }) = target {
+                    let mut resolved = resolve_start_target(projects, herdr, &request.session_id, target).await?;
+                    resolved.reselected_checkout = resolved.checkout.take();
+                    Ok(resolved)
+                } else {
+                    resolve_resume_input(service, herdr, run).await
+                }
             } else {
                 Ok(ResolvedMutationInput::default())
             }

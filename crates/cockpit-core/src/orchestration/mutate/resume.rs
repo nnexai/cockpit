@@ -191,8 +191,24 @@ pub fn effect_free_reserved_resume_launch(run: &Run) -> bool {
         && dispatch.source_location.is_none()
         && dispatch.move_operation_id.is_none()
         && (dispatch.staging_workspace_id.is_none()
-            || (run.kind == RunKind::Supervisor && dispatch.error.as_ref().is_some_and(|error| error.code == "workspace_missing")))
+            || (run.kind == RunKind::Supervisor && dispatch.error.as_ref().is_some_and(|error|
+                error.code == "workspace_missing"
+                    || (error.code == "checkout_identity_changed"
+                        && run.setup.as_ref().and_then(|setup| setup.workspace_id.as_ref()) == dispatch.staging_workspace_id.as_ref()))))
         && dispatch.recovery.is_none()
+}
+
+/// Explicitly reselect only the retained checkout of a claim-free root.
+pub fn root_checkout_reselection_pending(run: &Run) -> bool {
+    matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)
+        && run.run_id == run.root_id
+        && run.parent_run_id.is_none()
+        && run.checkout_claim_id.is_none()
+        && run.checkout.is_some()
+        && run.setup.as_ref().and_then(|setup| setup.workspace_id.as_ref()).is_some()
+        && effect_free_reserved_resume_launch(run)
+        && run.dispatch.as_ref().and_then(|dispatch| dispatch.error.as_ref())
+            .is_some_and(|error| error.code == "checkout_identity_changed")
 }
 
 
@@ -225,6 +241,35 @@ fn requeue_effect_free_launch(run: &mut Run) {
     dispatch.error = None;
     dispatch.updated_at = now();
     run.updated_at = dispatch.updated_at.clone();
+}
+
+pub(super) fn reselect_root_checkout(ctx: &mut MutationCtx<'_>, index: usize, workspace_id: &str) -> Result<(), InspectionError> {
+    operator(ctx.actor)?;
+    let run = &ctx.state.runs[index];
+    if !root_checkout_reselection_pending(run) || !resume_operation_open(ctx.state, run)
+        || ctx.state.checkout_claims.iter().any(|claim| claim.state != claims::ClaimState::Released
+            && claim.holder.as_ref().is_some_and(|holder| holder.run_id == run.run_id)) {
+        return Err(error("checkout_reselection_unavailable", "Only a claim-free root waiting on a changed checkout can be re-selected"));
+    }
+    let resolved = ctx.resolved.ok_or_else(|| error("checkout_reselection_unavailable", "Fresh Space evidence is required"))?;
+    let fresh = resolved.reselected_checkout.as_ref().ok_or_else(|| error("checkout_reselection_unavailable", "Fresh checkout evidence is required"))?;
+    let saved = run.checkout.as_ref().expect("pending checkout checked");
+    if fresh.path != saved.path || fresh.key != saved.key || fresh.git != saved.git {
+        return Err(error("checkout_reselection_identity_mismatch", "Re-selection must retain the same canonical checkout path, key and Git directories"));
+    }
+    let project = resolved.project.as_ref().ok_or_else(|| error("project_identity_conflict", "Fresh project evidence is required"))?;
+    if Some(&project.key) != run.project.as_ref().map(|project| &project.key) {
+        return Err(error("project_identity_conflict", "Re-selection must retain the root project"));
+    }
+    if run.setup.as_ref().and_then(|setup| setup.workspace_id.as_deref()) != Some(workspace_id)
+        || project.source_workspace_id.as_deref() != Some(workspace_id) {
+        return Err(error("checkout_reselection_space_mismatch", "Re-selection must originate in the root's retained Space"));
+    }
+    project_identity::revalidate_checkout(fresh)?;
+    let run = &mut ctx.state.runs[index];
+    run.checkout = Some(fresh.clone());
+    requeue_effect_free_launch(run);
+    Ok(())
 }
 
 

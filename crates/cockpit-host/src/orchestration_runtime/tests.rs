@@ -973,6 +973,26 @@ fn root_lookup_projects_effect_free_refusal_but_preserves_inflight_launch() {
 }
 
 #[test]
+fn staged_retained_space_checkout_refusal_is_disconnected_not_resuming() {
+    let mut run = reserved_resume_refusal("checkout_identity_changed");
+    run.setup = Some(SetupSummary {
+        operation_id: None, generation: None, workspace_id: Some("space".into()),
+        checkout_path: "/retained".into(), repository_id: None, branch: None, base: None,
+        base_commit: None, ownership: None, effects: Vec::new(), warnings: Vec::new(),
+        project_workspace_id: None,
+    });
+    run.dispatch.as_mut().unwrap().staging_workspace_id = Some("space".into());
+    let candidate = root_candidate(&run, false);
+    assert_eq!(candidate.resume, RootResumeAvailability::Blocked);
+    assert_eq!(candidate.connection, RootConnection::Disconnected);
+    assert_eq!(candidate.cause.unwrap().code, "checkout_identity_changed");
+    run.dispatch.as_mut().unwrap().staging_workspace_id = Some("other".into());
+    let candidate = root_candidate(&run, false);
+    assert_eq!(candidate.resume, RootResumeAvailability::InProgress);
+    assert_eq!(candidate.connection, RootConnection::Reconnecting);
+}
+
+#[test]
 fn root_lookup_offers_retry_only_for_stale_unsupported_omp_resume() {
     for (harness, configured_resume, code, expected) in [
         ("omp", false, "harness_resume_unsupported", RootResumeAvailability::Available),

@@ -32,7 +32,7 @@ pub(crate) mod fixture_resources;
 
 pub use agent::NativeAgentKind;
 pub use mutate::integration::OutputFacts;
-pub use mutate::resume::effect_free_reserved_resume_launch;
+pub use mutate::resume::{effect_free_reserved_resume_launch, root_checkout_reselection_pending};
 pub use resource_queue::ResourceSourceFacts;
 pub use cleanup::ResourceRegistrationFacts;
 pub use messages::{latest_progress_sequences, inbox_counts, inbox_meaningful, InboxCounts, InboxKindCount, InboxMessageContext};
@@ -96,6 +96,8 @@ pub(crate) struct AuthorizedJob {
 pub struct ResolvedMutationInput {
     pub project: Option<ProjectIdentity>,
     pub checkout: Option<CheckoutIdentity>,
+    /// Fresh checkout selected explicitly from the retained root Space.
+    pub reselected_checkout: Option<CheckoutIdentity>,
     pub checkout_branch: Option<String>,
     pub handoff_binding: Option<HandoffBindingRecord>,
     /// Placement resolved from fresh project/Space evidence before scheduled start.
