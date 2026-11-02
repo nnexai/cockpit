@@ -1729,6 +1729,30 @@ describe("liaison conversation and compact task rail", () => {
       action: "run_resume", run_id: "root", expected_attachment_epoch: 2,
     });
   });
+  it.each([false, true])("requires explicit stop confirmation for unrecorded unknown launch (replacement=%s)", async replacement => {
+    const fixture = new AppFixture(), epoch = replacement ? 2 : 1;
+    const root = runFixture({ stage: "starting", resume: replacement ? {
+      operation_id: "previous", run_id: "root", previous_attachment_epoch: 1, replacement_attachment_epoch: 2,
+      phase: "launching", cause: null, decision_id: null, updated_at: "2026-10-07T12:00:00Z",
+    } : null, dispatch: {
+      step: "launch_unknown", launch_attempt: epoch, launch_tag: "tag", endpoint_identity: "fixture-endpoint",
+      agent_started: false, error: { code: "launch_outcome_unknown", message: "Launch is unconfirmed." },
+      updated_at: "2026-10-07T12:00:00Z", recovery: null, scope_unit: null, pre_move_scope: null,
+      latch: null, latch_state: null, source_location: null, move_operation_id: null, staging_workspace_id: null,
+    } });
+    root.attachment!.epoch = epoch;
+    bindLiaison(fixture, () => orchestrationFixture([], [root]), () => ({ connection: "unknown", resume: "available", stop_confirmable: true }));
+    vi.mocked(fixture.client.orchestrationMutate).mockRejectedValue(new Error("Inspection not confirmed"));
+    await mount(fixture);
+    click(button("Resume supervisor")); await settle();
+    click(recoveryButton("I've stopped it myself…")); await settle();
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).toContain("all processes it started");
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+    click(recoveryButton("It's stopped — resume")); await settle();
+    expect(vi.mocked(fixture.client.orchestrationMutate).mock.calls[0][0].action).toMatchObject({
+      action: "run_resume", run_id: "root", expected_attachment_epoch: epoch, confirmed_stopped_attachment_id: "attachment",
+    });
+  });
   it("does not dispatch a Resume that only joins an effect-free refused launch", async () => {
     const fixture = new AppFixture(), waits: Deferred<OrchestrationWaitResponse>[] = [];
     const cause = { code: "launch_configuration_invalid", message: "Supervisor command is invalid", class: "recover" as const };

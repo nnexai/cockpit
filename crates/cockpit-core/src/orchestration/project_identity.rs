@@ -260,6 +260,19 @@ pub fn retryable_dead_unregistered_resume(run: &Run) -> bool {
             dispatch.launch_attempt == attachment.launch_attempt)
         && initial_direct_launch_exited(run)
 }
+// An unknown unregistered launch without any OS identity can only be
+// superseded by an explicit operator stop attestation and two fresh checks
+// that its exact owned terminal is absent. It is never automatic exit proof.
+fn confirmable_unregistered_launch(run: &Run) -> bool {
+    let (Some(dispatch), Some(attachment)) = (&run.dispatch, &run.attachment) else { return false };
+    dispatch.step == DispatchStep::LaunchUnknown && !dispatch.agent_started
+        && dispatch.latch_state == Some(AgentLatchState::Released) && dispatch.latch.is_some()
+        && attachment.launch_mode == Some(AttachmentLaunchMode::DirectProcess)
+        && attachment.conversation.is_none() && unrecorded_root_identity(attachment)
+        && attachment.location.as_ref().is_some_and(|location| location.terminal_id.is_some())
+        && super::launch_receipt_coherent(run)
+}
+
 
 fn root_recovery_run_target(run: &Run) -> Result<(), InspectionError> {
     if !matches!(run.kind, RunKind::Supervisor | RunKind::Adopted) || run.run_id != run.root_id
@@ -275,6 +288,7 @@ fn root_recovery_run_target(run: &Run) -> Result<(), InspectionError> {
             matches!(dispatch.step, DispatchStep::SetupRunning | DispatchStep::SetupUnknown
                 | DispatchStep::LaunchIntent | DispatchStep::LaunchPending)
             || dispatch.step == DispatchStep::LaunchUnknown && !initial_direct_launch_exited(run)
+                && !confirmable_unregistered_launch(run)
             || dispatch.launch_attempt != attachment.launch_attempt
             || attachment.location.as_ref().is_none_or(|location|
                 dispatch.endpoint_identity.as_deref() != Some(location.endpoint_identity.as_str())
@@ -346,7 +360,12 @@ fn root_stop_identity_confirmable(run: &Run) -> bool {
 /// Static display eligibility; admission additionally scans checkout claims under the lock.
 pub fn root_stop_confirmable(run: &Run) -> bool {
     root_stop_identity_confirmable(run) && run.resume.as_ref().is_none_or(|resume|
-        !matches!(resume.phase, ResumePhase::Reconciling | ResumePhase::Launching))
+        !matches!(resume.phase, ResumePhase::Reconciling | ResumePhase::Launching)
+            || resume.phase == ResumePhase::Launching && confirmable_unregistered_launch(run)
+                && resume.run_id == run.run_id
+                && resume.previous_attachment_epoch.is_some_and(|epoch|
+                    epoch > 0 && epoch.checked_add(1) == resume.replacement_attachment_epoch)
+                && resume.replacement_attachment_epoch == run.attachment.as_ref().map(|attachment| attachment.epoch))
 }
 
 pub(crate) fn root_stop_confirmation_unavailable() -> InspectionError {
@@ -418,7 +437,8 @@ pub(crate) fn revalidate_root_recovery(state: &super::store::OrchestrationState,
         || !same_dispatch(run.dispatch.as_ref(), proof.dispatch.as_ref()) || root_main_alive(attachment, proof.basis)? {
         return Err(root_unproven());
     }
-    if run.dispatch.as_ref().is_some_and(|dispatch| dispatch.step == DispatchStep::LaunchUnknown) {
+    if proof.basis == RootExitBasis::ExactIncarnation
+        && run.dispatch.as_ref().is_some_and(|dispatch| dispatch.step == DispatchStep::LaunchUnknown) {
         validate_unknown_launch_scope(run, proof.launch_scope.as_ref())?;
     }
     if run.kind == RunKind::Adopted && run.dispatch.is_none() {
@@ -643,7 +663,8 @@ impl OrchestrationService {
             restored_root_receipt_checkout(expected)?;
             Some(fresh_root_checkout(&fresh_runtime, expected)?.clone())
         } else { None };
-        let launch_scope = if expected.dispatch.as_ref().is_some_and(|dispatch| dispatch.step == DispatchStep::LaunchUnknown) {
+        let launch_scope = if basis == RootExitBasis::ExactIncarnation
+            && expected.dispatch.as_ref().is_some_and(|dispatch| dispatch.step == DispatchStep::LaunchUnknown) {
             let scope = expected.dispatch.as_ref().and_then(|dispatch| dispatch.pre_move_scope.as_ref())
                 .ok_or_else(root_container_unproven)?;
             let observed = crate::process_scope::observe(scope).await.map_err(|_| root_container_unproven())?;

@@ -1782,3 +1782,56 @@ async fn confirmed_resume_observes_missing_container_without_implicit_operator_t
     });
     assert!(!root_candidate(&run, false).stop_confirmable);
 }
+
+#[tokio::test]
+async fn confirmed_unrecorded_unknown_launch_requires_exact_absent_container() {
+    for replacement in [false, true] {
+        let fixture = Fixture::new();
+        let mut run = reviewed();
+        run.stage = RunStage::Starting;
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.launch_mode = Some(AttachmentLaunchMode::DirectProcess);
+        attachment.epoch = if replacement { 2 } else { 1 };
+        attachment.launch_attempt = attachment.epoch as u32;
+        let dispatch = run.dispatch.as_mut().unwrap();
+        dispatch.step = DispatchStep::LaunchUnknown;
+        dispatch.agent_started = false;
+        dispatch.launch_attempt = if replacement { 2 } else { 1 };
+        dispatch.latch_state = Some(AgentLatchState::Released);
+        dispatch.latch = Some(AgentLaunchReceipt { latch: "/fixture/latch".into(), nonce: "nonce".into(), latch_device: "1".into(), latch_inode: "2".into() });
+        if replacement {
+            run.resume = Some(ResumeRecord {
+                operation_id: uuid::Uuid::new_v4().to_string(), run_id: run.run_id.clone(),
+                previous_attachment_epoch: Some(1), replacement_attachment_epoch: Some(2),
+                fresh_conversation: Some(true), previous_conversation: None, session_namespace: None,
+                phase: ResumePhase::Launching, cause: None, decision_id: None, updated_at: run.updated_at.clone(),
+            });
+        }
+        fixture.publish(&[run.clone()]);
+        let candidate = root_candidate(&run, false);
+        assert!(candidate.stop_confirmable);
+        assert_eq!(candidate.resume, RootResumeAvailability::Available);
+        assert_ne!(candidate.connection, RootConnection::Connected);
+        let ordinary = resolve_resume_input(&fixture.service, &empty_observation(), &run).await.unwrap();
+        assert_eq!(ordinary.observation_cause.unwrap().code, "root_main_identity_unrecorded");
+        let confirmed = fixture.service.observe_confirmed_root_stop(&empty_observation(), &run, "attachment").await;
+        assert!(confirmed.root_main_recovery.is_some());
+        let present = fixture.service.observe_confirmed_root_stop(&ObservedHerdr(Some(observed())), &run, "attachment").await;
+        assert!(present.root_main_recovery.is_none());
+        assert_eq!(present.observation_cause.unwrap().code, "consumer_activity_unproven");
+        let wrong = fixture.service.observe_confirmed_root_stop(&empty_observation(), &run, "other").await;
+        assert!(wrong.root_main_recovery.is_none());
+        let mut request = resume_request(&run);
+        let OrchestrationAction::RunResume { confirmed_stopped_attachment_id, .. } = &mut request.action else { unreachable!() };
+        *confirmed_stopped_attachment_id = Some("attachment".into());
+        let mut changed = run.clone();
+        changed.dispatch.as_mut().unwrap().latch.as_mut().unwrap().nonce = "changed".into();
+        fixture.publish(&[changed]);
+        assert!(fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser), request.clone(), &confirmed).is_err());
+        fixture.publish(&[run.clone()]);
+        let result = resume_result(fixture.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Browser), request, &confirmed).unwrap());
+        assert_eq!(result.resume.phase, ResumePhase::Launching);
+        assert_eq!(result.resume.fresh_conversation, Some(true));
+        assert_eq!(result.resume.replacement_attachment_epoch, Some(if replacement { 3 } else { 2 }));
+    }
+}

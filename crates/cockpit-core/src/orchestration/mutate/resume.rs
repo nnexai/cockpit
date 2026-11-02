@@ -411,7 +411,8 @@ pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> 
     }
     if let Some(current) = ctx.state.runs[index].resume.as_ref().filter(|r|
         matches!(r.phase, ResumePhase::Reconciling | ResumePhase::Launching)
-            && !project_identity::retryable_dead_unregistered_resume(&ctx.state.runs[index])) {
+            && !project_identity::retryable_dead_unregistered_resume(&ctx.state.runs[index])
+            && !project_identity::root_stop_confirmable(&ctx.state.runs[index])) {
         let result = OrchestrationActionResult::RunResumed { resume: RunResumeResult { run_id: run_id.clone(), resume: current.clone(), duplicate: false } };
         if retryable_effect_free_resume_launch(ctx.state, &ctx.state.runs[index]) {
             requeue_effect_free_launch(&mut ctx.state.runs[index]);

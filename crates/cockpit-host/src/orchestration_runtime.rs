@@ -694,8 +694,10 @@ fn root_candidate(run: &Run, modern_binding: bool) -> LiaisonCandidate {
             || (matches!(error.code.as_str(), "workspace_missing" | "retained_space_checkout_changed")
                 && run.kind == RunKind::Supervisor));
     let dead_unregistered_launch = project_identity::retryable_dead_unregistered_resume(run);
+    let confirmable_unknown_launch = run.resume.as_ref().is_some_and(|resume| resume.phase == ResumePhase::Launching)
+        && project_identity::root_stop_confirmable(run);
     let resume = if incompatible_live { RootResumeAvailability::Blocked }
-    else if dead_unregistered_launch { RootResumeAvailability::Available }
+    else if dead_unregistered_launch || confirmable_unknown_launch { RootResumeAvailability::Available }
     else if refused_launch.is_some() {
         if retryable_refusal { RootResumeAvailability::Available }
         else { RootResumeAvailability::Blocked }

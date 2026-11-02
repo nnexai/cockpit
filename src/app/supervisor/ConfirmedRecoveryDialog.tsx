@@ -20,8 +20,8 @@ export function ConfirmedRecoveryDialog({ recovery }: { recovery: ConfirmedRecov
       <header className="task-setup-header"><h2 id={titleId}>{view === "fresh" ? "Start a new conversation?" : view === "stopped" ? "Resume this supervisor?" : "Supervisor recovery"}</h2><button type="button" className="task-setup-close" aria-label="Close" disabled={recovery.busy} onClick={back}><UiIcon name="close" /></button></header>
       <div className="task-setup-body"><div id={bodyId} className="library-confirm-body">
         {view === "stopped" ? <>
-          <p className="confirmed-recovery-lead">Continue only after you have stopped the old supervisor and closed its terminal.</p>
-          <p className="confirmed-recovery-fine">Tasks and history stay. Cockpit checks the old terminal before resuming.</p>
+          <p className="confirmed-recovery-lead">Continue only after you have stopped the old supervisor and all processes it started, and closed its terminal.</p>
+          <p className="confirmed-recovery-fine">Tasks and history stay. Cockpit checks that the old terminal is absent; it cannot verify that those processes stopped.</p>
         </> : view === "fresh" ? <>
           <p className="confirmed-recovery-lead">Start a new conversation with your existing tasks and history.</p>
           <p className="confirmed-recovery-fine">The old terminal stays open. Its supervisor's Cockpit credential will no longer work; you can close the terminal yourself.</p>
