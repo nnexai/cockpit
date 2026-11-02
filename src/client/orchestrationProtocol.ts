@@ -409,6 +409,7 @@ const POLICY = definePolicy({
       Run: {
         resume_identity: value => value.resume === null || value.resume.run_id === value.run_id,
         output_identity: value => value.source_output === null ? value.result?.source_output == null
+          && !(value.kind === "worker" && value.result?.kind === "result" && value.result.outcome === "succeeded")
           : value.result !== null && value.result.kind === "result"
             && value.source_output.result_message_id === value.result.message_id
             && value.result.source_output !== null && sameSource(value.source_output, value.result.source_output),
@@ -420,12 +421,12 @@ const POLICY = definePolicy({
             : sameSource(value.integration.source, value.source_output) && integratedChecks(value.integration))),
       },
       RunResumeResult: { resume_identity: value => value.resume.run_id === value.run_id },
+      // Root diagnostic Results have no source output. A bare report/action
+      // has no actor context; worker completion is fenced on Run and by core.
       Report: { source_identity: value => value.source_output === null
-        ? value.kind !== "result" || value.outcome !== "succeeded"
-        : value.kind === "result" && value.source_output.result_message_id === value.message_id },
+        || value.kind === "result" && value.source_output.result_message_id === value.message_id },
       "OrchestrationAction[report]": { source_identity: value => value.source_output === null
-        ? value.kind !== "result" || value.outcome !== "succeeded"
-        : value.kind === "result" && value.source_output.result_message_id === value.message_id },
+        || value.kind === "result" && value.source_output.result_message_id === value.message_id },
       "SourceOutput[code]": { checks: value => validChecks(value.focused_checks),
         range: value => value.commits.length === 0 ? value.base_commit === value.head_commit
           : value.commits.at(-1) === value.head_commit && !value.commits.includes(value.base_commit) },

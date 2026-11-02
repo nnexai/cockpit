@@ -717,8 +717,10 @@ describe("orchestration protocol boundary", () => {
     expect(parseOrchestrationAction(action)).toEqual(action);
     expect(parseOrchestrationAction({ ...action, source_output: nonCodeOutput })).toBeDefined();
     expect(parseOrchestrationAction({ ...action, outcome: "failed", source_output: null })).toBeDefined();
+    // Actor context is not part of this wire action; root diagnostics may succeed without output.
+    expect(parseOrchestrationAction({ ...action, source_output: null })).toBeDefined();
     for (const patch of [
-      { source_output: null }, { kind: "progress" }, { message_id: "old-result" },
+      { kind: "progress" }, { message_id: "old-result" },
       { source_output: { ...codeOutput, head_commit: "C".repeat(40) } },
       { source_output: { ...codeOutput, commits: [headCommit, headCommit] } },
       { source_output: { ...codeOutput, focused_checks: [focusedCheck, focusedCheck] } },
@@ -732,6 +734,18 @@ describe("orchestration protocol boundary", () => {
       expect(parseOrchestrationAction({ ...action, source_output: { ...nonCodeOutput,
         focused_checks: [{ ...focusedCheck, outcome, evidence: null, limitation: "Not exercised" }] } })).toBeDefined();
     }
+  });
+
+  it("accepts successful root diagnostic reports without accepting outputless worker Results", () => {
+    const diagnostic = { ...report, kind: "result" as const, outcome: "succeeded" as const, source_output: null };
+    const root = { ...snapshot.runs[0]!, run_id: "root", kind: "supervisor" as const,
+      parent_run_id: null, task_id: null, stage: "active" as const, resume: null,
+      checkout_claim_id: null, last_report: diagnostic, result: null, source_output: null };
+    const dto = { ...snapshot, runs: [root], messages: [{ ...message, report: diagnostic }] };
+    expect(parseOrchestrationSnapshot(dto).runs[0]!.last_report).toEqual(diagnostic);
+    expect(parseOrchestrationSnapshot(dto).messages[0]!.report).toEqual(diagnostic);
+    const worker = { ...codeRun, result: { ...codeRun.result, source_output: null }, source_output: null };
+    expect(() => parseOrchestrationSnapshot({ ...snapshot, runs: [worker] })).toThrow(CockpitClientError);
   });
 
   it("allows absent original provenance and validates retained revision and claim identities", () => {

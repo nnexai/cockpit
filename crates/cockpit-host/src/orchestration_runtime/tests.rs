@@ -437,6 +437,31 @@ async fn resume_rebooted_root_uses_process_proof_and_unknown_roots_stay_protecte
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn rebooted_supervisor_with_missing_pane_keeps_unrelated_terminal_untouched() {
+    let fixture = Fixture::new();
+    let mut run = root_with_process(std::process::id());
+    let boot = run.attachment.as_mut().unwrap().process.as_mut().unwrap().kernel_boot_id.as_mut().unwrap();
+    boot.replace_range(0..1, if boot.starts_with('0') { "1" } else { "0" });
+    fixture.publish(std::slice::from_ref(&run));
+    let mut runtime = observed();
+    runtime.endpoint_identity = "new-daemon".into();
+    let other = &mut runtime.panes[0];
+    other.tab_id = "other-tab".into();
+    other.pane_id = "other-pane".into();
+    other.terminal_id = Some("other-terminal".into());
+    other.native_session_id = Some("other-conversation".into());
+    other.tab_label = "Other agent".into();
+    other.agent_name = Some("Other agent".into());
+    let herdr = ObservedHerdr(Some(runtime));
+    let resolved = resolve_resume_input(&fixture.service, &herdr, &run).await.unwrap();
+    assert!(resolved.root_main_recovery.is_some());
+    assert!(resolved.writer_exit_proof.is_none());
+    assert!(resolved.observation_cause.is_none());
+    reserve_root_once(&fixture, &run, &resolved);
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 async fn resume_same_boot_dead_root_missing_container_reserves_only_root_epoch_once() {
     let fixture = Fixture::new();
     let run = dead_root();
