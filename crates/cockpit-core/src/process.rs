@@ -521,7 +521,7 @@ mod tests {
             match kind {
                 "symlink" => std::os::unix::fs::symlink("/does/not/exist", staging.path.join("unsafe")).unwrap(),
                 "directory" => staging.dir.create_dir("unsafe").unwrap(),
-                "fifo" => rustix::fs::mkfifoat(&staging.dir, "unsafe", rustix::fs::Mode::from_raw_mode(0o600)).unwrap(),
+                "fifo" => nix::unistd::mkfifo(&staging.path.join("unsafe"), nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR).unwrap(),
                 "hardlink" => {
                     staging.dir.write("original", b"x").unwrap();
                     std::fs::hard_link(staging.path.join("original"), staging.path.join("unsafe")).unwrap();

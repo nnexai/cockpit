@@ -152,43 +152,21 @@ pub fn machine_id() -> Option<String> {
 
 #[cfg(target_os = "macos")]
 pub fn machine_id() -> Option<String> {
-    use std::ffi::{c_char, c_void};
-    type CfRef = *const c_void;
-    #[link(name = "IOKit", kind = "framework")]
-    unsafe extern "C" {
-        fn IOServiceMatching(name: *const c_char) -> *mut c_void;
-        fn IOServiceGetMatchingService(port: u32, matching: *mut c_void) -> u32;
-        fn IORegistryEntryCreateCFProperty(entry: u32, key: CfRef, allocator: CfRef, options: u32) -> CfRef;
-        fn IOObjectRelease(object: u32) -> i32;
-    }
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFStringCreateWithCString(allocator: CfRef, string: *const c_char, encoding: u32) -> CfRef;
-        fn CFStringGetCString(string: CfRef, buffer: *mut c_char, size: isize, encoding: u32) -> bool;
-        fn CFGetTypeID(value: CfRef) -> usize;
-        fn CFStringGetTypeID() -> usize;
-        fn CFRelease(value: CfRef);
-    }
-    const UTF8: u32 = 0x0800_0100;
-    // IOServiceGetMatchingService consumes the matching dictionary.
-    unsafe {
-        let matching = IOServiceMatching(c"IOPlatformExpertDevice".as_ptr());
-        if matching.is_null() { return None; }
-        let service = IOServiceGetMatchingService(0, matching);
-        if service == 0 { return None; }
-        let key = CFStringCreateWithCString(std::ptr::null(), c"IOPlatformUUID".as_ptr(), UTF8);
-        if key.is_null() { IOObjectRelease(service); return None; }
-        let value = IORegistryEntryCreateCFProperty(service, key, std::ptr::null(), 0);
-        CFRelease(key);
-        IOObjectRelease(service);
-        if value.is_null() { return None; }
-        let mut buffer = [0u8; 37];
-        let valid = CFGetTypeID(value) == CFStringGetTypeID()
-            && CFStringGetCString(value, buffer.as_mut_ptr().cast(), buffer.len() as isize, UTF8);
-        CFRelease(value);
-        if !valid { return None; }
-        macos_machine_digest(&buffer[..36])
-    }
+    let output = std::process::Command::new("/usr/sbin/ioreg")
+        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+        .output().ok()?;
+    if !output.status.success() { return None; }
+    parse_macos_ioreg_uuid(&output.stdout)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_macos_ioreg_uuid(output: &[u8]) -> Option<String> {
+    let output = std::str::from_utf8(output).ok()?;
+    let uuid = output.lines().find_map(|line| {
+        let line = line.trim_start_matches(|c: char| c == '|' || c.is_ascii_whitespace());
+        line.strip_prefix("\"IOPlatformUUID\" = \"")?.strip_suffix('"')
+    })?;
+    macos_machine_digest(uuid.as_bytes())
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -522,6 +500,27 @@ mod tests {
             b"0123456789AB-CDEF-0123-456789ABCDEF", b"01234567-89AB-CDEF-0123-456789ABCDEG",
             b"01234567-89AB-CDEF-0123-456789ABCDEF\0"] {
             assert!(macos_machine_digest(invalid).is_none());
+        }
+    }
+
+    #[test]
+    fn macos_ioreg_output_extracts_only_a_valid_platform_uuid() {
+        let uuid = b"01234567-89ab-cdef-0123-456789abcdef";
+        let output = b"+-o IOPlatformExpertDevice\n  |  \"IOPlatformUUID\" = \"01234567-89ab-cdef-0123-456789abcdef\"\n";
+        assert_eq!(parse_macos_ioreg_uuid(output), macos_machine_digest(uuid));
+        for invalid in [
+            b"".as_slice(),
+            b"\xff",
+            b"\"IOPlatformSerialNumber\" = \"01234567-89ab-cdef-0123-456789abcdef\"",
+            b"prefix \"IOPlatformUUID\" = \"01234567-89ab-cdef-0123-456789abcdef\"",
+            b"\"IOPlatformUUID\" = \"00000000-0000-0000-0000-000000000000\"",
+            b"\"IOPlatformUUID\" = \"01234567-89ab-cdef-0123-456789abcde\"",
+            b"\"IOPlatformUUID\" = \"01234567-89ab-cdef-0123-456789abcdef0\"",
+            b"\"IOPlatformUUID\" = \"01234567-89ab-cdef-0123-456789abcdeg\"",
+            b"\"IOPlatformUUID\" = \"01234567-89ab-cdef-0123-456789abcdef\" trailing",
+            b"\"IOPlatformUUID\" = \"01234567-89ab-cdef-0123-456789abcdef\0\"",
+        ] {
+            assert!(parse_macos_ioreg_uuid(invalid).is_none(), "{invalid:?}");
         }
     }
 
