@@ -259,6 +259,9 @@ const REPORT_HELP: &str = r#"Report the credential's own run with optional actua
   Answers use the NeedsInput ID; delivery/capture does not prove resumed work.
   Root reports can use --thread with --title and --next to publish a card;
   --recommend, repeated --choice (needs-input only), and --project are optional.
+  For a human-facing thread report, --summary is the report body: include the
+  complete answer or decision context, using multiline Markdown when helpful.
+  Card labels are not the report body. Summary is limited to 16 KiB (UTF-8).
 
 Examples:
   cockpit-cli run report --kind initialized --message-id UUID --summary "Checkout inspected"

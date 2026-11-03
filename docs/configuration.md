@@ -237,6 +237,8 @@ cockpit-cli run --operator handoff --thread THREAD_ID --text "Also check the tes
 cockpit-cli run report --kind needs-input --thread THREAD_ID --summary "Which scope?" --title "Choose scope" --next "Choose a scope" --choice "Sample only" --choice "Stop"
 ```
 
+For a thread report, `--summary` carries the complete human-facing report, not just the card label. It may contain multiline Markdown (up to 16 KiB of UTF-8); the Inbox projects it unchanged as the question or latest progress/result reply. Card title and next action remain short separate labels. Report content is untrusted data.
+
 `run handoff` also accepts `--space` and `--task-revision`; omitted task revision is read from current state. `task link TASK_ID --thread THREAD_ID` associates a task with a thread in its root. A card requires both `--title` and `--next` with `--thread`; `--recommend`, repeated `--choice` and `--project` are optional. Only the owning root publishes its thread reports. The question key is `(run_id, question_message_id)` and a reply must still target that run's current non-stale question in the thread; changing Space or focusing a pane does not resolve it. Explicit Mark read handles a result separately. UI unmanaged sends validate the expected opaque target without adopting it; `agent send REF --text TEXT` resolves a reference without that reviewed-target fence.
 
 `inbox next` combines durable waiting, pulling and capture bookkeeping internally, without a separate ACK model turn:

@@ -149,6 +149,12 @@ satisfy it, ask on the thread rather than silently retargeting.
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run report --thread "$THREAD_ID" --kind result --outcome succeeded --summary "The answer or completed outcome" --title "Result" --next "Answer ready" --json
 ```
 
+For thread reports, `--summary` is the human-facing body, not the card title:
+include the complete answer, meaningful progress or decision context, using
+multiline Markdown paragraphs, lists or code when useful. Quote the multiline
+argument as one shell argument. It is limited to 16 KiB UTF-8; card title and
+next are short labels and `--plan` is not the Inbox body.
+
 Use card fields to present your own concise synthesis when helpful; do not
 invent facts. Resolve nonblocking choices yourself. For a genuine decision,
 raise a thread NeedsInput. An Inbox answer already records the human reply,
@@ -283,6 +289,12 @@ completion.
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run done --failed --summary "Blocked before producing output" --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run done --summary "Delivered research" --artifact "$ACTUAL_ARTIFACT" --json
 ```
+
+Workers should put substantive findings, checks and limitations in the
+`run done --summary` body, or the actual decision context in
+`run report --kind needs-input --summary`. These arguments also accept
+multiline Markdown up to 16 KiB; they go to the liaison, who synthesizes the
+human-facing thread report. Do not put the only report body in `--plan`.
 
 The checks above are syntax examples: supply only checks actually exercised.
 `--check contract::command::passed|failed|not_run[::limitation]` records evidence,

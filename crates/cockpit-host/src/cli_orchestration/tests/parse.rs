@@ -14,6 +14,18 @@ use super::super::{
 use super::{TestCli, TestCommand, parsed_task_action};
 
 #[test]
+fn thread_report_summary_preserves_multiline_markdown() {
+    let body = "## Résultat\n\n- **first**\n- `second`\n\n```text\n  exact\n```";
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "report", "--kind", "result", "--outcome", "succeeded",
+        "--thread", "thread", "--summary", body,
+    ]).unwrap().command else { panic!("expected run") };
+    let RunOperation::Mutation(action) = args.command.operation(&args.common).unwrap() else { panic!("expected report") };
+    let OrchestrationAction::Report { summary, .. } = action else { panic!("expected report action") };
+    assert_eq!(summary, body);
+}
+
+#[test]
 fn thread_cli_preserves_cards_bindings_and_links() {
     let action = parsed_task_action(&["create", "--title", "Work", "--thread", "thread"]).unwrap();
     assert_eq!(serde_json::to_value(action).unwrap()["thread_id"], "thread");

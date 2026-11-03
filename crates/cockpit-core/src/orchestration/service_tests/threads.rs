@@ -8,6 +8,43 @@ fn handoff(root: &str, thread: &str) -> OrchestrationAction {
         expected_task_revision: None, binding: None,
     }
 }
+#[test]
+fn rich_thread_reports_survive_storage_and_inbox_projection() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let actor = fixture.root_actor(&root);
+    let question_thread = id();
+    let result_thread = id();
+    fixture.operator(handoff(&root, &question_thread));
+    fixture.operator(handoff(&root, &result_thread));
+    let question = "## Decision\n\nChoose **one**:\n- café\n- `code`\n\n<script>untrusted</script>";
+    let result = "## Result\n\nFirst paragraph.\n\n- item one\n- item two\n\n```text\n  preserved\n```";
+    for (kind, body, thread) in [(ReportKind::NeedsInput, question, &question_thread), (ReportKind::Result, result, &result_thread)] {
+        let mut action = report(kind, (kind == ReportKind::Result).then_some(ReportOutcome::Succeeded), None);
+        if let OrchestrationAction::Report { thread_id, summary, .. } = &mut action {
+            *thread_id = Some(thread.clone());
+            *summary = body.into();
+        }
+        fixture.apply(&actor, action).unwrap();
+    }
+    // Read back from the durable store, rather than projecting the action itself.
+    let state = fixture.state();
+    for body in [question, result] {
+        let message = state.messages.iter().find(|m| m.text == body).unwrap();
+        assert_eq!(message.report.as_ref().unwrap().summary, body);
+    }
+    let view = super::super::inbox_view::project(
+        &InboxRequest { session_id: SESSION.into() }, &state, vec![],
+        Err(InspectionError::new("offline", "unavailable")), "2026-10-05T12:00:00Z", "store",
+    ).unwrap();
+    let question_view = view.threads.iter().find(|t| t.thread_id == question_thread).unwrap();
+    let result_view = view.threads.iter().find(|t| t.thread_id == result_thread).unwrap();
+    assert_eq!(question_view.questions[0].text.text, question);
+    assert_eq!(result_view.reply.as_ref().unwrap().text, result);
+    assert_eq!(serde_json::to_value(question_view).unwrap()["questions"][0]["text"]["text"], question);
+    assert_eq!(serde_json::to_value(result_view).unwrap()["reply"]["text"], result);
+}
+
 
 #[test]
 fn handoff_replay_survives_owner_close_and_rejects_changed_payload() {

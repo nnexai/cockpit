@@ -262,6 +262,30 @@ describe("Inbox", () => {
     expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("My answer");
     expect(host.textContent).toContain("selected question changed");
   });
+  it("shows the selected owner report as rich feedback with its provenance", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "answer", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null }, next: null, project: null, request: null, questions: [], recommendation: null, reply: { text: "## Report\n\n- **Completed**\n- Verified", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result-id", at: "now" }, unread_result_message_id: "result-id", tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    await flush(() => app.render());
+    await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Result"))!.click());
+    const update = host.querySelector(".inbox-update")!;
+    expect(update.querySelector("small")?.textContent).toBe("Update from Liaison");
+    expect(update.querySelector("h2")?.textContent).toBe("Report");
+    expect(update.querySelectorAll("li")).toHaveLength(2);
+    expect(update.querySelector("strong")?.textContent).toBe("Completed");
+  });
+  it("shows a NeedsInput report as rich question text without changing its choices", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    const question = { run_id: "owner", question_message_id: "q", asked_at: "now", text: { text: "## Decision\n\nPlease review **both** options.", source: { kind: "owner" as const, run_id: "owner", harness: "omp" }, message_id: "q", at: "now" }, choices: ["Yes", "No"], receipt: { status: "unresolved" as const } };
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Question", source: { kind: "recorded" }, message_id: null, at: null }, next: null, project: null, request: null, questions: [question], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    await flush(() => app.render());
+    await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Question"))!.click());
+    expect(host.querySelector(".inbox-q-text h2")?.textContent).toBe("Decision");
+    expect(host.querySelector(".inbox-q-text strong")?.textContent).toBe("both");
+    await flush(() => Array.from(host.querySelectorAll<HTMLButtonElement>(".inbox-chip")).find(b => b.textContent === "Yes")!.click());
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Yes");
+  });
   it("marks only the displayed result message read", async () => {
     const { client } = fixture(), app = setup(client);
     const inbox = view("a");
