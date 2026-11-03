@@ -30,6 +30,26 @@ async fn reference_snapshot(context: &Context, root: Option<String>) -> Result<O
         .max_by(|a, b| (&a.updated_at, &a.run_id).cmp(&(&b.updated_at, &b.run_id)));
     if let Some(run) = selected { context.snapshot(Some(run.root_id.clone())).await } else { Ok(snapshot) }
 }
+fn new_handoff_owner<'a>(
+    runs: &'a [cockpit_protocol::orchestration::Run],
+    owners: &[cockpit_protocol::orchestration::InboxOwner],
+    session: &str,
+) -> Option<&'a str> {
+    use cockpit_protocol::orchestration::{OwnerAvailability, RunStage};
+    runs.iter()
+        .filter(|run| cockpit_core::orchestration::is_liaison_candidate(run, session))
+        .filter(|run| !owners.iter().any(|owner| owner.root_id == run.run_id
+            && (owner.stage == RunStage::Closed || owner.availability == OwnerAvailability::Absent)))
+        .max_by(|left, right| {
+            let available = |run: &cockpit_protocol::orchestration::Run| owners.iter().any(|owner|
+                owner.root_id == run.run_id && owner.availability == OwnerAvailability::Available);
+            available(left).cmp(&available(right))
+                .then_with(|| left.updated_at.cmp(&right.updated_at))
+                .then_with(|| right.run_id.cmp(&left.run_id))
+        })
+        .map(|run| run.run_id.as_str())
+}
+
 
 
 pub(super) async fn task_command(context: &Context, root: &str, command: &mut TaskCommand) -> Result<(), CliError> {
@@ -97,8 +117,14 @@ pub(super) async fn run_command(context: &Context, root: Option<String>, command
         }
         return Ok(());
     }
-    if let RunCommand::Handoff { owner, task: target, task_revision, space: workspace, .. } = &mut *command {
-        if owner.is_none() {
+    if let RunCommand::Handoff { owner, thread, task: target, task_revision, space: workspace, .. } = &mut *command {
+        if owner.is_none() && thread.is_none() {
+            let snapshot = context.snapshot(None).await?;
+            let inbox = context.service.inbox(context.adapter.as_ref(),
+                &cockpit_protocol::orchestration::InboxRequest { session_id: context.session.clone() }).await?;
+            *owner = new_handoff_owner(&snapshot.runs, &inbox.owners, &context.session).map(str::to_owned);
+            if owner.is_none() { return Err(CliError::new("root_not_found", "No eligible liaison; specify --owner")); }
+        } else if owner.is_none() {
             use cockpit_protocol::orchestration::{LiaisonLookupRequest, LiaisonLookupResponse};
             let response = cockpit_host::orchestration_runtime::lookup_liaison(
                 &context.service, context.adapter.as_ref(),
@@ -213,6 +239,75 @@ pub(super) fn space(reference: &str, workspaces: &[cockpit_core::orchestration::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cockpit_protocol::orchestration::{InboxOwner, Integration, OwnerAvailability, Run, RunKind, RunStage};
+
+    fn root(id: &str, updated: &str) -> Run {
+        Run { session_id: "session".into(), brief: String::new(), run_id: id.into(),
+            kind: RunKind::Supervisor, label: id.into(), root_id: id.into(), parent_run_id: None,
+            task_id: None, attempt: 1, assignment_generation: None,
+            launch_config: Default::default(), task_revision_at_start: None, stage: RunStage::Active,
+            close_reason: None, dispatch: None, target: None, setup: None, cleanup_policy: None,
+            last_report: None, result: None, source_output: None, integration: Integration::Pending,
+            annotations: vec![], project: None, checkout: None, attachment: None, checkout_claim_id: None,
+            resume: None, retirement: None, created_at: updated.into(), updated_at: updated.into() }
+    }
+
+    fn owner(id: &str, availability: OwnerAvailability, stage: RunStage) -> InboxOwner {
+        InboxOwner { root_id: id.into(), label: id.into(), kind: RunKind::Supervisor, stage,
+            harness: String::new(), availability, location: None, undelivered: 0 }
+    }
+
+    #[test]
+    fn new_handoff_skips_absent_and_closed_but_preserves_unknown_and_starting() {
+        let runs = vec![root("dead", "4"), root("closed", "3"), root("unknown", "2"), root("starting", "1")];
+        let mut owners = vec![
+            owner("dead", OwnerAvailability::Absent, RunStage::Active),
+            owner("closed", OwnerAvailability::Available, RunStage::Closed),
+            owner("unknown", OwnerAvailability::Unknown, RunStage::Active),
+            owner("starting", OwnerAvailability::Starting, RunStage::Active),
+        ];
+        assert_eq!(new_handoff_owner(&runs, &owners, "session"), Some("unknown"));
+        owners[2].availability = OwnerAvailability::Absent;
+        assert_eq!(new_handoff_owner(&runs, &owners, "session"), Some("starting"));
+        owners[3].availability = OwnerAvailability::Absent;
+        assert_eq!(new_handoff_owner(&runs, &owners, "session"), None);
+        owners.remove(2);
+        assert_eq!(new_handoff_owner(&runs, &owners, "session"), Some("unknown"));
+    }
+
+    #[test]
+    fn new_handoff_prefers_available_before_liaison_ordering() {
+        let runs = vec![
+            root("unknown", "9"), root("starting", "8"), root("unlisted", "7"),
+            root("available_b", "2"), root("available_a", "2"), root("older", "1"),
+        ];
+        let mut owners = vec![
+            owner("unknown", OwnerAvailability::Unknown, RunStage::Active),
+            owner("starting", OwnerAvailability::Starting, RunStage::Active),
+            owner("available_b", OwnerAvailability::Available, RunStage::Active),
+            owner("available_a", OwnerAvailability::Available, RunStage::Active),
+            owner("older", OwnerAvailability::Available, RunStage::Active),
+        ];
+        assert_eq!(new_handoff_owner(&runs, &owners, "session"), Some("available_a"));
+        owners[3].stage = RunStage::Closed;
+        assert_eq!(new_handoff_owner(&runs, &owners, "session"), Some("available_b"));
+        owners[2].availability = OwnerAvailability::Absent;
+        owners[4].availability = OwnerAvailability::Absent;
+        assert_eq!(new_handoff_owner(&runs, &owners, "session"), Some("unknown"));
+    }
+
+    #[test]
+    fn new_handoff_uses_liaison_candidate_rules_and_tie_breaker() {
+        let mut child = root("child", "9");
+        child.parent_run_id = Some("a".into());
+        let mut other_session = root("other", "9");
+        other_session.session_id = "other".into();
+        let mut closed = root("closed", "9");
+        closed.stage = RunStage::Closed;
+        let runs = vec![root("b", "2"), root("a", "2"), child, other_session, closed];
+        assert_eq!(new_handoff_owner(&runs, &[], "session"), Some("a"));
+    }
+
     #[test]
     fn identifiers_titles_and_ambiguity() {
         let entries = [("abcd1234-0000", "Build widgets"), ("abcd9876-0000", "Fix widgets")];

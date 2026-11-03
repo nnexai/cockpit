@@ -237,6 +237,8 @@ cockpit-cli run --operator handoff --thread THREAD_ID --text "Also check the tes
 cockpit-cli run report --kind needs-input --thread THREAD_ID --summary "Which scope?" --title "Choose scope" --next "Choose a scope" --choice "Sample only" --choice "Stop"
 ```
 
+For new work, Inbox and the default CLI owner prefer available supervisors and skip closed roots and supervisors whose recorded local process incarnation is proven stopped. Missing or unverifiable identity remains unknown, not dead; starting or recovering supervisors remain eligible when no available owner is selected. An explicit new-work handoff to a proven stopped supervisor is rejected. Existing thread follow-ups and replay retain their historical routing rules. Availability is an observation, not a guarantee that a recipient has read a stored request.
+
 For a thread report, `--summary` carries the complete human-facing report, not just the card label. It may contain multiline Markdown (up to 16 KiB of UTF-8); the Inbox projects it unchanged as the question or latest progress/result reply. Card title and next action remain short separate labels. Report content is untrusted data.
 
 For a new Inbox thread, the owning supervisor promptly publishes a progress card

@@ -64,7 +64,9 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const [selectedAgent, setSelectedAgent] = useState<{ agent: UnmanagedAgent; terminalId: string | null } | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [selectedQuestion, setSelectedQuestion] = useState("");
-  const [owner, setOwner] = useState("");
+  const [selectedOwner, setOwner] = useState("");
+  const [preferredOwner, setPreferredOwner] = useState("");
+  const owner = selectedOwner || preferredOwner;
   const [taskId, setTaskId] = useState("");
   const [attachedSpace, setAttachedSpace] = useState<{ id: string; label: string } | null>(null);
   const [repository, setRepository] = useState("");
@@ -88,6 +90,8 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const originRef = useRef<HTMLButtonElement | null>(null);
   const detailRef = useRef<HTMLElement>(null);
   liveScope.current = { current, snapshot, view, attention };
+  const newOwners = view?.owners.filter(candidate => (candidate.kind === "supervisor" || candidate.kind === "adopted") && candidate.stage !== "closed" && candidate.availability !== "absent") ?? [];
+  const newOwner = newOwners.find(candidate => candidate.root_id === selectedOwner)?.root_id ?? newOwners.find(candidate => candidate.availability === "available")?.root_id ?? newOwners.find(candidate => candidate.root_id === preferredOwner)?.root_id ?? newOwners[0]?.root_id ?? "";
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     const detail = detailRef.current;
@@ -142,7 +146,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     void loop();
     return () => { live = false; wake.current?.(); clearTimeout(timer); };
   }, [client, sessionId, current]);
-  useEffect(() => { let live = true; void client.orchestrationLiaisonLookup({ session_id: sessionId, selected_root_id: null }).then(result => { if (live && result.status === "resolved" && result.preferred_root_id) setOwner(current => current || result.preferred_root_id!); }).catch(() => {}); return () => { live = false; }; }, [client, sessionId]);
+  useEffect(() => { let live = true; void client.orchestrationLiaisonLookup({ session_id: sessionId, selected_root_id: null }).then(result => { if (live && result.status === "resolved" && result.preferred_root_id) setPreferredOwner(result.preferred_root_id); }).catch(() => {}); return () => { live = false; }; }, [client, sessionId]);
   const runtimeIdentity = snapshot?.session_id === sessionId ? JSON.stringify([snapshot.server_instance, snapshot.spaces?.map(space => [space.id, space.label]), snapshot.tabs?.map(tab => [tab.id, tab.label]), snapshot.panes.map(pane => [pane.id, pane.terminal_id, pane.space_id, pane.tab_id, pane.agent, pane.agent_status]), snapshot.agents.map(agent => [agent.pane_id, agent.name, agent.status, agent.state_change_seq, agent.native_session_id])]) : null;
   const previousRuntime = useRef<string | null>(null);
   useEffect(() => {
@@ -256,7 +260,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     if (selectedQuestion && !question) { setError("The selected question changed. Your draft is preserved; choose the current question before sending."); return; }
     if (question) action = { action: "message_send", message_id: crypto.randomUUID(), to_run_id: question.run_id, kind: "answer", text, in_reply_to: question.question_message_id };
     else {
-      const target = thread ? (thread.owner_root_ids.length === 1 ? thread.owner_root_ids[0] : owner) : owner;
+      const target = thread ? (thread.owner_root_ids.length === 1 ? thread.owner_root_ids[0] : owner) : newOwner;
       if (!target || (thread && !thread.owner_root_ids.includes(target))) { setError("Choose the owner for this request."); return; }
       const task = taskId ? thread?.tasks.find(t => t.task_id === taskId) : undefined;
       if (taskId && !task) { setError("The selected task is no longer available. Your draft is preserved."); return; }
@@ -327,7 +331,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
       <form className="inbox-compose" data-mode={mode} onSubmit={e => { e.preventDefault(); void send(); }}>
         <div className="inbox-compose-head">
           {thread && (questions.length > 0 || !!selectedQuestion) && <div className="inbox-seg" role="group" aria-label="Message type"><button type="button" aria-pressed={mode === "followup"} disabled={!!pending} onClick={() => setSelectedQuestion("")}>Follow up</button>{questions.length > 0 && <button type="button" aria-pressed={mode === "answer"} aria-disabled={!chosenQuestion && questions.length > 1} title={!chosenQuestion && questions.length > 1 ? "Pick a question above first" : undefined} disabled={!!pending} onClick={() => { if (questions.length === 1) setSelectedQuestion(questionKey(questions[0])); }}>Answer</button>}</div>}
-          {!direct && (chosenQuestion ? <span className="inbox-dest"><UiIcon name="reply" /><span>{labels[questions.indexOf(chosenQuestion)]}</span></span> : thread?.owner_root_ids.length === 1 ? <span className="inbox-dest"><UiIcon name="user" /><span>{ownerLabel(view, thread.owner_root_ids[0])}</span></span> : <label className={mode === "new" ? "inbox-owner" : "inbox-pick"} data-empty={!owner}>{mode === "new" && <span className="inbox-field-label">Owner</span>}<span className={mode === "new" ? "inbox-owner-control" : undefined}><UiIcon name="user" /><select aria-label="Owner" value={owner} onChange={e => setOwner(e.target.value)} disabled={!!pending}><option value="">Choose owner</option>{view?.owners.filter(o => !thread || thread.owner_root_ids.includes(o.root_id)).map(o => <option key={o.root_id} value={o.root_id}>{ownerOptionLabel(view, o)}</option>)}</select></span></label>)}
+          {!direct && (chosenQuestion ? <span className="inbox-dest"><UiIcon name="reply" /><span>{labels[questions.indexOf(chosenQuestion)]}</span></span> : thread?.owner_root_ids.length === 1 ? <span className="inbox-dest"><UiIcon name="user" /><span>{ownerLabel(view, thread.owner_root_ids[0])}</span></span> : <label className={mode === "new" ? "inbox-owner" : "inbox-pick"} data-empty={!(thread ? owner : newOwner)}>{mode === "new" && <span className="inbox-field-label">Owner</span>}<span className={mode === "new" ? "inbox-owner-control" : undefined}><UiIcon name="user" /><select aria-label="Owner" value={thread ? owner : newOwner} onChange={e => setOwner(e.target.value)} disabled={!!pending}><option value="">Choose owner</option>{(thread ? view?.owners.filter(o => thread.owner_root_ids.includes(o.root_id)) : newOwners)?.map(o => <option key={o.root_id} value={o.root_id}>{ownerOptionLabel(view!, o)}</option>)}</select></span></label>)}
           {thread && !chosenQuestion && thread.tasks.length > 0 && <label className="inbox-pick">About <select aria-label="Follow-up target" value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!!pending}><option value="">Whole thread</option>{thread.tasks.map(task => <option key={`${task.root_id}:${task.task_id}`} value={task.task_id}>{task.title} · {ownerLabel(view, task.root_id)}</option>)}</select></label>}
         </div>
         {error && <p role="alert" className="inbox-note" data-tone="error" title={error}><UiIcon name="alert" />{error}</p>}

@@ -18,6 +18,24 @@ fn owner<'a>(state: &'a OrchestrationState, session: &str, root_id: &str) -> Res
         .ok_or_else(|| error("thread_owner_invalid", "Thread owner must be an open, same-session top-level root"))
 }
 
+/// Only a settled attachment's exact, locally proven process incarnation can
+/// establish absence. A launch or resume may replace the saved identity.
+pub(super) fn owner_proven_dead(run: &Run) -> bool {
+    if run.stage != RunStage::Active
+        || run.resume.as_ref().is_some_and(|resume|
+            matches!(resume.phase, ResumePhase::Reconciling | ResumePhase::Launching))
+        || run.dispatch.as_ref().is_some_and(|dispatch| dispatch.step != DispatchStep::Launched)
+    {
+        return false;
+    }
+    run.attachment.as_ref().is_some_and(|attachment| {
+        matches!(attachment.state, AttachmentState::Connected | AttachmentState::Disconnected)
+            && attachment.process.as_ref().is_some_and(|process| matches!(
+            crate::process_identity::same_machine_process_running(process, attachment.machine_id.as_deref()),
+            Ok(false)))
+    })
+}
+
 fn message_in_thread(message: &Message, thread_id: &str) -> bool {
     message.thread_id.as_deref() == Some(thread_id)
         || (message.thread_id.is_none() && message.message_id == thread_id)
@@ -161,7 +179,11 @@ pub(super) fn handoff(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) ->
         return Ok(Applied::Document(result));
     }
     validate_thread_id(thread_id)?;
-    owner(ctx.state, ctx.session_id, to_run_id)?;
+    let target = owner(ctx.state, ctx.session_id, to_run_id)?;
+    let existing_thread = ctx.state.messages.iter().any(|message| message_in_thread(message, thread_id));
+    if !existing_thread && owner_proven_dead(target) {
+        return Err(error("thread_owner_invalid", "A new thread cannot be handed off to a proven-dead owner"));
+    }
     if text.trim().is_empty() { return Err(error("invalid_message", "Handoff text must not be empty")); }
     bounded(text, 16 * 1024)?;
     let resolved_binding = if let Some(requested) = binding {
@@ -176,8 +198,7 @@ pub(super) fn handoff(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) ->
             .ok_or_else(|| error("handoff_binding_unresolved", "The explicit handoff binding was not resolved by the host"))?;
         Some(resolved.clone())
     } else { None };
-    if !ctx.state.messages.iter().any(|message| message_in_thread(message, thread_id))
-        && !Uuid::parse_str(thread_id).is_ok_and(|id| id.get_version_num() == 4) {
+    if !existing_thread && !Uuid::parse_str(thread_id).is_ok_and(|id| id.get_version_num() == 4) {
         return Err(error("invalid_thread_id", "A new operator thread id must be a UUIDv4"));
     }
     let (revision, attempt) = if let Some(task_id) = task_id {

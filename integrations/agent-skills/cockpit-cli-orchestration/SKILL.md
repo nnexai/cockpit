@@ -194,8 +194,12 @@ owner for interpretation, rather than classifying it as a task:
 
 These options are optional apart from `--text`: omit task and task revision
 together for unbound work, and omit repository/Space/branch/base when the user
-did not explicitly bind them. Without `--owner` the preferred liaison is used;
-without `--thread` a new thread is created. Retain the generated or explicit
+did not explicitly bind them. Without `--owner`, new work prefers an available
+liaison and skips proven stopped or closed owners; unknown identities remain
+eligible when no available liaison is selected. Explicit new-work handoffs to
+proven stopped owners are rejected. Existing thread follow-ups retain their
+historical routing.
+Without `--thread` a new thread is created. Retain the generated or explicit
 `--message-id` for an exact replay after an uncertain outcome.
 
 ## Canonical scope and stages

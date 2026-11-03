@@ -70,6 +70,94 @@ fn handoff_replay_survives_owner_close_and_rejects_changed_payload() {
     assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), handoff(&root, &id())), "thread_owner_invalid");
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn new_handoffs_exclude_only_proven_dead_settled_owners() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let thread = id();
+    let action = handoff(&root, &thread);
+    fixture.operator(action.clone());
+    let mut dead = live_process();
+    dead.start_ticks = dead.start_ticks.checked_add(1).unwrap();
+    let machine = crate::process_identity::machine_id().unwrap();
+    fixture.seed_run(&root, |run| {
+        run.stage = RunStage::Active;
+        run.dispatch = None;
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.state = AttachmentState::Connected;
+        attachment.process = Some(dead.clone());
+        attachment.machine_id = Some(machine.clone());
+    });
+    let operator = Actor::Operator(OperatorOrigin::Browser);
+    let before = fixture.state_bytes();
+    assert_code(fixture.apply(&operator, handoff(&root, &id())), "thread_owner_invalid");
+    assert_eq!(fixture.state_bytes(), before);
+    fixture.operator(action); // Replay remains idempotent.
+    fixture.operator(handoff(&root, &thread)); // Historical follow-up remains possible.
+    let project = |state: &store::OrchestrationState| super::super::inbox_view::project(
+        &InboxRequest { session_id: SESSION.into() }, state, vec![],
+        Err(InspectionError::new("offline", "unavailable")), "2026-10-05T12:00:00Z", "store",
+    ).unwrap().owners.into_iter().find(|owner| owner.root_id == root).unwrap().availability;
+    assert_eq!(project(&fixture.state()), OwnerAvailability::Absent);
+
+    fixture.seed_run(&root, |run| run.attachment.as_mut().unwrap().machine_id = None);
+    assert_eq!(project(&fixture.state()), OwnerAvailability::Unknown);
+    fixture.operator(handoff(&root, &id()));
+
+    fixture.seed_run(&root, |run| {
+        run.attachment.as_mut().unwrap().machine_id = Some(machine);
+        run.stage = RunStage::Starting;
+    });
+    assert_eq!(project(&fixture.state()), OwnerAvailability::Starting);
+    fixture.operator(handoff(&root, &id()));
+    for phase in [ResumePhase::Reconciling, ResumePhase::Launching] {
+        fixture.seed_run(&root, |run| {
+            run.stage = RunStage::Active;
+            run.resume = Some(ResumeRecord {
+                operation_id: id(), run_id: run.run_id.clone(), previous_attachment_epoch: Some(1),
+                fresh_conversation: None, previous_conversation: None, session_namespace: None,
+                phase, cause: None, decision_id: None, replacement_attachment_epoch: None, updated_at: now(),
+            });
+        });
+        assert_eq!(project(&fixture.state()), OwnerAvailability::Unknown);
+        fixture.operator(handoff(&root, &id()));
+    }
+    fixture.seed_run(&root, |run| {
+        run.resume = None;
+        run.dispatch = Some(super::super::dispatch(DispatchStep::LaunchUnknown));
+    });
+    assert_eq!(project(&fixture.state()), OwnerAvailability::Unknown);
+    fixture.operator(handoff(&root, &id()));
+}
+
+#[test]
+fn missing_pane_does_not_prove_unknown_owner_dead() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    fixture.seed_run(&root, |run| {
+        run.stage = RunStage::Active;
+        run.dispatch = None;
+        let attachment = run.attachment.as_mut().unwrap();
+        attachment.process = None;
+        attachment.location = Some(RunLocation {
+            boot_id: None, peer_process: None, terminal_id: Some("terminal".into()),
+            native_session_id: None, endpoint_identity: "endpoint".into(), session_id: SESSION.into(),
+            workspace_id: "space".into(), tab_id: "tab".into(), pane_id: "pane".into(),
+            launch_tag: "tag".into(),
+        });
+    });
+    let view = super::super::inbox_view::project(
+        &InboxRequest { session_id: SESSION.into() }, &fixture.state(), vec![],
+        Ok(super::super::herdr::RuntimeView {
+            endpoint_identity: "endpoint".into(), boot_id: None, peer_process: None,
+            focused_workspace_id: None, workspaces: vec![], panes: vec![],
+        }), "2026-10-05T12:00:00Z", "store",
+    ).unwrap();
+    assert_eq!(view.owners[0].availability, OwnerAvailability::Unknown);
+    fixture.operator(handoff(&root, &id()));
+}
+
 #[test]
 fn replacement_preserves_explicit_handoff_placement() {
     for require_branch in [true, false] {

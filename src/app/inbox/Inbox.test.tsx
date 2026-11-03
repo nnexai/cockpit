@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
-import type { InboxLocation, InboxView, OrchestrationWaitResponse, SessionSnapshotResponse } from "../../protocol/generated/v1";
+import type { InboxLocation, InboxView, LiaisonLookupResponse, OrchestrationWaitResponse, SessionSnapshotResponse } from "../../protocol/generated/v1";
 import type { AgentAttentionState } from "../session/agentAttention";
 import type { AttentionRow } from "../sidebar/agentAttentionModel";
 import { Inbox } from "./Inbox";
@@ -50,6 +50,11 @@ function deferredFocus() {
   let resolve!: () => void, reject!: (error: Error) => void;
   const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
+}
+function deferredLookup() {
+  let resolve!: (value: LiaisonLookupResponse) => void;
+  const promise = new Promise<LiaisonLookupResponse>(yes => { resolve = yes; });
+  return { promise, resolve };
 }
 function openSession() {
   Array.from(host.querySelectorAll<HTMLButtonElement>(".inbox-detail button")).find(button => button.textContent === "Open session")!.click();
@@ -189,12 +194,110 @@ describe("Inbox", () => {
       ["live-same", "Supervisor · Project / Work · live-same · Available"],
       ["old-same", "Supervisor · old-same · Status unknown"],
       ["starting", "Starting owner · Starting"],
-      ["absent", "Absent owner · Not running"],
     ]);
     await flush(() => { select.value = "old-same"; select.dispatchEvent(new Event("change", { bubbles: true })); });
     expect(select.value).toBe("old-same");
     await flush(() => text("Send to the selected supervisor")); await flush(submit);
     expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "thread_handoff", to_run_id: "old-same", text: "Send to the selected supervisor" });
+  });
+  it("routes new work to an available owner even when unknown and starting owners appear first", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    inbox.owners = [
+      { ...inbox.owners[0]!, root_id: "unknown", availability: "unknown" },
+      { ...inbox.owners[0]!, root_id: "starting", availability: "starting" },
+      { ...inbox.owners[0]!, root_id: "available" },
+    ];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "available", seq: 1, duplicate: false, stale: false } });
+    await flush(() => app.render());
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="Owner"]')!.value).toBe("available");
+    await flush(() => text("New work")); await flush(submit);
+    expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "thread_handoff", to_run_id: "available", text: "New work" });
+  });
+  it("keeps the available default when a delayed lookup prefers an unknown owner", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    inbox.owners = [
+      { ...inbox.owners[0]!, root_id: "unknown", availability: "unknown" },
+      { ...inbox.owners[0]!, root_id: "available" },
+    ];
+    const lookup = deferredLookup();
+    vi.mocked(client.orchestrationLiaisonLookup).mockReturnValue(lookup.promise);
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "available", seq: 1, duplicate: false, stale: false } });
+    await flush(() => app.render());
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Owner"]')!;
+    expect(select.value).toBe("available");
+    await flush(() => lookup.resolve({ status: "resolved", preferred_root_id: "unknown", lookup_revision: 1, roots: [] }));
+    expect(select.value).toBe("available");
+    await flush(() => text("New work")); await flush(submit);
+    expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "thread_handoff", to_run_id: "available", text: "New work" });
+  });
+  it("prefers an available new-work owner without overriding an explicit unknown selection", async () => {
+    const { client, waits } = fixture(), app = setup(client), inbox = view("a");
+    inbox.owners = [
+      { ...inbox.owners[0]!, root_id: "unknown", availability: "unknown" },
+      { ...inbox.owners[0]!, root_id: "starting", availability: "starting" },
+      { ...inbox.owners[0]!, root_id: "available" },
+    ];
+    const lookup = deferredLookup();
+    vi.mocked(client.orchestrationLiaisonLookup).mockReturnValue(lookup.promise);
+    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2 });
+    vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 3, result: { result: "message", to_run_id: "unknown", seq: 1, duplicate: false, stale: false } });
+    await flush(() => app.render());
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Owner"]')!;
+    expect(select.value).toBe("available");
+    await flush(() => { select.value = "unknown"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    await flush(() => lookup.resolve({ status: "resolved", preferred_root_id: "starting", lookup_revision: 1, roots: [] }));
+    expect(select.value).toBe("unknown");
+    await flush(() => waits[0]!({ revision: 2, tasks_token: "changed", changed: true }));
+    expect(select.value).toBe("unknown");
+    await flush(() => text("Send to my chosen owner")); await flush(submit);
+    expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "thread_handoff", to_run_id: "unknown", text: "Send to my chosen owner" });
+  });
+  it("falls back from an ineligible preferred owner and keeps drafts as availability changes", async () => {
+    const { client, waits } = fixture(), app = setup(client), inbox = view("a");
+    inbox.owners = [
+      { ...inbox.owners[0]!, stage: "closed" },
+      { ...inbox.owners[0]!, root_id: "absent", availability: "absent" },
+      { ...inbox.owners[0]!, root_id: "unknown", kind: "adopted", availability: "unknown" },
+      { ...inbox.owners[0]!, root_id: "starting", availability: "starting" },
+      { ...inbox.owners[0]!, root_id: "worker", kind: "worker" },
+    ];
+    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, owners: inbox.owners.map(o => o.root_id === "unknown" ? { ...o, availability: "absent" as const } : o) });
+    vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 3, result: { result: "message", to_run_id: "starting", seq: 1, duplicate: false, stale: false } });
+    await flush(() => app.render());
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Owner"]')!;
+    expect(Array.from(select.options).map(o => o.value)).toEqual(["", "unknown", "starting"]);
+    expect(select.value).toBe("unknown");
+    await flush(() => text("Keep this draft"));
+    await flush(() => waits[0]!({ revision: 2, tasks_token: "changed", changed: true }));
+    expect(select.value).toBe("starting");
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Keep this draft");
+    await flush(submit);
+    expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "thread_handoff", to_run_id: "starting", text: "Keep this draft" });
+  });
+  it("preserves follow-up routing to closed and absent historical owners", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    inbox.owners = [{ ...inbox.owners[0]!, stage: "closed", availability: "absent" }, { ...inbox.owners[0]!, root_id: "other", availability: "absent" }];
+    inbox.threads = [{ thread_id: "thread", state: "underway", need: null, owner_root_ids: ["owner", "other"], title: { text: "Historic work", source: { kind: "recorded" }, message_id: null, at: null }, next: null, project: null, request: null, questions: [], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "other", seq: 1, duplicate: false, stale: false } });
+    await flush(() => app.render());
+    await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Historic work"))!.click());
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Owner"]')!;
+    expect(Array.from(select.options).map(o => o.value)).toEqual(["", "owner", "other"]);
+    await flush(() => { select.value = "other"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    await flush(() => text("Follow up")); await flush(submit);
+    expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "thread_handoff", thread_id: "thread", to_run_id: "other" });
+  });
+  it("keeps the draft and does not send when no eligible new-work owner exists", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    inbox.owners = [{ ...inbox.owners[0]!, availability: "absent" }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    await flush(() => app.render()); await flush(() => text("Unsent draft")); await flush(submit);
+    expect((host.querySelector<HTMLSelectElement>('select[aria-label="Owner"]')!).value).toBe("");
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Unsent draft");
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
   });
   it("retries the same handoff identity after uncertain delivery", async () => {
     const { client } = fixture(), app = setup(client);

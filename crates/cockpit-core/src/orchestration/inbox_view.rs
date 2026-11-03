@@ -92,8 +92,9 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
     let owners = roots.iter().map(|r| {
         let o = observations.get(r.run_id.as_str()).copied();
         let availability = if r.stage != RunStage::Active && r.stage != RunStage::Closed { OwnerAvailability::Starting }
+            else if super::threads::owner_proven_dead(r) { OwnerAvailability::Absent }
             else { match o.map(|o| o.presence) { Some(Presence::Present) => OwnerAvailability::Available,
-                Some(Presence::Missing) => OwnerAvailability::Absent, _ => OwnerAvailability::Unknown } };
+                _ => OwnerAvailability::Unknown } };
         InboxOwner { root_id: r.run_id.clone(), label: r.label.clone(), kind: r.kind, stage: r.stage,
             harness: r.launch_config.harness_kind.clone(), availability, location: location(o),
             undelivered: state.messages.iter().filter(|m| m.to_run_id == r.run_id && matches!(m.from, ActorRef::Operator) && m.stage == DeliveryStage::Stored).count() as u32 }
