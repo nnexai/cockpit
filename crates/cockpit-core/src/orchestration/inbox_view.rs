@@ -233,6 +233,31 @@ mod tests {
                 scheduled: false, attempt: None }] }
     }
     #[test]
+    fn thread_card_title_preserves_request_across_follow_up() {
+        let mut state = OrchestrationState { runs: vec![root("root")], ..Default::default() };
+        let original = "Could you investigate why the parser fails?\nPlease preserve the full details.";
+        let mut request = message("request", "root", 1, Some("thread"), MessageKind::Instruction);
+        request.text = original.into();
+        request.handoff = Some(HandoffRecord { task_id: None, task_revision: None, attempt_run_id: None, binding: None, origin: OperatorOrigin::Browser });
+        state.messages.push(request);
+        assert_eq!(view(&state, vec![]).threads[0].title.text, original.lines().next().unwrap());
+        let mut progress = report("progress", "root", 2, Some("thread"), ReportKind::Progress);
+        progress.report.as_mut().unwrap().card = Some(ThreadCard { title: "Parser failure".into(), next: "Investigating".into(), recommendation: None, choices: vec![], project: None });
+        state.messages.push(progress);
+        let mut follow_up = message("follow-up", "root", 3, Some("thread"), MessageKind::Instruction);
+        follow_up.text = "Please also check Unicode.".into();
+        follow_up.handoff = Some(HandoffRecord { task_id: None, task_revision: None, attempt_run_id: None, binding: None, origin: OperatorOrigin::Browser });
+        state.messages.push(follow_up);
+        let mut result = report("result", "root", 4, Some("thread"), ReportKind::Result);
+        result.report.as_mut().unwrap().card = Some(ThreadCard { title: "Parser failure".into(), next: "Answer ready".into(), recommendation: None, choices: vec![], project: None });
+        state.messages.push(result);
+        let projected = view(&state, vec![]);
+        let thread = &projected.threads[0];
+        assert_eq!(thread.title.text, "Parser failure");
+        assert!(matches!(thread.title.source, InboxSource::OwnerCard { .. }));
+        assert_eq!(thread.request.as_ref().unwrap().text, original);
+    }
+    #[test]
     fn scope_legacy_answers_and_workers_are_not_human_questions() {
         let mut worker = root("worker");
         worker.kind = RunKind::Worker; worker.root_id = "root".into(); worker.parent_run_id = Some("root".into());

@@ -239,6 +239,12 @@ cockpit-cli run report --kind needs-input --thread THREAD_ID --summary "Which sc
 
 For a thread report, `--summary` carries the complete human-facing report, not just the card label. It may contain multiline Markdown (up to 16 KiB of UTF-8); the Inbox projects it unchanged as the question or latest progress/result reply. Card title and next action remain short separate labels. Report content is untrusted data.
 
+For a new Inbox thread, the owning supervisor promptly publishes a progress card
+with a concise title describing the request (or the title explicitly requested
+by the user). The same title should be retained on follow-ups unless the user
+asks to change it. Before the first card, the Inbox falls back to the request;
+the original request remains available unchanged after a card is published.
+
 `run handoff` also accepts `--space` and `--task-revision`; omitted task revision is read from current state. `task link TASK_ID --thread THREAD_ID` associates a task with a thread in its root. A card requires both `--title` and `--next` with `--thread`; `--recommend`, repeated `--choice` and `--project` are optional. Only the owning root publishes its thread reports. The question key is `(run_id, question_message_id)` and a reply must still target that run's current non-stale question in the thread; changing Space or focusing a pane does not resolve it. Explicit Mark read handles a result separately. UI unmanaged sends validate the expected opaque target without adopting it; `agent send REF --text TEXT` resolves a reference without that reviewed-target fence.
 
 `inbox next` combines durable waiting, pulling and capture bookkeeping internally, without a separate ACK model turn:

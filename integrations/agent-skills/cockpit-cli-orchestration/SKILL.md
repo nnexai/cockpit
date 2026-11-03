@@ -142,11 +142,20 @@ is an explicit user constraint: respect the requested repository, Space,
 branch and base, including the recorded checkout branch. If placement cannot
 satisfy it, ask on the thread rather than silently retargeting.
 
+For a new thread, promptly publish a progress report with `--thread`, `--title`
+and `--next`. Choose a concise, meaningful title that describes the request,
+rather than truncating its opening words; honor an explicitly requested title.
+Keep the same title on subsequent reports and follow-ups unless the user asks
+to change it. Do this as part of handling the request, not in a separate model
+call. The original request remains available unchanged in the Inbox.
+Before a card is published the Inbox falls back to the request text.
+
 ```sh
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task create --thread "$THREAD_ID" --title "Fix parser" --description "Outcome and acceptance criteria" --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" task link "$TASK_ID" --thread "$THREAD_ID" --json
-"${COCKPIT_CLI_PATH:-cockpit-cli}" run report --thread "$THREAD_ID" --kind needs-input --summary "Which API behaviour should we use?" --title "API behaviour" --next "Choose an approach" --recommend "Keep the existing API" --choice "Keep API" --choice "Change API" --json
-"${COCKPIT_CLI_PATH:-cockpit-cli}" run report --thread "$THREAD_ID" --kind result --outcome succeeded --summary "The answer or completed outcome" --title "Result" --next "Answer ready" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run report --thread "$THREAD_ID" --kind progress --summary "Investigating the parser." --title "Fix parser" --next "Investigate" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run report --thread "$THREAD_ID" --kind needs-input --summary "Which API behaviour should we use?" --title "Fix parser" --next "Choose an approach" --recommend "Keep the existing API" --choice "Keep API" --choice "Change API" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run report --thread "$THREAD_ID" --kind result --outcome succeeded --summary "The answer or completed outcome" --title "Fix parser" --next "Answer ready" --json
 ```
 
 For thread reports, `--summary` is the human-facing body, not the card title:

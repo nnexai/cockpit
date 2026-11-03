@@ -171,6 +171,31 @@ describe("Inbox", () => {
     await flush(() => app.render("b"));
     expect((host.querySelector(".inbox:not([hidden]) textarea") as HTMLTextAreaElement).value).toBe("second draft");
   });
+  it("distinguishes identically named owners and routes to the selected root", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    const first = { ...inbox.owners[0]!, root_id: "live-same", label: "Supervisor", location: { workspace_id: "space", workspace_label: "Project", tab_id: "tab", tab_label: "Work", pane_id: "pane" } };
+    inbox.owners = [
+      first,
+      { ...first, root_id: "old-same", availability: "unknown", location: null },
+      { ...first, root_id: "starting", label: "Starting owner", availability: "starting" },
+      { ...first, root_id: "absent", label: "Absent owner", availability: "absent" },
+    ];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "old-same", seq: 1, duplicate: false, stale: false } });
+    await flush(() => app.render());
+    const select = host.querySelector<HTMLSelectElement>('select[aria-label="Owner"]')!;
+    expect(Array.from(select.options).map(option => [option.value, option.textContent])).toEqual([
+      ["", "Choose owner"],
+      ["live-same", "Supervisor · Project / Work · live-same · Available"],
+      ["old-same", "Supervisor · old-same · Status unknown"],
+      ["starting", "Starting owner · Starting"],
+      ["absent", "Absent owner · Not running"],
+    ]);
+    await flush(() => { select.value = "old-same"; select.dispatchEvent(new Event("change", { bubbles: true })); });
+    expect(select.value).toBe("old-same");
+    await flush(() => text("Send to the selected supervisor")); await flush(submit);
+    expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "thread_handoff", to_run_id: "old-same", text: "Send to the selected supervisor" });
+  });
   it("retries the same handoff identity after uncertain delivery", async () => {
     const { client } = fixture(), app = setup(client);
     vi.mocked(client.orchestrationMutate).mockRejectedValueOnce(new Error("connection lost")).mockResolvedValueOnce({ revision: 2, result: { result: "message", to_run_id: "owner", seq: 1, duplicate: true, stale: false } });
