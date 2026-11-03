@@ -93,6 +93,26 @@ function openSession() {
 }
 
 describe("Inbox", () => {
+  it("shows distinct diagnostic message IDs once without duplicating labelled request and question IDs", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    const value = (text: string, message_id: string) => ({ text, source: { kind: "recorded" as const }, message_id, at: "now", images: [] });
+    const question = { run_id: "owner", question_message_id: "question-id", asked_at: "now", text: value("A question", "question-id"), choices: [], receipt: { status: "unresolved" as const } };
+    const receipt = (message_id: string, attempt_run_id: string | null) => ({ message_id, kind: "instruction" as const, to_run_id: "owner", attempt_run_id, stage: "stored" as const, created_at: "now", acked_at: null, stale: false });
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: value("Diagnostics work", "request-id"), next: value("Next", "shared-id"), project: null, request: { message_id: "request-id", text: "Request", created_at: "now", to_run_id: "owner", handoff: { task_id: null, task_revision: null, attempt_run_id: null, binding: null, origin: "browser" }, images: [] }, follow_ups: [], questions: [question], recommendation: value("Recommendation", "question-id"), reply: value("Reply", "shared-id"), unread_result_message_id: null, tasks: [], receipts: [receipt("request-id", "attempt-id"), receipt("shared-id", null), receipt("receipt-only-id", null)], facts: [value("Fact", "shared-id"), value("Distinct fact", "fact-id")], updated_at: "now" }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    await flush(() => app.render());
+    await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Diagnostics work"))!.click());
+    const diagnostics = host.querySelector(".inbox-evidence")!;
+    const labels = Array.from(diagnostics.querySelectorAll<HTMLButtonElement>("button")).map(button => button.getAttribute("aria-label"));
+    expect(labels.filter(label => label === "Copy request ID request-id")).toHaveLength(1);
+    expect(labels.filter(label => label === "Copy question ID question-id")).toHaveLength(1);
+    expect(labels.filter(label => label === "Copy message ID shared-id")).toHaveLength(1);
+    expect(labels.filter(label => label === "Copy message ID fact-id")).toHaveLength(1);
+    expect(labels.filter(label => label === "Copy message ID receipt-only-id")).toHaveLength(1);
+    expect(labels).not.toContain("Copy message ID request-id");
+    expect(labels).not.toContain("Copy message ID question-id");
+    expect(labels).toContain("Copy attempt run ID attempt-id");
+  });
   it("acknowledges the selected completion without opening the terminal and keeps its detail when it leaves attention", async () => {
     const completion = completionAttention();
     const options = { attention: completion.state, onOpenLocation: vi.fn(async () => {}) };
@@ -194,6 +214,32 @@ describe("Inbox", () => {
     expect(client.orchestrationInbox).toHaveBeenCalledTimes(1);
     await flush(() => waits[1]!({ revision: 2, tasks_token: "changed", changed: true }));
     expect(client.orchestrationInbox).toHaveBeenCalledTimes(2);
+  });
+  it("uses projected titles, bounds historic titles, and sizes the restored draft", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    const fullTitle = `Historic ${"😀".repeat(140)}`;
+    const request = "Short heading\n" + "Request body ".repeat(80);
+    const base = { state: "underway" as const, need: null, owner_root_ids: ["owner"], next: null, project: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" };
+    inbox.threads = [
+      { ...base, thread_id: "short", title: { text: "Short heading", source: { kind: "user" }, message_id: null, at: null, images: [] }, request: { message_id: "m", text: request, created_at: "now", to_run_id: "owner", handoff: { task_id: null, task_revision: null, attempt_run_id: null, binding: null, origin: "browser" }, images: [] } },
+      { ...base, thread_id: "historic", title: { text: fullTitle, source: { kind: "recorded" }, message_id: null, at: null, images: [] }, request: null },
+    ];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLTextAreaElement) { return this.value ? 180 : 40; });
+    await flush(() => app.render());
+    const rows = host.querySelectorAll<HTMLButtonElement>(".inbox-row");
+    expect(rows[0]!.querySelector("strong")!.textContent).toBe("Short heading");
+    expect(Array.from(rows[1]!.querySelector("strong")!.textContent!).length).toBe(120);
+    expect(rows[1]!.title).toBe(fullTitle);
+    await flush(() => text("Long draft"));
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.style.height).toBe("180px");
+    await flush(() => rows[0]!.click());
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("");
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.style.height).toBe("40px");
+    expect(host.querySelector(".inbox-thread-heading h2")!.textContent).toBe("Short heading");
+    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-new")!.click());
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Long draft");
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.style.height).toBe("180px");
   });
   it("keeps session drafts while switching and does not focus the composer", async () => {
     const { client } = fixture(), app = setup(client);

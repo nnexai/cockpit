@@ -7,11 +7,6 @@
 .inbox-image-tray button{min-height:32px;padding:4px 7px;border:1px solid var(--border-strong);border-radius:var(--radius-control)}
 .inbox-attach{height:42px;flex:none}
 .inbox-compose[data-dragging=true]{outline:2px dashed var(--accent);outline-offset:-4px}
-.inbox-compose[data-mode=new] .inbox-compose-row{display:block;overflow:hidden;border:1px solid var(--border-strong);border-top:2px solid var(--mode);border-radius:var(--radius-control);background:var(--surface)}
-.inbox-compose[data-mode=new] .inbox-compose-row textarea{display:block;width:100%;border:0;border-radius:0;background:transparent}
-.inbox-compose[data-mode=new] .inbox-compose-footer{display:flex;align-items:center;gap:8px;min-height:44px;padding:4px 6px;border-top:1px solid var(--border)}
-.inbox-compose[data-mode=new] .inbox-compose-footer .inbox-compose-hint{margin:0}
-.inbox-compose[data-mode=new] .inbox-compose-footer .inbox-send{margin-left:auto}
 .inbox-compose[data-mode=new] .inbox-image-tray{padding:6px;margin:0}
 @media(max-width:700px){.inbox-image-tray{flex-wrap:nowrap;max-height:none;overflow-x:auto}.inbox-image-tray li{flex:none}.inbox-image-tray button{min-height:44px}.inbox-attach{min-height:44px}}
 @media(forced-colors:active){.inbox-image-tray li,.inbox-image-tray button{border:1px solid ButtonText}}
