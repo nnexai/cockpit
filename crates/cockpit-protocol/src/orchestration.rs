@@ -1254,6 +1254,45 @@ pub enum DeliveryStage {
     Read,
     Acked,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct MessageImage {
+    pub image_id: String,
+    pub mime_type: String,
+    pub width: u32,
+    pub height: u32,
+    #[ts(type = "number")]
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct ImageLimits {
+    #[ts(type = "number")]
+    pub max_bytes: u64,
+    pub max_count: u32,
+    pub mime_types: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OrchestrationImagePut { pub session_id: String, pub data_base64: String }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OrchestrationImageRead { pub session_id: String, pub image_id: String }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct OrchestrationImageMedia { pub image: MessageImage, pub data_base64: String }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct JobImage {
+    pub image: MessageImage,
+    pub path: String,
+    pub message_id: String,
+    pub thread_id: Option<String>,
+    pub from: ActorRef,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Message {
     pub message_id: String, // sender-chosen idempotency key (uuid)
@@ -1263,6 +1302,8 @@ pub struct Message {
     pub from: ActorRef,
     pub kind: MessageKind,
     pub text: String, // ≤ 16 KiB UTF-8
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<MessageImage>,
     pub in_reply_to: Option<String>,
     pub report: Option<Report>, // kind == Report
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1400,6 +1441,7 @@ pub struct InboxView {
     pub observation: InboxObservation,
     pub owners: Vec<InboxOwner>,
     pub threads: Vec<InboxThread>,
+    pub image_limits: ImageLimits,
     pub unmanaged_agents: Vec<UnmanagedAgent>,
 }
 
@@ -1450,12 +1492,13 @@ pub enum InboxSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-pub struct InboxText { pub text: String, pub source: InboxSource, pub message_id: Option<String>, pub at: Option<String> }
+pub struct InboxText { pub text: String, pub source: InboxSource, pub message_id: Option<String>, pub at: Option<String>, pub images: Vec<MessageImage> }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct InboxRequestEcho {
     pub message_id: String, pub text: String, pub created_at: String,
     pub to_run_id: String, pub handoff: HandoffRecord,
+    pub images: Vec<MessageImage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1481,6 +1524,7 @@ pub struct InboxRun {
     pub presence: Presence, pub agent_status: Option<String>,
     pub location: Option<InboxLocation>,
     pub cleanup: Vec<CleanupResourceSummary>,
+    pub report_images: Vec<MessageImage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1499,6 +1543,7 @@ pub struct InboxThread {
     pub next: Option<InboxText>,
     pub project: Option<String>,
     pub request: Option<InboxRequestEcho>,
+    pub follow_ups: Vec<InboxRequestEcho>,
     pub questions: Vec<InboxQuestion>,
     pub recommendation: Option<InboxText>,
     pub reply: Option<InboxText>,
@@ -1714,6 +1759,8 @@ pub enum OrchestrationAction {
         thread_id: String,
         to_run_id: String,
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1747,12 +1794,16 @@ pub enum OrchestrationAction {
         thread_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         card: Option<ThreadCard>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<String>,
     },
     MessageSend {
         message_id: String,
         to_run_id: String,
         kind: MessageKind,
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<String>,
         #[serde(default)]
         in_reply_to: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

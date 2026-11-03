@@ -6,6 +6,8 @@ use serde::Serialize;
 use super::error::OperationError;
 
 pub const MUTATION_BYTES: usize = 64 * 1024;
+// Base64 of a 5 MiB image plus request metadata.
+pub const IMAGE_UPLOAD_BYTES: usize = 7 * 1024 * 1024;
 // Up to 4096 resource ids of 128 ASCII bytes, plus JSON and server identity.
 pub const SPACE_SERVICE_STATUS_BYTES: usize = 1024 * 1024;
 pub const SPACE_SERVICE_STATUS_MAX_PANES: usize = 4096;

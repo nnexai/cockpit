@@ -1003,7 +1003,7 @@ impl OrchestrationService {
             Some((resource.root_id.clone(), message_id, text))
         }).collect();
         for (root_id, message_id, text) in holds {
-            messages::append(&mut state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher, to_run_id: &root_id, message_id: &message_id,
+            messages::append(&mut state, messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Dispatcher, to_run_id: &root_id, message_id: &message_id,
             kind: MessageKind::Observation, text: &text, in_reply_to: None,
             report: None, stale: false, escalated_from: None, })?;
         }

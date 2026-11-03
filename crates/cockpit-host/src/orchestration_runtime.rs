@@ -177,6 +177,7 @@ pub async fn resolve_mutation_input(
     request: &OrchestrationMutationRequest,
 ) -> Result<ResolvedMutationInput, InspectionError> {
     let mut resolved = resolve_physical_mutation_input(service, projects, herdr, actor, request).await?;
+    resolved.images = service.resolve_images(request).await?;
     let catalog = cockpit_core::repositories::RepositoryCatalog::new(projects.configuration());
     resolved.output_facts = service.resolve_output_facts(actor, request, &catalog).await?;
     resolved.resource_source = service.resolve_resource_source(actor, request).await?;

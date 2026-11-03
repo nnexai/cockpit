@@ -59,6 +59,28 @@ pub(super) fn read_json_file<T: serde::de::DeserializeOwned>(path: PathBuf) -> R
     serde_json::from_str(&text)
         .map_err(|error| CliError::new("orchestration_input", error.to_string()))
 }
+pub(super) fn read_image_file(path: &std::path::Path) -> Result<Vec<u8>, CliError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let file = std::fs::OpenOptions::new().read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(path).map_err(|error| CliError::new("orchestration_input", format!("cannot open {}: {error}", path.display())))?;
+    let metadata = file.metadata().map_err(|error| CliError::new("orchestration_input", error.to_string()))?;
+    if !metadata.is_file() {
+        return Err(CliError::new("orchestration_input", "image must be a regular file"));
+    }
+    let max = cockpit_core::orchestration::MAX_IMAGE_BYTES;
+    if metadata.len() > max {
+        return Err(CliError::new("image_too_large", "image exceeds the size limit"));
+    }
+    let mut bytes = Vec::new();
+    file.take(max + 1).read_to_end(&mut bytes)
+        .map_err(|error| CliError::new("orchestration_input", error.to_string()))?;
+    if bytes.len() as u64 > max {
+        return Err(CliError::new("image_too_large", "image exceeds the size limit"));
+    }
+    Ok(bytes)
+}
+
 
 impl OrchestrationArgs {
     pub(super) fn configuration(&self) -> Result<ProjectConfiguration, CliError> {
@@ -307,6 +329,16 @@ impl Context {
         &self,
         action: OrchestrationAction,
     ) -> Result<OrchestrationMutationResponse, CliError> {
+        Box::pin(self.mutate_with_fresh(action, Default::default())).await
+    }
+
+    // The physical and output-fact resolver futures are large in debug builds;
+    // callers box this future to keep CLI command futures off the bounded stack.
+    pub(super) async fn mutate_with_fresh(
+        &self,
+        action: OrchestrationAction,
+        fresh_images: std::collections::BTreeSet<String>,
+    ) -> Result<OrchestrationMutationResponse, CliError> {
         let operator = Actor::Operator(cockpit_protocol::orchestration::OperatorOrigin::Native);
         let actor = match self.actor.as_ref() {
             Some(actor) => actor,
@@ -320,7 +352,7 @@ impl Context {
             return Ok(response);
         }
         self.check_caller().await?;
-        let input = if matches!(&request.action,
+        let mut input = if matches!(&request.action,
             OrchestrationAction::SupervisorStart { .. } | OrchestrationAction::RunResume { .. }
                 | OrchestrationAction::WorkerStart { .. } | OrchestrationAction::WorkerReplace { .. }
                 | OrchestrationAction::ResourceRegister { .. } | OrchestrationAction::ThreadHandoff { .. })
@@ -336,6 +368,8 @@ impl Context {
             input.resource_source = self.service.resolve_resource_source(actor, &request).await?;
             input
         };
+        input.images = self.service.resolve_images(&request).await?;
+        input.fresh_images = fresh_images;
         let result = self.service.mutate_resolved(actor, request, &input).map_err(|error| {
             if matches!(actor, Actor::Agent(_)) && matches!(error.code.as_str(), "actor_forbidden" | "session_mismatch") {
                 CliError::new(&error.code, format!("{}; explicit local management may use --operator with --root and named TASK/RUN targets in the actual --herdr-session/--herdr-socket", error.message))

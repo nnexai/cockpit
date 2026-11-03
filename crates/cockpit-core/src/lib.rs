@@ -8,6 +8,7 @@ pub mod comments;
 pub mod config;
 pub mod context;
 pub mod context_media;
+mod raster;
 pub mod context_search;
 pub mod credentials;
 pub mod extension_adapter;

@@ -174,7 +174,7 @@ pub(super) fn mark_read(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) 
 
 pub(super) fn handoff(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
     let origin = operator(ctx.actor)?;
-    let OrchestrationAction::ThreadHandoff { message_id, thread_id, to_run_id, text, task_id, expected_task_revision, binding } = &action else { unreachable!() };
+    let OrchestrationAction::ThreadHandoff { message_id, thread_id, to_run_id, text, task_id, expected_task_revision, binding, images } = &action else { unreachable!() };
     if let Some(result) = resume::replay(ctx, message_id, DurableOperationKind::ThreadHandoff, &action)? {
         return Ok(Applied::Document(result));
     }
@@ -184,7 +184,8 @@ pub(super) fn handoff(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) ->
     if !existing_thread && owner_proven_dead(target) {
         return Err(error("thread_owner_invalid", "A new thread cannot be handed off to a proven-dead owner"));
     }
-    if text.trim().is_empty() { return Err(error("invalid_message", "Handoff text must not be empty")); }
+    let images = messages::check_images(ctx.state, ctx.actor, None, images, ctx.resolved)?;
+    if text.trim().is_empty() && images.is_empty() { return Err(error("invalid_message", "Handoff requires text or an image")); }
     bounded(text, 16 * 1024)?;
     let resolved_binding = if let Some(requested) = binding {
         if requested.repository_id.is_none() && requested.workspace_id.is_none()
@@ -218,6 +219,7 @@ pub(super) fn handoff(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) ->
         in_reply_to: None, report: None, thread_id: Some(thread_id.clone()),
         handoff: Some(HandoffRecord { task_id: task_id.clone(), task_revision: revision,
             attempt_run_id: attempt, binding: resolved_binding, origin }),
+        images,
         stale: false, escalated_from: None,
     })?;
     if let Some(task_id) = task_id {

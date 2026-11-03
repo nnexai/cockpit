@@ -584,6 +584,7 @@ mod tests {
 
     fn message(text: String) -> Message {
         Message {
+            images: Vec::new(),
             message_id: Uuid::new_v4().to_string(),
             to_run_id: Uuid::new_v4().to_string(),
             seq: 1,

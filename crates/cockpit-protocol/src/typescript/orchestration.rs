@@ -4,6 +4,12 @@ section!(
     [
         OrchestrationSnapshotRequest,
         InboxRequest,
+        MessageImage,
+        ImageLimits,
+        OrchestrationImagePut,
+        OrchestrationImageRead,
+        OrchestrationImageMedia,
+        JobImage,
         InboxView,
         InboxObservation,
         OwnerAvailability,

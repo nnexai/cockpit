@@ -2,6 +2,16 @@ use super::*;
 use sha2::{Digest, Sha256};
 use super::super::credentials::{JobAuth, SecretBytes, test_job_auth, test_job_credential};
 
+fn apply(
+    state: &mut OrchestrationState,
+    actor: &Actor,
+    caller: Option<usize>,
+    stale: bool,
+    action: &OrchestrationAction,
+) -> Result<Option<OrchestrationActionResult>, InspectionError> {
+    super::apply(state, actor, caller, stale, action, None)
+}
+
 fn fixture_uuid(scope: &str, id: &str, subject: Option<&str>) -> String {
     let digest = Sha256::digest(format!("{scope}:{id}:{}", subject.unwrap_or("")));
     let mut bytes = [0; 16];
@@ -129,6 +139,7 @@ fn main_actor(run_id: &str) -> Actor {
 
 fn report(id: &str, kind: ReportKind, destination: Option<&str>) -> OrchestrationAction {
     OrchestrationAction::Report { thread_id: None, card: None, message_id: id.into(),
+    images: Vec::new(),
     kind,
     outcome: (kind == ReportKind::Result).then_some(ReportOutcome::Succeeded),
     summary: format!("summary-{id}"),
@@ -148,6 +159,7 @@ fn send(id: &str, kind: MessageKind, question: Option<&str>) -> OrchestrationAct
         to_run_id: "worker".into(),
         kind,
         text: "Proceed with the approved choice".into(),
+        images: Vec::new(),
         in_reply_to: question.map(str::to_owned),
         original_task_revision: None,
         original_claim_id: None,
@@ -197,6 +209,7 @@ fn assert_error(
 
 fn root_answer(id: &str, question: Option<&str>) -> OrchestrationAction {
     OrchestrationAction::MessageSend {
+        images: Vec::new(),
         message_id: id.into(), to_run_id: "root".into(), kind: MessageKind::Answer,
         text: "The human chose the scoped safe option.".into(),
         in_reply_to: question.map(str::to_owned),
@@ -519,7 +532,7 @@ fn dedupe_rejects_changed_payload_and_preserves_original_report_after_stage_chan
         &mut state,
         &actor,
         1,
-        &OrchestrationAction::Report { thread_id: None, card: None, message_id,
+        &OrchestrationAction::Report { images: Vec::new(), thread_id: None, card: None, message_id,
         kind,
         outcome,
         summary,
@@ -539,7 +552,7 @@ fn dedupe_rejects_changed_payload_and_preserves_original_report_after_stage_chan
 #[test]
 fn append_keys_by_sender_and_sequences_by_recipient() {
     let mut state = state();
-    let first = append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
+    let first = append(&mut state, AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     assert!(matches!(
         first,
@@ -549,7 +562,7 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
             ..
         }
     ));
-    let duplicate = append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
+    let duplicate = append(&mut state, AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     assert!(matches!(
         duplicate,
@@ -559,11 +572,11 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
             ..
         }
     ));
-    append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Run {
+    append(&mut state, AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Run {
         run_id: "root".into(),
     }, to_run_id: "worker", message_id: "same", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
-    append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "sibling", message_id: "other", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
+    append(&mut state, AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "sibling", message_id: "other", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     assert_eq!(
         state
@@ -577,6 +590,7 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
         append(&mut state, AppendMessage {
             thread_id: None,
             handoff: None,
+            images: Vec::new(),
             from: ActorRef::Operator,
             to_run_id: "sibling",
             message_id: "same",
@@ -595,6 +609,7 @@ fn append_keys_by_sender_and_sequences_by_recipient() {
         append(&mut state, AppendMessage {
             thread_id: None,
             handoff: None,
+            images: Vec::new(),
             from: ActorRef::Operator,
             to_run_id: "worker",
             message_id: "same",
@@ -619,6 +634,7 @@ fn append_bounds_utf8_bytes_and_rejects_sequence_overflow() {
         append(&mut state, AppendMessage {
             thread_id: None,
             handoff: None,
+            images: Vec::new(),
             from: ActorRef::Operator,
             to_run_id: "worker",
             message_id: "large",
@@ -633,13 +649,14 @@ fn append_bounds_utf8_bytes_and_rejects_sequence_overflow() {
         .code,
         "message_too_large"
     );
-    append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: "first", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
+    append(&mut state, AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: "first", kind: MessageKind::Instruction, text: "hello", in_reply_to: None, report: None, stale: false, escalated_from: None })
     .unwrap();
     state.messages[0].seq = u64::MAX;
     assert_eq!(
         append(&mut state, AppendMessage {
             thread_id: None,
             handoff: None,
+            images: Vec::new(),
             from: ActorRef::Operator,
             to_run_id: "worker",
             message_id: "second",
@@ -875,6 +892,7 @@ fn durable_pull_and_ack_are_atomic_across_the_whole_prefix() {
             None,
             false,
             &OrchestrationAction::MessageSend {
+                images: Vec::new(),
                 message_id: id.into(),
                 to_run_id: "worker".into(),
                 kind: MessageKind::Instruction,
@@ -954,7 +972,7 @@ fn durable_pull_and_ack_are_atomic_across_the_whole_prefix() {
 fn pull_caps_at_one_hundred_and_is_scoped_to_registered_run_inbox() {
     let mut state = state();
     for seq in 0..105 {
-        append(&mut state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: &format!("message-{seq}"), kind: MessageKind::Instruction, text: "read", in_reply_to: None, report: None, stale: false, escalated_from: None })
+        append(&mut state, AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: "worker", message_id: &format!("message-{seq}"), kind: MessageKind::Instruction, text: "read", in_reply_to: None, report: None, stale: false, escalated_from: None })
         .unwrap();
     }
     let result = mutation(
@@ -995,6 +1013,7 @@ fn message_and_annotation_authority_is_directional_and_append_only() {
         ("root", MessageKind::Answer, Some("actor_forbidden")),
     ] {
         let action = OrchestrationAction::MessageSend {
+            images: Vec::new(),
             message_id: format!("{target}-{kind:?}"),
             to_run_id: target.into(),
             kind,
@@ -1050,6 +1069,7 @@ fn message_and_annotation_authority_is_directional_and_append_only() {
             None,
             false,
             &OrchestrationAction::MessageSend {
+                images: Vec::new(),
                 message_id: "operator-observation".into(),
                 to_run_id: "root".into(),
                 kind: MessageKind::Observation,
@@ -1125,6 +1145,7 @@ fn invalid_credentials_and_role_forgery_leave_messages_unchanged() {
     assert_error(
         &mut state, &Actor::Agent(forged_root), 1,
         &OrchestrationAction::MessageSend {
+            images: Vec::new(),
             message_id: "forged-root".into(), to_run_id: "grandchild".into(),
             kind: MessageKind::Instruction, text: "forbidden".into(), in_reply_to: None,
             original_task_revision: None, original_claim_id: None,
@@ -1209,4 +1230,78 @@ fn historical_message_replay_cannot_restore_revoked_task_ownership() {
     assert_error(&mut state, &actor, 1, &progress, "job_unauthorized");
     assert_eq!(serde_json::to_value(&state).unwrap(), before);
     assert_eq!(state.messages.len(), 1);
+}
+
+fn image(id: &str) -> MessageImage {
+    MessageImage { image_id: id.into(), mime_type: "image/png".into(), width: 1, height: 1, bytes: 1 }
+}
+
+#[test]
+fn image_resolution_authority_and_thread_grant_are_checked() {
+    let mut state = state();
+    let actor = main_actor("worker");
+    let Actor::Agent(agent) = &actor else { unreachable!() };
+    let job = bound_context(&state, agent, Some(1)).unwrap();
+    let ids = vec!["one".to_string()];
+    let resolved = ResolvedMutationInput { images: Some(vec![image("one")]), ..Default::default() };
+    assert_eq!(check_images(&state, &actor, Some(&job), &ids, None).unwrap_err().code, "image_unresolved");
+    assert_eq!(check_images(&state, &actor, Some(&job), &ids, Some(&resolved)).unwrap_err().code, "image_forbidden");
+    let mut fresh = resolved.clone();
+    fresh.fresh_images.insert("one".into());
+    assert_eq!(check_images(&state, &actor, Some(&job), &ids, Some(&fresh)).unwrap(), vec![image("one")]);
+    assert_eq!(check_images(&state, &actor, Some(&job), &["one".into(), "one".into()], Some(&fresh)).unwrap_err().code, "image_duplicate");
+    assert_eq!(check_images(&state, &actor, Some(&job), &["1".into(), "2".into(), "3".into(), "4".into(), "5".into()], Some(&fresh)).unwrap_err().code, "image_too_many");
+    assert_eq!(check_images(&state, &actor, Some(&job), &["other".into()], Some(&resolved)).unwrap_err().code, "image_unresolved");
+
+    append(&mut state, AppendMessage {
+        images: vec![image("one")], thread_id: Some("thread".into()),
+        handoff: Some(HandoffRecord { task_id: Some("task-worker".into()), task_revision: None,
+            attempt_run_id: None, binding: None, origin: OperatorOrigin::Browser }),
+        from: ActorRef::Operator, to_run_id: "root", message_id: "handoff",
+        kind: MessageKind::Instruction, text: "", in_reply_to: None, report: None,
+        stale: false, escalated_from: None,
+    }).unwrap();
+    assert_eq!(check_images(&state, &actor, Some(&job), &ids, Some(&resolved)).unwrap(), vec![image("one")]);
+    let sibling = main_actor("sibling");
+    let Actor::Agent(agent) = &sibling else { unreachable!() };
+    let sibling_job = bound_context(&state, agent, Some(3)).unwrap();
+    assert_eq!(check_images(&state, &sibling, Some(&sibling_job), &ids, Some(&resolved)).unwrap_err().code, "image_forbidden");
+}
+
+#[test]
+fn report_images_are_stored_and_part_of_duplicate_identity() {
+    let mut state = state();
+    let actor = main_actor("worker");
+    let mut action = report("image-report", ReportKind::Progress, None);
+    let OrchestrationAction::Report { images, .. } = &mut action else { unreachable!() };
+    images.push("one".into());
+    let mut resolved = ResolvedMutationInput { images: Some(vec![image("one")]), ..Default::default() };
+    resolved.fresh_images.insert("one".into());
+    super::apply(&mut state, &actor, Some(1), false, &action, Some(&resolved)).unwrap();
+    assert_eq!(state.messages[0].images, vec![image("one")]);
+    let before = serde_json::to_value(&state).unwrap();
+    let OrchestrationAction::Report { images, .. } = &mut action else { unreachable!() };
+    *images = vec!["two".into()];
+    resolved.images = Some(vec![image("two")]);
+    resolved.fresh_images.insert("two".into());
+    assert_eq!(super::apply(&mut state, &actor, Some(1), false, &action, Some(&resolved)).unwrap_err().code, "message_id_conflict");
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
+}
+
+#[test]
+fn direct_message_images_are_stored_and_deduplicated() {
+    let mut state = state();
+    let actor = Actor::Operator(OperatorOrigin::Browser);
+    let mut action = send("image-send", MessageKind::Instruction, None);
+    let OrchestrationAction::MessageSend { images, .. } = &mut action else { unreachable!() };
+    images.push("one".into());
+    let mut resolved = ResolvedMutationInput { images: Some(vec![image("one")]), ..Default::default() };
+    super::apply(&mut state, &actor, None, false, &action, Some(&resolved)).unwrap();
+    assert_eq!(state.messages[0].images, vec![image("one")]);
+    let before = serde_json::to_value(&state).unwrap();
+    let OrchestrationAction::MessageSend { images, .. } = &mut action else { unreachable!() };
+    *images = vec!["two".into()];
+    resolved.images = Some(vec![image("two")]);
+    assert_eq!(super::apply(&mut state, &actor, None, false, &action, Some(&resolved)).unwrap_err().code, "message_id_conflict");
+    assert_eq!(serde_json::to_value(&state).unwrap(), before);
 }

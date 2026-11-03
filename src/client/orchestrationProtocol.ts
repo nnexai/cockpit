@@ -2,10 +2,12 @@ import type {
   OrchestrationAction, OrchestrationMutationRequest, OrchestrationMutationResponse,
   OrchestrationSnapshotRequest, OrchestrationSnapshot, OrchestrationWaitRequest, OrchestrationWaitResponse, InboxRequest, InboxView,
   LiaisonLookupRequest, LiaisonLookupResponse, CheckOutcome, Integration, SourceOutput, CleanupItem, OwnedResourceIdentity, AgentSendTarget,
+  OrchestrationImagePut, OrchestrationImageRead, OrchestrationImageMedia, MessageImage,
 } from "../protocol/generated/v1";
 import {
   wireOrchestrationAction, wireOrchestrationMutationRequest, wireOrchestrationMutationResponse,
   wireOrchestrationSnapshotRequest, wireOrchestrationSnapshot, wireOrchestrationWaitRequest, wireOrchestrationWaitResponse, wireInboxRequest, wireInboxView,
+  wireOrchestrationImagePut, wireOrchestrationImageRead, wireOrchestrationImageMedia, wireMessageImage,
   wireLiaisonLookupRequest, wireLiaisonLookupResponse, wireAgentSendTarget, type TypedWirePolicy, type WireOwners,
 } from "../protocol/generated/validate";
 import { CockpitClientError, validateSessionId } from "./CockpitClient";
@@ -24,6 +26,13 @@ const decimalU64 = (value: string) => /^(?:0|[1-9]\d*)$/.test(value)
   && (value.length < 20 || (value.length === 20 && value <= "18446744073709551615"));
 const epoch = (value: number | null) => value === null || (Number.isSafeInteger(value) && value > 0);
 const hash = (value: string) => /^[a-f0-9]{64}$/.test(value);
+const imageId = (value: string) => /^sha256-[a-f0-9]{64}$/.test(value);
+const imageMime = (value: string) => value === "image/png" || value === "image/jpeg";
+function base64ByteLength(value: string): number {
+  if (!value.length || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return -1;
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  return value.length / 4 * 3 - padding;
+}
 const gitObject = (value: string) => /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
 const nonemptyText = (max: number) => (value: string) => boundedText(max)(value) && value.trim().length > 0;
 const launchText = (value: string) => nonemptyText(4096)(value) && !/[\x00-\x1f\x7f]/.test(value);
@@ -99,6 +108,8 @@ const labels = rootMessage("Invalid orchestration", {
   OrchestrationMutationRequest: "mutation request", OrchestrationMutationResponse: "mutation response",
   OrchestrationActionResult: "mutation result", OrchestrationWaitRequest: "wait request", OrchestrationWaitResponse: "wait response",
   InboxRequest: "inbox request", InboxView: "inbox",
+  OrchestrationImagePut: "image put request", OrchestrationImageRead: "image read request",
+  OrchestrationImageMedia: "image media", MessageImage: "image",
   LiaisonLookupRequest: "liaison lookup request", LiaisonLookupResponse: "liaison lookup response",
 });
 const POLICY = definePolicy({
@@ -134,6 +145,7 @@ const POLICY = definePolicy({
       "OrchestrationActionResult[resource_registered]", "OrchestrationActionResult[cleanup_finished]",
       "LiaisonLookupRequest", "LiaisonLookupResponse",
       "InboxRequest", "InboxView", "InboxObservation", "InboxOwner", "InboxLocation", "InboxSource", "InboxText",
+      "OrchestrationImagePut", "OrchestrationImageRead", "OrchestrationImageMedia", "MessageImage", "ImageLimits",
       "InboxRequestEcho", "InboxQuestion", "InboxReceipt", "InboxRun", "InboxTaskLink", "InboxThread",
       "HandoffBinding", "HandoffBindingRecord", "BoundCheckout", "HandoffRecord", "ThreadCard", "AgentSendTarget",
       "OrchestrationAction[supervisor_start]", "OrchestrationAction[run_attach]",
@@ -172,6 +184,7 @@ const POLICY = definePolicy({
       "CleanupFinishResult", "CleanupResourceSummary", "RunCleanupSummary", "RestorationSummary",
       "LiaisonLookupRequest", "LiaisonLookupResponse", "LiaisonCandidate",
       "InboxRequest", "InboxView", "InboxObservation", "InboxOwner", "InboxLocation", "InboxSource", "InboxText",
+      "OrchestrationImagePut", "OrchestrationImageRead", "OrchestrationImageMedia", "MessageImage", "ImageLimits",
       "InboxRequestEcho", "InboxQuestion", "InboxReceipt", "InboxRun", "InboxTaskLink", "InboxThread",
       "HandoffBinding", "HandoffBindingRecord", "BoundCheckout", "HandoffRecord", "ThreadCard", "AgentSendTarget",
       "ErrorResponse", "RootSummary", "TaskBoard", "TaskProject", "TaskView", "Task", "TaskStep", "TaskStepProgress", "TaskDependencies",
@@ -364,6 +377,19 @@ const POLICY = definePolicy({
         CleanupEffectReceipt: ["updated_at"], CleanupItem: ["updated_at"],
         TaskSchedule: ["scheduled_at"], OwnedProcessScope: ["captured_at"],
       }),
+      ...refine(session, { OrchestrationImagePut: ["session_id"], OrchestrationImageRead: ["session_id"] }),
+      ...refine(imageId, { MessageImage: ["image_id"], OrchestrationImageRead: ["image_id"] }),
+      "MessageImage.mime_type": imageMime,
+      "MessageImage.width": value => value > 0,
+      "MessageImage.height": value => value > 0,
+      "MessageImage.bytes": value => value > 0 && Number.isSafeInteger(value),
+      "ImageLimits.max_bytes": value => value > 0 && Number.isSafeInteger(value),
+      "ImageLimits.max_count": value => value > 0,
+      "ImageLimits.mime_types": values => values.length > 0 && values.every(imageMime) && new Set(values).size === values.length,
+      "OrchestrationImagePut.data_base64": value => base64ByteLength(value) > 0,
+      "OrchestrationAction[thread_handoff].images": values => values === undefined || (values.every(imageId) && new Set(values).size === values.length),
+      "OrchestrationAction[message_send].images": values => values === undefined || (values.every(imageId) && new Set(values).size === values.length),
+      "OrchestrationAction[report].images": values => values === undefined || (values.every(imageId) && new Set(values).size === values.length),
       ...refine(session, { InboxRequest: ["session_id"], InboxView: ["session_id"], OrchestrationSnapshotRequest: ["session_id"], OrchestrationMutationRequest: ["session_id"], OrchestrationSnapshot: ["session_id"], Run: ["session_id"], RunLocation: ["session_id"], RetirementIdentity: ["session_id"], LiaisonLookupRequest: ["session_id"], OwnedSpaceIdentity: ["session_id"] }),
       ...refine(stepTitle, { "OrchestrationAction[task_step_add]": ["title"], "OrchestrationAction[task_step_rename]": ["title"] }),
       ...refine(decimalU64, { NativeShellIdentity: ["executable_device", "executable_inode"], DirectoryIdentity: ["device", "inode"],
@@ -402,6 +428,8 @@ const POLICY = definePolicy({
       },
     },
     checks: {
+      MessageImage: { dimensions: value => value.width * value.height <= 16_000_000 },
+      OrchestrationImageMedia: { payload: value => base64ByteLength(value.data_base64) === value.image.bytes },
       TaskStepProgress: { progress: value => value.done <= value.total },
       OrchestrationConfiguration: { resume_args: value => value.resume_args === null
         || (value.resume_args.filter(arg => arg === "{session_id}").length === 1
@@ -502,6 +530,14 @@ export function parseOrchestrationAction(value: unknown): OrchestrationAction { 
 export function parseOrchestrationSnapshotRequest(value: unknown): OrchestrationSnapshotRequest { return parseWire(value, wireOrchestrationSnapshotRequest, POLICY); }
 export function parseAgentSendTarget(value: unknown): AgentSendTarget { return parseWire(value, wireAgentSendTarget, POLICY); }
 export function parseInboxRequest(value: unknown): InboxRequest { return parseWire(value, wireInboxRequest, POLICY); }
+export function parseOrchestrationImagePut(value: unknown): OrchestrationImagePut { return parseWire(value, wireOrchestrationImagePut, POLICY); }
+export function parseOrchestrationImageRead(value: unknown): OrchestrationImageRead { return parseWire(value, wireOrchestrationImageRead, POLICY); }
+export function parseMessageImage(value: unknown): MessageImage { return parseWire(value, wireMessageImage, POLICY); }
+export function matchOrchestrationImageMedia(value: unknown, request: OrchestrationImageRead): OrchestrationImageMedia {
+  const media = parseWire(value, wireOrchestrationImageMedia, POLICY);
+  if (media.image.image_id !== request.image_id) malformed("image identity");
+  return media;
+}
 export function matchInboxView(value: unknown, request: InboxRequest): InboxView {
   const view = parseWire(value, wireInboxView, POLICY);
   if (view.session_id !== request.session_id) malformed("inbox identity");

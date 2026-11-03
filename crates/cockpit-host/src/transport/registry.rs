@@ -395,6 +395,26 @@ macro_rules! cockpit_operations {
                   limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
                   guard = after(Orchestration); status = service
             }
+            { id: orchestration_image_put, ctx: orchestration, out: ::cockpit_protocol::orchestration::MessageImage,
+              call: $crate::transport::operations::orchestration::orchestration_image_put,
+              native: orchestration_image_put(request: ::serde_json::Value)
+                  => $crate::transport::native_input::value($crate::transport::limits::IMAGE_UPLOAD_BYTES, "orchestration"),
+              http: post "/api/v1/sessions/{session_id}/orchestration/images"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::orchestration::OrchestrationImagePut>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::operations::orchestration::image_put_input();
+                  limit = $crate::transport::limits::IMAGE_UPLOAD_BYTES; origin = route;
+                  guard = after(Orchestration); status = service
+            }
+            { id: orchestration_image_read, ctx: orchestration, out: ::cockpit_protocol::orchestration::OrchestrationImageMedia,
+              call: $crate::transport::operations::orchestration::orchestration_image_read,
+              native: orchestration_image_read(request: ::serde_json::Value)
+                  => $crate::transport::native_input::value($crate::transport::limits::MUTATION_BYTES, "orchestration"),
+              http: post "/api/v1/sessions/{session_id}/orchestration/images/read"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::orchestration::OrchestrationImageRead>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::operations::orchestration::image_read_input();
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
+                  guard = after(Orchestration); status = service
+            }
             { id: orchestration_liaison_lookup, ctx: orchestration, out: ::cockpit_protocol::orchestration::LiaisonLookupResponse,
               call: $crate::transport::operations::orchestration::orchestration_liaison_lookup,
               native: orchestration_liaison_lookup(request: ::serde_json::Value)

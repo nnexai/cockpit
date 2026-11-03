@@ -109,6 +109,7 @@ where F: FnOnce(&cockpit_protocol::orchestration::OrchestrationSnapshot, &str) -
                 &Actor::Operator(origin),
                 OrchestrationMutationRequest { session_id: session.to_owned(), expected_revision: None,
                     action: OrchestrationAction::MessageSend { message_id: message_id.clone(), to_run_id: run.run_id.clone(),
+                        images: Vec::new(),
                         kind: MessageKind::Instruction, text, in_reply_to: None,
                         original_task_revision: None, original_claim_id: None } },
                 &cockpit_core::orchestration::ResolvedMutationInput::default(),

@@ -151,6 +151,17 @@ describe("optional public OMP Cockpit hook", () => {
     expect(rendered).toContain("Answer messages are already recorded");
     expect(rendered).not.toMatch(/secret-token|secret-capability|secret-card|\/private/);
   });
+  it("retains only image metadata and points to scoped local paths", () => {
+    const rendered = frames([{ ...message(1), images: [{
+      image_id: "sha256-id", mime_type: "image/png", width: 10, height: 20, bytes: 30,
+      private_path: "/secret",
+    }] }]).join("");
+    expect(rendered).toContain('"images":[{"image_id":"sha256-id","mime_type":"image/png","width":10,"height":20,"bytes":30}]');
+    expect(rendered).toContain("Run `cockpit-cli inbox images` for local paths.");
+    expect(rendered).not.toContain("/secret");
+    expect(frames([message(2)]).join("")).not.toContain("inbox images");
+  });
+
 
   it("preserves oversized canonical bootstrap without truncation", () => {
     const text = `Stages: stage-one [x]\nDescription: ${"🧪".repeat(10_000)}`;

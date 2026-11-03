@@ -1668,6 +1668,21 @@ async fn operation_inputs_preserve_path_body_and_runtime_rejection_precedence() 
             "{",
             Some("invalid_orchestration_request"),
         ),
+        (
+            "/api/v1/sessions/bad%3Aid/orchestration/images",
+            "{",
+            Some("invalid_session_id"),
+        ),
+        (
+            "/api/v1/sessions/session/orchestration/images",
+            "{",
+            Some("invalid_orchestration_request"),
+        ),
+        (
+            "/api/v1/sessions/session/orchestration/images/read",
+            r#"{"session_id":"other","image_id":"id"}"#,
+            Some("session_mismatch"),
+        ),
         ("/api/v1/notes", "{", Some("notes_usage")),
         ("/api/v1/browser/action", "{", None),
     ] {
@@ -1698,6 +1713,32 @@ async fn operation_inputs_preserve_path_body_and_runtime_rejection_precedence() 
             assert!(serde_json::from_slice::<serde_json::Value>(&bytes).is_err());
             assert!(!String::from_utf8_lossy(&bytes).contains("browser_runtime_unavailable"));
         }
+    }
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
+async fn image_routes_require_origin_and_enforce_body_budgets() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(service(), &root, authority).expect("router");
+    for (path, limit) in [
+        ("/api/v1/sessions/session/orchestration/images", 7 * 1024 * 1024),
+        ("/api/v1/sessions/session/orchestration/images/read", 64 * 1024),
+    ] {
+        let request = |origin: bool, body: Vec<u8>| {
+            let mut builder = Request::builder().method("POST").uri(path)
+                .header("host", authority.to_string()).header("content-type", "application/json");
+            if origin { builder = builder.header("origin", format!("http://{authority}")); }
+            builder.body(axum::body::Body::from(body)).unwrap()
+        };
+        let response = router.clone().oneshot(request(false, b"{}".to_vec())).await.unwrap();
+        assert_eq!(response.status(), 400, "{path}");
+        let bytes = axum::body::to_bytes(response.into_body(), 65536).await.unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(error["code"], "request_origin_required");
+        let response = router.clone().oneshot(request(true, vec![b' '; limit + 1])).await.unwrap();
+        assert_eq!(response.status(), 413, "{path}");
     }
     std::fs::remove_dir_all(root).expect("cleanup");
 }

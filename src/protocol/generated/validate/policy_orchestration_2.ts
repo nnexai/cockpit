@@ -2,6 +2,11 @@
 import type * as V1 from "../v1";
 
 export interface WireTypes {
+  "RunRetirement": V1.RunRetirement;
+  "RetirementState": V1.RetirementState;
+  "RetirementBlocker": V1.RetirementBlocker;
+  "TerminalOutcome": V1.TerminalOutcome;
+  "RetainReason": V1.RetainReason;
   "RetirementPhase": V1.RetirementPhase;
   "Run": V1.Run;
   "DispatchState": V1.DispatchState;
@@ -29,6 +34,13 @@ export interface WireTypes {
 }
 
 export interface WireOwners {
+  "RunRetirement": V1.RunRetirement;
+  "RetirementState": V1.RetirementState;
+  "RetirementState[waiting]": Extract<V1.RetirementState, { "state": "waiting" }>;
+  "RetirementState[close_intent]": Extract<V1.RetirementState, { "state": "close_intent" }>;
+  "RetirementState[retired]": Extract<V1.RetirementState, { "state": "retired" }>;
+  "RetirementState[retained]": Extract<V1.RetirementState, { "state": "retained" }>;
+  "RetirementState[unknown]": Extract<V1.RetirementState, { "state": "unknown" }>;
   "Run": V1.Run;
   "DispatchState": V1.DispatchState;
   "Annotation": V1.Annotation;
@@ -118,6 +130,25 @@ export interface WireOwners {
 }
 
 export interface WireFields {
+  "RunRetirement.retirement_id": (V1.RunRetirement)["retirement_id"];
+  "RunRetirement.trigger": (V1.RunRetirement)["trigger"];
+  "RunRetirement.result_message_id": (V1.RunRetirement)["result_message_id"];
+  "RunRetirement.task_revision": (V1.RunRetirement)["task_revision"];
+  "RunRetirement.replacement": (V1.RunRetirement)["replacement"];
+  "RunRetirement.identity": (V1.RunRetirement)["identity"];
+  "RunRetirement.state": (V1.RunRetirement)["state"];
+  "RunRetirement.created_at": (V1.RunRetirement)["created_at"];
+  "RunRetirement.updated_at": (V1.RunRetirement)["updated_at"];
+  "RetirementState[waiting].blockers": (Extract<V1.RetirementState, { "state": "waiting" }>)["blockers"];
+  "RetirementState[close_intent].at": (Extract<V1.RetirementState, { "state": "close_intent" }>)["at"];
+  "RetirementState[retired].at": (Extract<V1.RetirementState, { "state": "retired" }>)["at"];
+  "RetirementState[retired].terminal": (Extract<V1.RetirementState, { "state": "retired" }>)["terminal"];
+  "RetirementState[retained].at": (Extract<V1.RetirementState, { "state": "retained" }>)["at"];
+  "RetirementState[retained].reason": (Extract<V1.RetirementState, { "state": "retained" }>)["reason"];
+  "RetirementState[retained].stopped": (Extract<V1.RetirementState, { "state": "retained" }>)["stopped"];
+  "RetirementState[unknown].at": (Extract<V1.RetirementState, { "state": "unknown" }>)["at"];
+  "RetirementState[unknown].phase": (Extract<V1.RetirementState, { "state": "unknown" }>)["phase"];
+  "RetirementState[unknown].detail": (Extract<V1.RetirementState, { "state": "unknown" }>)["detail"];
   "Run.session_id": (V1.Run)["session_id"];
   "Run.brief": (V1.Run)["brief"];
   "Run.run_id": (V1.Run)["run_id"];
@@ -182,6 +213,7 @@ export interface WireFields {
   "Message.from": (V1.Message)["from"];
   "Message.kind": (V1.Message)["kind"];
   "Message.text": (V1.Message)["text"];
+  "Message.images": (V1.Message)["images"];
   "Message.in_reply_to": (V1.Message)["in_reply_to"];
   "Message.report": (V1.Message)["report"];
   "Message.thread_id": (V1.Message)["thread_id"];
@@ -369,6 +401,7 @@ export interface WireFields {
   "OrchestrationAction[thread_handoff].thread_id": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["thread_id"];
   "OrchestrationAction[thread_handoff].to_run_id": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["to_run_id"];
   "OrchestrationAction[thread_handoff].text": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["text"];
+  "OrchestrationAction[thread_handoff].images": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["images"];
   "OrchestrationAction[thread_handoff].task_id": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["task_id"];
   "OrchestrationAction[thread_handoff].expected_task_revision": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["expected_task_revision"];
   "OrchestrationAction[thread_handoff].binding": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["binding"];
@@ -388,10 +421,12 @@ export interface WireFields {
   "OrchestrationAction[report].original_claim_id": (Extract<V1.OrchestrationAction, { "action": "report" }>)["original_claim_id"];
   "OrchestrationAction[report].thread_id": (Extract<V1.OrchestrationAction, { "action": "report" }>)["thread_id"];
   "OrchestrationAction[report].card": (Extract<V1.OrchestrationAction, { "action": "report" }>)["card"];
+  "OrchestrationAction[report].images": (Extract<V1.OrchestrationAction, { "action": "report" }>)["images"];
   "OrchestrationAction[message_send].message_id": (Extract<V1.OrchestrationAction, { "action": "message_send" }>)["message_id"];
   "OrchestrationAction[message_send].to_run_id": (Extract<V1.OrchestrationAction, { "action": "message_send" }>)["to_run_id"];
   "OrchestrationAction[message_send].kind": (Extract<V1.OrchestrationAction, { "action": "message_send" }>)["kind"];
   "OrchestrationAction[message_send].text": (Extract<V1.OrchestrationAction, { "action": "message_send" }>)["text"];
+  "OrchestrationAction[message_send].images": (Extract<V1.OrchestrationAction, { "action": "message_send" }>)["images"];
   "OrchestrationAction[message_send].in_reply_to": (Extract<V1.OrchestrationAction, { "action": "message_send" }>)["in_reply_to"];
   "OrchestrationAction[message_send].original_task_revision": (Extract<V1.OrchestrationAction, { "action": "message_send" }>)["original_task_revision"];
   "OrchestrationAction[message_send].original_claim_id": (Extract<V1.OrchestrationAction, { "action": "message_send" }>)["original_claim_id"];
@@ -444,6 +479,13 @@ export interface WireFields {
 }
 
 export interface WireFieldNames {
+  "RunRetirement": "retirement_id" | "trigger" | "result_message_id" | "task_revision" | "replacement" | "identity" | "state" | "created_at" | "updated_at";
+  "RetirementState": never;
+  "RetirementState[waiting]": "blockers";
+  "RetirementState[close_intent]": "at";
+  "RetirementState[retired]": "at" | "terminal";
+  "RetirementState[retained]": "at" | "reason" | "stopped";
+  "RetirementState[unknown]": "at" | "phase" | "detail";
   "Run": "session_id" | "brief" | "run_id" | "kind" | "label" | "root_id" | "parent_run_id" | "task_id" | "attempt" | "assignment_generation" | "launch_config" | "task_revision_at_start" | "stage" | "close_reason" | "dispatch" | "target" | "setup" | "cleanup_policy" | "last_report" | "result" | "source_output" | "integration" | "annotations" | "project" | "checkout" | "attachment" | "checkout_claim_id" | "resume" | "retirement" | "created_at" | "updated_at";
   "DispatchState": "launch_tag" | "endpoint_identity" | "scope_unit" | "pre_move_scope" | "latch" | "latch_state" | "source_location" | "move_operation_id" | "staging_workspace_id" | "recovery" | "agent_started" | "step" | "launch_attempt" | "error" | "updated_at";
   "Annotation": "by" | "text" | "at";
@@ -452,7 +494,7 @@ export interface WireFieldNames {
   "ActorRef[run]": "run_id";
   "ActorRef[dispatcher]": never;
   "Report": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "card" | "at";
-  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "in_reply_to" | "report" | "thread_id" | "handoff" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
+  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "images" | "in_reply_to" | "report" | "thread_id" | "handoff" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
   "QuestionStatus": "run_id" | "question_message_id" | "asked_at" | "thread_id" | "receipt";
   "QuestionReceipt": never;
   "QuestionReceipt[unresolved]": never;
@@ -501,11 +543,11 @@ export interface WireFieldNames {
   "OrchestrationAction[cancel_run]": "run_id";
   "OrchestrationAction[reconcile_run]": "run_id" | "recovery";
   "OrchestrationAction[intent_resolve]": "intent_id" | "apply";
-  "OrchestrationAction[thread_handoff]": "message_id" | "thread_id" | "to_run_id" | "text" | "task_id" | "expected_task_revision" | "binding";
+  "OrchestrationAction[thread_handoff]": "message_id" | "thread_id" | "to_run_id" | "text" | "images" | "task_id" | "expected_task_revision" | "binding";
   "OrchestrationAction[thread_mark_read]": "thread_id" | "through_message_id";
   "OrchestrationAction[thread_link]": "root_id" | "task_id" | "thread_id";
-  "OrchestrationAction[report]": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "to_run_id" | "original_task_revision" | "original_claim_id" | "thread_id" | "card";
-  "OrchestrationAction[message_send]": "message_id" | "to_run_id" | "kind" | "text" | "in_reply_to" | "original_task_revision" | "original_claim_id";
+  "OrchestrationAction[report]": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "to_run_id" | "original_task_revision" | "original_claim_id" | "thread_id" | "card" | "images";
+  "OrchestrationAction[message_send]": "message_id" | "to_run_id" | "kind" | "text" | "images" | "in_reply_to" | "original_task_revision" | "original_claim_id";
   "OrchestrationAction[annotate]": "run_id" | "text";
   "OrchestrationAction[inbox_pull]": "after_seq" | "limit";
   "OrchestrationAction[inbox_ack]": "through_seq";
@@ -533,6 +575,9 @@ export interface WireFieldNames {
 }
 
 export interface WireChildNames {
+  "RunRetirement.replacement": "ReplacementRetirementAuthority";
+  "RunRetirement.identity": "RetirementIdentity";
+  "RunRetirement.state": "RetirementState";
   "Run.launch_config": "OrchestrationConfiguration";
   "Run.dispatch": "DispatchState";
   "Run.target": "DispatchTarget";
@@ -616,6 +661,12 @@ export interface WireChildNames {
 }
 
 export interface WireTagNames {
+  "RetirementState": "state";
+  "RetirementState[waiting]": "state";
+  "RetirementState[close_intent]": "state";
+  "RetirementState[retired]": "state";
+  "RetirementState[retained]": "state";
+  "RetirementState[unknown]": "state";
   "ActorRef": "type";
   "ActorRef[operator]": "type";
   "ActorRef[run]": "type";
@@ -694,6 +745,13 @@ export interface WireTagNames {
 }
 
 export interface WireCheckpointFieldNames {
+  "RunRetirement": "retirement_id" | "trigger" | "result_message_id" | "task_revision" | "replacement" | "identity" | "state" | "created_at" | "updated_at";
+  "RetirementState": "at" | "blockers" | "detail" | "phase" | "reason" | "state" | "stopped" | "terminal";
+  "RetirementState[waiting]": "blockers" | "state";
+  "RetirementState[close_intent]": "at" | "state";
+  "RetirementState[retired]": "at" | "terminal" | "state";
+  "RetirementState[retained]": "at" | "reason" | "stopped" | "state";
+  "RetirementState[unknown]": "at" | "phase" | "detail" | "state";
   "Run": "session_id" | "brief" | "run_id" | "kind" | "label" | "root_id" | "parent_run_id" | "task_id" | "attempt" | "assignment_generation" | "launch_config" | "task_revision_at_start" | "stage" | "close_reason" | "dispatch" | "target" | "setup" | "cleanup_policy" | "last_report" | "result" | "source_output" | "integration" | "annotations" | "project" | "checkout" | "attachment" | "checkout_claim_id" | "resume" | "retirement" | "created_at" | "updated_at";
   "DispatchState": "launch_tag" | "endpoint_identity" | "scope_unit" | "pre_move_scope" | "latch" | "latch_state" | "source_location" | "move_operation_id" | "staging_workspace_id" | "recovery" | "agent_started" | "step" | "launch_attempt" | "error" | "updated_at";
   "Annotation": "by" | "text" | "at";
@@ -702,7 +760,7 @@ export interface WireCheckpointFieldNames {
   "ActorRef[run]": "run_id" | "type";
   "ActorRef[dispatcher]": "type";
   "Report": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "card" | "at";
-  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "in_reply_to" | "report" | "thread_id" | "handoff" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
+  "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "images" | "in_reply_to" | "report" | "thread_id" | "handoff" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
   "QuestionStatus": "run_id" | "question_message_id" | "asked_at" | "thread_id" | "receipt";
   "QuestionReceipt": "answer" | "status";
   "QuestionReceipt[unresolved]": "status";
@@ -716,7 +774,7 @@ export interface WireCheckpointFieldNames {
   "RuntimeObservation[fresh]": "endpoint_identity" | "observed_at" | "runs" | "status";
   "RuntimeObservation[unavailable]": "error" | "status";
   "Attention": "kind" | "run_id" | "task_id" | "message_seq" | "since";
-  "OrchestrationAction": "action" | "after_seq" | "apply" | "assign" | "attachment_id" | "before_step_id" | "binding" | "brief" | "card" | "checked" | "cleanup_policy" | "confirmed_stopped_attachment_id" | "conversation" | "depends_on" | "description" | "expected_assignment_generation" | "expected_attachment_epoch" | "expected_doc_revision" | "expected_run_id" | "expected_task_revision" | "follow_up_of" | "in_reply_to" | "intent_id" | "kind" | "label" | "limit" | "location" | "message_id" | "operation_id" | "original_claim_id" | "original_task_revision" | "outcome" | "parent_step_id" | "plan" | "reason" | "record" | "recovery" | "registration" | "release" | "request" | "root_id" | "run_id" | "scope" | "selected_root_id" | "source_output" | "source_revision" | "step_id" | "summary" | "target" | "task_id" | "text" | "thread_id" | "through_message_id" | "through_seq" | "title" | "to_run_id";
+  "OrchestrationAction": "action" | "after_seq" | "apply" | "assign" | "attachment_id" | "before_step_id" | "binding" | "brief" | "card" | "checked" | "cleanup_policy" | "confirmed_stopped_attachment_id" | "conversation" | "depends_on" | "description" | "expected_assignment_generation" | "expected_attachment_epoch" | "expected_doc_revision" | "expected_run_id" | "expected_task_revision" | "follow_up_of" | "images" | "in_reply_to" | "intent_id" | "kind" | "label" | "limit" | "location" | "message_id" | "operation_id" | "original_claim_id" | "original_task_revision" | "outcome" | "parent_step_id" | "plan" | "reason" | "record" | "recovery" | "registration" | "release" | "request" | "root_id" | "run_id" | "scope" | "selected_root_id" | "source_output" | "source_revision" | "step_id" | "summary" | "target" | "task_id" | "text" | "thread_id" | "through_message_id" | "through_seq" | "title" | "to_run_id";
   "OrchestrationAction[task_create]": "root_id" | "task_id" | "title" | "description" | "depends_on" | "follow_up_of" | "expected_doc_revision" | "source_revision" | "thread_id" | "action";
   "OrchestrationAction[task_assign]": "root_id" | "task_id" | "title" | "description" | "action";
   "OrchestrationAction[task_assignment_resolve]": "root_id" | "task_id" | "expected_task_revision" | "assign" | "action";
@@ -751,11 +809,11 @@ export interface WireCheckpointFieldNames {
   "OrchestrationAction[cancel_run]": "run_id" | "action";
   "OrchestrationAction[reconcile_run]": "run_id" | "recovery" | "action";
   "OrchestrationAction[intent_resolve]": "intent_id" | "apply" | "action";
-  "OrchestrationAction[thread_handoff]": "message_id" | "thread_id" | "to_run_id" | "text" | "task_id" | "expected_task_revision" | "binding" | "action";
+  "OrchestrationAction[thread_handoff]": "message_id" | "thread_id" | "to_run_id" | "text" | "images" | "task_id" | "expected_task_revision" | "binding" | "action";
   "OrchestrationAction[thread_mark_read]": "thread_id" | "through_message_id" | "action";
   "OrchestrationAction[thread_link]": "root_id" | "task_id" | "thread_id" | "action";
-  "OrchestrationAction[report]": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "to_run_id" | "original_task_revision" | "original_claim_id" | "thread_id" | "card" | "action";
-  "OrchestrationAction[message_send]": "message_id" | "to_run_id" | "kind" | "text" | "in_reply_to" | "original_task_revision" | "original_claim_id" | "action";
+  "OrchestrationAction[report]": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "to_run_id" | "original_task_revision" | "original_claim_id" | "thread_id" | "card" | "images" | "action";
+  "OrchestrationAction[message_send]": "message_id" | "to_run_id" | "kind" | "text" | "images" | "in_reply_to" | "original_task_revision" | "original_claim_id" | "action";
   "OrchestrationAction[annotate]": "run_id" | "text" | "action";
   "OrchestrationAction[inbox_pull]": "after_seq" | "limit" | "action";
   "OrchestrationAction[inbox_ack]": "through_seq" | "action";
@@ -783,6 +841,10 @@ export interface WireCheckpointFieldNames {
 }
 
 export type WireOmittableField =
+  | "RunRetirement.result_message_id"
+  | "RunRetirement.task_revision"
+  | "RunRetirement.replacement"
+  | "RunRetirement.identity"
   | "Run.parent_run_id"
   | "Run.task_id"
   | "Run.assignment_generation"
@@ -817,6 +879,7 @@ export type WireOmittableField =
   | "Report.plan"
   | "Report.source_output"
   | "Report.card"
+  | "Message.images"
   | "Message.in_reply_to"
   | "Message.report"
   | "Message.thread_id"
@@ -863,6 +926,7 @@ export type WireOmittableField =
   | "OrchestrationAction[task_scope_update].title"
   | "OrchestrationAction[task_scope_update].description"
   | "OrchestrationAction[reconcile_run].recovery"
+  | "OrchestrationAction[thread_handoff].images"
   | "OrchestrationAction[thread_handoff].task_id"
   | "OrchestrationAction[thread_handoff].expected_task_revision"
   | "OrchestrationAction[thread_handoff].binding"
@@ -874,6 +938,8 @@ export type WireOmittableField =
   | "OrchestrationAction[report].original_claim_id"
   | "OrchestrationAction[report].thread_id"
   | "OrchestrationAction[report].card"
+  | "OrchestrationAction[report].images"
+  | "OrchestrationAction[message_send].images"
   | "OrchestrationAction[message_send].in_reply_to"
   | "OrchestrationAction[message_send].original_task_revision"
   | "OrchestrationAction[message_send].original_claim_id"
@@ -884,11 +950,13 @@ export type WireOmittableField =
 
 export type WireOptionalField =
   | "Report.card"
+  | "Message.images"
   | "Message.thread_id"
   | "Message.handoff"
   | "QuestionStatus.thread_id"
   | "OrchestrationAction[task_create].thread_id"
   | "OrchestrationAction[run_resume].confirmed_stopped_attachment_id"
+  | "OrchestrationAction[thread_handoff].images"
   | "OrchestrationAction[thread_handoff].task_id"
   | "OrchestrationAction[thread_handoff].expected_task_revision"
   | "OrchestrationAction[thread_handoff].binding"
@@ -896,15 +964,22 @@ export type WireOptionalField =
   | "OrchestrationAction[report].original_claim_id"
   | "OrchestrationAction[report].thread_id"
   | "OrchestrationAction[report].card"
+  | "OrchestrationAction[report].images"
+  | "OrchestrationAction[message_send].images"
   | "OrchestrationAction[message_send].original_task_revision"
   | "OrchestrationAction[message_send].original_claim_id"
   | never;
 
 export type WireListField =
+  | "RetirementState[waiting].blockers"
   | "Run.annotations"
+  | "Message.images"
   | "RuntimeObservation[fresh].runs"
   | "OrchestrationAction[task_create].depends_on"
   | "OrchestrationAction[task_dependencies_set].depends_on"
+  | "OrchestrationAction[thread_handoff].images"
+  | "OrchestrationAction[report].images"
+  | "OrchestrationAction[message_send].images"
   | "OrchestrationActionResult[inbox].messages"
   | never;
 

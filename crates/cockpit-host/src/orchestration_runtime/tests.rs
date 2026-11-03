@@ -1222,6 +1222,7 @@ async fn handoff_binding_observes_the_current_workspace_checkout_and_refuses_sta
     let request = OrchestrationMutationRequest {
         session_id: "fixture".into(), expected_revision: None,
         action: OrchestrationAction::ThreadHandoff {
+            images: Vec::new(),
             message_id: "message".into(), thread_id: "thread".into(), to_run_id: "run".into(),
             text: "Investigate".into(), task_id: None, expected_task_revision: None,
             binding: Some(binding.clone()),

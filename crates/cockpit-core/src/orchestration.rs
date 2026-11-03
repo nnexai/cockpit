@@ -11,6 +11,9 @@ pub mod project_identity;
 pub mod session_identity;
 mod escalation;
 mod messages;
+mod images;
+#[cfg(test)]
+mod image_visibility_tests;
 mod projection;
 mod inbox_view;
 mod threads;
@@ -36,6 +39,7 @@ pub use mutate::resume::{effect_free_reserved_resume_launch, root_checkout_resel
 pub use resource_queue::ResourceSourceFacts;
 pub use cleanup::ResourceRegistrationFacts;
 pub use messages::{latest_progress_sequences, inbox_counts, inbox_meaningful, InboxCounts, InboxKindCount, InboxMessageContext};
+pub use images::{MAX_IMAGE_BYTES, MAX_MESSAGE_IMAGES};
 pub use credentials::{JobAuth, JobRole, SecretBytes, read_job_auth};
 pub use claims::{RootMainRecoveryProof, WriterExitProof};
 use mutate::{Applied, MutationCtx};
@@ -48,6 +52,7 @@ use cockpit_protocol::orchestration::*;
 use cockpit_protocol::projects::{ProjectConfiguration, WorkspaceSetupRequest};
 use herdr::OrchestrationHerdr;
 use std::{path::Path, time::Duration};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use store::{OrchestrationState, OrchestrationStore};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -90,6 +95,46 @@ pub(crate) struct AuthorizedJob {
     pub checkout_claim_id: Option<String>,
 }
 
+pub(crate) enum ImageViewer<'a> {
+    Operator { session_id: &'a str },
+    Job(&'a AuthorizedJob),
+}
+
+fn message_visible(state: &OrchestrationState, viewer: &ImageViewer<'_>, message: &Message) -> bool {
+    if message.stale { return false; }
+    let recipient = state.runs.iter().find(|run| run.run_id == message.to_run_id);
+    match viewer {
+        ImageViewer::Operator { session_id } =>
+            recipient.is_some_and(|run| run.session_id == *session_id),
+        ImageViewer::Job(job) => {
+            let Some(own) = state.runs.get(job.run_index) else { return false; };
+            let recipient_in_tree = recipient.is_some_and(|run| run.session_id == own.session_id && run.root_id == own.root_id);
+            let sender_in_tree = match &message.from {
+                ActorRef::Run { run_id } => state.runs.iter().any(|run|
+                    run.run_id == *run_id && run.session_id == own.session_id && run.root_id == own.root_id),
+                _ => false,
+            };
+            if job.role == JobRole::Root { return recipient_in_tree || sender_in_tree; }
+            if !recipient_in_tree && !sender_in_tree { return false; }
+            if message.to_run_id == own.run_id || matches!(&message.from, ActorRef::Run { run_id } if run_id == &own.run_id) {
+                return true;
+            }
+            let (Some(task_id), Some(thread_id), Some(handoff)) =
+                (own.task_id.as_deref(), message.thread_id.as_deref(), message.handoff.as_ref())
+                else { return false; };
+            matches!(message.from, ActorRef::Operator)
+                && message.to_run_id == own.root_id
+                && (handoff.task_id.as_deref() == Some(task_id) || state.thread_links.iter().any(|link|
+                    link.root_id == own.root_id && link.task_id == task_id && link.thread_id == thread_id))
+        }
+    }
+}
+
+pub(crate) fn image_visible(state: &OrchestrationState, viewer: &ImageViewer<'_>, image_id: &str) -> bool {
+    state.messages.iter().any(|message| message_visible(state, viewer, message)
+        && message.images.iter().any(|image| image.image_id == image_id))
+}
+
 
 /// Immutable owner observations, not client-supplied action fields.
 #[derive(Debug, Clone, Default)]
@@ -118,6 +163,8 @@ pub struct ResolvedMutationInput {
     pub output_facts: Option<OutputFacts>,
     pub resource_source: Option<ResourceSourceFacts>,
     pub resource_registration: Option<ResourceRegistrationFacts>,
+    pub images: Option<Vec<MessageImage>>,
+    pub fresh_images: std::collections::BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,6 +285,67 @@ impl OrchestrationService {
         self.store.base()
     }
     pub fn store_identity(&self) -> &str { self.store.identity() }
+    /// Uploads are operator-controlled or trusted CLI input; grants arise only
+    /// when a durable message references the returned image.
+    pub fn image_put(&self, session_id: &str, bytes: &[u8]) -> Result<MessageImage, InspectionError> {
+        validate_identity(session_id)?;
+        images::put(self.base(), session_id, bytes)
+    }
+
+    pub fn validate_image_session(&self, session_id: &str) -> Result<(), InspectionError> {
+        validate_identity(session_id)
+    }
+
+    pub async fn resolve_images(&self, request: &OrchestrationMutationRequest) -> Result<Option<Vec<MessageImage>>, InspectionError> {
+        validate_identity(&request.session_id)?;
+        let ids = match &request.action {
+            OrchestrationAction::ThreadHandoff { images, .. }
+            | OrchestrationAction::Report { images, .. }
+            | OrchestrationAction::MessageSend { images, .. } => images,
+            _ => return Ok(None),
+        };
+        if ids.len() > images::MAX_MESSAGE_IMAGES {
+            return Err(error("image_too_many", "Too many images on one message"));
+        }
+        let mut seen = std::collections::HashSet::new();
+        if ids.iter().any(|id| !seen.insert(id)) {
+            return Err(error("image_duplicate", "Duplicate image ID"));
+        }
+        ids.iter().map(|id| images::verify(self.base(), &request.session_id, id).map(|(image, _)| image)).collect::<Result<Vec<_>, _>>().map(Some)
+    }
+
+    pub fn image_for_session(&self, session_id: &str, image_id: &str) -> Result<OrchestrationImageMedia, InspectionError> {
+        validate_identity(session_id)?;
+        images::validate_image_id(image_id)?;
+        let state = self.store.lock()?.read_shared()?;
+        if !image_visible(&state, &ImageViewer::Operator { session_id }, image_id) {
+            return Err(error("image_not_found", "Image not found"));
+        }
+        let (image, bytes) = images::read_bytes(self.base(), session_id, image_id)?;
+        Ok(OrchestrationImageMedia { image, data_base64: BASE64.encode(bytes) })
+    }
+
+    pub fn images_for_job(&self, caller: &AgentCaller, session_id: &str, image_id: Option<&str>) -> Result<Vec<JobImage>, InspectionError> {
+        validate_identity(session_id)?;
+        if let Some(id) = image_id { images::validate_image_id(id)?; }
+        let locked = self.store.lock()?;
+        let state = locked.read_shared()?;
+        let job = credentials::validate_caller(&state, caller)?;
+        scope_run(&state, session_id, job.run_index)?;
+        let viewer = ImageViewer::Job(&job);
+        let mut seen = std::collections::HashSet::new();
+        let mut result = Vec::new();
+        for message in state.messages.iter().filter(|message| message_visible(&state, &viewer, message)) {
+            for image in &message.images {
+                if image_id.is_some_and(|id| id != image.image_id) || !seen.insert(image.image_id.clone()) { continue; }
+                let (image, path) = images::verify(self.base(), session_id, &image.image_id)?;
+                result.push(JobImage { image, path: path.to_string_lossy().into_owned(),
+                    message_id: message.message_id.clone(), thread_id: message.thread_id.clone(), from: message.from.clone() });
+            }
+        }
+        if image_id.is_some() && result.is_empty() { return Err(error("image_not_found", "Image not found")); }
+        Ok(result)
+    }
     fn snapshot_records(
         &self, request: &OrchestrationSnapshotRequest,
     ) -> Result<(std::sync::Arc<OrchestrationState>, Vec<TaskBoard>, String), InspectionError> {
@@ -655,7 +763,7 @@ impl OrchestrationService {
             mutate::integration::validate_report_output(&state, index, &request.action, resolved,
                 &request.session_id, current_revision)?;
         }
-        if let Some(result) = messages::apply(&mut state, actor, caller, stale, &request.action)? {
+        if let Some(result) = messages::apply(&mut state, actor, caller, stale, &request.action, resolved)? {
             if let Some((operation_id, kind)) = semantic_operation {
                 let root_id = match caller {
                     Some(index) => state.runs[index].root_id.clone(),
@@ -869,7 +977,7 @@ impl OrchestrationService {
                         _ => unreachable!(),
                     }
                 };
-                messages::append(&mut state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher, to_run_id: &recipient, message_id: &key, kind: MessageKind::Observation, text: &text, in_reply_to: None, report: None, stale: false, escalated_from: (recipient != original).then(|| original.to_owned()) })?;
+                messages::append(&mut state, messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Dispatcher, to_run_id: &recipient, message_id: &key, kind: MessageKind::Observation, text: &text, in_reply_to: None, report: None, stale: false, escalated_from: (recipient != original).then(|| original.to_owned()) })?;
                 changed = true;
             }
         }
@@ -1430,7 +1538,7 @@ fn brief(
             "launch".into()
         }
     );
-    messages::append(state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher, to_run_id: to, message_id: &message_id, kind, text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
+    messages::append(state, messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Dispatcher, to_run_id: to, message_id: &message_id, kind, text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     Ok(())
 }
 #[cfg(test)]

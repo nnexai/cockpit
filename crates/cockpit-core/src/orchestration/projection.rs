@@ -959,6 +959,7 @@ mod tests {
 
     fn brief(kind: MessageKind, stage: DeliveryStage) -> Message {
         Message {
+            images: Vec::new(),
             thread_id: None,
             handoff: None,
             message_id: "44444444-4444-4444-8444-444444444444".into(),

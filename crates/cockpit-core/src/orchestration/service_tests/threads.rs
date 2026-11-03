@@ -3,6 +3,7 @@ use super::super::store::ThreadLinkRecord;
 
 fn handoff(root: &str, thread: &str) -> OrchestrationAction {
     OrchestrationAction::ThreadHandoff {
+        images: Vec::new(),
         message_id: id(), thread_id: thread.into(), to_run_id: root.into(),
         text: "Please investigate".into(), task_id: None,
         expected_task_revision: None, binding: None,
@@ -156,6 +157,39 @@ fn missing_pane_does_not_prove_unknown_owner_dead() {
     ).unwrap();
     assert_eq!(view.owners[0].availability, OwnerAvailability::Unknown);
     fixture.operator(handoff(&root, &id()));
+}
+
+#[test]
+fn image_handoff_persists_metadata_and_fences_replay() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let operator = Actor::Operator(OperatorOrigin::Browser);
+    let mut action = handoff(&root, &id());
+    let OrchestrationAction::ThreadHandoff { text, images, .. } = &mut action else { unreachable!() };
+    text.clear();
+    *images = vec!["one".into(), "two".into()];
+    let metadata = |id: &str| MessageImage {
+        image_id: id.into(), mime_type: "image/png".into(), width: 1, height: 1, bytes: 1,
+    };
+    let resolved = ResolvedMutationInput { images: Some(vec![metadata("one"), metadata("two")]), ..Default::default() };
+    let request = |action| OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: None, action,
+    };
+    fixture.service.mutate_resolved(&operator, request(action.clone()), &resolved).unwrap();
+    let state = fixture.state();
+    assert_eq!(state.messages.last().unwrap().images, resolved.images.clone().unwrap());
+    let before = fixture.state_bytes();
+    let OrchestrationAction::ThreadHandoff { images, .. } = &mut action else { unreachable!() };
+    images.reverse();
+    let changed = ResolvedMutationInput { images: Some(vec![metadata("two"), metadata("one")]), ..Default::default() };
+    assert_code(fixture.service.mutate_resolved(&operator, request(action), &changed), "operation_conflict");
+    assert_eq!(fixture.state_bytes(), before);
+
+    let mut empty = handoff(&root, &id());
+    let OrchestrationAction::ThreadHandoff { text, .. } = &mut empty else { unreachable!() };
+    text.clear();
+    assert_code(fixture.apply(&operator, empty), "invalid_message");
+    assert_eq!(fixture.state_bytes(), before);
 }
 
 #[test]

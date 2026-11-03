@@ -3,7 +3,7 @@ use cockpit_protocol::orchestration::*;
 use std::collections::{HashMap, HashSet};
 
 use super::store::OrchestrationState;
-use super::{Actor, AgentCaller, AuthorizedJob, actor_ref, error, is_ancestor, now, run_index};
+use super::{Actor, AgentCaller, AuthorizedJob, ImageViewer, ResolvedMutationInput, actor_ref, error, image_visible, is_ancestor, now, run_index};
 use super::credentials::{JobRole, validate_caller};
 use crate::InspectionError;
 
@@ -250,6 +250,38 @@ pub(crate) fn current_question_for<'a>(messages: &'a [Message], run_id: &str, th
     current_questions(messages, run_id).into_iter().find(|message| message.thread_id.as_deref() == thread_id)
 }
 
+pub(crate) fn check_images(
+    state: &OrchestrationState,
+    actor: &Actor,
+    caller: Option<&AuthorizedJob>,
+    requested: &[String],
+    resolved: Option<&ResolvedMutationInput>,
+) -> Result<Vec<MessageImage>, InspectionError> {
+    if requested.len() > super::images::MAX_MESSAGE_IMAGES {
+        return Err(error("image_too_many", "Too many images on one message"));
+    }
+    let mut ids = HashSet::new();
+    if requested.iter().any(|id| !ids.insert(id)) {
+        return Err(error("image_duplicate", "An image may only appear once on a message"));
+    }
+    if requested.is_empty() {
+        return Ok(Vec::new());
+    }
+    let input = resolved.ok_or_else(|| error("image_unresolved", "Image references were not resolved"))?;
+    let images = input.images.as_ref()
+        .filter(|images| images.len() == requested.len()
+            && images.iter().zip(requested).all(|(image, id)| image.image_id == *id))
+        .ok_or_else(|| error("image_unresolved", "Image references do not match the resolved images"))?;
+    if let Actor::Agent(_) = actor {
+        let job = caller.ok_or_else(|| error("caller_unbound", "The admitted job does not match the caller"))?;
+        if requested.iter().any(|id| !input.fresh_images.contains(id)
+            && !image_visible(state, &ImageViewer::Job(job), id)) {
+            return Err(error("image_forbidden", "Image is not visible to this job"));
+        }
+    }
+    Ok(images.clone())
+}
+
 pub(crate) struct AppendMessage<'a> {
     pub from: ActorRef,
     pub to_run_id: &'a str,
@@ -260,6 +292,7 @@ pub(crate) struct AppendMessage<'a> {
     pub report: Option<Report>,
     pub thread_id: Option<String>,
     pub handoff: Option<HandoffRecord>,
+    pub images: Vec<MessageImage>,
     pub stale: bool,
     pub escalated_from: Option<String>,
 }
@@ -270,7 +303,7 @@ pub(crate) fn append(
     message: AppendMessage<'_>,
 ) -> Result<OrchestrationActionResult, InspectionError> {
     let AppendMessage {
-        from, to_run_id, message_id, kind, text, in_reply_to, report, stale, escalated_from, thread_id, handoff,
+        from, to_run_id, message_id, kind, text, in_reply_to, report, stale, escalated_from, thread_id, handoff, images,
     } = message;
     if message_id.is_empty() {
         return Err(error("invalid_message_id", "A message id is required"));
@@ -303,6 +336,7 @@ pub(crate) fn append(
             || existing.escalated_from != escalated_from
             || existing.thread_id != thread_id
             || existing.handoff != handoff
+            || existing.images != images
         {
             return Err(error(
                 "message_id_conflict",
@@ -337,6 +371,7 @@ pub(crate) fn append(
         report,
         thread_id,
         handoff,
+        images,
         stale,
         escalated_from,
         stage: DeliveryStage::Stored,
@@ -408,6 +443,7 @@ pub(crate) fn apply(
     caller: Option<usize>,
     stale: bool,
     action: &OrchestrationAction,
+    resolved: Option<&ResolvedMutationInput>,
 ) -> Result<Option<OrchestrationActionResult>, InspectionError> {
     if !matches!(
         action,
@@ -429,13 +465,13 @@ pub(crate) fn apply(
     let caller = job.as_ref();
     match action {
         OrchestrationAction::Report { .. } => {
-            report::apply(state, actor, caller, action)
+            report::apply(state, actor, caller, action, resolved)
         }
         OrchestrationAction::MessageSend { .. }
         | OrchestrationAction::Annotate { .. }
         | OrchestrationAction::InboxPull { .. }
         | OrchestrationAction::InboxAck { .. } => {
-            inbox::apply(state, actor, caller, action)
+            inbox::apply(state, actor, caller, action, resolved)
         }
         _ => Ok(None),
     }

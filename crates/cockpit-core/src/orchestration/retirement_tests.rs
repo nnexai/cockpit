@@ -295,6 +295,7 @@ fn operator_resolution_uses_current_revision_but_not_a_different_result() {
     fixture.mutate(&Actor::Operator(OperatorOrigin::Browser),
         OrchestrationAction::SendBack { run_id: fixture.run().run_id, text: "Report against the reviewed current scope".into() }).unwrap();
     fixture.mutate(&Actor::Agent(Box::new(fixture.caller())), OrchestrationAction::Report { thread_id: None, card: None, message_id: "fresh-result".into(), kind: ReportKind::Result, outcome: Some(ReportOutcome::Succeeded),
+    images: Vec::new(),
     summary: "Current non-code output".into(), plan: None,
     source_output: Some(SourceOutput::NonCode {
         result_message_id: "fresh-result".into(), task_revision: current.task_revision.clone(),
@@ -464,6 +465,7 @@ fn closed_worker_cannot_append_messages_or_register_again() {
     fixture.accept();
     for action in [
         OrchestrationAction::Report { thread_id: None, card: None, message_id: id(), kind: ReportKind::Progress, outcome: None,
+        images: Vec::new(),
         summary: "late history".into(), plan: None, source_output: None,
         to_run_id: None, original_task_revision: None, original_claim_id: None, },
         OrchestrationAction::RunRegister { operation_id: id() },

@@ -226,6 +226,7 @@ fn child_reports_and_parent_inbox_delivery_preserve_nonnull_parent_receipts() {
             .apply(
                 &child_actor,
                 OrchestrationAction::Report { thread_id: None, card: None, message_id: message_id.clone(),
+                images: Vec::new(),
                 kind,
                 outcome,
                 summary: summary.into(),

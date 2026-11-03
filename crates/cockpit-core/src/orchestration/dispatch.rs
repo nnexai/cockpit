@@ -2454,7 +2454,7 @@ impl OrchestrationService {
             return Ok(());
         }
         let text = format!("Scheduled task {} remains queued: {}. Resolve its explicit source Space/placement or cancel/re-schedule; no launch was replayed.", candidate.task_id, error.message);
-        super::messages::append(&mut state, super::messages::AppendMessage { thread_id: None, handoff: None, from: cockpit_protocol::orchestration::ActorRef::Dispatcher,
+        super::messages::append(&mut state, super::messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: cockpit_protocol::orchestration::ActorRef::Dispatcher,
         to_run_id: &candidate.root_id, message_id: &message_id,
         kind: cockpit_protocol::orchestration::MessageKind::Observation,
         text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None, })?;
@@ -2582,7 +2582,7 @@ impl OrchestrationService {
         waits.retain(|key, _| blocked.contains(key));
         if !notices.is_empty() {
             for (root, id, text) in notices {
-                super::messages::append(&mut state, super::messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher,
+                super::messages::append(&mut state, super::messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Dispatcher,
                     to_run_id: &root, message_id: &id, kind: MessageKind::Observation, text: &text,
                     in_reply_to: None, report: None, stale: false, escalated_from: None })?;
             }
@@ -2621,7 +2621,7 @@ impl OrchestrationService {
         }
         if !notices.is_empty() {
             for (root, key, text) in notices {
-                super::messages::append(&mut state, super::messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher,
+                super::messages::append(&mut state, super::messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Dispatcher,
                     to_run_id: &root, message_id: &key, kind: MessageKind::Observation, text: &text,
                     in_reply_to: None, report: None, stale: false, escalated_from: None })?;
             }

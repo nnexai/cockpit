@@ -5,6 +5,7 @@ use axum::{
         rejection::{JsonRejection, QueryRejection},
     },
 };
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cockpit_protocol::orchestration::{
     AgentSendTarget, InboxRequest, InboxView,
     OperatorOrigin, OrchestrationMutationRequest, OrchestrationMutationResponse,
@@ -12,6 +13,7 @@ use cockpit_protocol::orchestration::{
     OrchestrationWaitResponse,
     LiaisonLookupRequest, LiaisonLookupResponse,
 };
+use cockpit_protocol::orchestration::{MessageImage, OrchestrationImageMedia, OrchestrationImagePut, OrchestrationImageRead};
 use serde::Deserialize;
 
 use crate::{
@@ -102,6 +104,35 @@ pub fn mutation_input() -> impl FnOnce(MutationInput) -> Result<OrchestrationMut
                 "session_mismatch",
                 "Path and request session IDs differ",
             ));
+        }
+        Ok(request)
+    }
+}
+
+type ImagePutInput = (Path<String>, Result<Json<OrchestrationImagePut>, JsonRejection>);
+type ImageReadInput = (Path<String>, Result<Json<OrchestrationImageRead>, JsonRejection>);
+
+pub fn image_put_input() -> impl FnOnce(ImagePutInput) -> Result<OrchestrationImagePut, OperationError> {
+    |(path, body)| {
+        let (session_id, request): (String, OrchestrationImagePut) = http_input::session_sized_body(
+            Reject("invalid_session_id", "Session ID is invalid"),
+            Reject("invalid_orchestration_request", "Expected a bounded JSON orchestration request with valid fields"),
+        )((path, body))?;
+        if request.session_id != session_id {
+            return Err(OperationError::rejected("session_mismatch", "Path and request session IDs differ"));
+        }
+        Ok(request)
+    }
+}
+
+pub fn image_read_input() -> impl FnOnce(ImageReadInput) -> Result<OrchestrationImageRead, OperationError> {
+    |(path, body)| {
+        let (session_id, request): (String, OrchestrationImageRead) = http_input::session_sized_body(
+            Reject("invalid_session_id", "Session ID is invalid"),
+            Reject("invalid_orchestration_request", "Expected a bounded JSON orchestration request with valid fields"),
+        )((path, body))?;
+        if request.session_id != session_id {
+            return Err(OperationError::rejected("session_mismatch", "Path and request session IDs differ"));
         }
         Ok(request)
     }
@@ -206,6 +237,41 @@ pub async fn orchestration_mutate(
     runtime.mutate(origin, request).await.map_err(Into::into)
 }
 
+pub async fn orchestration_image_put(
+    runtime: &OrchestrationRuntime,
+    _transport: Transport,
+    request: OrchestrationImagePut,
+) -> Result<MessageImage, OperationError> {
+    if !crate::transport::guard::valid_session_id(&request.session_id) {
+        return Err(OperationError::rejected("invalid_session_id", "Session ID is invalid"));
+    }
+    runtime.service.validate_image_session(&request.session_id)?;
+    let bytes = decode_image(&request.data_base64)?;
+    runtime.service.image_put(&request.session_id, &bytes).map_err(Into::into)
+}
+
+fn decode_image(data: &str) -> Result<Vec<u8>, OperationError> {
+    let max = cockpit_core::orchestration::MAX_IMAGE_BYTES as usize;
+    if data.len() > max.div_ceil(3) * 4 {
+        return Err(OperationError::rejected("image_too_large", "Image exceeds the byte limit"));
+    }
+    BASE64.decode(data).map_err(|_| {
+        OperationError::rejected("invalid_orchestration_request", "Image data is not valid base64")
+    })
+}
+
+pub async fn orchestration_image_read(
+    runtime: &OrchestrationRuntime,
+    _transport: Transport,
+    request: OrchestrationImageRead,
+) -> Result<OrchestrationImageMedia, OperationError> {
+    if !crate::transport::guard::valid_session_id(&request.session_id) {
+        return Err(OperationError::rejected("invalid_session_id", "Session ID is invalid"));
+    }
+    runtime.service.validate_image_session(&request.session_id)?;
+    runtime.service.image_for_session(&request.session_id, &request.image_id).map_err(Into::into)
+}
+
 pub async fn orchestration_wait(
     runtime: &OrchestrationRuntime,
     _transport: Transport,
@@ -218,6 +284,73 @@ pub async fn orchestration_wait(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_inputs_fence_sessions_and_decode_bounded_base64() {
+        let put = OrchestrationImagePut { session_id: "other".into(), data_base64: "AA==".into() };
+        let error: cockpit_protocol::v1::ErrorResponse =
+            image_put_input()((Path("session".into()), Ok(Json(put)))).unwrap_err().into();
+        assert_eq!(error.code, "session_mismatch");
+        let read = OrchestrationImageRead { session_id: "session".into(), image_id: "id".into() };
+        assert!(image_read_input()((Path("session".into()), Ok(Json(read)))).is_ok());
+        assert_eq!(decode_image("AA==").unwrap(), vec![0]);
+        let error: cockpit_protocol::v1::ErrorResponse = decode_image("!").unwrap_err().into();
+        assert_eq!(error.code, "invalid_orchestration_request");
+        let encoded_limit = (cockpit_core::orchestration::MAX_IMAGE_BYTES as usize).div_ceil(3) * 4;
+        let error: cockpit_protocol::v1::ErrorResponse = decode_image(&"A".repeat(encoded_limit + 1)).unwrap_err().into();
+        assert_eq!(error.code, "image_too_large");
+    }
+
+    #[tokio::test]
+    async fn image_handlers_put_png_and_refuse_unreferenced_read() {
+        use std::sync::Arc;
+        use cockpit_core::{library::LibraryService, projects::ProjectService, sources::SourceService};
+        use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
+        use cockpit_protocol::projects::ProjectConfiguration;
+
+        fn chunk(png: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+            png.extend_from_slice(&(data.len() as u32).to_be_bytes());
+            png.extend_from_slice(kind);
+            png.extend_from_slice(data);
+            let mut crc = !0u32;
+            for byte in kind.iter().chain(data) {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xedb88320 & (0u32.wrapping_sub(crc & 1)));
+                }
+            }
+            png.extend_from_slice(&(!crc).to_be_bytes());
+        }
+        let root = std::env::temp_dir().join(format!("cockpit-image-transport-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let config = ProjectConfiguration::for_tests(&root);
+        let sources = Arc::new(SourceService::new(&config, Vec::new()).unwrap());
+        let library = Arc::new(LibraryService::new(config.clone(), sources));
+        let herdr = Arc::new(HerdrCliAdapter::new(HerdrCliConfig::from_options_with_environment(
+            Some(root.join("not-installed-herdr")), Some("fixture".into()),
+            Some(root.join("not-running.sock")), &Default::default(),
+        ).unwrap()));
+        let projects = Arc::new(ProjectService::new(config.clone(), herdr.clone()).unwrap());
+        let runtime = OrchestrationRuntime::new(&config, herdr, projects, library,
+            Some(root.join("config.toml")), crate::orchestration_runtime::CliProcessRole::Host).unwrap();
+        let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+        chunk(&mut png, b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]);
+        chunk(&mut png, b"IDAT", &[0x78, 0x01, 0x01, 4, 0, 0xfb, 0xff, 0, 0, 0, 0, 0, 1, 0, 1]);
+        chunk(&mut png, b"IEND", &[]);
+        for transport in [Transport::Gateway, Transport::Native] {
+            let bad = OrchestrationImagePut { session_id: "session".into(), data_base64: "!".into() };
+            let error: cockpit_protocol::v1::ErrorResponse = orchestration_image_put(&runtime, transport, bad).await.unwrap_err().into();
+            assert_eq!(error.code, "invalid_orchestration_request");
+            let put = OrchestrationImagePut { session_id: "session".into(), data_base64: BASE64.encode(&png) };
+            let image = orchestration_image_put(&runtime, transport, put).await.unwrap();
+            assert_eq!((image.mime_type.as_str(), image.width, image.height), ("image/png", 1, 1));
+            let read = OrchestrationImageRead { session_id: "session".into(), image_id: image.image_id };
+            let error: cockpit_protocol::v1::ErrorResponse = orchestration_image_read(&runtime, transport, read).await.unwrap_err().into();
+            assert_eq!(error.code, "image_not_found");
+        }
+        drop(runtime);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn agent_send_decodes_optional_reviewed_target_for_both_transports() {

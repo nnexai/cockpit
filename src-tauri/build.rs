@@ -13,6 +13,8 @@ fn main() {
             "orchestration_liaison_lookup",
             "orchestration_agent_send",
             "orchestration_mutate",
+            "orchestration_image_put",
+            "orchestration_image_read",
             "orchestration_wait",
             "cockpit_notes_execute",
             "cockpit_widget_subscribe",

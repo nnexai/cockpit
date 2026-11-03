@@ -532,6 +532,7 @@ fn worker_start_is_root_or_operator_only_and_preclaim_capability_cannot_write() 
         report(ReportKind::Progress, None, None),
         fixture.successful_result(&actor),
         OrchestrationAction::MessageSend {
+            images: Vec::new(),
             message_id: id(), to_run_id: root.clone(), kind: MessageKind::Observation,
             text: "Not admitted before registration".into(), in_reply_to: None,
             original_task_revision: None, original_claim_id: None,
@@ -683,6 +684,7 @@ fn revoked_generation_rejects_scope_messages_resource_mutations_and_message_repl
         },
     }};
     let message = OrchestrationAction::MessageSend {
+        images: Vec::new(),
         message_id: id(), to_run_id: root.clone(), kind: MessageKind::Observation,
         text: "Captured worker evidence".into(), in_reply_to: None,
         original_task_revision: None, original_claim_id: None,

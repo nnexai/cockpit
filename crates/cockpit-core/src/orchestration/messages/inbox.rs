@@ -1,10 +1,10 @@
 use cockpit_protocol::orchestration::*;
-use super::super::DecisionProvenance;
+use super::super::{DecisionProvenance, ResolvedMutationInput};
 
 use super::{
     Actor, AuthorizedJob, JobRole, AppendMessage, OrchestrationState, agent, actor_ref, append, duplicate, error,
     current_question_for, deliverable, is_ancestor, latest_progress_sequences, message_result, now,
-    run_index, text_bound, upward,
+    run_index, text_bound, upward, check_images,
 };
 use crate::InspectionError;
 
@@ -13,6 +13,7 @@ pub(super) fn apply(
     actor: &Actor,
     caller: Option<&AuthorizedJob>,
     action: &OrchestrationAction,
+    resolved: Option<&ResolvedMutationInput>,
 ) -> Result<Option<OrchestrationActionResult>, InspectionError> {
     let result = match action {
         OrchestrationAction::MessageSend {
@@ -21,6 +22,7 @@ pub(super) fn apply(
             kind,
             text,
             in_reply_to,
+            images,
             ..
         } => send(
             state,
@@ -32,7 +34,9 @@ pub(super) fn apply(
                 kind: *kind,
                 text,
                 in_reply_to,
+                images,
             },
+            resolved,
         )?,
         OrchestrationAction::Annotate { run_id, text } => {
             text_bound(text)?;
@@ -217,6 +221,7 @@ struct Outgoing<'a> {
     kind: MessageKind,
     text: &'a str,
     in_reply_to: &'a Option<String>,
+    images: &'a [String],
 }
 
 fn send(
@@ -224,6 +229,7 @@ fn send(
     actor: &Actor,
     caller: Option<&AuthorizedJob>,
     outgoing: Outgoing<'_>,
+    resolved: Option<&ResolvedMutationInput>,
 ) -> Result<OrchestrationActionResult, InspectionError> {
     let Outgoing {
         message_id,
@@ -231,7 +237,12 @@ fn send(
         kind,
         text,
         in_reply_to,
+        images,
     } = outgoing;
+    if text.trim().is_empty() {
+        return Err(error("invalid_message", "Message text must not be empty"));
+    }
+    let images = check_images(state, actor, caller, images, resolved)?;
     let target = run_index(state, to_run_id)?;
     let (recipient, escalated) = recipient(state, actor, caller, target, to_run_id, kind)?;
     let from = actor_ref(actor, caller.map(|job| job.run_index), state);
@@ -242,6 +253,7 @@ fn send(
             || existing.in_reply_to != *in_reply_to
             || existing.report.is_some()
             || existing.handoff.is_some()
+            || existing.images != images
             || (kind != MessageKind::Answer && existing.thread_id.is_some())
             || existing
                 .escalated_from
@@ -346,6 +358,7 @@ fn send(
         text,
         in_reply_to: in_reply_to.clone(),
         report: None,
+        images,
         stale: false,
         escalated_from: escalated, },
     )?;
@@ -353,7 +366,7 @@ fn send(
         append(state, AppendMessage {
             from: ActorRef::Dispatcher, to_run_id: &root, message_id: &notice_id,
             kind: MessageKind::Observation, text: &text, in_reply_to: None,
-            report: None, thread_id: None, handoff: None, stale: false, escalated_from: None,
+            report: None, thread_id: None, handoff: None, images: Vec::new(), stale: false, escalated_from: None,
         })?;
     }
     if let Some(provenance) = answer_provenance {

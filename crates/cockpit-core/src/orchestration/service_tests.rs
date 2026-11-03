@@ -494,6 +494,7 @@ fn report(
     plan: Option<&str>,
 ) -> OrchestrationAction {
     OrchestrationAction::Report { thread_id: None, card: None, message_id: id(),
+    images: Vec::new(),
     kind,
     outcome,
     summary: "Explicit worker evidence".into(),

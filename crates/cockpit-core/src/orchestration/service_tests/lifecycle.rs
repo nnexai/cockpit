@@ -343,6 +343,7 @@ fn linked_answer_retries_preserve_committed_receipts_after_new_question_and_rech
     fixture.apply(&worker, report(ReportKind::NeedsInput, None, None)).unwrap();
     let q1 = fixture.run(&run_id).last_report.unwrap().message_id;
     let answer = OrchestrationAction::MessageSend { message_id: id(),
+    images: Vec::new(),
     to_run_id: run_id.clone(),
     kind: MessageKind::Answer,
     text: "Use the approved choice".into(), in_reply_to: Some(q1.clone()), original_task_revision: None, original_claim_id: None };
@@ -400,6 +401,7 @@ fn bound_top_root_starts_answers_sends_back_accepts_and_cancels() {
         .apply(
             &supervisor,
             OrchestrationAction::MessageSend { message_id: answer_id.clone(),
+            images: Vec::new(),
             to_run_id: run_id.clone(),
             kind: MessageKind::Answer,
             text: "Use the established task scope; no additional decision is missing".into(), in_reply_to: Some(question_id.clone()), original_task_revision: None, original_claim_id: None },
@@ -576,6 +578,7 @@ fn management_requires_root_credentials_not_worker_child_or_forged_identity() {
                 run_id: run_id.clone(),
             },
             5 => OrchestrationAction::MessageSend { message_id: id(),
+            images: Vec::new(),
             to_run_id: branch_id.clone(),
             kind: MessageKind::Answer,
             text: "Answer".into(), in_reply_to: answer_question, original_task_revision: None, original_claim_id: None },
@@ -725,6 +728,7 @@ fn supervisor_recovers_only_strict_descendants() {
         fixture.apply(
             &supervisor,
             OrchestrationAction::MessageSend { message_id: id(),
+            images: Vec::new(),
             to_run_id: nested,
             kind: MessageKind::Answer,
             text: "Too late".into(), in_reply_to: None, original_task_revision: None, original_claim_id: None },

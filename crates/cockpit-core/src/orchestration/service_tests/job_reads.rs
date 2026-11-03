@@ -6,7 +6,7 @@ fn caller(actor: &Actor) -> &AgentCaller {
 }
 
 fn private_message(state: &mut OrchestrationState, recipient: &str, text: &str) {
-    messages::append(state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: recipient, message_id: &id(),
+    messages::append(state, messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Operator, to_run_id: recipient, message_id: &id(),
     kind: MessageKind::Instruction, text, in_reply_to: None,
     report: None, stale: false, escalated_from: None, }).unwrap();
 }
@@ -174,6 +174,7 @@ fn private_question_aliases_and_answers_are_hidden_but_public_run_reports_remain
     ] {
         let message_id = id();
         fixture.apply(actor, OrchestrationAction::Report { thread_id: None, card: None, message_id: message_id.clone(), kind: ReportKind::NeedsInput, outcome: None,
+        images: Vec::new(),
         summary: marker.into(), plan: Some(format!("{marker}-PLAN")),
         source_output: None, to_run_id: None,
         original_task_revision: None, original_claim_id: None, }).unwrap();
@@ -181,12 +182,14 @@ fn private_question_aliases_and_answers_are_hidden_but_public_run_reports_remain
     }
     for (run_id, question_id) in questions {
         fixture.operator(OrchestrationAction::MessageSend {
+            images: Vec::new(),
             message_id: id(), to_run_id: run_id.clone(), kind: MessageKind::Answer,
             text: format!("PRIVATE-ANSWER-BODY-{run_id}"), in_reply_to: Some(question_id),
             original_task_revision: None, original_claim_id: None,
         });
     }
     fixture.apply(&progress_actor, OrchestrationAction::Report { thread_id: None, card: None, message_id: id(), kind: ReportKind::Progress, outcome: None,
+    images: Vec::new(),
     summary: "PUBLIC-PROGRESS-BODY".into(), plan: None,
     source_output: None, to_run_id: None,
     original_task_revision: None, original_claim_id: None, }).unwrap();

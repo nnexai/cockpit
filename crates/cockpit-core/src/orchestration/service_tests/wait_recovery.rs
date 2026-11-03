@@ -134,6 +134,7 @@ async fn durable_inbox_wait_wakes_on_message_without_reading_or_acknowledging_bo
     assert!(poll_wait_once(waiting.as_mut()).await.is_pending());
     let message_id = id();
     fixture.operator(OrchestrationAction::MessageSend {
+        images: Vec::new(),
         message_id: message_id.clone(), to_run_id: root.clone(), kind: MessageKind::Instruction,
         text: "PRIVATE MESSAGE BODY".into(), in_reply_to: None,
         original_task_revision: None, original_claim_id: None,
@@ -162,7 +163,7 @@ async fn housekeeping_is_silent_but_remains_in_inbox_after_ack() {
     let after = fixture.state().messages.iter().filter(|message| message.to_run_id == root)
         .map(|message| message.seq).max().unwrap_or(0);
     fixture.seed_state(|state| {
-        messages::append(state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher, to_run_id: &root, message_id: "cleanup:resource:integration_pending",
+        messages::append(state, messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Dispatcher, to_run_id: &root, message_id: "cleanup:resource:integration_pending",
         kind: MessageKind::Observation, text: "Cleanup awaits integration.", in_reply_to: None,
         report: None, stale: false, escalated_from: None, }).unwrap();
     });

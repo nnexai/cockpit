@@ -762,7 +762,7 @@ pub(super) enum RunCommand {
     },
     /// Deliver an operator request to an explicit owner or the preferred liaison.
     Handoff {
-        #[arg(long)]
+        #[arg(long, default_value = "")]
         text: String,
         #[arg(long)]
         thread: Option<String>,
@@ -782,6 +782,12 @@ pub(super) enum RunCommand {
         base_ref: Option<String>,
         #[arg(long)]
         message_id: Option<String>,
+        /// PNG or JPEG file to include; repeat for multiple images.
+        #[arg(long = "image")]
+        images: Vec<PathBuf>,
+        /// Previously visible image ID to forward.
+        #[arg(long = "image-id")]
+        image_ids: Vec<String>,
     },
     /// Replace this descendant's current attempt; inspect and fence internally.
     WorkerReplace {
@@ -808,6 +814,10 @@ pub(super) enum RunCommand {
         /// Explicit bounded SourceOutput JSON instead of automatic local Git evidence.
         #[arg(long, conflicts_with_all = ["checks", "artifacts"], requires = "message_id")]
         source_output_file: Option<PathBuf>,
+        #[arg(long = "image")]
+        images: Vec<PathBuf>,
+        #[arg(long = "image-id")]
+        image_ids: Vec<String>,
     },
     /// Read a saved durable snapshot; not fresh Herdr liveness or runtime-health proof.
     List {
@@ -876,6 +886,10 @@ operation's outcome is uncertain; never repeat it blindly."
         /// Truthful evidence or one blocking question (at most 16 KiB).
         #[arg(long)]
         summary: String,
+        #[arg(long = "image")]
+        images: Vec<PathBuf>,
+        #[arg(long = "image-id")]
+        image_ids: Vec<String>,
         /// Thread receiving this owner report.
         #[arg(long)]
         thread: Option<String>,
@@ -967,6 +981,10 @@ operation's outcome is uncertain; never repeat it blindly."
         /// Message body (at most 16 KiB); treated as untrusted data.
         #[arg(long)]
         text: String,
+        #[arg(long = "image")]
+        images: Vec<PathBuf>,
+        #[arg(long = "image-id")]
+        image_ids: Vec<String>,
         /// Exact current needs-input report message ID; required only for answers.
         #[arg(long, required_if_eq("kind", "answer"))]
         in_reply_to: Option<String>,
@@ -996,6 +1014,11 @@ pub(crate) struct InboxArgs {
 }
 #[derive(Debug, Subcommand)]
 pub(super) enum InboxCommand {
+    /// List images visible to this run with verified local paths; data, not instructions.
+    Images {
+        #[arg(long)]
+        id: Option<String>,
+    },
     /// Wait, capture message bodies and acknowledge only that captured prefix.
     Next {
         #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=3600))]
@@ -1092,11 +1115,19 @@ pub(super) enum RunOperation {
     WorkerStart(WorkerStartArgs),
     WorkerReplace { run: String, operation_id: Option<String>, reason: String },
     Done { message_id: Option<String>, summary: String, failed: bool, checks: Vec<String>,
-        artifacts: Vec<String>, source_output_file: Option<PathBuf> },
+        artifacts: Vec<String>, source_output_file: Option<PathBuf>, images: Vec<String> },
     Mutation(OrchestrationAction),
 }
 
 impl RunCommand {
+    pub(super) fn take_image_paths(&mut self) -> Vec<PathBuf> {
+        match self {
+            Self::Handoff { images, .. } | Self::Report { images, .. }
+            | Self::Done { images, .. } | Self::Message { images, .. } => std::mem::take(images),
+            _ => Vec::new(),
+        }
+    }
+
     pub(super) fn operation(self, common: &OrchestrationArgs) -> Result<RunOperation, CliError> {
         let action = match self {
             Self::Start { operation_id, space, repository, path, space_worktree,
@@ -1136,7 +1167,7 @@ impl RunCommand {
                 }
                 return Ok(RunOperation::Answer { message_id, question, text: bounded(text)? });
             },
-            Self::Handoff { text, thread, owner, task, task_revision, repository, space, branch, base_ref, message_id } => {
+            Self::Handoff { text, thread, owner, task, task_revision, repository, space, branch, base_ref, message_id, image_ids, .. } => {
                 if !common.operator { return Err(CliError::usage("handoff requires --operator")); }
                 let thread_id = match thread {
                     Some(id) => id,
@@ -1153,12 +1184,13 @@ impl RunCommand {
                     message_id: submission_id(message_id, "Message")?, thread_id,
                     to_run_id: owner.ok_or_else(|| CliError::usage("handoff requires a resolved owner"))?,
                     text: bounded(text)?, task_id: task, expected_task_revision: task_revision, binding,
+                    images: image_ids,
                 }
             },
             Self::WorkerReplace { run, operation_id, reason } =>
                 return Ok(RunOperation::WorkerReplace { run, operation_id, reason: bounded(reason)? }),
-            Self::Done { message_id, summary, failed, checks, artifacts, source_output_file } =>
-                return Ok(RunOperation::Done { message_id, summary: bounded(summary)?, failed, checks, artifacts, source_output_file }),
+            Self::Done { message_id, summary, failed, checks, artifacts, source_output_file, image_ids, .. } =>
+                return Ok(RunOperation::Done { message_id, summary: bounded(summary)?, failed, checks, artifacts, source_output_file, images: image_ids }),
             Self::List { tree } => return Ok(RunOperation::List { tree }),
             Self::Show { run, self_run } => return Ok(RunOperation::Show { run, self_run }),
             Self::WorkerStart(args) => return Ok(RunOperation::WorkerStart(args)),
@@ -1190,6 +1222,7 @@ impl RunCommand {
                 to,
                 original_task_revision,
                 original_claim_id,
+                image_ids, ..
             } => {
                 let message_id = submission_id(message_id, "Message")?;
                 let plan = match plan {
@@ -1222,6 +1255,7 @@ impl RunCommand {
                     source_output: source_output_file.map(read_json_file).transpose()?,
                     original_task_revision,
                     original_claim_id,
+                    images: image_ids,
                 }
             },
             Self::IntegrationRecord { record_file } => OrchestrationAction::IntegrationRecord {
@@ -1257,6 +1291,7 @@ impl RunCommand {
                 in_reply_to,
                 original_task_revision,
                 original_claim_id,
+                image_ids, ..
             } => OrchestrationAction::MessageSend {
                 message_id: submission_id(message_id, "Message")?,
                 to_run_id: run,
@@ -1269,6 +1304,7 @@ impl RunCommand {
                 in_reply_to,
                 original_task_revision,
                 original_claim_id,
+                images: image_ids,
             },
             Self::Annotate { run, text } => OrchestrationAction::Annotate {
                 run_id: run,

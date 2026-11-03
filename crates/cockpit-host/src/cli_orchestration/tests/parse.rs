@@ -24,6 +24,49 @@ fn thread_report_summary_preserves_multiline_markdown() {
     let OrchestrationAction::Report { summary, .. } = action else { panic!("expected report action") };
     assert_eq!(summary, body);
 }
+#[test]
+fn image_flags_and_inbox_images_parse() {
+    for command in [
+        vec!["run", "report", "--kind", "progress", "--summary", "Update"],
+        vec!["run", "done", "--summary", "Done"],
+        vec!["run", "message", "worker", "--kind", "instruction", "--text", "Review"],
+        vec!["run", "--operator", "handoff", "--owner", "root"],
+    ] {
+        let mut args = vec!["test"];
+        args.extend(command);
+        args.extend(["--image", "one.png", "--image", "two.jpg", "--image-id", "sha256-test"]);
+        let TestCommand::Run(mut parsed) = TestCli::try_parse_from(args).unwrap().command else { panic!("expected run") };
+        assert_eq!(parsed.command.take_image_paths(), [PathBuf::from("one.png"), PathBuf::from("two.jpg")]);
+        let op = parsed.command.operation(&parsed.common).unwrap();
+        let images = match op {
+            RunOperation::Mutation(OrchestrationAction::Report { images, .. }
+                | OrchestrationAction::MessageSend { images, .. }
+                | OrchestrationAction::ThreadHandoff { images, .. }) | RunOperation::Done { images, .. } => images,
+            _ => panic!("expected image-bearing operation"),
+        };
+        assert_eq!(images, ["sha256-test"]);
+    }
+    let TestCommand::Inbox(parsed) = TestCli::try_parse_from(["test", "inbox", "images", "--id", "id", "--json"]).unwrap().command else { panic!("expected inbox") };
+    assert!(matches!(parsed.command, InboxCommand::Images { id: Some(id) } if id == "id"));
+}
+#[test]
+fn image_file_reader_rejects_non_files_and_oversize() {
+    let dir = std::env::temp_dir().join(format!("cockpit-image-test-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+    let file = dir.join("image");
+    std::fs::write(&file, b"content").unwrap();
+    assert_eq!(super::super::context::read_image_file(&file).unwrap(), b"content");
+    assert!(super::super::context::read_image_file(&dir).is_err());
+    let link = dir.join("link");
+    std::os::unix::fs::symlink(&file, &link).unwrap();
+    assert!(super::super::context::read_image_file(&link).is_err());
+    std::fs::OpenOptions::new().write(true).open(&file).unwrap()
+        .set_len(cockpit_core::orchestration::MAX_IMAGE_BYTES + 1).unwrap();
+    assert_eq!(super::super::context::read_image_file(&file).unwrap_err().code, "image_too_large");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+
 
 #[test]
 fn thread_cli_preserves_cards_bindings_and_links() {
@@ -1010,7 +1053,7 @@ fn done_preserves_truthful_check_statuses_and_source_alternatives() {
         "--check", "native::native smoke::not_run::No disposable compositor",
         "--artifact", "/tmp/output-a", "--artifact", "https://forge/output-b",
     ]).unwrap().command else { panic!("expected run") };
-    let RunOperation::Done { message_id, summary, failed, checks, artifacts, source_output_file } =
+    let RunOperation::Done { message_id, summary, failed, checks, artifacts, source_output_file, .. } =
         args.command.operation(&args.common).unwrap() else { panic!("expected done") };
     assert!(message_id.is_none() && failed && source_output_file.is_none());
     assert_eq!(summary, "Checks failed");

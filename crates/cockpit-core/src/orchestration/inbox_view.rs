@@ -15,7 +15,15 @@ fn owner_source(run: &Run, card: bool) -> InboxSource {
     else { InboxSource::Owner { run_id: run.run_id.clone(), harness: run.launch_config.harness_kind.clone() } }
 }
 fn text(value: String, source: InboxSource, message: Option<&Message>) -> InboxText {
-    InboxText { text: value, source, message_id: message.map(|m| m.message_id.clone()), at: message.map(|m| m.created_at.clone()) }
+    InboxText { text: value, source, message_id: message.map(|m| m.message_id.clone()), at: message.map(|m| m.created_at.clone()), images: Vec::new() }
+}
+fn message_text(value: String, source: InboxSource, message: &Message) -> InboxText {
+    let mut result = text(value, source, Some(message));
+    result.images = message.images.clone();
+    result
+}
+fn build_request_echo(message: &Message) -> InboxRequestEcho {
+    InboxRequestEcho { message_id: message.message_id.clone(), text: message.text.clone(), created_at: message.created_at.clone(), to_run_id: message.to_run_id.clone(), handoff: message.handoff.clone().unwrap(), images: message.images.clone() }
 }
 fn first_line(value: &str) -> String {
     let line = value.lines().next().unwrap_or("");
@@ -108,15 +116,17 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             if m.handoff.is_some() && root_map.contains_key(m.to_run_id.as_str()) { owner_ids.insert(m.to_run_id.as_str()); }
             if let Some(root) = report_owner(m, &root_map) { owner_ids.insert(root.run_id.as_str()); }
         }
-        let request_message = messages.iter().copied().find(|m| m.handoff.is_some());
-        let request_echo = request_message.map(|m| InboxRequestEcho { message_id: m.message_id.clone(), text: m.text.clone(), created_at: m.created_at.clone(), to_run_id: m.to_run_id.clone(), handoff: m.handoff.clone().unwrap() });
+        let mut handoffs = messages.iter().copied().filter(|m| matches!(m.from, ActorRef::Operator) && m.handoff.is_some());
+        let request_message = handoffs.next();
+        let request_echo = request_message.map(build_request_echo);
+        let follow_ups = handoffs.map(build_request_echo).collect();
         let reports: Vec<(&Message, &Run)> = messages.iter().filter_map(|m| report_owner(m, &root_map).map(|r| (*m, r))).collect();
         let latest_report = reports.last().copied();
         let latest_card = reports.iter().rev().find(|(m, _)| m.report.as_ref().and_then(|r| r.card.as_ref()).is_some()).copied();
         let mut projected_questions = Vec::new();
         if let Some(statuses) = questions.get(id) { for q in statuses {
             if let (Some(m), Some(root)) = (question_message(&state.messages, q), root_map.get(q.run_id.as_str())) {
-                if let Some(report) = &m.report { projected_questions.push(InboxQuestion { run_id: q.run_id.clone(), question_message_id: q.question_message_id.clone(), asked_at: q.asked_at.clone(), text: text(report.summary.clone(), owner_source(root, false), Some(m)), choices: report.card.as_ref().map(|c| c.choices.clone()).unwrap_or_default(), receipt: q.receipt.clone() }); }
+                if let Some(report) = &m.report { projected_questions.push(InboxQuestion { run_id: q.run_id.clone(), question_message_id: q.question_message_id.clone(), asked_at: q.asked_at.clone(), text: message_text(report.summary.clone(), owner_source(root, false), m), choices: report.card.as_ref().map(|c| c.choices.clone()).unwrap_or_default(), receipt: q.receipt.clone() }); }
             }
         }}
         projected_questions.sort_by(|a,b| (&a.asked_at, &a.run_id, &a.question_message_id).cmp(&(&b.asked_at, &b.run_id, &b.question_message_id)));
@@ -132,7 +142,10 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             let lane = projection::lane(&view.task, &view.dependencies, current, &intents);
             let run = current.map(|r| {
                 let o = observations.get(r.run_id.as_str()).copied();
-                InboxRun { run_id: r.run_id.clone(), attempt: r.attempt, stage: r.stage, harness: r.launch_config.harness_kind.clone(), presence: o.map_or(Presence::Unobserved, |o| o.presence), agent_status: o.and_then(|o| o.agent_status.clone()), location: location(o), cleanup: cleanups.iter().find(|c| c.run_id == r.run_id).map(|c| c.items.clone()).unwrap_or_default() }
+                let report_images = state.messages.iter().filter(|m| !m.stale && m.kind == MessageKind::Report && !m.images.is_empty()
+                    && matches!(&m.from, ActorRef::Run { run_id } if run_id == &r.run_id))
+                    .max_by(|a, b| message_order(a).cmp(&message_order(b))).map(|m| m.images.clone()).unwrap_or_default();
+                InboxRun { run_id: r.run_id.clone(), attempt: r.attempt, stage: r.stage, harness: r.launch_config.harness_kind.clone(), presence: o.map_or(Presence::Unobserved, |o| o.presence), agent_status: o.and_then(|o| o.agent_status.clone()), location: location(o), cleanup: cleanups.iter().find(|c| c.run_id == r.run_id).map(|c| c.items.clone()).unwrap_or_default(), report_images }
             });
             tasks.push(InboxTaskLink { root_id: root_id.into(), task_id: task_id.into(), title: view.task.title.clone(), project: task_projects.get(&(root_id, task_id)).cloned().flatten(), lane, run });
         }
@@ -146,7 +159,7 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             else if latest_report.is_some_and(|(m, _)| m.report.as_ref().is_some_and(|r| r.kind == ReportKind::Result)) || (link_count > 0 && tasks.len() == link_count && tasks.iter().all(|t| t.lane == TaskLane::Accepted)) || answered_legacy { (InboxState::Handled, None) }
             else { (InboxState::Underway, None) };
         let title = if let Some((m, root)) = latest_card { text(m.report.as_ref().unwrap().card.as_ref().unwrap().title.clone(), owner_source(root, true), Some(m)) }
-            else if let Some(m) = request_message { text(first_line(&m.text), InboxSource::User, Some(m)) }
+            else if let Some(m) = request_message { let line = first_line(&m.text); text(if line.trim().is_empty() && !m.images.is_empty() { format!("Image request ({})", m.images.len()) } else { line }, InboxSource::User, Some(m)) }
             else if let Some(q) = projected_questions.first() { text(first_line(&q.text.text), q.text.source.clone(), messages.iter().copied().find(|m| m.message_id == q.question_message_id && matches!(&m.from, ActorRef::Run { run_id } if run_id == &q.run_id))) }
             else if let Some((m, root)) = latest_report { text(first_line(&m.report.as_ref().unwrap().summary), owner_source(root, false), Some(m)) }
             else { text(id.to_owned(), InboxSource::Recorded, None) };
@@ -154,7 +167,7 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             else if let Some(receipt) = receipts.last() { let label = root_map.get(receipt.to_run_id.as_str()).map_or(receipt.to_run_id.as_str(), |r| r.label.as_str()); Some(text(if receipt.stage == DeliveryStage::Stored { format!("Waiting for {label} to pick up") } else { format!("With {label}") }, InboxSource::Recorded, None)) }
             else if tasks.len() == 1 { Some(text(format!("{:?} · {}", tasks[0].lane, tasks[0].title), InboxSource::Recorded, None)) } else { None };
         let recommendation = reports.iter().rev().find_map(|(m, root)| m.report.as_ref()?.card.as_ref()?.recommendation.as_ref().map(|v| text(v.clone(), owner_source(root, true), Some(m))));
-        let reply = reports.iter().rev().find(|(m, _)| m.report.as_ref().is_some_and(|r| matches!(r.kind, ReportKind::Progress | ReportKind::Result))).map(|(m, root)| text(m.report.as_ref().unwrap().summary.clone(), owner_source(root, false), Some(m)));
+        let reply = reports.iter().rev().find(|(m, _)| m.report.as_ref().is_some_and(|r| matches!(r.kind, ReportKind::Progress | ReportKind::Result))).map(|(m, root)| message_text(m.report.as_ref().unwrap().summary.clone(), owner_source(root, false), m));
         let project = latest_card.and_then(|(m, _)| m.report.as_ref()?.card.as_ref()?.project.clone());
         let mut facts = Vec::new();
         for r in &receipts { facts.push(text(format!("Delivery {:?}", r.stage), InboxSource::Recorded, messages.iter().copied().find(|m| m.message_id == r.message_id && m.to_run_id == r.to_run_id && matches!(m.from, ActorRef::Operator)))); }
@@ -175,7 +188,7 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
         }
         facts.truncate(8);
         let updated_at = messages.iter().map(|m| m.created_at.as_str()).max().unwrap_or(now).to_owned();
-        threads.push(InboxThread { thread_id: id.into(), state: state_value, need, owner_root_ids: owner_ids.into_iter().map(str::to_owned).collect(), title, next, project, request: request_echo, questions: projected_questions, recommendation, reply, unread_result_message_id: unread, tasks, receipts, facts, updated_at });
+        threads.push(InboxThread { thread_id: id.into(), state: state_value, need, owner_root_ids: owner_ids.into_iter().map(str::to_owned).collect(), title, next, project, request: request_echo, follow_ups, questions: projected_questions, recommendation, reply, unread_result_message_id: unread, tasks, receipts, facts, updated_at });
     }
     threads.sort_by(|a,b| {
         let rank = |t: &InboxThread| match t.need { Some(InboxNeed::Decision) => 0, Some(InboxNeed::Answer) => 1, None if t.state == InboxState::Underway => 2, None => 3 };
@@ -187,7 +200,7 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
     let mut handled = 0;
     threads.retain(|t| { if t.state != InboxState::Handled { true } else { handled += 1; handled <= 50 } });
     let observation = match observation { RuntimeObservation::Fresh { observed_at, .. } => InboxObservation::Fresh { observed_at }, RuntimeObservation::Unavailable { error } => InboxObservation::Unavailable { error } };
-    Ok(InboxView { session_id: request.session_id.clone(), state_store_id: store_id.into(), revision: state.revision, tasks_token: String::new(), observation, owners, threads, unmanaged_agents })
+    Ok(InboxView { session_id: request.session_id.clone(), state_store_id: store_id.into(), revision: state.revision, tasks_token: String::new(), observation, owners, threads, unmanaged_agents, image_limits: ImageLimits { max_bytes: super::images::MAX_IMAGE_BYTES as _, max_count: super::images::MAX_MESSAGE_IMAGES as _, mime_types: vec!["image/png".into(), "image/jpeg".into()] } })
 }
 
 #[cfg(test)]
@@ -210,7 +223,7 @@ mod tests {
         Message { message_id: id.into(), to_run_id: root.into(), seq, from: ActorRef::Operator,
             kind, text: id.into(), in_reply_to: None, report: None, thread_id: thread.map(str::to_owned),
             handoff: None, stale: false, escalated_from: None, stage: DeliveryStage::Stored,
-            created_at: format!("2026-10-05T12:{:02}:{:02}Z", seq / 60, seq % 60), acked_at: None }
+            created_at: format!("2026-10-05T12:{:02}:{:02}Z", seq / 60, seq % 60), acked_at: None, images: vec![] }
     }
     fn report(id: &str, root: &str, seq: u64, thread: Option<&str>, kind: ReportKind) -> Message {
         let mut m = message(id, root, seq, thread, MessageKind::Report);
@@ -218,6 +231,66 @@ mod tests {
         m.report = Some(Report { message_id: id.into(), kind, outcome: None, summary: format!("summary {id}"),
             plan: None, source_output: None, card: None, at: m.created_at.clone() });
         m
+    }
+    fn image(id: &str) -> MessageImage {
+        MessageImage { image_id: id.into(), mime_type: "image/png".into(), width: 1, height: 1, bytes: 42 }
+    }
+    #[test]
+    fn image_projection_preserves_handoffs_reports_and_inert_markdown() {
+        let mut state = OrchestrationState { runs: vec![root("r")], ..Default::default() };
+        let mut first = message("first", "r", 1, Some("t"), MessageKind::Instruction);
+        first.text = String::new();
+        first.handoff = Some(HandoffRecord { task_id: None, task_revision: None, attempt_run_id: None, binding: None, origin: OperatorOrigin::Browser });
+        first.images = vec![image("first-image")];
+        let mut follow = message("follow", "r", 2, Some("t"), MessageKind::Instruction);
+        follow.handoff = first.handoff.clone();
+        follow.images = vec![image("follow-image")];
+        let mut reply = report("reply", "r", 3, Some("t"), ReportKind::Progress);
+        reply.report.as_mut().unwrap().summary = "![x](https://example.invalid/image.png)".into();
+        reply.images = vec![image("reply-image")];
+        let mut question = report("question", "r", 4, Some("t"), ReportKind::NeedsInput);
+        question.images = vec![image("question-image")];
+        state.messages.extend([follow, question, first, reply]);
+        let result = view(&state, vec![]);
+        let thread = &result.threads[0];
+        assert_eq!(thread.title.text, "Image request (1)");
+        assert!(thread.title.images.is_empty());
+        assert_eq!(thread.request.as_ref().unwrap().images, vec![image("first-image")]);
+        assert_eq!(thread.follow_ups.len(), 1);
+        assert_eq!(thread.follow_ups[0].message_id, "follow");
+        assert_eq!(thread.follow_ups[0].images, vec![image("follow-image")]);
+        assert_eq!(thread.reply.as_ref().unwrap().text, "![x](https://example.invalid/image.png)");
+        assert_eq!(thread.reply.as_ref().unwrap().images, vec![image("reply-image")]);
+        assert_eq!(thread.questions[0].text.images, vec![image("question-image")]);
+        assert!(thread.facts.iter().all(|fact| fact.images.is_empty()));
+        assert_eq!(result.image_limits.max_bytes, super::super::images::MAX_IMAGE_BYTES);
+        assert_eq!(result.image_limits.max_count, super::super::images::MAX_MESSAGE_IMAGES as u32);
+        assert_eq!(result.image_limits.mime_types, vec!["image/png", "image/jpeg"]);
+    }
+    #[test]
+    fn worker_images_use_latest_non_stale_image_report() {
+        let mut worker = root("worker");
+        worker.kind = RunKind::Worker;
+        worker.root_id = "r".into();
+        worker.parent_run_id = Some("r".into());
+        worker.task_id = Some("task".into());
+        worker.assignment_generation = Some(1);
+        let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, schedule: None,
+            owner: Some(TaskOwner { run_id: "worker".into(), conversation: None, claim_operation_id: "claim".into() }) });
+        state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
+        state.messages.push(report("root-progress", "r", 1, Some("t"), ReportKind::Progress));
+        let mut old = report("old", "worker", 2, None, ReportKind::Progress);
+        old.images = vec![image("old")];
+        let mut newest = report("newest", "worker", 3, None, ReportKind::Progress);
+        newest.images = vec![image("newest")];
+        let empty = report("empty", "worker", 4, None, ReportKind::Progress);
+        let mut stale = report("stale", "worker", 5, None, ReportKind::Result);
+        stale.stale = true;
+        stale.images = vec![image("stale")];
+        state.messages.extend([stale, newest, old, empty]);
+        let result = view(&state, vec![board("r", "task")]);
+        assert_eq!(result.threads[0].tasks[0].run.as_ref().unwrap().report_images, vec![image("newest")]);
     }
     fn view(state: &OrchestrationState, boards: Vec<TaskBoard>) -> InboxView {
         project(&InboxRequest { session_id: "session".into() }, state, boards,

@@ -60,6 +60,12 @@ pub fn status(policy: StatusPolicy, error: &OperationError) -> StatusCode {
             | "handoff_binding_mismatch"
             | "space_git_action_in_progress" => StatusCode::CONFLICT,
             "thread_forbidden" | "thread_owner_invalid" => StatusCode::BAD_REQUEST,
+            "image_not_found" => StatusCode::NOT_FOUND,
+            "image_forbidden" => StatusCode::FORBIDDEN,
+            "image_id_invalid" | "image_too_large" | "image_type_refused"
+            | "image_format_refused" | "image_header_invalid" | "image_dimensions"
+            | "image_decoded_bytes" | "image_too_many" | "image_duplicate"
+            | "image_unresolved" => StatusCode::BAD_REQUEST,
             _ => StatusCode::SERVICE_UNAVAILABLE,
         },
         StatusPolicy::Notes => match code {
@@ -143,5 +149,19 @@ mod tests {
         }
         let error = OperationError::Service(InspectionError::new("handoff_binding_unavailable", "test"));
         assert_eq!(status(StatusPolicy::Service, &error), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn image_service_errors_have_actionable_http_statuses() {
+        for (code, expected) in [
+            ("image_not_found", StatusCode::NOT_FOUND),
+            ("image_forbidden", StatusCode::FORBIDDEN),
+            ("image_too_large", StatusCode::BAD_REQUEST),
+            ("image_duplicate", StatusCode::BAD_REQUEST),
+            ("image_store_full", StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let error = OperationError::Service(InspectionError::new(code, "test"));
+            assert_eq!(status(StatusPolicy::Service, &error), expected, "{code}");
+        }
     }
 }

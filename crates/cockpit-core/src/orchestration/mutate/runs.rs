@@ -560,7 +560,7 @@ pub(in crate::orchestration) fn cancel(
     state.runs[index].stage = RunStage::Closed;
     state.runs[index].close_reason = Some(CloseReason::Cancelled);
     let from = actor_ref(actor, caller, state);
-    messages::append(state, messages::AppendMessage { thread_id: None, handoff: None, from, to_run_id: &run_id, message_id: &format!("cancel-{}", id()), kind: MessageKind::CancelRequest, text: "Tracking is closed for this run. Please stop and report outstanding effects. This advisory request does not guarantee process termination; resources and descendants are retained.", in_reply_to: None, report: None, stale: false, escalated_from: None })?;
+    messages::append(state, messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from, to_run_id: &run_id, message_id: &format!("cancel-{}", id()), kind: MessageKind::CancelRequest, text: "Tracking is closed for this run. Please stop and report outstanding effects. This advisory request does not guarantee process termination; resources and descendants are retained.", in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     let annotation = decision_annotation(
         actor_ref(actor, caller, state),
         &provenance,
@@ -940,6 +940,7 @@ mod capacity_tests {
             linked_by: ActorRef::Operator, at: "now".into(),
         });
         state.messages.push(Message {
+            images: Vec::new(),
             message_id: "message".into(), to_run_id: "root".into(), seq: 1,
             from: ActorRef::Operator, kind: MessageKind::Instruction, text: "work".into(),
             in_reply_to: None, report: None, thread_id: Some("thread".into()),

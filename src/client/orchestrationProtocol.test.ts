@@ -310,6 +310,21 @@ const defaultedSnapshotFields: Readonly<Record<string, true>> = {
 };
 
 describe("orchestration protocol boundary", () => {
+  it("validates image references on handoffs, reports, and messages", () => {
+    const image_id = `sha256-${hash}`;
+    const handoff = { action: "thread_handoff", message_id: "message", thread_id: prerequisiteId,
+      to_run_id: "root", text: "", images: [image_id] };
+    const reportAction = { action: "report", message_id: "result", kind: "result", outcome: "succeeded",
+      summary: "Done", plan: null, source_output: null, to_run_id: null, images: [image_id] };
+    const message = { action: "message_send", message_id: "message", to_run_id: "run",
+      kind: "instruction", text: "Work", in_reply_to: null, images: [image_id] };
+    for (const action of [handoff, reportAction, message]) {
+      expect(parseOrchestrationAction(action)).toEqual(action);
+      expect(() => parseOrchestrationAction({ ...action, images: ["bad"] })).toThrow(CockpitClientError);
+      expect(() => parseOrchestrationAction({ ...action, images: [image_id, image_id] })).toThrow(CockpitClientError);
+    }
+  });
+
   it("decodes the observed unmanaged target without accepting additional identity fields", () => {
     const target = { endpoint_identity: "endpoint", workspace_id: "space", tab_id: "other-tab", pane_id: "other-pane",
       terminal_id: "terminal", agent_kind: "omp", agent_name: "omp", native_session_id: null,
@@ -1882,19 +1897,60 @@ describe("browser/native orchestration parity", () => {
     if (transport === "browser") expect(JSON.parse(browserCall.mock.calls[0]![1]!.body as string)).toEqual(legacy);
     else expect(nativeCall).toHaveBeenCalledWith("orchestration_agent_send", { request: legacy });
   });
+  it.each(["browser", "native"] as const)("uploads and reads verified images on %s", async transport => {
+    const image = { image_id: `sha256-${hash}`, mime_type: "image/png", width: 1, height: 1, bytes: 3 };
+    const put = { session_id: "session", data_base64: "YWJj" };
+    const read = { session_id: "session", image_id: image.image_id };
+    let payload: unknown = image;
+    const browserCall = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(payload)));
+    const nativeCall = vi.fn(async (_command: string, _args?: Record<string, unknown>) => payload);
+    const client = transport === "browser" ? createBrowserClient(browserCall) : createNativeClient(nativeCall);
+    await expect(client.orchestrationImagePut(put)).resolves.toEqual(image);
+    if (transport === "browser") {
+      expect(browserCall.mock.calls[0]![0]).toBe("/api/v1/sessions/session/orchestration/images");
+      expect(JSON.parse(browserCall.mock.calls[0]![1]!.body as string)).toEqual(put);
+    } else expect(nativeCall).toHaveBeenCalledWith("orchestration_image_put", { request: put });
+    payload = { image, data_base64: "YWJj" };
+    await expect(client.orchestrationImageRead(read)).resolves.toEqual(payload);
+    if (transport === "browser") {
+      expect(browserCall.mock.calls[1]![0]).toBe("/api/v1/sessions/session/orchestration/images/read");
+      expect(JSON.parse(browserCall.mock.calls[1]![1]!.body as string)).toEqual(read);
+    } else expect(nativeCall).toHaveBeenCalledWith("orchestration_image_read", { request: read });
+    for (const invalid of [
+      { image: { ...image, image_id: `sha256-${"b".repeat(64)}` }, data_base64: "YWJj" },
+      { image: { ...image, mime_type: "image/svg+xml" }, data_base64: "YWJj" },
+      { image: { ...image, width: 0 }, data_base64: "YWJj" },
+      { image, data_base64: "YQ==" },
+      { image, data_base64: "!!!!" },
+    ]) {
+      payload = invalid;
+      await expect(client.orchestrationImageRead(read)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+    browserCall.mockClear(); nativeCall.mockClear();
+    await expect(client.orchestrationImagePut({ ...put, data_base64: "!!!!" })).rejects.toMatchObject({ code: "malformed_response" });
+    await expect(client.orchestrationImageRead({ ...read, image_id: "../bad" })).rejects.toMatchObject({ code: "malformed_response" });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(client.orchestrationImagePut(put, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    await expect(client.orchestrationImageRead(read, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(browserCall).not.toHaveBeenCalled(); expect(nativeCall).not.toHaveBeenCalled();
+  });
+
 
   it.each(["browser", "native"] as const)("reads and strictly decodes the Inbox on %s", async transport => {
     const request = { session_id: "session" };
-    const title = { text: "Investigate", source: { kind: "user" }, message_id: null, at: null };
+    const title = { text: "Investigate", source: { kind: "user" }, message_id: null, at: null, images: [] };
     const thread = { thread_id: prerequisiteId, state: "underway", need: null, owner_root_ids: ["root"],
-      title, next: null, project: null, request: null, questions: [], recommendation: null, reply: null,
+      title, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null,
       unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: at };
     const view = { session_id: "session", state_store_id: hash, revision: 1, tasks_token: hash,
+      image_limits: { max_bytes: 5242880, max_count: 4, mime_types: ["image/png", "image/jpeg"] },
       observation: { status: "fresh", observed_at: at }, owners: [], threads: [thread], unmanaged_agents: [] };
     let payload: unknown = view;
     const browserCall = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(payload)));
     const nativeCall = vi.fn(async () => payload);
     const client = transport === "browser" ? createBrowserClient(browserCall) : createNativeClient(nativeCall);
+    await expect(client.orchestrationInbox(request)).resolves.toEqual(view);
     for (const bad of [
       { ...view, session_id: "other" },
       { ...view, unexpected: true },

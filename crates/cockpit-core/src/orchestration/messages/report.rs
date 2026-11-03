@@ -2,16 +2,18 @@ use cockpit_protocol::orchestration::*;
 
 use super::{
     Actor, AuthorizedJob, AppendMessage, OrchestrationState, agent, actor_ref, append,
-    duplicate, error, message_result, now, same_report,
+    check_images, duplicate, error, message_result, now, same_report,
     text_bound, upward,
 };
 use crate::InspectionError;
+use super::super::ResolvedMutationInput;
 
 pub(super) fn apply(
     state: &mut OrchestrationState,
     actor: &Actor,
     caller: Option<&AuthorizedJob>,
     action: &OrchestrationAction,
+    resolved: Option<&ResolvedMutationInput>,
 ) -> Result<Option<OrchestrationActionResult>, InspectionError> {
     let result = match action {
         OrchestrationAction::Report {
@@ -24,9 +26,14 @@ pub(super) fn apply(
             to_run_id,
             thread_id,
             card,
+            images,
             ..
         } => {
             let (_, index) = agent(actor, caller)?;
+            let images = check_images(state, actor, caller, images, resolved)?;
+            if summary.trim().is_empty() {
+                return Err(error("invalid_message", "Report summary must not be empty"));
+            }
             text_bound(summary)?;
             let run = &state.runs[index];
             if thread_id.is_some() || card.is_some() {
@@ -64,6 +71,7 @@ pub(super) fn apply(
                     || !same_report(existing.report.as_ref(), Some(&report))
                     || existing.thread_id != *thread_id
                     || existing.handoff.is_some()
+                    || existing.images != images
                     || existing.in_reply_to.is_some()
                     || existing
                         .escalated_from
@@ -91,6 +99,7 @@ pub(super) fn apply(
                 text: summary,
                 in_reply_to: None,
                 report: Some(report.clone()),
+                images,
                 stale: false,
                 escalated_from: escalated, },
             )?;
@@ -183,6 +192,7 @@ fn publish_report_receipt(
         text: &text,
         in_reply_to: None,
         report: None,
+        images: Vec::new(),
         stale: false,
         escalated_from: None, })?;
     }

@@ -3,6 +3,7 @@ import {
   matchOrchestrationSnapshot, parseOrchestrationSnapshotRequest, parseOrchestrationMutationRequest, 
   parseOrchestrationMutationResponse, parseOrchestrationWaitRequest, parseOrchestrationWaitResponse,
   parseLiaisonLookupRequest, parseLiaisonLookupResponse, parseInboxRequest, matchInboxView, parseAgentSendTarget,
+  parseOrchestrationImagePut, parseOrchestrationImageRead, parseMessageImage, matchOrchestrationImageMedia,
 } from "./orchestrationProtocol";
 import {
   matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest, parseWidgetRemoveResponse, 
@@ -155,6 +156,30 @@ const operations: OperationTable = {
         http: { method: "GET", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/inbox`, signal: () => signal },
         tauri: { command: "orchestration_inbox", args: () => ({ request: body }) },
         parse: response => { signal?.throwIfAborted(); return matchInboxView(response, body); },
+      };
+    },
+  },
+  orchestrationImagePut: { nativeAbort: "read",
+    encode(_backend, value, signal) {
+      signal?.throwIfAborted();
+      const body = parseOrchestrationImagePut(value);
+      return {
+        operation: "orchestration image put",
+        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/images`, json: () => body, signal: () => signal },
+        tauri: { command: "orchestration_image_put", args: () => ({ request: body }) },
+        parse: response => { signal?.throwIfAborted(); return parseMessageImage(response); },
+      };
+    },
+  },
+  orchestrationImageRead: { nativeAbort: "read",
+    encode(_backend, value, signal) {
+      signal?.throwIfAborted();
+      const body = parseOrchestrationImageRead(value);
+      return {
+        operation: "orchestration image read",
+        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/images/read`, json: () => body, signal: () => signal },
+        tauri: { command: "orchestration_image_read", args: () => ({ request: body }) },
+        parse: response => { signal?.throwIfAborted(); return matchOrchestrationImageMedia(response, body); },
       };
     },
   },

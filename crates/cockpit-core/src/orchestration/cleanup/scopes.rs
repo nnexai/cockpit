@@ -374,7 +374,7 @@ impl OrchestrationService {
                 let text = format!("Cleanup is on hold for attempt {} (checkout claim {}, attachment epoch {epoch}): {}. {}",
                     expected.run_id, expected.checkout_claim_id.as_deref().unwrap_or("unproven"),
                     message.trim_end_matches('.'), cleanup_hold_action(code));
-                messages::append(&mut state, messages::AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher,
+                messages::append(&mut state, messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Dispatcher,
                     to_run_id: &expected.root_id, message_id: &message_id, kind: MessageKind::Observation,
                     text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
                 changed = true;

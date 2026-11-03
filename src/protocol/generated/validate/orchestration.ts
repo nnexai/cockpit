@@ -14,6 +14,43 @@ export const wireInboxRequest: WireDescriptor<V1.InboxRequest> = struct<V1.Inbox
   "session_id": req(str),
 });
 
+export const wireMessageImage: WireDescriptor<V1.MessageImage> = struct<V1.MessageImage>("MessageImage", {
+  "image_id": req(str),
+  "mime_type": req(str),
+  "width": req(u32),
+  "height": req(u32),
+  "bytes": req(u53),
+});
+
+export const wireImageLimits: WireDescriptor<V1.ImageLimits> = struct<V1.ImageLimits>("ImageLimits", {
+  "max_bytes": req(u53),
+  "max_count": req(u32),
+  "mime_types": req(list(str)),
+});
+
+export const wireOrchestrationImagePut: WireDescriptor<V1.OrchestrationImagePut> = struct<V1.OrchestrationImagePut>("OrchestrationImagePut", {
+  "session_id": req(str),
+  "data_base64": req(str),
+});
+
+export const wireOrchestrationImageRead: WireDescriptor<V1.OrchestrationImageRead> = struct<V1.OrchestrationImageRead>("OrchestrationImageRead", {
+  "session_id": req(str),
+  "image_id": req(str),
+});
+
+export const wireOrchestrationImageMedia: WireDescriptor<V1.OrchestrationImageMedia> = struct<V1.OrchestrationImageMedia>("OrchestrationImageMedia", {
+  "image": req(named(() => wireMessageImage)),
+  "data_base64": req(str),
+});
+
+export const wireJobImage: WireDescriptor<V1.JobImage> = struct<V1.JobImage>("JobImage", {
+  "image": req(named(() => wireMessageImage)),
+  "path": req(str),
+  "message_id": req(str),
+  "thread_id": req(nullable(str), { fill: null }),
+  "from": req(named(() => wireActorRef)),
+});
+
 export const wireInboxView: WireDescriptor<V1.InboxView> = struct<V1.InboxView>("InboxView", {
   "session_id": req(str),
   "state_store_id": req(str),
@@ -22,6 +59,7 @@ export const wireInboxView: WireDescriptor<V1.InboxView> = struct<V1.InboxView>(
   "observation": req(named(() => wireInboxObservation)),
   "owners": req(list(named(() => wireInboxOwner))),
   "threads": req(list(named(() => wireInboxThread))),
+  "image_limits": req(named(() => wireImageLimits)),
   "unmanaged_agents": req(list(named(() => wireUnmanagedAgent))),
 });
 
@@ -82,6 +120,7 @@ export const wireInboxText: WireDescriptor<V1.InboxText> = struct<V1.InboxText>(
   "source": req(named(() => wireInboxSource)),
   "message_id": req(nullable(str), { fill: null }),
   "at": req(nullable(str), { fill: null }),
+  "images": req(list(named(() => wireMessageImage))),
 });
 
 export const wireInboxRequestEcho: WireDescriptor<V1.InboxRequestEcho> = struct<V1.InboxRequestEcho>("InboxRequestEcho", {
@@ -90,6 +129,7 @@ export const wireInboxRequestEcho: WireDescriptor<V1.InboxRequestEcho> = struct<
   "created_at": req(str),
   "to_run_id": req(str),
   "handoff": req(named(() => wireHandoffRecord)),
+  "images": req(list(named(() => wireMessageImage))),
 });
 
 export const wireInboxQuestion: WireDescriptor<V1.InboxQuestion> = struct<V1.InboxQuestion>("InboxQuestion", {
@@ -121,6 +161,7 @@ export const wireInboxRun: WireDescriptor<V1.InboxRun> = struct<V1.InboxRun>("In
   "agent_status": req(nullable(str), { fill: null }),
   "location": req(nullable(named(() => wireInboxLocation)), { fill: null }),
   "cleanup": req(list(named(() => wireCleanupResourceSummary))),
+  "report_images": req(list(named(() => wireMessageImage))),
 });
 
 export const wireInboxTaskLink: WireDescriptor<V1.InboxTaskLink> = struct<V1.InboxTaskLink>("InboxTaskLink", {
@@ -141,6 +182,7 @@ export const wireInboxThread: WireDescriptor<V1.InboxThread> = struct<V1.InboxTh
   "next": req(nullable(named(() => wireInboxText)), { fill: null }),
   "project": req(nullable(str), { fill: null }),
   "request": req(nullable(named(() => wireInboxRequestEcho)), { fill: null }),
+  "follow_ups": req(list(named(() => wireInboxRequestEcho))),
   "questions": req(list(named(() => wireInboxQuestion))),
   "recommendation": req(nullable(named(() => wireInboxText)), { fill: null }),
   "reply": req(nullable(named(() => wireInboxText)), { fill: null }),
@@ -1098,6 +1140,7 @@ export const wireMessage: WireDescriptor<V1.Message> = struct<V1.Message>("Messa
   "from": req(named(() => wireActorRef)),
   "kind": req(named(() => wireMessageKind)),
   "text": req(str),
+  "images": opt(list(named(() => wireMessageImage)), OMIT, { fill: () => ([]), rustOmits: true }),
   "in_reply_to": req(nullable(str), { fill: null }),
   "report": req(nullable(named(() => wireReport)), { fill: null }),
   "thread_id": opt(nullable(str), OMIT, { fill: null, rustOmits: true }),
