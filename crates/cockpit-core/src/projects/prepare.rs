@@ -91,6 +91,13 @@ impl ProjectService {
     pub async fn prepare_owned_checkout(&self, session: &str, request: &OwnedCheckoutRequest, library: &LibraryService)
         -> Result<WorkspaceOperation, InspectionError>
     {
+        self.prepare_owned_checkout_with_machine(session, request, library, crate::process_identity::machine_id).await
+    }
+
+    async fn prepare_owned_checkout_with_machine(&self, session: &str, request: &OwnedCheckoutRequest,
+        library: &LibraryService, machine_id: impl Fn() -> Option<String>)
+        -> Result<WorkspaceOperation, InspectionError>
+    {
         validate_session(session)?;
         uuid::Uuid::parse_str(&request.operation_id).map_err(|_| invalid("operation_id must be a UUID"))?;
         validate_text(&request.source_workspace_id, "source_workspace_id", 256)?;
@@ -214,6 +221,10 @@ impl ProjectService {
             return Err(conflict("owned branch already exists"));
         }
         super::plan::bounded_path(&operation.plan.checkout_path, Path::new(&self.configuration.worktree_root), "checkout_path")?;
+        // Capture before recording a Git request or creating either resource. A
+        // later loss/change still leaves the pending journal fenced as unknown.
+        let machine = machine_id().ok_or_else(|| InspectionError::new("owned_git_conflict",
+            "Stable local machine identity is unavailable; no Git resources were created"))?;
         self.store.update_owned_checkout(&request.operation_id, Some(operation.generation), |o, journal| {
             journal.as_mut().ok_or_else(|| conflict("owned checkout journal is missing"))?.git_requested = true;
             o.error = Some(error_response("owned_checkout_git_pending", "awaiting local Git creation outcome"));
@@ -237,7 +248,12 @@ impl ProjectService {
         let branch_ref = format!("refs/heads/{}", request.branch);
         let identity = crate::project_adapter::capture_owned_git_identity(&request.operation_id,
             &repository.root, &operation.plan.checkout_path, Some(&branch_ref),
-            self.configuration.limits.git_timeout_ms as u64, self.configuration.limits.git_output_bytes as usize).await?;
+            self.configuration.limits.git_timeout_ms as u64, self.configuration.limits.git_output_bytes as usize).await
+            .map_err(|error| unknown(&format!("Git creation could not be physically proven ({}: {}); existing resources are protected, never replayed",
+                error.code, error.message)))?;
+        if identity.machine_id != machine {
+            return Err(unknown("local machine identity changed during Git creation; existing resources are protected, never replayed"));
+        }
         self.store.write_owned_creation(&OwnedCreationReceipt {
             operation_id: request.operation_id.clone(), resources: vec![
                 OwnedResourceIdentity::Worktree { identity: identity.clone() }, OwnedResourceIdentity::Branch { identity },

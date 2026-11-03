@@ -150,8 +150,61 @@ pub fn machine_id() -> Option<String> {
     machine_digest(&bytes[..size])
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+pub fn machine_id() -> Option<String> {
+    use std::ffi::{c_char, c_void};
+    type CfRef = *const c_void;
+    #[link(name = "IOKit", kind = "framework")]
+    unsafe extern "C" {
+        fn IOServiceMatching(name: *const c_char) -> *mut c_void;
+        fn IOServiceGetMatchingService(port: u32, matching: *mut c_void) -> u32;
+        fn IORegistryEntryCreateCFProperty(entry: u32, key: CfRef, allocator: CfRef, options: u32) -> CfRef;
+        fn IOObjectRelease(object: u32) -> i32;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringCreateWithCString(allocator: CfRef, string: *const c_char, encoding: u32) -> CfRef;
+        fn CFStringGetCString(string: CfRef, buffer: *mut c_char, size: isize, encoding: u32) -> bool;
+        fn CFGetTypeID(value: CfRef) -> usize;
+        fn CFStringGetTypeID() -> usize;
+        fn CFRelease(value: CfRef);
+    }
+    const UTF8: u32 = 0x0800_0100;
+    // IOServiceGetMatchingService consumes the matching dictionary.
+    unsafe {
+        let matching = IOServiceMatching(c"IOPlatformExpertDevice".as_ptr());
+        if matching.is_null() { return None; }
+        let service = IOServiceGetMatchingService(0, matching);
+        if service == 0 { return None; }
+        let key = CFStringCreateWithCString(std::ptr::null(), c"IOPlatformUUID".as_ptr(), UTF8);
+        if key.is_null() { IOObjectRelease(service); return None; }
+        let value = IORegistryEntryCreateCFProperty(service, key, std::ptr::null(), 0);
+        CFRelease(key);
+        IOObjectRelease(service);
+        if value.is_null() { return None; }
+        let mut buffer = [0u8; 37];
+        let valid = CFGetTypeID(value) == CFStringGetTypeID()
+            && CFStringGetCString(value, buffer.as_mut_ptr().cast(), buffer.len() as isize, UTF8);
+        CFRelease(value);
+        if !valid { return None; }
+        macos_machine_digest(&buffer[..36])
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn machine_id() -> Option<String> { None }
+
+#[cfg(any(target_os = "macos", test))]
+fn macos_machine_digest(bytes: &[u8]) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    if bytes.len() != 36 || !bytes.iter().enumerate().all(|(i, b)| {
+        if matches!(i, 8 | 13 | 18 | 23) { *b == b'-' } else { b.is_ascii_hexdigit() }
+    }) || !bytes.iter().any(|b| b.is_ascii_hexdigit() && *b != b'0') { return None; }
+    let mut digest = Sha256::new();
+    digest.update(b"cockpit:macos-platform-uuid:v1\0");
+    for byte in bytes { digest.update([byte.to_ascii_lowercase()]); }
+    Some(format!("{:x}", digest.finalize()))
+}
 
 fn machine_digest(bytes: &[u8]) -> Option<String> {
     use sha2::{Digest, Sha256};
@@ -458,6 +511,26 @@ fn read_process(pid: i32) -> io::Result<ProcessStatus> {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    #[test]
+    fn macos_platform_uuid_requires_exact_nonzero_evidence_and_normalizes_case() {
+        let upper = b"01234567-89AB-CDEF-0123-456789ABCDEF";
+        let lower = b"01234567-89ab-cdef-0123-456789abcdef";
+        assert_eq!(macos_machine_digest(upper), macos_machine_digest(lower));
+        assert!(macos_machine_digest(upper).is_some());
+        for invalid in [b"00000000-0000-0000-0000-000000000000".as_slice(),
+            b"0123456789AB-CDEF-0123-456789ABCDEF", b"01234567-89AB-CDEF-0123-456789ABCDEG",
+            b"01234567-89AB-CDEF-0123-456789ABCDEF\0"] {
+            assert!(macos_machine_digest(invalid).is_none());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_machine_identity_is_stable() {
+        let machine = machine_id().expect("IOPlatformUUID must be available for physical ownership");
+        assert_eq!(machine_id().as_deref(), Some(machine.as_str()));
+    }
 
     fn fake_status(parent: i32, start: u64) -> ProcessStatus {
         ProcessStatus { parent, start, exited: false,

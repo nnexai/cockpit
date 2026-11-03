@@ -106,6 +106,37 @@ async fn owned_prep_is_filesystem_only_idempotent_and_retains_resolved_base() {
 }
 
 #[tokio::test]
+async fn missing_machine_proof_refuses_before_git_and_allows_safe_retry() {
+    let fixture = Fixture::new().await;
+    let error = fixture.service.prepare_owned_checkout_with_machine(
+        "session", &fixture.request, &fixture.library, || None).await.unwrap_err();
+    assert_eq!(error.code, "owned_git_conflict");
+    assert!(!Path::new(&fixture.request.checkout_path).exists());
+    let branches = crate::space_git::git_output(Path::new(&fixture.request.repository_checkout),
+        &["branch", "--list", &fixture.request.branch]).await.unwrap();
+    assert!(branches.status.success() && branches.stdout.is_empty());
+    assert!(!fixture.service.store.owned_checkout(&fixture.request.operation_id).unwrap().unwrap().git_requested);
+    assert!(fixture.service.store.read_owned_creation(&fixture.request.operation_id).unwrap().is_none());
+    let prepared = fixture.service.prepare_owned_checkout("session", &fixture.request, &fixture.library).await.unwrap();
+    assert_eq!(prepared.step, WorkspaceOperationStep::CheckoutPrepared);
+    assert!(fixture.service.store.read_owned_creation(&prepared.operation_id).unwrap().is_some());
+    fixture.no_shells();
+}
+
+#[tokio::test]
+async fn changed_machine_proof_after_git_never_adopts_or_replays() {
+    let fixture = Fixture::new().await;
+    let error = fixture.service.prepare_owned_checkout_with_machine(
+        "session", &fixture.request, &fixture.library, || Some("different-machine".into())).await.unwrap_err();
+    assert_eq!(error.code, "owned_checkout_outcome_unknown");
+    assert!(Path::new(&fixture.request.checkout_path).is_dir());
+    assert!(fixture.service.store.read_owned_creation(&fixture.request.operation_id).unwrap().is_none());
+    assert_eq!(fixture.service.prepare_owned_checkout("session", &fixture.request, &fixture.library).await.unwrap_err().code,
+        "owned_checkout_outcome_unknown");
+    fixture.no_shells();
+}
+
+#[tokio::test]
 async fn bind_selects_existing_context_paths_and_captures_actual_move_operation() {
     let fixture = Fixture::new().await;
     let library = &fixture.library;
@@ -168,6 +199,8 @@ async fn interrupted_git_without_creation_proof_is_never_replayed_or_adopted() {
     let fixture = Fixture::new().await;
     let prepared = fixture.service.prepare_owned_checkout("session", &fixture.request, &fixture.library).await.unwrap();
     // Simulate a crash after Git returned but before its immutable physical proof was durable.
+    let marker = Path::new(&fixture.request.checkout_path).join("unproven-user-data");
+    std::fs::write(&marker, "preserve").unwrap();
     std::fs::remove_file(Path::new(&fixture.config.state_root).join(format!("{}.owned.json", prepared.operation_id))).unwrap();
     fixture.service.store.update(&prepared.operation_id, None, |o| {
         o.step = WorkspaceOperationStep::Validated; o.state = WorkspaceOperationState::Running;
@@ -177,6 +210,9 @@ async fn interrupted_git_without_creation_proof_is_never_replayed_or_adopted() {
     assert_eq!(restarted.store.load(&prepared.operation_id).unwrap().state, WorkspaceOperationState::OutcomeUnknown);
     assert_eq!(restarted.prepare_owned_checkout("session", &fixture.request, &fixture.library).await.unwrap_err().code, "owned_checkout_outcome_unknown");
     assert!(Path::new(&fixture.request.checkout_path).is_dir());
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "preserve");
+    assert_eq!(crate::space_git::git_line(Path::new(&fixture.request.repository_checkout),
+        &["rev-parse", "--verify", "refs/heads/worker"]).await.unwrap(), fixture.request.base);
     assert!(restarted.store.read_owned_creation(&prepared.operation_id).unwrap().is_none());
     fixture.no_shells();
 }
