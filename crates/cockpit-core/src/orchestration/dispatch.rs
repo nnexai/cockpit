@@ -1053,8 +1053,11 @@ impl Dispatcher {
         let retained_restart = initial_retained_restart(&self.service, run, &runtime)?;
         let require_checkout = retained_restart.is_some_and(|(_, explicitly_reselected)| explicitly_reselected);
         let workspace_id = if let Some((server_proven, explicitly_reselected)) = retained_restart {
+            // A supervisor is a liaison, not a checkout writer: its retained
+            // Space still uniquely holding the saved folder is enough, even
+            // after a reboot or Herdr restart changed the server identity.
             let retained = if explicitly_reselected { setup.workspace_id.clone() }
-                else if server_proven { resume_staging_choice(run, &runtime) } else { None };
+                else if server_proven || run.kind == RunKind::Supervisor { resume_staging_choice(run, &runtime) } else { None };
             match retained {
                 Some(retained) => retained,
                 None => {

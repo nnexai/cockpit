@@ -867,6 +867,10 @@ mod tests {
         assert_eq!(project.key, owned_project.key);
         assert_eq!(checkout, owned_checkout);
         revalidate_checkout(&checkout).unwrap();
+        // Btrfs subvolumes and macOS volumes may report another st_dev after a reboot.
+        let mut rebooted = checkout.clone();
+        rebooted.directory_identity.device = "previous-boot-device".into();
+        revalidate_checkout(&rebooted).unwrap();
         std::fs::rename(&checkout_path, root.join("old-checkout")).unwrap();
         std::fs::create_dir(&checkout_path).unwrap();
         let (replacement_project, replacement) = resolve_directory(&checkout_path, None, None).await.unwrap();

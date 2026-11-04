@@ -692,7 +692,7 @@ fn root_candidate(run: &Run, modern_binding: bool) -> LiaisonCandidate {
         .and_then(|_| run.dispatch.as_ref()?.error.as_ref());
     let retryable_refusal = refused_launch.is_some_and(|error|
         (error.code == "harness_resume_unsupported" && resume_supported(&run.launch_config))
-            || (matches!(error.code.as_str(), "workspace_missing" | "retained_space_checkout_changed")
+            || (matches!(error.code.as_str(), "workspace_missing" | "retained_space_checkout_changed" | "retained_space_identity_unproven")
                 && run.kind == RunKind::Supervisor));
     let dead_unregistered_launch = project_identity::retryable_dead_unregistered_resume(run);
     let confirmable_unknown_launch = run.resume.as_ref().is_some_and(|resume| resume.phase == ResumePhase::Launching)

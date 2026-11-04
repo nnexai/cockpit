@@ -2594,11 +2594,14 @@ async fn resumed_supervisor_uses_retained_space_or_fresh_focused_staging() {
     }
 }
 
+/// After a reboot or Herdr restart no launch receipt proves the server, but a
+/// supervisor still relaunches in its retained Space while that Space uniquely
+/// holds the saved folder; a Space now showing another folder stays refused.
 #[tokio::test]
-async fn resumed_supervisor_does_not_launch_in_unproven_retained_space() {
+async fn resumed_supervisor_relaunches_in_retained_space_after_server_restart() {
     use cockpit_protocol::orchestration::{AttachmentState, ResumePhase, ResumeRecord};
     use std::sync::atomic::Ordering;
-    for preserved_staging in [false, true] {
+    for (preserved_staging, retained_cwd_matches) in [(false, true), (true, true), (false, false), (true, false)] {
         let fixture = ReviewFixture::new(RunStage::Starting);
         let (_, checkout) = super::super::project_identity::resolve_owned_directory(&fixture.root).unwrap();
         fixture.change(|run| {
@@ -2627,12 +2630,19 @@ async fn resumed_supervisor_does_not_launch_in_unproven_retained_space() {
         });
         let run = fixture.current().1;
         let mut observed = runtime();
-        observed.workspaces[0].cwd = checkout.path.clone();
-        let adapter = Arc::new(CountingHerdr::new(observed, false, false));
+        observed.workspaces[0].cwd = if retained_cwd_matches { checkout.path.clone() } else { "/elsewhere".into() };
+        let mut adapter = CountingHerdr::new(observed, false, false);
+        adapter.managed_launch = true;
+        let adapter = Arc::new(adapter);
         let dispatcher = fixture.dispatcher(Arc::clone(&adapter));
-        let error = dispatcher.launch(&run).await.unwrap_err();
-        assert_eq!(error.code, "retained_space_identity_unproven");
-        assert_eq!(adapter.create_calls.load(Ordering::SeqCst), 0);
+        let result = dispatcher.launch(&run).await;
+        if retained_cwd_matches {
+            result.unwrap();
+            assert_eq!(adapter.create_calls.load(Ordering::SeqCst), 1, "relaunch happens in the retained Space");
+        } else {
+            assert_eq!(result.unwrap_err().code, "retained_space_identity_unproven");
+            assert_eq!(adapter.create_calls.load(Ordering::SeqCst), 0);
+        }
     }
 }
 

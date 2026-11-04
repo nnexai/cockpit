@@ -70,7 +70,7 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
     && root.dispatch?.step === "launch_unknown" && candidate?.resume === "available";
   const initialStarting = !!root && (root.stage === "queued" || root.stage === "starting") && !root.resume && !initialLaunchUnconfirmed;
   const retainedConfirmation = retained.current?.confirmation;
-  const reselect = !!live && candidate?.connection === "disconnected" && candidate.resume === "blocked" && ["checkout_identity_changed", "retained_space_identity_unproven"].includes(candidate.cause?.code ?? "");
+  const reselect = !!live && candidate?.connection === "disconnected" && candidate.resume === "blocked" && candidate.cause?.code === "checkout_identity_changed";
   const retainedStart = retained.current?.action.action === "supervisor_start" ? retained.current.action : null;
   const reselectSpaceMatches = !!selection.spaceId && selection.spaceId === root?.setup?.workspace_id && selection.spaceId === state.snapshot?.focused_space_id
     && (!retainedStart || retainedStart.selected_root_id === rootId && retainedStart.target?.target === "existing_space" && retainedStart.target.workspace_id === selection.spaceId);

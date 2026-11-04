@@ -1487,10 +1487,8 @@ describe("liaison conversation and compact task rail", () => {
     }
     expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
   });
-  it.each([
-    ["space-1", "checkout_identity_changed"], ["other-space", "checkout_identity_changed"],
-    ["space-1", "retained_space_identity_unproven"], ["other-space", "retained_space_identity_unproven"],
-  ])("offers reselection only in the retained Space (saved %s, cause %s)", async (savedSpace, cause) => {
+  it.each(["space-1", "other-space"])("offers reselection only in the retained Space (saved %s)", async savedSpace => {
+    const cause = "checkout_identity_changed";
     const fixture = new AppFixture(), current = orchestrationFixture([taskFixture("Existing work")]);
     current.runs[0].stage = "starting";
     current.runs[0].setup = { operation_id: null, generation: null, workspace_id: savedSpace, checkout_path: "/project", repository_id: null, branch: null, base: null, base_commit: null, ownership: null, effects: [], warnings: [], project_workspace_id: null };
@@ -1503,7 +1501,7 @@ describe("liaison conversation and compact task rail", () => {
       return { revision: 2, result: { result: "supervisor_started", start: { root_id: "root", outcome: "resuming", operation_id: request.action.operation_id, resume_operation_id: "original", duplicate: false } } };
     });
     await mount(fixture);
-    if (cause === "checkout_identity_changed") expect(container.textContent).toContain("The saved checkout no longer matches the current directory or worktree");
+    expect(container.textContent).toContain("The saved checkout no longer matches the current directory or worktree");
     expect(button("Resume in this folder").disabled).toBe(savedSpace !== "space-1");
     if (savedSpace === "space-1") {
       click(button("Resume in this folder")); await settle();

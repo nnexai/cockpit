@@ -994,7 +994,7 @@ fn root_lookup_projects_effect_free_refusal_but_preserves_inflight_launch() {
         ("omp", "workspace_missing", None, DispatchStep::NeedsReview,
             RootResumeAvailability::Available, RootConnection::Disconnected, None),
         ("omp", "retained_space_identity_unproven", None, DispatchStep::NeedsReview,
-            RootResumeAvailability::Blocked, RootConnection::Disconnected, Some(ResumeCauseClass::Recover)),
+            RootResumeAvailability::Available, RootConnection::Disconnected, None),
         ("omp", "retained_space_checkout_changed", None, DispatchStep::NeedsReview,
             RootResumeAvailability::Available, RootConnection::Disconnected, None),
         ("omp", "workspace_missing", Some("launch-in-flight"), DispatchStep::NeedsReview,

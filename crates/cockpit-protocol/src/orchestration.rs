@@ -358,12 +358,21 @@ pub enum ProjectSource {
     Git { common_dir: String },
     Directory { root: String },
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// Physical directory evidence. `device` is informational only: Btrfs
+/// subvolumes (anonymous device numbers) and macOS volumes can report a
+/// different `st_dev` for the same directory after a reboot or remount, so
+/// equality compares the inode alone. Callers always pair it with the
+/// canonical path.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct DirectoryIdentity {
     pub device: String,
     pub inode: String,
 }
+impl PartialEq for DirectoryIdentity {
+    fn eq(&self, other: &Self) -> bool { self.inode == other.inode }
+}
+impl Eq for DirectoryIdentity {}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct CheckoutGitIdentity {
