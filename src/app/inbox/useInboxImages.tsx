@@ -28,6 +28,7 @@ export function useInboxImages(client: CockpitClient, sessionId: string, key: st
   const attach = useRef<HTMLButtonElement>(null);
   const tray = useRef<HTMLUListElement>(null);
   const limitDescription = useId();
+  const imageDescription = useId();
   const update = (fn: (current: Drafts) => Drafts) => { const next = fn(draftsRef.current); draftsRef.current = next; setDrafts(next); };
   useEffect(() => () => { for (const entries of Object.values(draftsRef.current)) for (const entry of entries) { entry.controller?.abort(); if (entry.url) URL.revokeObjectURL(entry.url); } }, []);
   const start = (draftKey: string, id: string, file: File) => {
@@ -93,9 +94,10 @@ export function useInboxImages(client: CockpitClient, sessionId: string, key: st
       {item.status === "error" && item.retryable && <button type="button" disabled={disabled} onClick={() => start(key, item.id, item.file)}>Retry</button>}
       <button type="button" className="inbox-image-remove" aria-label={`Remove ${nameOf(item.file)}`} disabled={disabled} onClick={() => remove(item.id)}>Remove</button>
     </li>)}</ul>}
+    {entries.length > 0 && <p id={imageDescription} className="inbox-compose-hint">Images are shared with the owner and workers on this request. Image metadata may be retained.</p>}
     {atLimit && <p id={limitDescription} className="inbox-compose-hint">{limits?.max_count} images maximum. Remove an image to add another.</p>}
     <span className="inbox-sr" role="status">{announcement}</span>
   </>;
-  const picker = (disabled: boolean) => <><input ref={input} hidden type="file" accept={limits?.mime_types.join(",")} multiple onChange={event => { if (event.currentTarget.files) add(event.currentTarget.files); event.currentTarget.value = ""; }} /><button ref={attach} type="button" className="inbox-btn inbox-attach" aria-label="Attach images" aria-describedby={atLimit ? limitDescription : undefined} disabled={disabled || !limits || atLimit} onClick={() => input.current?.click()}>Attach</button></>;
+  const picker = (disabled: boolean) => <><input ref={input} hidden type="file" accept={limits?.mime_types.join(",")} multiple onChange={event => { if (event.currentTarget.files) add(event.currentTarget.files); event.currentTarget.value = ""; }} /><button ref={attach} type="button" className="inbox-btn inbox-attach" aria-label="Attach images" aria-describedby={[entries.length > 0 && imageDescription, atLimit && limitDescription].filter(Boolean).join(" ") || undefined} disabled={disabled || !limits || atLimit} onClick={() => input.current?.click()}>Attach</button></>;
   return { entries, ready, ids, add, clear, controls, picker };
 }
