@@ -17,6 +17,7 @@
     "allow-orchestration-mutate",
     "allow-orchestration-image-put",
     "allow-orchestration-image-read",
+    "allow-orchestration-artifact-read",
     "allow-orchestration-wait",
     "allow-cockpit-widget-subscribe",
     "allow-cockpit-widget-report",

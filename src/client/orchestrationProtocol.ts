@@ -3,11 +3,13 @@ import type {
   OrchestrationSnapshotRequest, OrchestrationSnapshot, OrchestrationWaitRequest, OrchestrationWaitResponse, InboxRequest, InboxView,
   LiaisonLookupRequest, LiaisonLookupResponse, CheckOutcome, Integration, SourceOutput, CleanupItem, OwnedResourceIdentity, AgentSendTarget,
   OrchestrationImagePut, OrchestrationImageRead, OrchestrationImageMedia, MessageImage,
+  OrchestrationArtifactRead, OrchestrationArtifactMedia,
 } from "../protocol/generated/v1";
 import {
   wireOrchestrationAction, wireOrchestrationMutationRequest, wireOrchestrationMutationResponse,
   wireOrchestrationSnapshotRequest, wireOrchestrationSnapshot, wireOrchestrationWaitRequest, wireOrchestrationWaitResponse, wireInboxRequest, wireInboxView,
   wireOrchestrationImagePut, wireOrchestrationImageRead, wireOrchestrationImageMedia, wireMessageImage,
+  wireOrchestrationArtifactRead, wireOrchestrationArtifactMedia,
   wireLiaisonLookupRequest, wireLiaisonLookupResponse, wireAgentSendTarget, type TypedWirePolicy, type WireOwners,
 } from "../protocol/generated/validate";
 import { CockpitClientError, validateSessionId } from "./CockpitClient";
@@ -110,6 +112,7 @@ const labels = rootMessage("Invalid orchestration", {
   InboxRequest: "inbox request", InboxView: "inbox",
   OrchestrationImagePut: "image put request", OrchestrationImageRead: "image read request",
   OrchestrationImageMedia: "image media", MessageImage: "image",
+  OrchestrationArtifactRead: "artifact read request", OrchestrationArtifactMedia: "artifact media",
   LiaisonLookupRequest: "liaison lookup request", LiaisonLookupResponse: "liaison lookup response",
 });
 const POLICY = definePolicy({
@@ -146,6 +149,7 @@ const POLICY = definePolicy({
       "LiaisonLookupRequest", "LiaisonLookupResponse",
       "InboxRequest", "InboxView", "InboxObservation", "InboxOwner", "InboxLocation", "InboxSource", "InboxText",
       "OrchestrationImagePut", "OrchestrationImageRead", "OrchestrationImageMedia", "MessageImage", "ImageLimits",
+      "OrchestrationArtifactRead", "OrchestrationArtifactMedia", "InboxEntry", "InboxTaskEvidence", "InboxArtifact", "InboxDecision",
       "InboxRequestEcho", "InboxQuestion", "InboxReceipt", "InboxRun", "InboxTaskLink", "InboxThread",
       "HandoffBinding", "HandoffBindingRecord", "BoundCheckout", "HandoffRecord", "ThreadCard", "AgentSendTarget",
       "OrchestrationAction[supervisor_start]", "OrchestrationAction[run_attach]",
@@ -185,6 +189,7 @@ const POLICY = definePolicy({
       "LiaisonLookupRequest", "LiaisonLookupResponse", "LiaisonCandidate",
       "InboxRequest", "InboxView", "InboxObservation", "InboxOwner", "InboxLocation", "InboxSource", "InboxText",
       "OrchestrationImagePut", "OrchestrationImageRead", "OrchestrationImageMedia", "MessageImage", "ImageLimits",
+      "OrchestrationArtifactRead", "OrchestrationArtifactMedia", "InboxEntry", "InboxTaskEvidence", "InboxArtifact", "InboxDecision",
       "InboxRequestEcho", "InboxQuestion", "InboxReceipt", "InboxRun", "InboxTaskLink", "InboxThread",
       "HandoffBinding", "HandoffBindingRecord", "BoundCheckout", "HandoffRecord", "ThreadCard", "AgentSendTarget",
       "ErrorResponse", "RootSummary", "TaskBoard", "TaskProject", "TaskView", "Task", "TaskStep", "TaskStepProgress", "TaskDependencies",
@@ -536,6 +541,16 @@ export function parseMessageImage(value: unknown): MessageImage { return parseWi
 export function matchOrchestrationImageMedia(value: unknown, request: OrchestrationImageRead): OrchestrationImageMedia {
   const media = parseWire(value, wireOrchestrationImageMedia, POLICY);
   if (media.image.image_id !== request.image_id) malformed("image identity");
+  return media;
+}
+export function parseOrchestrationArtifactRead(value: unknown): OrchestrationArtifactRead {
+  const request = parseWire(value, wireOrchestrationArtifactRead, POLICY);
+  if (!session(request.session_id) || !id(request.run_id) || !absolutePath(request.path)) malformed("artifact read request");
+  return request;
+}
+export function matchOrchestrationArtifactMedia(value: unknown, request: OrchestrationArtifactRead): OrchestrationArtifactMedia {
+  const media = parseWire(value, wireOrchestrationArtifactMedia, POLICY);
+  if (media.path !== request.path) malformed("artifact identity");
   return media;
 }
 export function matchInboxView(value: unknown, request: InboxRequest): InboxView {

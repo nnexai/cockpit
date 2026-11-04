@@ -243,6 +243,7 @@ class AppFixture {
     orchestrationInbox: vi.fn(async request => ({ session_id: request.session_id, state_store_id: "fixture", revision: 0, tasks_token: "fixture", observation: { status: "fresh" as const, observed_at: "2026-01-01T00:00:00Z" }, owners: [], threads: [], unmanaged_agents: [], image_limits: { max_bytes: 5 * 1024 * 1024, max_count: 4, mime_types: ["image/png", "image/jpeg"] } })),
     orchestrationImagePut: vi.fn(async () => { throw new Error("Unexpected image upload in terminal fixture"); }),
     orchestrationImageRead: vi.fn(async () => { throw new Error("Unexpected image read in terminal fixture"); }),
+    orchestrationArtifactRead: vi.fn(async () => { throw new Error("Unexpected artifact read in terminal fixture"); }),
     orchestrationSnapshot: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
     orchestrationMutate: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
     orchestrationWait: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),

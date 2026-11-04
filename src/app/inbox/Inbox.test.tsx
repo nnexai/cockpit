@@ -93,15 +93,34 @@ function openSession() {
 }
 
 describe("Inbox", () => {
+  it("shows the chronological conversation and linked task evidence", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    const owner = { kind: "owner" as const, run_id: "owner", harness: "omp" };
+    const entry = (message_id: string, minute: string, kind: "request" | "follow_up" | "update" | "result", text: string) => ({ message_id, at: `2026-11-04T10:${minute}:00Z`, kind, text, source: kind === "request" || kind === "follow_up" ? { kind: "user" as const } : owner, outcome: kind === "result" ? "succeeded" as const : null, images: [], in_reply_to: null });
+    inbox.threads = [{ thread_id: "thread", state: "handled", need: null, owner_root_ids: ["owner"], title: { text: "Timeline work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_result_message_id: null, receipts: [], facts: [], updated_at: "2026-11-04T10:04:00Z", timeline_omitted: 0, timeline: [entry("1", "00", "request", "Original request"), entry("2", "01", "update", "First owner update"), entry("3", "02", "update", "Second owner update"), entry("4", "03", "follow_up", "More detail please"), entry("5", "04", "result", "Final result")], tasks: [{ root_id: "owner", task_id: "task", title: "Linked task", project: null, lane: "accepted", run: null, evidence: { run_id: "run", attempt: 1, attempts: 1, result: null, checks: [{ contract: "Desktop check", command_or_scenario: "desktop smoke", outcome: "failed", evidence: "Mismatch", limitation: "No native coverage" }], commits: [], head_commit: null, integration: null, artifacts: [], images: [], decisions: [] } }] }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    await flush(() => app.render());
+    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-row")!.click());
+    const timeline = host.querySelector('[aria-label="Timeline"]')!.textContent!;
+    const positions = ["Original request", "First owner update", "Second owner update", "More detail please", "Final result"].map(value => timeline.indexOf(value));
+    expect(positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]!))).toBe(true);
+    const work = host.querySelector('[aria-label="Work"]')!;
+    expect(work.textContent).toContain("Desktop check");
+    expect(work.textContent).toContain("No native coverage");
+  });
   it("shows distinct diagnostic message IDs once without duplicating labelled request and question IDs", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
     const value = (text: string, message_id: string) => ({ text, source: { kind: "recorded" as const }, message_id, at: "now", images: [] });
     const question = { run_id: "owner", question_message_id: "question-id", asked_at: "now", text: value("A question", "question-id"), choices: [], receipt: { status: "unresolved" as const } };
     const receipt = (message_id: string, attempt_run_id: string | null) => ({ message_id, kind: "instruction" as const, to_run_id: "owner", attempt_run_id, stage: "stored" as const, created_at: "now", acked_at: null, stale: false });
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: value("Diagnostics work", "request-id"), next: value("Next", "shared-id"), project: null, request: { message_id: "request-id", text: "Request", created_at: "now", to_run_id: "owner", handoff: { task_id: null, task_revision: null, attempt_run_id: null, binding: null, origin: "browser" }, images: [] }, follow_ups: [], questions: [question], recommendation: value("Recommendation", "question-id"), reply: value("Reply", "shared-id"), unread_result_message_id: null, tasks: [], receipts: [receipt("request-id", "attempt-id"), receipt("shared-id", null), receipt("receipt-only-id", null)], facts: [value("Fact", "shared-id"), value("Distinct fact", "fact-id")], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: value("Diagnostics work", "request-id"), next: value("Next", "shared-id"), project: null, request: { message_id: "request-id", text: "Request", created_at: "now", to_run_id: "owner", handoff: { task_id: null, task_revision: null, attempt_run_id: null, binding: null, origin: "browser" }, images: [] }, follow_ups: [], questions: [question], recommendation: value("Recommendation", "question-id"), reply: value("Reply", "shared-id"), unread_result_message_id: null, tasks: [], receipts: [receipt("request-id", "attempt-id"), receipt("shared-id", null), receipt("receipt-only-id", null)], facts: [value("Fact", "shared-id"), value("Distinct fact", "fact-id")], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Diagnostics work"))!.click());
+    const disclosure = host.querySelector<HTMLDetailsElement>(".inbox-diag")!;
+    expect(disclosure.open).toBe(false);
+    await flush(() => disclosure.querySelector("summary")!.click());
+    expect(disclosure.open).toBe(true);
     const diagnostics = host.querySelector(".inbox-evidence")!;
     const labels = Array.from(diagnostics.querySelectorAll<HTMLButtonElement>("button")).map(button => button.getAttribute("aria-label"));
     expect(labels.filter(label => label === "Copy request ID request-id")).toHaveLength(1);
@@ -219,9 +238,9 @@ describe("Inbox", () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
     const fullTitle = `Historic ${"😀".repeat(140)}`;
     const request = "Short heading\n" + "Request body ".repeat(80);
-    const base = { state: "underway" as const, need: null, owner_root_ids: ["owner"], next: null, project: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" };
+    const base = { state: "underway" as const, need: null, owner_root_ids: ["owner"], next: null, project: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" };
     inbox.threads = [
-      { ...base, thread_id: "short", title: { text: "Short heading", source: { kind: "user" }, message_id: null, at: null, images: [] }, request: { message_id: "m", text: request, created_at: "now", to_run_id: "owner", handoff: { task_id: null, task_revision: null, attempt_run_id: null, binding: null, origin: "browser" }, images: [] } },
+      { ...base, thread_id: "short", title: { text: "Short heading", source: { kind: "user" }, message_id: null, at: null, images: [] }, request: { message_id: "m", text: request, created_at: "now", to_run_id: "owner", handoff: { task_id: null, task_revision: null, attempt_run_id: null, binding: null, origin: "browser" }, images: [] }, timeline: [{ message_id: "m", at: "2026-11-04T10:00:00Z", kind: "request", text: request, source: { kind: "user" }, outcome: null, images: [], in_reply_to: null }] },
       { ...base, thread_id: "historic", title: { text: fullTitle, source: { kind: "recorded" }, message_id: null, at: null, images: [] }, request: null },
     ];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
@@ -236,9 +255,9 @@ describe("Inbox", () => {
     await flush(() => rows[0]!.click());
     expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("");
     expect(host.querySelector<HTMLTextAreaElement>("textarea")!.style.height).toBe("40px");
-    expect(host.querySelector(".inbox-thread-heading h2")!.textContent).toBe("Short heading");
+    expect(host.querySelector(".inbox-thread-header h2")!.textContent).toBe("Short heading");
     await flush(() => rows[1]!.click());
-    expect(host.querySelector(".inbox-thread-heading h2")!.textContent).toBe(fullTitle);
+    expect(host.querySelector(".inbox-thread-header h2")!.textContent).toBe(fullTitle);
     await flush(() => host.querySelector<HTMLButtonElement>(".inbox-new")!.click());
     expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Long draft");
     expect(host.querySelector<HTMLTextAreaElement>("textarea")!.style.height).toBe("180px");
@@ -359,7 +378,7 @@ describe("Inbox", () => {
   it("preserves follow-up routing to closed and absent historical owners", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
     inbox.owners = [{ ...inbox.owners[0]!, stage: "closed", availability: "absent" }, { ...inbox.owners[0]!, root_id: "other", availability: "absent" }];
-    inbox.threads = [{ thread_id: "thread", state: "underway", need: null, owner_root_ids: ["owner", "other"], title: { text: "Historic work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "underway", need: null, owner_root_ids: ["owner", "other"], title: { text: "Historic work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "other", seq: 1, duplicate: false, stale: false } });
     await flush(() => app.render());
@@ -486,7 +505,7 @@ describe("Inbox", () => {
     const { client } = fixture(), app = setup(client);
     const inbox = view("a");
     const question = (id: string, run: string) => ({ run_id: run, question_message_id: id, asked_at: "now", text: { text: `Question ${id}`, source: { kind: "owner" as const, run_id: run, harness: "omp" }, message_id: id, at: "now", images: [] }, choices: [], receipt: { status: "unresolved" as const } });
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner", "other"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [question("q1", "owner"), question("q2", "other")], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner", "other"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [question("q1", "owner"), question("q2", "other")], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "other", seq: 1, duplicate: false, stale: false } });
     await flush(() => app.render());
@@ -498,12 +517,12 @@ describe("Inbox", () => {
   it("sends a follow-up after a confirmed answer and resolved question", async () => {
     const { client, waits } = fixture(), app = setup(client), inbox = view("a");
     const question = { run_id: "owner", question_message_id: "q", asked_at: "now", text: { text: "Choose", source: { kind: "owner" as const, run_id: "owner", harness: "omp" }, message_id: "q", at: "now", images: [] }, choices: ["Blue"], receipt: { status: "unresolved" as const } };
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [question], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [question], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, state: "handled", need: null, questions: [] }] });
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "owner", seq: 1, duplicate: false, stale: false } });
     await flush(() => app.render());
     await flush(() => host.querySelector<HTMLButtonElement>(".inbox-row")!.click());
-    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-chip")!.click());
+    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-choice")!.click());
     await flush(submit);
     await flush(() => waits[0]!({ revision: 2, tasks_token: "updated", changed: true }));
     await flush(() => text("One more thing")); await flush(submit);
@@ -514,7 +533,7 @@ describe("Inbox", () => {
     const inbox = view("a");
     const question = (run: string) => ({ run_id: run, question_message_id: "shared", asked_at: "now", text: { text: `Question from ${run}`, source: { kind: "owner" as const, run_id: run, harness: "omp" }, message_id: "shared", at: "now", images: [] }, choices: [], receipt: { status: "unresolved" as const } });
     const first = question("owner"), second = question("other");
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner", "other"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [first, second], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner", "other"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [first, second], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, questions: [second, first] }] });
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 3, result: { result: "message", to_run_id: "other", seq: 1, duplicate: false, stale: false } });
     await flush(() => app.render());
@@ -538,7 +557,7 @@ describe("Inbox", () => {
     const inbox = view("a");
     const question = (run: string) => ({ run_id: run, question_message_id: "shared", asked_at: "now", text: { text: `Question from ${run}`, source: { kind: "owner" as const, run_id: run, harness: "omp" }, message_id: "shared", at: "now", images: [] }, choices: [], receipt: { status: "unresolved" as const } });
     const first = question("owner"), second = question("other");
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner", "other"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [first, second], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner", "other"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [first, second], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, questions: [first] }] });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Work"))!.click());
@@ -554,7 +573,7 @@ describe("Inbox", () => {
     const { client, waits } = fixture(), app = setup(client);
     const inbox = view("a");
     const question = { run_id: "owner", question_message_id: "old", asked_at: "now", text: { text: "Which one?", source: { kind: "owner" as const, run_id: "owner", harness: "omp" }, message_id: "old", at: "now", images: [] }, choices: [], receipt: { status: "unresolved" as const } };
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [question], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [question], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, questions: [] }] });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Work"))!.click());
@@ -568,51 +587,51 @@ describe("Inbox", () => {
   });
   it("shows the selected owner report as rich feedback with its provenance", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "answer", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: { text: "## Report\n\n- **Completed**\n- Verified", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result-id", at: "now", images: [] }, unread_result_message_id: "result-id", tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "answer", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: { text: "## Report\n\n- **Completed**\n- Verified", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result-id", at: "now", images: [] }, unread_result_message_id: "result-id", tasks: [], receipts: [], facts: [], timeline: [{ message_id: "result-id", at: "2026-11-04T10:00:00Z", kind: "result", text: "## Report\n\n- **Completed**\n- Verified", source: { kind: "owner", run_id: "owner", harness: "omp" }, outcome: "succeeded", images: [], in_reply_to: null }], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Result"))!.click());
-    const update = host.querySelector(".inbox-update")!;
-    expect(update.querySelector("small")?.textContent).toContain("Result from Liaison");
+    const update = host.querySelector(".inbox-result")!;
+    expect(update.textContent).toContain("Result");
     expect(update.querySelector("h2")?.textContent).toBe("Report");
     expect(update.querySelectorAll("li")).toHaveLength(2);
-    expect(update.querySelector("strong")?.textContent).toBe("Completed");
+    expect(update.querySelector(".inbox-feedback strong")?.textContent).toBe("Completed");
   });
   it("shows handled generically and keeps follow-up separate from acknowledgement", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
-    inbox.threads = [{ thread_id: "thread", state: "handled", need: null, owner_root_ids: ["owner"], title: { text: "Earlier request", source: { kind: "user" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: { text: "The work was reported.", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result", at: "now", images: [] }, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "handled", need: null, owner_root_ids: ["owner"], title: { text: "Earlier request", source: { kind: "user" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: { text: "The work was reported.", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result", at: "now", images: [] }, unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [{ message_id: "result", at: "2026-11-04T10:00:00Z", kind: "result", text: "The work was reported.", source: { kind: "owner", run_id: "owner", harness: "omp" }, outcome: "succeeded", images: [], in_reply_to: null }], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     await flush(() => app.render());
     const row = host.querySelector<HTMLButtonElement>(".inbox-row")!;
     expect(row.textContent).toContain("The work was reported.");
     expect(row.textContent).toContain("Handled");
     await flush(() => row.click());
-    expect(host.querySelector(".inbox-handled")?.textContent).toContain("Handled. To ask for more, follow up.");
-    expect(host.querySelector(".inbox-handled")?.textContent).not.toContain("acknowledged");
+    expect(host.querySelector(".inbox-state")?.textContent).toBe("Handled");
+    expect(host.querySelector('textarea[aria-label="Follow up with owner"]')).not.toBeNull();
     expect(client.orchestrationMutate).not.toHaveBeenCalled();
   });
   it("shows a NeedsInput report as rich question text without changing its choices", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
     const question = { run_id: "owner", question_message_id: "q", asked_at: "now", text: { text: "## Decision\n\nPlease review **both** options.", source: { kind: "owner" as const, run_id: "owner", harness: "omp" }, message_id: "q", at: "now", images: [] }, choices: ["Yes", "No"], receipt: { status: "unresolved" as const } };
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Question", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [question], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Question", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [question], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Question"))!.click());
     expect(host.querySelector(".inbox-q-text h2")?.textContent).toBe("Decision");
     expect(host.querySelector(".inbox-q-text strong")?.textContent).toBe("both");
-    await flush(() => Array.from(host.querySelectorAll<HTMLButtonElement>(".inbox-chip")).find(b => b.textContent === "Yes")!.click());
+    await flush(() => Array.from(host.querySelectorAll<HTMLButtonElement>(".inbox-choice")).find(b => b.textContent === "Yes")!.click());
     expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Yes");
   });
   it("marks only the displayed result message read", async () => {
     const { client } = fixture(), app = setup(client);
     const inbox = view("a");
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [{ run_id: "owner", question_message_id: "question-id", asked_at: "now", text: { text: "Choose a direction", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "question-id", at: "now", images: [] }, choices: ["Yes"], receipt: { status: "unresolved" } }], recommendation: null, reply: { text: "The result", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result-id", at: "now", images: [] }, unread_result_message_id: "result-id", tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [{ run_id: "owner", question_message_id: "question-id", asked_at: "now", text: { text: "Choose a direction", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "question-id", at: "now", images: [] }, choices: ["Yes"], receipt: { status: "unresolved" } }], recommendation: null, reply: { text: "The result", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result-id", at: "now", images: [] }, unread_result_message_id: "result-id", tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "done" } });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Result"))!.click());
     expect(client.orchestrationMutate).not.toHaveBeenCalled();
-    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-chip")!.click());
+    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-choice")!.click());
     expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Yes");
     expect(client.orchestrationMutate).not.toHaveBeenCalled();
     const acknowledge = Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Acknowledge")!;
@@ -626,7 +645,7 @@ describe("Inbox", () => {
   });
   it("does not acknowledge a result absent from the displayed report", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "answer", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: { text: "Earlier report", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "old-result", at: "now", images: [] }, unread_result_message_id: "new-result", tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "answer", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: { text: "Earlier report", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "old-result", at: "now", images: [] }, unread_result_message_id: "new-result", tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     await flush(() => app.render());
     await flush(() => host.querySelector<HTMLButtonElement>(".inbox-row")!.click());
@@ -638,7 +657,7 @@ describe("Inbox", () => {
   });
   it("does not steal focus when acknowledgement finishes after the user moves away", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "answer", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: { text: "Report", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result-id", at: "now", images: [] }, unread_result_message_id: "result-id", tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "answer", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: { text: "Report", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result-id", at: "now", images: [] }, unread_result_message_id: "result-id", tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     let finish!: () => void;
     vi.mocked(client.orchestrationMutate).mockImplementation(() => new Promise(resolve => { finish = () => resolve({ revision: 2, result: { result: "done" } }); }));
@@ -657,7 +676,7 @@ describe("Inbox", () => {
   it("fences a task follow-up with its owner's current task revision", async () => {
     const { client } = fixture(), app = setup(client);
     const inbox = view("a");
-    inbox.threads = [{ thread_id: "thread", state: "underway", need: null, owner_root_ids: ["owner"], title: { text: "Task", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_result_message_id: null, tasks: [{ root_id: "owner", task_id: "task-id", title: "Task", project: null, lane: "working", run: null }], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "underway", need: null, owner_root_ids: ["owner"], title: { text: "Task", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_result_message_id: null, tasks: [{ root_id: "owner", task_id: "task-id", title: "Task", project: null, lane: "working", run: null, evidence: null }], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     client.orchestrationSnapshot = vi.fn(async () => ({ session_id: "a", state_store_id: "store-a", board: { root_id: "owner", tasks: [{ task: { task_id: "task-id", task_revision: "revision" } }] } })) as unknown as CockpitClient["orchestrationSnapshot"];
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "owner", seq: 1, duplicate: false, stale: false } });

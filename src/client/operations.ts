@@ -4,6 +4,7 @@ import {
   parseOrchestrationMutationResponse, parseOrchestrationWaitRequest, parseOrchestrationWaitResponse,
   parseLiaisonLookupRequest, parseLiaisonLookupResponse, parseInboxRequest, matchInboxView, parseAgentSendTarget,
   parseOrchestrationImagePut, parseOrchestrationImageRead, parseMessageImage, matchOrchestrationImageMedia,
+  parseOrchestrationArtifactRead, matchOrchestrationArtifactMedia,
 } from "./orchestrationProtocol";
 import {
   matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest, parseWidgetRemoveResponse, 
@@ -180,6 +181,18 @@ const operations: OperationTable = {
         http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/images/read`, json: () => body, signal: () => signal },
         tauri: { command: "orchestration_image_read", args: () => ({ request: body }) },
         parse: response => { signal?.throwIfAborted(); return matchOrchestrationImageMedia(response, body); },
+      };
+    },
+  },
+  orchestrationArtifactRead: { nativeAbort: "read",
+    encode(_backend, value, signal) {
+      signal?.throwIfAborted();
+      const body = parseOrchestrationArtifactRead(value);
+      return {
+        operation: "orchestration artifact read",
+        http: { method: "POST", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/artifacts/read`, json: () => body, signal: () => signal },
+        tauri: { command: "orchestration_artifact_read", args: () => ({ request: body }) },
+        parse: response => { signal?.throwIfAborted(); return matchOrchestrationArtifactMedia(response, body); },
       };
     },
   },

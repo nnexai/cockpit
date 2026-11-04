@@ -1285,6 +1285,22 @@ pub struct OrchestrationImageRead { pub session_id: String, pub image_id: String
 pub struct OrchestrationImageMedia { pub image: MessageImage, pub data_base64: String }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OrchestrationArtifactRead {
+    pub session_id: String,
+    pub run_id: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct OrchestrationArtifactMedia {
+    pub path: String,
+    pub kind: InboxArtifactKind,
+    pub mime_type: String,
+    pub data_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct JobImage {
     pub image: MessageImage,
     pub path: String,
@@ -1527,10 +1543,80 @@ pub struct InboxRun {
     pub report_images: Vec<MessageImage>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum InboxEntryKind { Request, FollowUp, Answer, Question, Update, Result }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxEntry {
+    pub message_id: String,
+    pub at: String,
+    pub kind: InboxEntryKind,
+    pub text: String,
+    pub source: InboxSource,
+    pub outcome: Option<ReportOutcome>,
+    pub images: Vec<MessageImage>,
+    pub in_reply_to: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum InboxArtifactKind { Image, Html, Markdown, Other }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxArtifact {
+    pub path: String,
+    pub name: String,
+    pub kind: InboxArtifactKind,
+    pub recorded: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum InboxDecisionBy { You, Owner, Cockpit, Agent }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxDecision {
+    pub question: String,
+    pub answer: Option<String>,
+    pub asked_at: String,
+    pub answered_at: Option<String>,
+    pub by: Option<InboxDecisionBy>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxTaskResult {
+    pub summary: String,
+    pub outcome: Option<ReportOutcome>,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxTaskIntegration {
+    pub target: String,
+    pub commit: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxTaskEvidence {
+    pub run_id: String,
+    pub attempt: u32,
+    pub attempts: u32,
+    pub result: Option<InboxTaskResult>,
+    pub checks: Vec<CheckOutcome>,
+    pub commits: Vec<String>,
+    pub head_commit: Option<String>,
+    pub integration: Option<InboxTaskIntegration>,
+    pub artifacts: Vec<InboxArtifact>,
+    pub images: Vec<MessageImage>,
+    pub decisions: Vec<InboxDecision>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct InboxTaskLink {
     pub root_id: String, pub task_id: String, pub title: String,
     pub project: Option<TaskProject>, pub lane: TaskLane, pub run: Option<InboxRun>,
+    pub evidence: Option<InboxTaskEvidence>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1551,6 +1637,8 @@ pub struct InboxThread {
     pub tasks: Vec<InboxTaskLink>,
     pub receipts: Vec<InboxReceipt>,
     pub facts: Vec<InboxText>,
+    pub timeline: Vec<InboxEntry>,
+    pub timeline_omitted: u32,
     pub updated_at: String,
 }
 

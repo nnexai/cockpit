@@ -15,6 +15,7 @@ fn main() {
             "orchestration_mutate",
             "orchestration_image_put",
             "orchestration_image_read",
+            "orchestration_artifact_read",
             "orchestration_wait",
             "cockpit_notes_execute",
             "cockpit_widget_subscribe",

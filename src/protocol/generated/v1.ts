@@ -1048,6 +1048,10 @@ export type OrchestrationImageRead = { session_id: string, image_id: string, };
 
 export type OrchestrationImageMedia = { image: MessageImage, data_base64: string, };
 
+export type OrchestrationArtifactRead = { session_id: string, run_id: string, path: string, };
+
+export type OrchestrationArtifactMedia = { path: string, kind: InboxArtifactKind, mime_type: string, data_base64: string, };
+
 export type JobImage = { image: MessageImage, path: string, message_id: string, thread_id: string | null, from: ActorRef, };
 
 export type InboxView = { session_id: string, state_store_id: string, revision: number, tasks_token: string, observation: InboxObservation, owners: Array<InboxOwner>, threads: Array<InboxThread>, image_limits: ImageLimits, unmanaged_agents: Array<UnmanagedAgent>, };
@@ -1076,9 +1080,27 @@ export type InboxReceipt = { message_id: string, kind: MessageKind, to_run_id: s
 
 export type InboxRun = { run_id: string, attempt: number, stage: RunStage, harness: string, presence: Presence, agent_status: string | null, location: InboxLocation | null, cleanup: Array<CleanupResourceSummary>, report_images: Array<MessageImage>, };
 
-export type InboxTaskLink = { root_id: string, task_id: string, title: string, project: TaskProject | null, lane: TaskLane, run: InboxRun | null, };
+export type InboxEntryKind = "request" | "follow_up" | "answer" | "question" | "update" | "result";
 
-export type InboxThread = { thread_id: string, state: InboxState, need: InboxNeed | null, owner_root_ids: Array<string>, title: InboxText, next: InboxText | null, project: string | null, request: InboxRequestEcho | null, follow_ups: Array<InboxRequestEcho>, questions: Array<InboxQuestion>, recommendation: InboxText | null, reply: InboxText | null, unread_result_message_id: string | null, tasks: Array<InboxTaskLink>, receipts: Array<InboxReceipt>, facts: Array<InboxText>, updated_at: string, };
+export type InboxEntry = { message_id: string, at: string, kind: InboxEntryKind, text: string, source: InboxSource, outcome: ReportOutcome | null, images: Array<MessageImage>, in_reply_to: string | null, };
+
+export type InboxArtifactKind = "image" | "html" | "markdown" | "other";
+
+export type InboxArtifact = { path: string, name: string, kind: InboxArtifactKind, recorded: boolean, };
+
+export type InboxDecisionBy = "you" | "owner" | "cockpit" | "agent";
+
+export type InboxDecision = { question: string, answer: string | null, asked_at: string, answered_at: string | null, by: InboxDecisionBy | null, };
+
+export type InboxTaskResult = { summary: string, outcome: ReportOutcome | null, at: string, };
+
+export type InboxTaskIntegration = { target: string, commit: string, };
+
+export type InboxTaskEvidence = { run_id: string, attempt: number, attempts: number, result: InboxTaskResult | null, checks: Array<CheckOutcome>, commits: Array<string>, head_commit: string | null, integration: InboxTaskIntegration | null, artifacts: Array<InboxArtifact>, images: Array<MessageImage>, decisions: Array<InboxDecision>, };
+
+export type InboxTaskLink = { root_id: string, task_id: string, title: string, project: TaskProject | null, lane: TaskLane, run: InboxRun | null, evidence: InboxTaskEvidence | null, };
+
+export type InboxThread = { thread_id: string, state: InboxState, need: InboxNeed | null, owner_root_ids: Array<string>, title: InboxText, next: InboxText | null, project: string | null, request: InboxRequestEcho | null, follow_ups: Array<InboxRequestEcho>, questions: Array<InboxQuestion>, recommendation: InboxText | null, reply: InboxText | null, unread_result_message_id: string | null, tasks: Array<InboxTaskLink>, receipts: Array<InboxReceipt>, facts: Array<InboxText>, timeline: Array<InboxEntry>, timeline_omitted: number, updated_at: string, };
 
 export type HandoffBinding = { repository_id: string | null, workspace_id: string | null, branch: string | null, base_ref: string | null, };
 

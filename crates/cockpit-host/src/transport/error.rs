@@ -60,8 +60,9 @@ pub fn status(policy: StatusPolicy, error: &OperationError) -> StatusCode {
             | "handoff_binding_mismatch"
             | "space_git_action_in_progress" => StatusCode::CONFLICT,
             "thread_forbidden" | "thread_owner_invalid" => StatusCode::BAD_REQUEST,
-            "image_not_found" => StatusCode::NOT_FOUND,
-            "image_forbidden" => StatusCode::FORBIDDEN,
+            "image_not_found" | "artifact_not_found" => StatusCode::NOT_FOUND,
+            "image_forbidden" | "artifact_not_allowed" => StatusCode::FORBIDDEN,
+            "artifact_unsupported" | "artifact_too_large" => StatusCode::BAD_REQUEST,
             "image_id_invalid" | "image_too_large" | "image_type_refused"
             | "image_format_refused" | "image_header_invalid" | "image_dimensions"
             | "image_decoded_bytes" | "image_too_many" | "image_duplicate"
@@ -157,6 +158,10 @@ mod tests {
             ("image_not_found", StatusCode::NOT_FOUND),
             ("image_forbidden", StatusCode::FORBIDDEN),
             ("image_too_large", StatusCode::BAD_REQUEST),
+            ("artifact_not_found", StatusCode::NOT_FOUND),
+            ("artifact_too_large", StatusCode::BAD_REQUEST),
+            ("artifact_unsupported", StatusCode::BAD_REQUEST),
+            ("artifact_not_allowed", StatusCode::FORBIDDEN),
             ("image_duplicate", StatusCode::BAD_REQUEST),
             ("image_store_full", StatusCode::SERVICE_UNAVAILABLE),
         ] {

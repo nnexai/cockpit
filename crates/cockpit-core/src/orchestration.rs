@@ -12,6 +12,7 @@ pub mod session_identity;
 mod escalation;
 mod messages;
 mod images;
+mod artifacts;
 #[cfg(test)]
 mod image_visibility_tests;
 mod projection;
@@ -324,6 +325,14 @@ impl OrchestrationService {
         let (image, bytes) = images::read_bytes(self.base(), session_id, image_id)?;
         Ok(OrchestrationImageMedia { image, data_base64: BASE64.encode(bytes) })
     }
+    pub fn artifact_read(&self, request: OrchestrationArtifactRead) -> Result<OrchestrationArtifactMedia, InspectionError> {
+        validate_identity(&request.session_id)?;
+        let state = self.store.lock()?.read_shared()?;
+        let run = state.runs.iter().find(|run| run.session_id == request.session_id && run.run_id == request.run_id)
+            .ok_or_else(|| error("artifact_not_found", "Artifact not found"))?;
+        artifacts::read(run, &request.path)
+    }
+
 
     pub fn images_for_job(&self, caller: &AgentCaller, session_id: &str, image_id: Option<&str>) -> Result<Vec<JobImage>, InspectionError> {
         validate_identity(session_id)?;

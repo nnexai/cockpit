@@ -2,6 +2,15 @@
 import type * as V1 from "../v1";
 
 export interface WireTypes {
+  "CleanupFinish": V1.CleanupFinish;
+  "CleanupFinishResult": V1.CleanupFinishResult;
+  "CleanupResourceSummary": V1.CleanupResourceSummary;
+  "RunCleanupSummary": V1.RunCleanupSummary;
+  "RestorationSummary": V1.RestorationSummary;
+  "NativeShellIdentity": V1.NativeShellIdentity;
+  "RetirementTrigger": V1.RetirementTrigger;
+  "RetirementIdentity": V1.RetirementIdentity;
+  "ReplacementRetirementAuthority": V1.ReplacementRetirementAuthority;
   "RunRetirement": V1.RunRetirement;
   "RetirementState": V1.RetirementState;
   "RetirementBlocker": V1.RetirementBlocker;
@@ -34,6 +43,14 @@ export interface WireTypes {
 }
 
 export interface WireOwners {
+  "CleanupFinish": V1.CleanupFinish;
+  "CleanupFinishResult": V1.CleanupFinishResult;
+  "CleanupResourceSummary": V1.CleanupResourceSummary;
+  "RunCleanupSummary": V1.RunCleanupSummary;
+  "RestorationSummary": V1.RestorationSummary;
+  "NativeShellIdentity": V1.NativeShellIdentity;
+  "RetirementIdentity": V1.RetirementIdentity;
+  "ReplacementRetirementAuthority": V1.ReplacementRetirementAuthority;
   "RunRetirement": V1.RunRetirement;
   "RetirementState": V1.RetirementState;
   "RetirementState[waiting]": Extract<V1.RetirementState, { "state": "waiting" }>;
@@ -130,6 +147,54 @@ export interface WireOwners {
 }
 
 export interface WireFields {
+  "CleanupFinish.operation_id": (V1.CleanupFinish)["operation_id"];
+  "CleanupFinish.root_id": (V1.CleanupFinish)["root_id"];
+  "CleanupFinish.run_id": (V1.CleanupFinish)["run_id"];
+  "CleanupFinishResult.operation_id": (V1.CleanupFinishResult)["operation_id"];
+  "CleanupFinishResult.items": (V1.CleanupFinishResult)["items"];
+  "CleanupFinishResult.removed_count": (V1.CleanupFinishResult)["removed_count"];
+  "CleanupFinishResult.waiting_count": (V1.CleanupFinishResult)["waiting_count"];
+  "CleanupFinishResult.kept_count": (V1.CleanupFinishResult)["kept_count"];
+  "CleanupFinishResult.unknown_count": (V1.CleanupFinishResult)["unknown_count"];
+  "CleanupFinishResult.duplicate": (V1.CleanupFinishResult)["duplicate"];
+  "CleanupResourceSummary.resource_id": (V1.CleanupResourceSummary)["resource_id"];
+  "CleanupResourceSummary.kind": (V1.CleanupResourceSummary)["kind"];
+  "CleanupResourceSummary.ownership": (V1.CleanupResourceSummary)["ownership"];
+  "CleanupResourceSummary.cleanup": (V1.CleanupResourceSummary)["cleanup"];
+  "RunCleanupSummary.run_id": (V1.RunCleanupSummary)["run_id"];
+  "RunCleanupSummary.items": (V1.RunCleanupSummary)["items"];
+  "RunCleanupSummary.removed_count": (V1.RunCleanupSummary)["removed_count"];
+  "RunCleanupSummary.waiting_count": (V1.RunCleanupSummary)["waiting_count"];
+  "RunCleanupSummary.kept_count": (V1.RunCleanupSummary)["kept_count"];
+  "RunCleanupSummary.unknown_count": (V1.RunCleanupSummary)["unknown_count"];
+  "RestorationSummary.reattached": (V1.RestorationSummary)["reattached"];
+  "RestorationSummary.total_attachments": (V1.RestorationSummary)["total_attachments"];
+  "RestorationSummary.cleanup_pending": (V1.RestorationSummary)["cleanup_pending"];
+  "NativeShellIdentity.process": (V1.NativeShellIdentity)["process"];
+  "NativeShellIdentity.executable_device": (V1.NativeShellIdentity)["executable_device"];
+  "NativeShellIdentity.executable_inode": (V1.NativeShellIdentity)["executable_inode"];
+  "NativeShellIdentity.argv_digest": (V1.NativeShellIdentity)["argv_digest"];
+  "RetirementIdentity.attachment_id": (V1.RetirementIdentity)["attachment_id"];
+  "RetirementIdentity.attachment_epoch": (V1.RetirementIdentity)["attachment_epoch"];
+  "RetirementIdentity.launch_mode": (V1.RetirementIdentity)["launch_mode"];
+  "RetirementIdentity.run_attempt": (V1.RetirementIdentity)["run_attempt"];
+  "RetirementIdentity.launch_attempt": (V1.RetirementIdentity)["launch_attempt"];
+  "RetirementIdentity.launch_tag": (V1.RetirementIdentity)["launch_tag"];
+  "RetirementIdentity.endpoint_identity": (V1.RetirementIdentity)["endpoint_identity"];
+  "RetirementIdentity.session_id": (V1.RetirementIdentity)["session_id"];
+  "RetirementIdentity.workspace_id": (V1.RetirementIdentity)["workspace_id"];
+  "RetirementIdentity.tab_id": (V1.RetirementIdentity)["tab_id"];
+  "RetirementIdentity.pane_id": (V1.RetirementIdentity)["pane_id"];
+  "RetirementIdentity.terminal_id": (V1.RetirementIdentity)["terminal_id"];
+  "RetirementIdentity.herdr_boot_id": (V1.RetirementIdentity)["herdr_boot_id"];
+  "RetirementIdentity.herdr_peer": (V1.RetirementIdentity)["herdr_peer"];
+  "RetirementIdentity.conversation": (V1.RetirementIdentity)["conversation"];
+  "RetirementIdentity.process": (V1.RetirementIdentity)["process"];
+  "RetirementIdentity.shell": (V1.RetirementIdentity)["shell"];
+  "ReplacementRetirementAuthority.operation_id": (V1.ReplacementRetirementAuthority)["operation_id"];
+  "ReplacementRetirementAuthority.previous_run_id": (V1.ReplacementRetirementAuthority)["previous_run_id"];
+  "ReplacementRetirementAuthority.previous_generation": (V1.ReplacementRetirementAuthority)["previous_generation"];
+  "ReplacementRetirementAuthority.replacement_run_id": (V1.ReplacementRetirementAuthority)["replacement_run_id"];
   "RunRetirement.retirement_id": (V1.RunRetirement)["retirement_id"];
   "RunRetirement.trigger": (V1.RunRetirement)["trigger"];
   "RunRetirement.result_message_id": (V1.RunRetirement)["result_message_id"];
@@ -479,6 +544,14 @@ export interface WireFields {
 }
 
 export interface WireFieldNames {
+  "CleanupFinish": "operation_id" | "root_id" | "run_id";
+  "CleanupFinishResult": "operation_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count" | "duplicate";
+  "CleanupResourceSummary": "resource_id" | "kind" | "ownership" | "cleanup";
+  "RunCleanupSummary": "run_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count";
+  "RestorationSummary": "reattached" | "total_attachments" | "cleanup_pending";
+  "NativeShellIdentity": "process" | "executable_device" | "executable_inode" | "argv_digest";
+  "RetirementIdentity": "attachment_id" | "attachment_epoch" | "launch_mode" | "run_attempt" | "launch_attempt" | "launch_tag" | "endpoint_identity" | "session_id" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "herdr_boot_id" | "herdr_peer" | "conversation" | "process" | "shell";
+  "ReplacementRetirementAuthority": "operation_id" | "previous_run_id" | "previous_generation" | "replacement_run_id";
   "RunRetirement": "retirement_id" | "trigger" | "result_message_id" | "task_revision" | "replacement" | "identity" | "state" | "created_at" | "updated_at";
   "RetirementState": never;
   "RetirementState[waiting]": "blockers";
@@ -575,6 +648,12 @@ export interface WireFieldNames {
 }
 
 export interface WireChildNames {
+  "CleanupResourceSummary.cleanup": "CleanupItem";
+  "NativeShellIdentity.process": "NativeProcessIdentity";
+  "RetirementIdentity.herdr_peer": "NativeProcessIdentity";
+  "RetirementIdentity.conversation": "ConversationIdentity";
+  "RetirementIdentity.process": "NativeProcessIdentity";
+  "RetirementIdentity.shell": "NativeShellIdentity";
   "RunRetirement.replacement": "ReplacementRetirementAuthority";
   "RunRetirement.identity": "RetirementIdentity";
   "RunRetirement.state": "RetirementState";
@@ -745,6 +824,14 @@ export interface WireTagNames {
 }
 
 export interface WireCheckpointFieldNames {
+  "CleanupFinish": "operation_id" | "root_id" | "run_id";
+  "CleanupFinishResult": "operation_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count" | "duplicate";
+  "CleanupResourceSummary": "resource_id" | "kind" | "ownership" | "cleanup";
+  "RunCleanupSummary": "run_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count";
+  "RestorationSummary": "reattached" | "total_attachments" | "cleanup_pending";
+  "NativeShellIdentity": "process" | "executable_device" | "executable_inode" | "argv_digest";
+  "RetirementIdentity": "attachment_id" | "attachment_epoch" | "launch_mode" | "run_attempt" | "launch_attempt" | "launch_tag" | "endpoint_identity" | "session_id" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "herdr_boot_id" | "herdr_peer" | "conversation" | "process" | "shell";
+  "ReplacementRetirementAuthority": "operation_id" | "previous_run_id" | "previous_generation" | "replacement_run_id";
   "RunRetirement": "retirement_id" | "trigger" | "result_message_id" | "task_revision" | "replacement" | "identity" | "state" | "created_at" | "updated_at";
   "RetirementState": "at" | "blockers" | "detail" | "phase" | "reason" | "state" | "stopped" | "terminal";
   "RetirementState[waiting]": "blockers" | "state";
@@ -841,6 +928,15 @@ export interface WireCheckpointFieldNames {
 }
 
 export type WireOmittableField =
+  | "CleanupFinish.run_id"
+  | "RetirementIdentity.attachment_id"
+  | "RetirementIdentity.attachment_epoch"
+  | "RetirementIdentity.launch_mode"
+  | "RetirementIdentity.herdr_boot_id"
+  | "RetirementIdentity.herdr_peer"
+  | "RetirementIdentity.conversation"
+  | "RetirementIdentity.process"
+  | "RetirementIdentity.shell"
   | "RunRetirement.result_message_id"
   | "RunRetirement.task_revision"
   | "RunRetirement.replacement"
@@ -971,6 +1067,8 @@ export type WireOptionalField =
   | never;
 
 export type WireListField =
+  | "CleanupFinishResult.items"
+  | "RunCleanupSummary.items"
   | "RetirementState[waiting].blockers"
   | "Run.annotations"
   | "Message.images"

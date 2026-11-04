@@ -2421,8 +2421,8 @@ pub fn render_run_bootstrap(run: &Run) -> String {
         format!("Supervisor liaison: delegate implementation, do not perform worker task scope. Author canonical tasks/dependencies, then {cli} task schedule TASK to authorize autonomous dependency-ready dispatch. Review Results and run accept or send-back. Replace an unproven/stalled attempt with {cli} run worker-replace RUN --reason \"...\"; never blindly replay an unknown launch. Record real integration/check evidence, then cleanup. Resolve routine boundaries autonomously; ask the human only for outcome-changing decisions in this conversation.")
     };
     let report_guidance = if run.kind == RunKind::Worker {
-        "Put substantive feedback and evidence in the run done --summary or needs-input report --summary; multiline Markdown is supported. Report to the liaison, who decides what to relay to the human."
-    } else { "" };
+        "Put substantive feedback and evidence in the run done --summary or needs-input report --summary; multiline Markdown is supported. Name screenshot, mock and report files by absolute path in the summary so they appear as evidence. Report to the liaison, who decides what to relay to the human."
+    } else { "Human-facing thread reports render Markdown: structure results as short lists or tables with inline code, and attach relevant screenshots or mocks with --image." };
     let inbox = if configured_inbox_hook(run) {
         format!("A configured optional hook delivers inbox notices automatically. Stay responsive in the conversation; do not start a competing long inbox capture/wait. If an immediate pending capture is needed, use {cli} inbox next --wait 0 --deliverable --json. Configuration is not proof of hook delivery or a model response.")
     } else {

@@ -95,6 +95,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     orchestrationInbox: vi.fn(async () => { throw new Error("Unexpected orchestration inbox in terminal fixture"); }),
     orchestrationImagePut: vi.fn(async () => { throw new Error("Unexpected orchestration image put in terminal fixture"); }),
     orchestrationImageRead: vi.fn(async () => { throw new Error("Unexpected orchestration image read in terminal fixture"); }),
+    orchestrationArtifactRead: vi.fn(async () => { throw new Error("Unexpected orchestration artifact read in terminal fixture"); }),
     orchestrationMutate: vi.fn(async () => { throw new Error("Unexpected orchestration mutation in terminal fixture"); }),
     orchestrationWait: vi.fn(async () => { throw new Error("Unexpected orchestration wait in terminal fixture"); }),
     orchestrationLiaisonLookup: vi.fn(async () => { throw new Error("Unexpected liaison lookup in terminal fixture"); }),

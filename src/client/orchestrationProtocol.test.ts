@@ -1935,6 +1935,25 @@ describe("browser/native orchestration parity", () => {
     await expect(client.orchestrationImageRead(read, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
     expect(browserCall).not.toHaveBeenCalled(); expect(nativeCall).not.toHaveBeenCalled();
   });
+  it.each(["browser", "native"] as const)("reads artifacts with path identity on %s", async transport => {
+    const request = { session_id: "session", run_id: "run", path: "/tmp/mock.html" };
+    let payload: unknown = { path: request.path, kind: "html", mime_type: "text/html", data_base64: "YWJj" };
+    const browserCall = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(payload)));
+    const nativeCall = vi.fn(async (_command: string, _args?: Record<string, unknown>) => payload);
+    const client = transport === "browser" ? createBrowserClient(browserCall) : createNativeClient(nativeCall);
+    await expect(client.orchestrationArtifactRead(request)).resolves.toEqual(payload);
+    if (transport === "browser") {
+      expect(browserCall.mock.calls[0]![0]).toBe("/api/v1/sessions/session/orchestration/artifacts/read");
+      expect(JSON.parse(browserCall.mock.calls[0]![1]!.body as string)).toEqual(request);
+    } else expect(nativeCall).toHaveBeenCalledWith("orchestration_artifact_read", { request });
+    payload = { path: "/tmp/other.html", kind: "html", mime_type: "text/html", data_base64: "YWJj" };
+    await expect(client.orchestrationArtifactRead(request)).rejects.toMatchObject({ code: "malformed_response" });
+    browserCall.mockClear(); nativeCall.mockClear();
+    await expect(client.orchestrationArtifactRead({ ...request, path: "/tmp/../mock.html" })).rejects.toMatchObject({ code: "malformed_response" });
+    const controller = new AbortController(); controller.abort();
+    await expect(client.orchestrationArtifactRead(request, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(browserCall).not.toHaveBeenCalled(); expect(nativeCall).not.toHaveBeenCalled();
+  });
 
 
   it.each(["browser", "native"] as const)("reads and strictly decodes the Inbox on %s", async transport => {
@@ -1942,7 +1961,7 @@ describe("browser/native orchestration parity", () => {
     const title = { text: "Investigate", source: { kind: "user" }, message_id: null, at: null, images: [] };
     const thread = { thread_id: prerequisiteId, state: "underway", need: null, owner_root_ids: ["root"],
       title, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null,
-      unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: at };
+      unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: at };
     const view = { session_id: "session", state_store_id: hash, revision: 1, tasks_token: hash,
       image_limits: { max_bytes: 5242880, max_count: 4, mime_types: ["image/png", "image/jpeg"] },
       observation: { status: "fresh", observed_at: at }, owners: [], threads: [thread], unmanaged_agents: [] };

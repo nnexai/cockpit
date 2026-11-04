@@ -14,7 +14,7 @@ import type {
   OrchestrationMutationRequest, OrchestrationMutationResponse,
   OrchestrationWaitRequest, OrchestrationWaitResponse,
   LiaisonLookupRequest, LiaisonLookupResponse,
-  OrchestrationImagePut, OrchestrationImageRead, OrchestrationImageMedia, MessageImage,
+  OrchestrationImagePut, OrchestrationImageRead, OrchestrationImageMedia, MessageImage, OrchestrationArtifactRead, OrchestrationArtifactMedia,
 } from "../protocol/generated/v1";
 export type {
   OrchestrationSnapshotRequest, OrchestrationSnapshot, InboxRequest, InboxView, AgentSendTarget,
@@ -22,6 +22,7 @@ export type {
   OrchestrationWaitRequest, OrchestrationWaitResponse,
   LiaisonLookupRequest, LiaisonLookupResponse,
   OrchestrationImagePut, OrchestrationImageRead, OrchestrationImageMedia, MessageImage, ImageLimits,
+  OrchestrationArtifactRead, OrchestrationArtifactMedia, InboxArtifact, InboxArtifactKind, InboxDecision, InboxEntry, InboxEntryKind, InboxTaskEvidence,
 } from "../protocol/generated/v1";
 import type {
   WidgetEvent, WidgetWindowReport, WidgetContentRequest, WidgetContent, WidgetSummary,
@@ -351,6 +352,7 @@ export interface CockpitClient {
   orchestrationInbox(request: InboxRequest, signal?: AbortSignal): Promise<InboxView>;
   orchestrationImagePut(request: OrchestrationImagePut, signal?: AbortSignal): Promise<MessageImage>;
   orchestrationImageRead(request: OrchestrationImageRead, signal?: AbortSignal): Promise<OrchestrationImageMedia>;
+  orchestrationArtifactRead(request: OrchestrationArtifactRead, signal?: AbortSignal): Promise<OrchestrationArtifactMedia>;
   /** Read-only host resolution for this session; unavailable identity is not an empty match set. */
   orchestrationLiaisonLookup(request: LiaisonLookupRequest): Promise<LiaisonLookupResponse>;
   orchestrationAgentSend(request: { session_id: string; reference: string; text: string; expected_target?: AgentSendTarget }): Promise<void>;

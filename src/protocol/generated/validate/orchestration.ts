@@ -43,6 +43,19 @@ export const wireOrchestrationImageMedia: WireDescriptor<V1.OrchestrationImageMe
   "data_base64": req(str),
 });
 
+export const wireOrchestrationArtifactRead: WireDescriptor<V1.OrchestrationArtifactRead> = struct<V1.OrchestrationArtifactRead>("OrchestrationArtifactRead", {
+  "session_id": req(str),
+  "run_id": req(str),
+  "path": req(str),
+});
+
+export const wireOrchestrationArtifactMedia: WireDescriptor<V1.OrchestrationArtifactMedia> = struct<V1.OrchestrationArtifactMedia>("OrchestrationArtifactMedia", {
+  "path": req(str),
+  "kind": req(named(() => wireInboxArtifactKind)),
+  "mime_type": req(str),
+  "data_base64": req(str),
+});
+
 export const wireJobImage: WireDescriptor<V1.JobImage> = struct<V1.JobImage>("JobImage", {
   "image": req(named(() => wireMessageImage)),
   "path": req(str),
@@ -164,6 +177,63 @@ export const wireInboxRun: WireDescriptor<V1.InboxRun> = struct<V1.InboxRun>("In
   "report_images": req(list(named(() => wireMessageImage))),
 });
 
+export const wireInboxEntryKind: WireDescriptor<V1.InboxEntryKind> = literal<V1.InboxEntryKind>("InboxEntryKind", ["request", "follow_up", "answer", "question", "update", "result"]);
+
+export const wireInboxEntry: WireDescriptor<V1.InboxEntry> = struct<V1.InboxEntry>("InboxEntry", {
+  "message_id": req(str),
+  "at": req(str),
+  "kind": req(named(() => wireInboxEntryKind)),
+  "text": req(str),
+  "source": req(named(() => wireInboxSource)),
+  "outcome": req(nullable(named(() => wireReportOutcome)), { fill: null }),
+  "images": req(list(named(() => wireMessageImage))),
+  "in_reply_to": req(nullable(str), { fill: null }),
+});
+
+export const wireInboxArtifactKind: WireDescriptor<V1.InboxArtifactKind> = literal<V1.InboxArtifactKind>("InboxArtifactKind", ["image", "html", "markdown", "other"]);
+
+export const wireInboxArtifact: WireDescriptor<V1.InboxArtifact> = struct<V1.InboxArtifact>("InboxArtifact", {
+  "path": req(str),
+  "name": req(str),
+  "kind": req(named(() => wireInboxArtifactKind)),
+  "recorded": req(bool),
+});
+
+export const wireInboxDecisionBy: WireDescriptor<V1.InboxDecisionBy> = literal<V1.InboxDecisionBy>("InboxDecisionBy", ["you", "owner", "cockpit", "agent"]);
+
+export const wireInboxDecision: WireDescriptor<V1.InboxDecision> = struct<V1.InboxDecision>("InboxDecision", {
+  "question": req(str),
+  "answer": req(nullable(str), { fill: null }),
+  "asked_at": req(str),
+  "answered_at": req(nullable(str), { fill: null }),
+  "by": req(nullable(named(() => wireInboxDecisionBy)), { fill: null }),
+});
+
+export const wireInboxTaskResult: WireDescriptor<V1.InboxTaskResult> = struct<V1.InboxTaskResult>("InboxTaskResult", {
+  "summary": req(str),
+  "outcome": req(nullable(named(() => wireReportOutcome)), { fill: null }),
+  "at": req(str),
+});
+
+export const wireInboxTaskIntegration: WireDescriptor<V1.InboxTaskIntegration> = struct<V1.InboxTaskIntegration>("InboxTaskIntegration", {
+  "target": req(str),
+  "commit": req(str),
+});
+
+export const wireInboxTaskEvidence: WireDescriptor<V1.InboxTaskEvidence> = struct<V1.InboxTaskEvidence>("InboxTaskEvidence", {
+  "run_id": req(str),
+  "attempt": req(u32),
+  "attempts": req(u32),
+  "result": req(nullable(named(() => wireInboxTaskResult)), { fill: null }),
+  "checks": req(list(named(() => wireCheckOutcome))),
+  "commits": req(list(str)),
+  "head_commit": req(nullable(str), { fill: null }),
+  "integration": req(nullable(named(() => wireInboxTaskIntegration)), { fill: null }),
+  "artifacts": req(list(named(() => wireInboxArtifact))),
+  "images": req(list(named(() => wireMessageImage))),
+  "decisions": req(list(named(() => wireInboxDecision))),
+});
+
 export const wireInboxTaskLink: WireDescriptor<V1.InboxTaskLink> = struct<V1.InboxTaskLink>("InboxTaskLink", {
   "root_id": req(str),
   "task_id": req(str),
@@ -171,6 +241,7 @@ export const wireInboxTaskLink: WireDescriptor<V1.InboxTaskLink> = struct<V1.Inb
   "project": req(nullable(named(() => wireTaskProject)), { fill: null }),
   "lane": req(named(() => wireTaskLane)),
   "run": req(nullable(named(() => wireInboxRun)), { fill: null }),
+  "evidence": req(nullable(named(() => wireInboxTaskEvidence)), { fill: null }),
 });
 
 export const wireInboxThread: WireDescriptor<V1.InboxThread> = struct<V1.InboxThread>("InboxThread", {
@@ -190,6 +261,8 @@ export const wireInboxThread: WireDescriptor<V1.InboxThread> = struct<V1.InboxTh
   "tasks": req(list(named(() => wireInboxTaskLink))),
   "receipts": req(list(named(() => wireInboxReceipt))),
   "facts": req(list(named(() => wireInboxText))),
+  "timeline": req(list(named(() => wireInboxEntry))),
+  "timeline_omitted": req(u32),
   "updated_at": req(str),
 });
 

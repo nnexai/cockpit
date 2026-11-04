@@ -9,6 +9,8 @@ export interface WireTypes {
   "OrchestrationImagePut": V1.OrchestrationImagePut;
   "OrchestrationImageRead": V1.OrchestrationImageRead;
   "OrchestrationImageMedia": V1.OrchestrationImageMedia;
+  "OrchestrationArtifactRead": V1.OrchestrationArtifactRead;
+  "OrchestrationArtifactMedia": V1.OrchestrationArtifactMedia;
   "JobImage": V1.JobImage;
   "InboxView": V1.InboxView;
   "InboxObservation": V1.InboxObservation;
@@ -23,6 +25,15 @@ export interface WireTypes {
   "InboxQuestion": V1.InboxQuestion;
   "InboxReceipt": V1.InboxReceipt;
   "InboxRun": V1.InboxRun;
+  "InboxEntryKind": V1.InboxEntryKind;
+  "InboxEntry": V1.InboxEntry;
+  "InboxArtifactKind": V1.InboxArtifactKind;
+  "InboxArtifact": V1.InboxArtifact;
+  "InboxDecisionBy": V1.InboxDecisionBy;
+  "InboxDecision": V1.InboxDecision;
+  "InboxTaskResult": V1.InboxTaskResult;
+  "InboxTaskIntegration": V1.InboxTaskIntegration;
+  "InboxTaskEvidence": V1.InboxTaskEvidence;
   "InboxTaskLink": V1.InboxTaskLink;
   "InboxThread": V1.InboxThread;
   "HandoffBinding": V1.HandoffBinding;
@@ -130,15 +141,6 @@ export interface WireTypes {
   "CleanupItem": V1.CleanupItem;
   "OwnedResourceRecord": V1.OwnedResourceRecord;
   "ResourceRegister": V1.ResourceRegister;
-  "CleanupFinish": V1.CleanupFinish;
-  "CleanupFinishResult": V1.CleanupFinishResult;
-  "CleanupResourceSummary": V1.CleanupResourceSummary;
-  "RunCleanupSummary": V1.RunCleanupSummary;
-  "RestorationSummary": V1.RestorationSummary;
-  "NativeShellIdentity": V1.NativeShellIdentity;
-  "RetirementTrigger": V1.RetirementTrigger;
-  "RetirementIdentity": V1.RetirementIdentity;
-  "ReplacementRetirementAuthority": V1.ReplacementRetirementAuthority;
 }
 
 export interface WireOwners {
@@ -149,6 +151,8 @@ export interface WireOwners {
   "OrchestrationImagePut": V1.OrchestrationImagePut;
   "OrchestrationImageRead": V1.OrchestrationImageRead;
   "OrchestrationImageMedia": V1.OrchestrationImageMedia;
+  "OrchestrationArtifactRead": V1.OrchestrationArtifactRead;
+  "OrchestrationArtifactMedia": V1.OrchestrationArtifactMedia;
   "JobImage": V1.JobImage;
   "InboxView": V1.InboxView;
   "InboxObservation": V1.InboxObservation;
@@ -167,6 +171,12 @@ export interface WireOwners {
   "InboxQuestion": V1.InboxQuestion;
   "InboxReceipt": V1.InboxReceipt;
   "InboxRun": V1.InboxRun;
+  "InboxEntry": V1.InboxEntry;
+  "InboxArtifact": V1.InboxArtifact;
+  "InboxDecision": V1.InboxDecision;
+  "InboxTaskResult": V1.InboxTaskResult;
+  "InboxTaskIntegration": V1.InboxTaskIntegration;
+  "InboxTaskEvidence": V1.InboxTaskEvidence;
   "InboxTaskLink": V1.InboxTaskLink;
   "InboxThread": V1.InboxThread;
   "HandoffBinding": V1.HandoffBinding;
@@ -264,14 +274,6 @@ export interface WireOwners {
   "CleanupItem": V1.CleanupItem;
   "OwnedResourceRecord": V1.OwnedResourceRecord;
   "ResourceRegister": V1.ResourceRegister;
-  "CleanupFinish": V1.CleanupFinish;
-  "CleanupFinishResult": V1.CleanupFinishResult;
-  "CleanupResourceSummary": V1.CleanupResourceSummary;
-  "RunCleanupSummary": V1.RunCleanupSummary;
-  "RestorationSummary": V1.RestorationSummary;
-  "NativeShellIdentity": V1.NativeShellIdentity;
-  "RetirementIdentity": V1.RetirementIdentity;
-  "ReplacementRetirementAuthority": V1.ReplacementRetirementAuthority;
 }
 
 export interface WireFields {
@@ -292,6 +294,13 @@ export interface WireFields {
   "OrchestrationImageRead.image_id": (V1.OrchestrationImageRead)["image_id"];
   "OrchestrationImageMedia.image": (V1.OrchestrationImageMedia)["image"];
   "OrchestrationImageMedia.data_base64": (V1.OrchestrationImageMedia)["data_base64"];
+  "OrchestrationArtifactRead.session_id": (V1.OrchestrationArtifactRead)["session_id"];
+  "OrchestrationArtifactRead.run_id": (V1.OrchestrationArtifactRead)["run_id"];
+  "OrchestrationArtifactRead.path": (V1.OrchestrationArtifactRead)["path"];
+  "OrchestrationArtifactMedia.path": (V1.OrchestrationArtifactMedia)["path"];
+  "OrchestrationArtifactMedia.kind": (V1.OrchestrationArtifactMedia)["kind"];
+  "OrchestrationArtifactMedia.mime_type": (V1.OrchestrationArtifactMedia)["mime_type"];
+  "OrchestrationArtifactMedia.data_base64": (V1.OrchestrationArtifactMedia)["data_base64"];
   "JobImage.image": (V1.JobImage)["image"];
   "JobImage.path": (V1.JobImage)["path"];
   "JobImage.message_id": (V1.JobImage)["message_id"];
@@ -360,12 +369,46 @@ export interface WireFields {
   "InboxRun.location": (V1.InboxRun)["location"];
   "InboxRun.cleanup": (V1.InboxRun)["cleanup"];
   "InboxRun.report_images": (V1.InboxRun)["report_images"];
+  "InboxEntry.message_id": (V1.InboxEntry)["message_id"];
+  "InboxEntry.at": (V1.InboxEntry)["at"];
+  "InboxEntry.kind": (V1.InboxEntry)["kind"];
+  "InboxEntry.text": (V1.InboxEntry)["text"];
+  "InboxEntry.source": (V1.InboxEntry)["source"];
+  "InboxEntry.outcome": (V1.InboxEntry)["outcome"];
+  "InboxEntry.images": (V1.InboxEntry)["images"];
+  "InboxEntry.in_reply_to": (V1.InboxEntry)["in_reply_to"];
+  "InboxArtifact.path": (V1.InboxArtifact)["path"];
+  "InboxArtifact.name": (V1.InboxArtifact)["name"];
+  "InboxArtifact.kind": (V1.InboxArtifact)["kind"];
+  "InboxArtifact.recorded": (V1.InboxArtifact)["recorded"];
+  "InboxDecision.question": (V1.InboxDecision)["question"];
+  "InboxDecision.answer": (V1.InboxDecision)["answer"];
+  "InboxDecision.asked_at": (V1.InboxDecision)["asked_at"];
+  "InboxDecision.answered_at": (V1.InboxDecision)["answered_at"];
+  "InboxDecision.by": (V1.InboxDecision)["by"];
+  "InboxTaskResult.summary": (V1.InboxTaskResult)["summary"];
+  "InboxTaskResult.outcome": (V1.InboxTaskResult)["outcome"];
+  "InboxTaskResult.at": (V1.InboxTaskResult)["at"];
+  "InboxTaskIntegration.target": (V1.InboxTaskIntegration)["target"];
+  "InboxTaskIntegration.commit": (V1.InboxTaskIntegration)["commit"];
+  "InboxTaskEvidence.run_id": (V1.InboxTaskEvidence)["run_id"];
+  "InboxTaskEvidence.attempt": (V1.InboxTaskEvidence)["attempt"];
+  "InboxTaskEvidence.attempts": (V1.InboxTaskEvidence)["attempts"];
+  "InboxTaskEvidence.result": (V1.InboxTaskEvidence)["result"];
+  "InboxTaskEvidence.checks": (V1.InboxTaskEvidence)["checks"];
+  "InboxTaskEvidence.commits": (V1.InboxTaskEvidence)["commits"];
+  "InboxTaskEvidence.head_commit": (V1.InboxTaskEvidence)["head_commit"];
+  "InboxTaskEvidence.integration": (V1.InboxTaskEvidence)["integration"];
+  "InboxTaskEvidence.artifacts": (V1.InboxTaskEvidence)["artifacts"];
+  "InboxTaskEvidence.images": (V1.InboxTaskEvidence)["images"];
+  "InboxTaskEvidence.decisions": (V1.InboxTaskEvidence)["decisions"];
   "InboxTaskLink.root_id": (V1.InboxTaskLink)["root_id"];
   "InboxTaskLink.task_id": (V1.InboxTaskLink)["task_id"];
   "InboxTaskLink.title": (V1.InboxTaskLink)["title"];
   "InboxTaskLink.project": (V1.InboxTaskLink)["project"];
   "InboxTaskLink.lane": (V1.InboxTaskLink)["lane"];
   "InboxTaskLink.run": (V1.InboxTaskLink)["run"];
+  "InboxTaskLink.evidence": (V1.InboxTaskLink)["evidence"];
   "InboxThread.thread_id": (V1.InboxThread)["thread_id"];
   "InboxThread.state": (V1.InboxThread)["state"];
   "InboxThread.need": (V1.InboxThread)["need"];
@@ -382,6 +425,8 @@ export interface WireFields {
   "InboxThread.tasks": (V1.InboxThread)["tasks"];
   "InboxThread.receipts": (V1.InboxThread)["receipts"];
   "InboxThread.facts": (V1.InboxThread)["facts"];
+  "InboxThread.timeline": (V1.InboxThread)["timeline"];
+  "InboxThread.timeline_omitted": (V1.InboxThread)["timeline_omitted"];
   "InboxThread.updated_at": (V1.InboxThread)["updated_at"];
   "HandoffBinding.repository_id": (V1.HandoffBinding)["repository_id"];
   "HandoffBinding.workspace_id": (V1.HandoffBinding)["workspace_id"];
@@ -795,54 +840,6 @@ export interface WireFields {
   "ResourceRegister.operation_id": (V1.ResourceRegister)["operation_id"];
   "ResourceRegister.run_id": (V1.ResourceRegister)["run_id"];
   "ResourceRegister.resource": (V1.ResourceRegister)["resource"];
-  "CleanupFinish.operation_id": (V1.CleanupFinish)["operation_id"];
-  "CleanupFinish.root_id": (V1.CleanupFinish)["root_id"];
-  "CleanupFinish.run_id": (V1.CleanupFinish)["run_id"];
-  "CleanupFinishResult.operation_id": (V1.CleanupFinishResult)["operation_id"];
-  "CleanupFinishResult.items": (V1.CleanupFinishResult)["items"];
-  "CleanupFinishResult.removed_count": (V1.CleanupFinishResult)["removed_count"];
-  "CleanupFinishResult.waiting_count": (V1.CleanupFinishResult)["waiting_count"];
-  "CleanupFinishResult.kept_count": (V1.CleanupFinishResult)["kept_count"];
-  "CleanupFinishResult.unknown_count": (V1.CleanupFinishResult)["unknown_count"];
-  "CleanupFinishResult.duplicate": (V1.CleanupFinishResult)["duplicate"];
-  "CleanupResourceSummary.resource_id": (V1.CleanupResourceSummary)["resource_id"];
-  "CleanupResourceSummary.kind": (V1.CleanupResourceSummary)["kind"];
-  "CleanupResourceSummary.ownership": (V1.CleanupResourceSummary)["ownership"];
-  "CleanupResourceSummary.cleanup": (V1.CleanupResourceSummary)["cleanup"];
-  "RunCleanupSummary.run_id": (V1.RunCleanupSummary)["run_id"];
-  "RunCleanupSummary.items": (V1.RunCleanupSummary)["items"];
-  "RunCleanupSummary.removed_count": (V1.RunCleanupSummary)["removed_count"];
-  "RunCleanupSummary.waiting_count": (V1.RunCleanupSummary)["waiting_count"];
-  "RunCleanupSummary.kept_count": (V1.RunCleanupSummary)["kept_count"];
-  "RunCleanupSummary.unknown_count": (V1.RunCleanupSummary)["unknown_count"];
-  "RestorationSummary.reattached": (V1.RestorationSummary)["reattached"];
-  "RestorationSummary.total_attachments": (V1.RestorationSummary)["total_attachments"];
-  "RestorationSummary.cleanup_pending": (V1.RestorationSummary)["cleanup_pending"];
-  "NativeShellIdentity.process": (V1.NativeShellIdentity)["process"];
-  "NativeShellIdentity.executable_device": (V1.NativeShellIdentity)["executable_device"];
-  "NativeShellIdentity.executable_inode": (V1.NativeShellIdentity)["executable_inode"];
-  "NativeShellIdentity.argv_digest": (V1.NativeShellIdentity)["argv_digest"];
-  "RetirementIdentity.attachment_id": (V1.RetirementIdentity)["attachment_id"];
-  "RetirementIdentity.attachment_epoch": (V1.RetirementIdentity)["attachment_epoch"];
-  "RetirementIdentity.launch_mode": (V1.RetirementIdentity)["launch_mode"];
-  "RetirementIdentity.run_attempt": (V1.RetirementIdentity)["run_attempt"];
-  "RetirementIdentity.launch_attempt": (V1.RetirementIdentity)["launch_attempt"];
-  "RetirementIdentity.launch_tag": (V1.RetirementIdentity)["launch_tag"];
-  "RetirementIdentity.endpoint_identity": (V1.RetirementIdentity)["endpoint_identity"];
-  "RetirementIdentity.session_id": (V1.RetirementIdentity)["session_id"];
-  "RetirementIdentity.workspace_id": (V1.RetirementIdentity)["workspace_id"];
-  "RetirementIdentity.tab_id": (V1.RetirementIdentity)["tab_id"];
-  "RetirementIdentity.pane_id": (V1.RetirementIdentity)["pane_id"];
-  "RetirementIdentity.terminal_id": (V1.RetirementIdentity)["terminal_id"];
-  "RetirementIdentity.herdr_boot_id": (V1.RetirementIdentity)["herdr_boot_id"];
-  "RetirementIdentity.herdr_peer": (V1.RetirementIdentity)["herdr_peer"];
-  "RetirementIdentity.conversation": (V1.RetirementIdentity)["conversation"];
-  "RetirementIdentity.process": (V1.RetirementIdentity)["process"];
-  "RetirementIdentity.shell": (V1.RetirementIdentity)["shell"];
-  "ReplacementRetirementAuthority.operation_id": (V1.ReplacementRetirementAuthority)["operation_id"];
-  "ReplacementRetirementAuthority.previous_run_id": (V1.ReplacementRetirementAuthority)["previous_run_id"];
-  "ReplacementRetirementAuthority.previous_generation": (V1.ReplacementRetirementAuthority)["previous_generation"];
-  "ReplacementRetirementAuthority.replacement_run_id": (V1.ReplacementRetirementAuthority)["replacement_run_id"];
 }
 
 export interface WireFieldNames {
@@ -853,6 +850,8 @@ export interface WireFieldNames {
   "OrchestrationImagePut": "session_id" | "data_base64";
   "OrchestrationImageRead": "session_id" | "image_id";
   "OrchestrationImageMedia": "image" | "data_base64";
+  "OrchestrationArtifactRead": "session_id" | "run_id" | "path";
+  "OrchestrationArtifactMedia": "path" | "kind" | "mime_type" | "data_base64";
   "JobImage": "image" | "path" | "message_id" | "thread_id" | "from";
   "InboxView": "session_id" | "state_store_id" | "revision" | "tasks_token" | "observation" | "owners" | "threads" | "image_limits" | "unmanaged_agents";
   "InboxObservation": never;
@@ -871,8 +870,14 @@ export interface WireFieldNames {
   "InboxQuestion": "run_id" | "question_message_id" | "asked_at" | "text" | "choices" | "receipt";
   "InboxReceipt": "message_id" | "kind" | "to_run_id" | "attempt_run_id" | "stage" | "created_at" | "acked_at" | "stale";
   "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "presence" | "agent_status" | "location" | "cleanup" | "report_images";
-  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run";
-  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "updated_at";
+  "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to";
+  "InboxArtifact": "path" | "name" | "kind" | "recorded";
+  "InboxDecision": "question" | "answer" | "asked_at" | "answered_at" | "by";
+  "InboxTaskResult": "summary" | "outcome" | "at";
+  "InboxTaskIntegration": "target" | "commit";
+  "InboxTaskEvidence": "run_id" | "attempt" | "attempts" | "result" | "checks" | "commits" | "head_commit" | "integration" | "artifacts" | "images" | "decisions";
+  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence";
+  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "updated_at";
   "HandoffBinding": "repository_id" | "workspace_id" | "branch" | "base_ref";
   "HandoffBindingRecord": "requested" | "repository_common_dir" | "workspace_checkout";
   "BoundCheckout": "path" | "common_dir" | "branch" | "head";
@@ -968,14 +973,6 @@ export interface WireFieldNames {
   "CleanupItem": "operation_id" | "state" | "reason" | "effects" | "updated_at";
   "OwnedResourceRecord": "resource_id" | "root_id" | "run_id" | "kind" | "ownership" | "creation_operation_id" | "identity" | "authority" | "consumers" | "integration_result_id" | "cleanup";
   "ResourceRegister": "operation_id" | "run_id" | "resource";
-  "CleanupFinish": "operation_id" | "root_id" | "run_id";
-  "CleanupFinishResult": "operation_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count" | "duplicate";
-  "CleanupResourceSummary": "resource_id" | "kind" | "ownership" | "cleanup";
-  "RunCleanupSummary": "run_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count";
-  "RestorationSummary": "reattached" | "total_attachments" | "cleanup_pending";
-  "NativeShellIdentity": "process" | "executable_device" | "executable_inode" | "argv_digest";
-  "RetirementIdentity": "attachment_id" | "attachment_epoch" | "launch_mode" | "run_attempt" | "launch_attempt" | "launch_tag" | "endpoint_identity" | "session_id" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "herdr_boot_id" | "herdr_peer" | "conversation" | "process" | "shell";
-  "ReplacementRetirementAuthority": "operation_id" | "previous_run_id" | "previous_generation" | "replacement_run_id";
 }
 
 export interface WireChildNames {
@@ -992,8 +989,12 @@ export interface WireChildNames {
   "InboxQuestion.text": "InboxText";
   "InboxQuestion.receipt": "QuestionReceipt";
   "InboxRun.location": "InboxLocation";
+  "InboxEntry.source": "InboxSource";
+  "InboxTaskEvidence.result": "InboxTaskResult";
+  "InboxTaskEvidence.integration": "InboxTaskIntegration";
   "InboxTaskLink.project": "TaskProject";
   "InboxTaskLink.run": "InboxRun";
+  "InboxTaskLink.evidence": "InboxTaskEvidence";
   "InboxThread.title": "InboxText";
   "InboxThread.next": "InboxText";
   "InboxThread.request": "InboxRequestEcho";
@@ -1058,12 +1059,6 @@ export interface WireChildNames {
   "OwnedResourceRecord.identity": "OwnedResourceIdentity";
   "OwnedResourceRecord.cleanup": "CleanupItem";
   "ResourceRegister.resource": "OwnedResourceIdentity";
-  "CleanupResourceSummary.cleanup": "CleanupItem";
-  "NativeShellIdentity.process": "NativeProcessIdentity";
-  "RetirementIdentity.herdr_peer": "NativeProcessIdentity";
-  "RetirementIdentity.conversation": "ConversationIdentity";
-  "RetirementIdentity.process": "NativeProcessIdentity";
-  "RetirementIdentity.shell": "NativeShellIdentity";
 }
 
 export interface WireTagNames {
@@ -1116,6 +1111,8 @@ export interface WireCheckpointFieldNames {
   "OrchestrationImagePut": "session_id" | "data_base64";
   "OrchestrationImageRead": "session_id" | "image_id";
   "OrchestrationImageMedia": "image" | "data_base64";
+  "OrchestrationArtifactRead": "session_id" | "run_id" | "path";
+  "OrchestrationArtifactMedia": "path" | "kind" | "mime_type" | "data_base64";
   "JobImage": "image" | "path" | "message_id" | "thread_id" | "from";
   "InboxView": "session_id" | "state_store_id" | "revision" | "tasks_token" | "observation" | "owners" | "threads" | "image_limits" | "unmanaged_agents";
   "InboxObservation": "error" | "observed_at" | "status";
@@ -1134,8 +1131,14 @@ export interface WireCheckpointFieldNames {
   "InboxQuestion": "run_id" | "question_message_id" | "asked_at" | "text" | "choices" | "receipt";
   "InboxReceipt": "message_id" | "kind" | "to_run_id" | "attempt_run_id" | "stage" | "created_at" | "acked_at" | "stale";
   "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "presence" | "agent_status" | "location" | "cleanup" | "report_images";
-  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run";
-  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "updated_at";
+  "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to";
+  "InboxArtifact": "path" | "name" | "kind" | "recorded";
+  "InboxDecision": "question" | "answer" | "asked_at" | "answered_at" | "by";
+  "InboxTaskResult": "summary" | "outcome" | "at";
+  "InboxTaskIntegration": "target" | "commit";
+  "InboxTaskEvidence": "run_id" | "attempt" | "attempts" | "result" | "checks" | "commits" | "head_commit" | "integration" | "artifacts" | "images" | "decisions";
+  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence";
+  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "updated_at";
   "HandoffBinding": "repository_id" | "workspace_id" | "branch" | "base_ref";
   "HandoffBindingRecord": "requested" | "repository_common_dir" | "workspace_checkout";
   "BoundCheckout": "path" | "common_dir" | "branch" | "head";
@@ -1231,14 +1234,6 @@ export interface WireCheckpointFieldNames {
   "CleanupItem": "operation_id" | "state" | "reason" | "effects" | "updated_at";
   "OwnedResourceRecord": "resource_id" | "root_id" | "run_id" | "kind" | "ownership" | "creation_operation_id" | "identity" | "authority" | "consumers" | "integration_result_id" | "cleanup";
   "ResourceRegister": "operation_id" | "run_id" | "resource";
-  "CleanupFinish": "operation_id" | "root_id" | "run_id";
-  "CleanupFinishResult": "operation_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count" | "duplicate";
-  "CleanupResourceSummary": "resource_id" | "kind" | "ownership" | "cleanup";
-  "RunCleanupSummary": "run_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count";
-  "RestorationSummary": "reattached" | "total_attachments" | "cleanup_pending";
-  "NativeShellIdentity": "process" | "executable_device" | "executable_inode" | "argv_digest";
-  "RetirementIdentity": "attachment_id" | "attachment_epoch" | "launch_mode" | "run_attempt" | "launch_attempt" | "launch_tag" | "endpoint_identity" | "session_id" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "herdr_boot_id" | "herdr_peer" | "conversation" | "process" | "shell";
-  "ReplacementRetirementAuthority": "operation_id" | "previous_run_id" | "previous_generation" | "replacement_run_id";
 }
 
 export type WireOmittableField =
@@ -1251,8 +1246,18 @@ export type WireOmittableField =
   | "InboxReceipt.acked_at"
   | "InboxRun.agent_status"
   | "InboxRun.location"
+  | "InboxEntry.outcome"
+  | "InboxEntry.in_reply_to"
+  | "InboxDecision.answer"
+  | "InboxDecision.answered_at"
+  | "InboxDecision.by"
+  | "InboxTaskResult.outcome"
+  | "InboxTaskEvidence.result"
+  | "InboxTaskEvidence.head_commit"
+  | "InboxTaskEvidence.integration"
   | "InboxTaskLink.project"
   | "InboxTaskLink.run"
+  | "InboxTaskLink.evidence"
   | "InboxThread.need"
   | "InboxThread.next"
   | "InboxThread.project"
@@ -1355,15 +1360,6 @@ export type WireOmittableField =
   | "CleanupItem.reason"
   | "OwnedResourceRecord.creation_operation_id"
   | "OwnedResourceRecord.integration_result_id"
-  | "CleanupFinish.run_id"
-  | "RetirementIdentity.attachment_id"
-  | "RetirementIdentity.attachment_epoch"
-  | "RetirementIdentity.launch_mode"
-  | "RetirementIdentity.herdr_boot_id"
-  | "RetirementIdentity.herdr_peer"
-  | "RetirementIdentity.conversation"
-  | "RetirementIdentity.process"
-  | "RetirementIdentity.shell"
   | never;
 
 export type WireOptionalField =
@@ -1384,12 +1380,19 @@ export type WireListField =
   | "InboxQuestion.choices"
   | "InboxRun.cleanup"
   | "InboxRun.report_images"
+  | "InboxEntry.images"
+  | "InboxTaskEvidence.checks"
+  | "InboxTaskEvidence.commits"
+  | "InboxTaskEvidence.artifacts"
+  | "InboxTaskEvidence.images"
+  | "InboxTaskEvidence.decisions"
   | "InboxThread.owner_root_ids"
   | "InboxThread.follow_ups"
   | "InboxThread.questions"
   | "InboxThread.tasks"
   | "InboxThread.receipts"
   | "InboxThread.facts"
+  | "InboxThread.timeline"
   | "ThreadCard.choices"
   | "OrchestrationSnapshot.roots"
   | "OrchestrationSnapshot.runs"
@@ -1426,7 +1429,5 @@ export type WireListField =
   | "OwnedFixtureIdentity.processes"
   | "CleanupItem.effects"
   | "OwnedResourceRecord.consumers"
-  | "CleanupFinishResult.items"
-  | "RunCleanupSummary.items"
   | never;
 

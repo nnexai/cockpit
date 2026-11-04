@@ -415,6 +415,16 @@ macro_rules! cockpit_operations {
                   limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
                   guard = after(Orchestration); status = service
             }
+            { id: orchestration_artifact_read, ctx: orchestration, out: ::cockpit_protocol::orchestration::OrchestrationArtifactMedia,
+              call: $crate::transport::operations::orchestration::orchestration_artifact_read,
+              native: orchestration_artifact_read(request: ::serde_json::Value)
+                  => $crate::transport::native_input::value($crate::transport::limits::MUTATION_BYTES, "orchestration"),
+              http: post "/api/v1/sessions/{session_id}/orchestration/artifacts/read"
+                  (path: ::axum::extract::Path<::std::string::String>, body: ::std::result::Result<::axum::Json<::cockpit_protocol::orchestration::OrchestrationArtifactRead>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::operations::orchestration::artifact_read_input();
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
+                  guard = after(Orchestration); status = service
+            }
             { id: orchestration_liaison_lookup, ctx: orchestration, out: ::cockpit_protocol::orchestration::LiaisonLookupResponse,
               call: $crate::transport::operations::orchestration::orchestration_liaison_lookup,
               native: orchestration_liaison_lookup(request: ::serde_json::Value)

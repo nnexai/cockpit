@@ -14,6 +14,7 @@ use cockpit_protocol::orchestration::{
     LiaisonLookupRequest, LiaisonLookupResponse,
 };
 use cockpit_protocol::orchestration::{MessageImage, OrchestrationImageMedia, OrchestrationImagePut, OrchestrationImageRead};
+use cockpit_protocol::orchestration::{OrchestrationArtifactMedia, OrchestrationArtifactRead};
 use serde::Deserialize;
 
 use crate::{
@@ -128,6 +129,21 @@ pub fn image_put_input() -> impl FnOnce(ImagePutInput) -> Result<OrchestrationIm
 pub fn image_read_input() -> impl FnOnce(ImageReadInput) -> Result<OrchestrationImageRead, OperationError> {
     |(path, body)| {
         let (session_id, request): (String, OrchestrationImageRead) = http_input::session_sized_body(
+            Reject("invalid_session_id", "Session ID is invalid"),
+            Reject("invalid_orchestration_request", "Expected a bounded JSON orchestration request with valid fields"),
+        )((path, body))?;
+        if request.session_id != session_id {
+            return Err(OperationError::rejected("session_mismatch", "Path and request session IDs differ"));
+        }
+        Ok(request)
+    }
+}
+
+type ArtifactReadInput = (Path<String>, Result<Json<OrchestrationArtifactRead>, JsonRejection>);
+
+pub fn artifact_read_input() -> impl FnOnce(ArtifactReadInput) -> Result<OrchestrationArtifactRead, OperationError> {
+    |(path, body)| {
+        let (session_id, request): (String, OrchestrationArtifactRead) = http_input::session_sized_body(
             Reject("invalid_session_id", "Session ID is invalid"),
             Reject("invalid_orchestration_request", "Expected a bounded JSON orchestration request with valid fields"),
         )((path, body))?;
@@ -272,6 +288,17 @@ pub async fn orchestration_image_read(
     runtime.service.image_for_session(&request.session_id, &request.image_id).map_err(Into::into)
 }
 
+pub async fn orchestration_artifact_read(
+    runtime: &OrchestrationRuntime,
+    _transport: Transport,
+    request: OrchestrationArtifactRead,
+) -> Result<OrchestrationArtifactMedia, OperationError> {
+    if !crate::transport::guard::valid_session_id(&request.session_id) {
+        return Err(OperationError::rejected("invalid_session_id", "Session ID is invalid"));
+    }
+    runtime.service.artifact_read(request).map_err(Into::into)
+}
+
 pub async fn orchestration_wait(
     runtime: &OrchestrationRuntime,
     _transport: Transport,
@@ -299,6 +326,19 @@ mod tests {
         let encoded_limit = (cockpit_core::orchestration::MAX_IMAGE_BYTES as usize).div_ceil(3) * 4;
         let error: cockpit_protocol::v1::ErrorResponse = decode_image(&"A".repeat(encoded_limit + 1)).unwrap_err().into();
         assert_eq!(error.code, "image_too_large");
+    }
+
+    #[test]
+    fn artifact_read_input_fences_sessions() {
+        let request = OrchestrationArtifactRead {
+            session_id: "session".into(),
+            run_id: "run".into(),
+            path: "/tmp/artifact.html".into(),
+        };
+        assert!(artifact_read_input()((Path("session".into()), Ok(Json(request.clone())))).is_ok());
+        let error: cockpit_protocol::v1::ErrorResponse =
+            artifact_read_input()((Path("other".into()), Ok(Json(request)))).unwrap_err().into();
+        assert_eq!(error.code, "session_mismatch");
     }
 
     #[tokio::test]
