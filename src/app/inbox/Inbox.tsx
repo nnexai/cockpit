@@ -268,7 +268,15 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
       revisionFloor.current = Math.max(revisionFloor.current, response.revision);
       if (response.result.result !== "message" || (operation.action.action === "thread_handoff" && response.result.to_run_id !== operation.action.to_run_id) || (operation.action.action === "message_send" && response.result.to_run_id !== operation.action.to_run_id)) throw new Error("Delivery receipt did not match the request");
       if (response.result.result === "message" && response.result.stale) { setPending(null); setError("The question or task changed. Your draft is preserved; review the current work before sending again."); }
-      else { setPending(null); setDrafts(d => d[operation.key] === operation.text ? { ...d, [operation.key]: "" } : d); if (operation.action.action === "thread_handoff") { images.clear(operation.key, operation.action.images ?? []); setSelected(operation.action.thread_id); } }
+      else {
+        setPending(null);
+        setDrafts(d => d[operation.key] === operation.text ? { ...d, [operation.key]: "" } : d);
+        if (operation.action.action === "message_send" && operation.action.kind === "answer") {
+          const answered = JSON.stringify([operation.action.to_run_id, operation.action.in_reply_to]);
+          setSelectedQuestion(current => current === answered ? "" : current);
+        }
+        if (operation.action.action === "thread_handoff") { images.clear(operation.key, operation.action.images ?? []); setSelected(operation.action.thread_id); }
+      }
       refreshVersion.current++; wake.current?.();
     } catch (e) { if (mounted.current) { setError(`${e instanceof Error ? e.message : "Delivery was not confirmed"}. The original request is retained; retry it without changing its identity.`); refreshVersion.current++; wake.current?.(); } }
     finally { lock.current = false; if (mounted.current) setBusy(false); }

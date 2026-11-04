@@ -495,6 +495,20 @@ describe("Inbox", () => {
     await flush(() => text("Use the second option")); await flush(submit);
     expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "message_send", to_run_id: "other", kind: "answer", in_reply_to: "q2", text: "Use the second option" });
   });
+  it("sends a follow-up after a confirmed answer and resolved question", async () => {
+    const { client, waits } = fixture(), app = setup(client), inbox = view("a");
+    const question = { run_id: "owner", question_message_id: "q", asked_at: "now", text: { text: "Choose", source: { kind: "owner" as const, run_id: "owner", harness: "omp" }, message_id: "q", at: "now", images: [] }, choices: ["Blue"], receipt: { status: "unresolved" as const } };
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [question], recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, state: "handled", need: null, questions: [] }] });
+    vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "owner", seq: 1, duplicate: false, stale: false } });
+    await flush(() => app.render());
+    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-row")!.click());
+    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-chip")!.click());
+    await flush(submit);
+    await flush(() => waits[0]!({ revision: 2, tasks_token: "updated", changed: true }));
+    await flush(() => text("One more thing")); await flush(submit);
+    expect(vi.mocked(client.orchestrationMutate).mock.calls[1]![0].action).toMatchObject({ action: "thread_handoff", thread_id: "thread", to_run_id: "owner", text: "One more thing" });
+  });
   it("selects and answers the right root when questions share a message ID", async () => {
     const { client, waits } = fixture(), app = setup(client);
     const inbox = view("a");
