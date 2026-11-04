@@ -332,6 +332,34 @@ mod tests {
         assert_eq!(thread.request.as_ref().unwrap().text, original);
     }
     #[test]
+    fn latest_valid_owner_card_titles_thread_without_replacing_request() {
+        let mut worker = root("worker");
+        worker.kind = RunKind::Worker;
+        worker.root_id = "root".into();
+        worker.parent_run_id = Some("root".into());
+        let mut state = OrchestrationState { runs: vec![root("root"), worker], ..Default::default() };
+        let mut request = message("request", "root", 1, Some("thread"), MessageKind::Instruction);
+        request.text = "Original request\nFull details".into();
+        request.handoff = Some(HandoffRecord { task_id: None, task_revision: None, attempt_run_id: None, binding: None, origin: OperatorOrigin::Browser });
+        let mut original = report("original", "root", 2, Some("thread"), ReportKind::Progress);
+        original.report.as_mut().unwrap().card = Some(ThreadCard { title: "Original title".into(), next: "Working".into(), recommendation: None, choices: vec![], project: None });
+        let mut renamed = report("renamed", "root", 3, Some("thread"), ReportKind::Progress);
+        renamed.report.as_mut().unwrap().card = Some(ThreadCard { title: "Renamed title".into(), next: "Working".into(), recommendation: None, choices: vec![], project: None });
+        let without_card = report("without-card", "root", 4, Some("thread"), ReportKind::Result);
+        let mut stale = report("stale", "root", 5, Some("thread"), ReportKind::Progress);
+        stale.stale = true;
+        stale.report.as_mut().unwrap().card = Some(ThreadCard { title: "Stale title".into(), next: "Old".into(), recommendation: None, choices: vec![], project: None });
+        let mut worker_report = report("worker-report", "worker", 6, Some("thread"), ReportKind::Progress);
+        worker_report.report.as_mut().unwrap().card = Some(ThreadCard { title: "Worker title".into(), next: "Old".into(), recommendation: None, choices: vec![], project: None });
+        state.messages.extend([worker_report, stale, without_card, renamed, original, request]);
+        let projected = view(&state, vec![]);
+        let thread = &projected.threads[0];
+        assert_eq!(thread.title.text, "Renamed title");
+        assert_eq!(thread.title.message_id.as_deref(), Some("renamed"));
+        assert!(matches!(thread.title.source, InboxSource::OwnerCard { .. }));
+        assert_eq!(thread.request.as_ref().unwrap().text, "Original request\nFull details");
+    }
+    #[test]
     fn scope_legacy_answers_and_workers_are_not_human_questions() {
         let mut worker = root("worker");
         worker.kind = RunKind::Worker; worker.root_id = "root".into(); worker.parent_run_id = Some("root".into());

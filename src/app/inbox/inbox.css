@@ -237,6 +237,18 @@
 .inbox-task .inbox-btn{min-height:30px}
 .inbox-rail .inbox-evidence{margin-top:0;padding-top:6px;border-top:0}
 .inbox-compose-hint{margin-top:6px!important;color:var(--text-muted);font-size:11px}
+.inbox-outcome{border-left:3px solid var(--kc,var(--border-strong))!important}
+.inbox-result-actions{position:sticky;bottom:0;z-index:1;padding:12px 14px;background:var(--chrome-bg);border:1px solid var(--border-strong);border-radius:var(--radius-panel);box-shadow:0 -4px 18px color-mix(in srgb,var(--app-bg) 50%,transparent)}
+.inbox-result-actions p{margin-bottom:10px;color:var(--text-secondary);font-size:12px}
+.inbox-result-actions>div,.inbox-handled{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.inbox-handled{justify-content:space-between;padding:12px 14px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-panel);font-size:13px}
+.inbox-messages-heading{margin:24px 0 0;font-size:13px;color:var(--text-secondary)}
+.inbox-followup-cancel{margin-left:auto;padding:6px 8px!important;color:var(--accent)!important;font-size:12px}
+.inbox-compose-label{font-size:12px;color:var(--text-secondary)}
+.inbox-supporting>summary{display:flex;align-items:center;gap:6px;min-height:44px;list-style:none;color:var(--text-muted);cursor:pointer}
+.inbox-supporting>summary::-webkit-details-marker{display:none}
+.inbox-supporting>summary .ui-icon{width:14px;height:14px;flex-basis:14px}
+.inbox-card-heading h3{flex:none;white-space:nowrap}
 .inbox-copy{display:flex;align-items:center;gap:8px;margin:8px 0;font-size:12px}
 .inbox-copy>span:first-child{flex:1;overflow-wrap:anywhere;color:var(--text-secondary);user-select:text}
 .inbox-copy button{flex:none;padding:4px 8px;border:1px solid var(--border-strong);border-radius:var(--radius-control);color:var(--text-secondary)}
@@ -268,8 +280,13 @@
   .inbox-thread-header .inbox-btn.is-primary{width:100%;justify-content:center}
   .inbox-rail{padding-inline:16px}
   .inbox-row{min-height:72px;padding-block:14px}
+  .inbox-compose[data-result-followup=true]{display:none}
+  .inbox-result-actions{bottom:0;padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+  .inbox-result-actions>div{display:flex;flex-wrap:nowrap}
+  .inbox-result-actions .inbox-btn{flex:1;justify-content:center;min-height:48px}
+  .inbox-chip{min-height:52px}
   .inbox-row.is-quiet{min-height:60px;padding-block:12px}
-  .inbox-compose:not(:focus-within):not([data-mode=answer]):not([data-mode=new]) .inbox-compose-head{display:none}
+  .inbox-compose:not(:focus-within):not([data-mode=answer]):not([data-mode=new]):not(:has(.inbox-followup-cancel)) .inbox-compose-head{display:none}
   .inbox-compose:not(:focus-within):not([data-mode=answer]):not([data-mode=new]) textarea{min-height:46px;height:46px}
   .inbox-compose-row{flex-wrap:nowrap}
   .inbox-send{min-height:46px}

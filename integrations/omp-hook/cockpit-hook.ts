@@ -184,7 +184,7 @@ export function frames(messages: Envelope[]): string[] {
       ? "Answer messages are already recorded; continue on the matching thread and question without recording the answer again.\n"
       : "")
     + (messages.some(message => message.handoff && message.thread_id)
-      ? "For a new thread, promptly report progress with --thread, --title and --next. Choose a concise meaningful title for the request, not its opening words; honor an explicitly requested title. Keep the title on later reports and follow-ups unless the user asks to change it. Handle this in your normal work, not a separate model call.\n"
+      ? "For a new thread, promptly publish a progress report with `run report --kind progress --thread ID --title TITLE --next NEXT --summary SUMMARY`: choose a concise meaningful title for the request, not its opening words, and honor an explicitly requested title. On follow-ups retain the existing thread title unless the user asks to change it; if needed, inspect prior thread reports with `inbox list`. Handle this in your normal work, not a separate model call.\n"
       : "")
     + `--- BEGIN UNTRUSTED DATA ${index + 1}/${parts.length} ---\n${body}\n`
     + `--- END UNTRUSTED DATA ${index + 1}/${parts.length} ---`);

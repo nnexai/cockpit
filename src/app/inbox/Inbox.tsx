@@ -18,11 +18,14 @@ type Pending = { action: OrchestrationAction; text: string; store: string; key: 
 const source = (value: InboxText) => value.source.kind === "owner_card" ? `AI synthesis · ${value.source.harness}` : value.source.kind === "owner" ? `Owner · ${value.source.harness}` : value.source.kind === "worker" ? "Worker claim" : value.source.kind === "user" ? "Your request" : "Recorded fact";
 const questionKey = (question: InboxQuestion) => JSON.stringify([question.run_id, question.question_message_id]);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const threadHeadline = (thread: InboxThread) => {
-  const title = thread.title.text.replace(/\s+/g, " ").trim();
-  const characters = Array.from(title);
-  return characters.length > 120 ? `${characters.slice(0, 119).join("").trimEnd()}…` : title;
-};
+const threadHeadline = (thread: InboxThread) => thread.title.text.replace(/\s+/g, " ").trim();
+const deliveryLabel = (stage: InboxThread["receipts"][number]["stage"]) => stage === "stored" ? "waiting to be picked up" : stage === "read" ? "picked up" : "received";
+function outcomeLine(thread: InboxThread) {
+  const question = thread.questions.find(q => q.receipt.status === "unresolved");
+  const text = question?.text.text || thread.reply?.text || thread.next?.text;
+  const lines = text?.split(/\r?\n/).map(line => line.replace(/<[^>]*>|[*_`#>\[\]]/g, "").trim()).filter(Boolean) ?? [];
+  return lines.find(line => line !== threadHeadline(thread)) || (thread.state === "handled" ? "Handled" : thread.state === "needs_you" ? "Awaiting your response" : "Waiting for an update");
+}
 const directBusyCodes: Record<string, true> = { agent_not_idle: true, herdr_prompt_deferred: true, agent_blocked: true, agent_not_ready: true };
 const ownerLabel = (view: InboxView | null, runId: string) => {
   const owner = view?.owners.find(o => o.root_id === runId);
@@ -42,9 +45,9 @@ function questionLabels(view: InboxView | null, questions: InboxQuestion[]) {
 }
 function tone(thread: InboxThread): { kind: string; icon: UiIconName; label: string } {
   if (thread.state === "underway") return { kind: "work", icon: "work", label: "Working" };
-  if (thread.state === "handled") return { kind: "done", icon: "check-circle", label: "Done" };
+  if (thread.state === "handled") return { kind: "done", icon: "check-circle", label: "Handled" };
   if (thread.need === "answer") return { kind: "review", icon: "eye", label: "Result ready" };
-  return { kind: "decision", icon: "help", label: thread.need === "decision" ? "Needs your decision" : "Needs you" };
+  return { kind: "decision", icon: "help", label: thread.need === "decision" ? "Question" : "Needs you" };
 }
 const srcKind = (value: InboxText) => value.source.kind === "owner_card" ? "ai" : value.source.kind;
 const srcLabel = (value: InboxText) => ({ ai: "AI summary", owner: "Owner", worker: "Worker claim", user: "Your request", recorded: "Recorded" })[srcKind(value)];
@@ -80,6 +83,13 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const [base, setBase] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
+  const [readError, setReadError] = useState("");
+  const [followupOpen, setFollowupOpen] = useState(false);
+  const [announcement, setAnnouncement] = useState("");
+  const followupRef = useRef<HTMLButtonElement>(null);
+  const focusAfterRead = useRef<string | null>(null);
+  const resultActionsRef = useRef<HTMLDivElement>(null);
+  const resultActionsFocused = useRef(false);
   const [directUncertain, setDirectUncertain] = useState<Record<string, boolean>>({});
   const [directStale, setDirectStale] = useState(false);
   const [directOutcome, setDirectOutcome] = useState<{ pane: string; target: string; kind: "submitted" | "busy"; name: string } | null>(null);
@@ -181,6 +191,27 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const preview = view?.threads.find(t => t.state === "needs_you")?.title.text ?? view?.unmanaged_agents.find(relevant)?.agent_name ?? null;
   useEffect(() => { if (current) onAttentionChange?.({ count, preview }); }, [current, count, preview, onAttentionChange]);
   const thread = view?.threads.find(t => t.thread_id === selected);
+  useEffect(() => {
+    const trackFocus = (event: Event) => {
+      resultActionsFocused.current = !!resultActionsRef.current?.contains(event.target as Node);
+    };
+    document.addEventListener("focusin", trackFocus, true);
+    document.addEventListener("pointerdown", trackFocus, true);
+    return () => {
+      document.removeEventListener("focusin", trackFocus, true);
+      document.removeEventListener("pointerdown", trackFocus, true);
+    };
+  }, []);
+  useLayoutEffect(() => {
+    const readId = focusAfterRead.current;
+    if (!readId || !thread || thread.unread_result_message_id === readId) return;
+    focusAfterRead.current = null;
+    const active = document.activeElement;
+    if (resultActionsFocused.current && (!active || active === document.body || resultActionsRef.current?.contains(active))) {
+      (followupRef.current ?? composerRef.current)?.focus();
+    }
+    resultActionsFocused.current = false;
+  }, [thread, announcement]);
   const direct = selectedAgent?.agent;
   const matchedDirect = direct ? matchingAgent(direct) : undefined;
   const liveDirect = matchedDirect?.terminalId === selectedAgent?.terminalId ? matchedDirect : undefined;
@@ -194,7 +225,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     field.style.height = "auto";
     field.style.height = `${Math.min(field.scrollHeight, window.innerHeight * .4)}px`;
   }, [text, key, visible, mobileDetail]);
-  const select = (id: string | null) => { selectionVersion.current++; setDirectOutcome(null); setError(""); setSelected(id); setSelectedAgent(null); setSelectedQuestion(""); setTaskId(""); setMobileDetail(true); };
+  const select = (id: string | null) => { selectionVersion.current++; setDirectOutcome(null); setError(""); setReadError(""); setFollowupOpen(false); setAnnouncement(""); focusAfterRead.current = null; resultActionsFocused.current = false; setSelected(id); setSelectedAgent(null); setSelectedQuestion(""); setTaskId(""); setMobileDetail(true); };
   const selectAgent = (agent: UnmanagedAgent) => {
     const row = matchingAgent(agent);
     const target = agent.expected_target;
@@ -299,7 +330,19 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     }
     await execute({ action, text, store: view.state_store_id, key });
   };
-  const markRead = async () => { if (!thread?.unread_result_message_id || !view || view.observation.status !== "fresh" || snapshot?.session_id !== sessionId || busy || lock.current) return; lock.current = true; setBusy(true); try { await client.orchestrationMutate({ session_id: sessionId, expected_revision: null, action: { action: "thread_mark_read", thread_id: thread.thread_id, through_message_id: thread.unread_result_message_id } }); refreshVersion.current++; wake.current?.(); } catch (e) { setError(e instanceof Error ? e.message : "Could not mark read"); } finally { lock.current = false; setBusy(false); } };
+  const markRead = async () => {
+    if (!thread?.unread_result_message_id || thread.reply?.message_id !== thread.unread_result_message_id || !view || !current || view.observation.status !== "fresh" || snapshot?.session_id !== sessionId || busy || lock.current) return;
+    const attempt = selectionVersion.current;
+    const resultId = thread.unread_result_message_id;
+    lock.current = true; setBusy(true); setReadError("");
+    try {
+      await client.orchestrationMutate({ session_id: sessionId, expected_revision: null, action: { action: "thread_mark_read", thread_id: thread.thread_id, through_message_id: resultId } });
+      if (mounted.current && selectionVersion.current === attempt) { focusAfterRead.current = resultId; setAnnouncement("Acknowledged. You can still follow up."); }
+      refreshVersion.current++; wake.current?.();
+    } catch (e) { if (mounted.current && selectionVersion.current === attempt) setReadError(`Couldn't acknowledge: ${e instanceof Error ? e.message : "Please try again."}`); }
+    finally { lock.current = false; if (mounted.current) setBusy(false); }
+  };
+  const startFollowup = () => { setSelectedQuestion(""); setFollowupOpen(true); requestAnimationFrame(() => composerRef.current?.focus()); };
   const questions = thread?.questions.filter(q => q.receipt.status === "unresolved") ?? [];
   const chosenQuestion = questions.find(q => questionKey(q) === selectedQuestion);
   const labels = questionLabels(view, questions);
@@ -328,7 +371,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
         {view?.threads.filter(t => t.state === "needs_you").map(t => <ThreadRow key={t.thread_id} thread={t} selected={selected === t.thread_id} onSelect={() => select(t.thread_id)} />)}
         {view?.unmanaged_agents.filter(relevant).map(a => <AgentRow key={a.pane_id} agent={a} context={contextFor(a)} selected={selected === `agent:${a.pane_id}`} onSelect={() => selectAgent(a)} />)}
       </section>}
-      {underway.length > 0 && <details className="inbox-others" open><summary><UiIcon name="right" />Underway · {underway.length}</summary>{underway.map(t => <ThreadRow key={t.thread_id} thread={t} selected={selected === t.thread_id} onSelect={() => select(t.thread_id)} />)}</details>}
+      {underway.length > 0 && <details className="inbox-others" open><summary><UiIcon name="right" />Working · {underway.length}</summary>{underway.map(t => <ThreadRow key={t.thread_id} thread={t} selected={selected === t.thread_id} onSelect={() => select(t.thread_id)} />)}</details>}
       {handled.length > 0 && <details className="inbox-others" open={handled.some(t => t.thread_id === selected) || undefined}><summary><UiIcon name="right" />Handled · {handled.length}</summary>{handled.map(t => <ThreadRow key={t.thread_id} thread={t} selected={selected === t.thread_id} onSelect={() => select(t.thread_id)} />)}</details>}
       {view && view.unmanaged_agents.some(a => !relevant(a)) && <details className="inbox-others"><summary><UiIcon name="right" />Other agents · {view.unmanaged_agents.filter(a => !relevant(a)).length}</summary>{view.unmanaged_agents.filter(a => !relevant(a)).map(a => <AgentRow key={a.pane_id} agent={a} context={contextFor(a)} selected={selected === `agent:${a.pane_id}`} quiet onSelect={() => selectAgent(a)} />)}</details>}
     </aside>
@@ -337,19 +380,27 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
         <div className="inbox-thread-heading"><p className="inbox-facts"><span className="inbox-state">{tone(thread).label}</span>{thread.project && <span>{thread.project}</span>}<span>Updated <Time value={thread.updated_at} /></span>{thread.next && thread.next.source.kind !== "owner_card" && <span>{thread.next.text}</span>}{ai && <span className="inbox-prov"><UiIcon name="spark" />AI summary</span>}{worker && <span className="inbox-tag" data-kind="worker">Worker claim</span>}</p><h2 title={thread.title.text} aria-label={thread.title.text}>{threadHeadline(thread)}</h2>{thread.next?.source.kind === "owner_card" && <p className="inbox-next"><UiIcon name="spark" />{thread.next.text}</p>}</div>
         <div className="inbox-actions">{targets.map(target => <button type="button" className="inbox-btn" key={target.key} title={target.full} aria-label={target.full} disabled={view?.observation.status !== "fresh"} onClick={() => open(target.location)}><UiIcon name="terminal" /><span>{targets.length === 1 ? "Open session" : target.label}</span></button>)}
           {view?.owners.filter(o => thread.owner_root_ids.includes(o.root_id) && (!o.location || o.availability !== "available")).map(o => <span className="inbox-offline" key={o.root_id}><UiIcon name="offline" />{ownerLabel(view, o.root_id)} · {o.availability === "starting" ? "starting" : o.availability === "absent" ? "not running" : "status unknown"}</span>)}
-          {thread.unread_result_message_id && <button type="button" className="inbox-btn is-primary" disabled={busy} onClick={() => void markRead()}><UiIcon name="check" />Mark read</button>}</div>
+        </div>
       </header><div className="inbox-body"><div className="inbox-content"><div className="inbox-column">
         {questions.map((q, i) => <div key={questionKey(q)}><Question question={q} label={labels[i]} selected={selectedQuestion === questionKey(q)} draft={text} recommendation={thread.recommendation?.text} onSelect={() => setSelectedQuestion(selectedQuestion === questionKey(q) ? "" : questionKey(q))} onChoice={choice => { setSelectedQuestion(questionKey(q)); setText(choice); }} /><InboxImages client={client} sessionId={sessionId} images={q.text.images ?? []} label={`Attached by ${source(q.text)}`} /></div>)}
         {thread.recommendation && !recommendationIsChoice && <div className="inbox-recommendation" role="note"><UiIcon name="spark" /><span><span className="inbox-sr">AI recommendation: </span>{thread.recommendation.text}</span></div>}
-        {thread.reply && (thread.reply.text !== thread.title.text || (thread.reply.images?.length ?? 0) > 0) && <div className="inbox-update"><small>{thread.reply.source.kind === "owner" || thread.reply.source.kind === "owner_card" ? `Update from ${ownerLabel(view, thread.reply.source.run_id)}` : thread.reply.source.kind === "worker" ? "Worker update" : "Update"}</small><InboxFeedback text={thread.reply.text} /><InboxImages client={client} sessionId={sessionId} images={thread.reply.images ?? []} label={`Attached by ${source(thread.reply)}`} /></div>}
+        {thread.reply && <div className="inbox-update inbox-outcome" data-tone={tone(thread).kind}><small>{thread.unread_result_message_id && thread.reply.message_id === thread.unread_result_message_id ? "Result" : "Update"}{thread.reply.source.kind === "owner" || thread.reply.source.kind === "owner_card" ? ` from ${ownerLabel(view, thread.reply.source.run_id)}` : thread.reply.source.kind === "worker" ? " from worker" : ""} · <Time value={thread.reply.at} /></small><InboxFeedback text={thread.reply.text} /><InboxImages client={client} sessionId={sessionId} images={thread.reply.images ?? []} label={`Attached by ${source(thread.reply)}`} /></div>}
+        {!thread.reply && !questions.length && <div className="inbox-update inbox-outcome" data-tone={tone(thread).kind}><small>Where it stands</small><p>{thread.next?.text || (thread.state === "handled" ? "Handled." : "Waiting for an update.")}</p></div>}
+        {thread.unread_result_message_id && <div ref={resultActionsRef} className="inbox-result-actions" role="group" aria-label="Result actions" onFocusCapture={() => { resultActionsFocused.current = true; }} onBlurCapture={e => { if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) resultActionsFocused.current = false; }}><p>{readError ? <span role="alert">{readError}</span> : thread.reply?.message_id !== thread.unread_result_message_id ? "The unread result is not available in this view. Refresh before acknowledging it." : "Acknowledge marks this result as read. It doesn't answer questions, accept the work, or notify the owner."}</p><div><button type="button" className="inbox-btn is-primary" disabled={thread.reply?.message_id !== thread.unread_result_message_id || busy || !current || view?.observation.status !== "fresh" || snapshot?.session_id !== sessionId} onClick={() => void markRead()}><UiIcon name="check" />{busy ? "Acknowledging…" : "Acknowledge"}</button><button ref={followupRef} type="button" className="inbox-btn" onClick={startFollowup}>Follow up</button></div>{view?.observation.status !== "fresh" && <small>Live sessions are unavailable; actions are paused.</small>}</div>}
+        {thread.state === "handled" && !thread.unread_result_message_id && <div className="inbox-handled"><span>Handled. To ask for more, follow up.</span><button ref={followupRef} type="button" className="inbox-btn" onClick={startFollowup}>Follow up</button></div>}
+        <span className="inbox-sr" role="status">{announcement}</span>
+        {(thread.request || thread.follow_ups.length > 0 || thread.questions.some(q => q.receipt.status !== "unresolved")) && <h3 className="inbox-messages-heading">Your messages</h3>}
         {thread.request && <RequestCard key={thread.thread_id} thread={thread} view={view} client={client} sessionId={sessionId} />}
-        {(thread.follow_ups ?? []).map(item => <section className="inbox-update" key={item.message_id}><small>Your follow-up · <Time value={item.created_at} /></small><p>{item.text}</p><InboxImages client={client} sessionId={sessionId} images={item.images ?? []} label="Images in your follow-up" /></section>)}
+        {(thread.follow_ups ?? []).map(item => { const receipt = thread.receipts.find(r => r.message_id === item.message_id); return <section className="inbox-update" key={item.message_id}><small>Your follow-up · <Time value={item.created_at} />{receipt && ` · ${deliveryLabel(receipt.stage)}`}</small><p>{item.text}</p><InboxImages client={client} sessionId={sessionId} images={item.images ?? []} label="Images in your follow-up" /></section>; })}
+        {thread.questions.map(q => q.receipt.status !== "unresolved" && <section className="inbox-update" key={questionKey(q)}><small>Answer · <Time value={q.receipt.answer.created_at} /> · {deliveryLabel(q.receipt.answer.stage)}</small><p>{q.text.text}</p></section>)}
         {thread.tasks.map(task => task.run && (task.run.report_images?.length ?? 0) > 0 && <section className="inbox-update" key={`${task.root_id}:${task.task_id}:images`}><small>Worker claim · {task.title} · not verified by Cockpit</small><InboxImages client={client} sessionId={sessionId} images={task.run.report_images} label="Attached by worker — not verified by Cockpit" /></section>)}
         {!hasRail && <Evidence thread={thread} view={view} displayed={displayed} />}
         </div></div>{hasRail && <WorkRail thread={thread} view={view} displayed={displayed} open={open} wide={wideDetail} references={references} />}
       </div></> : direct ? <div className="inbox-content"><div className="inbox-head" data-tone="unknown"><span className="inbox-kic is-lg"><UiIcon name="user" /></span><div><h2>{direct.agent_name}</h2><p className="inbox-facts"><span>{direct.workspace_label} · {direct.tab_label}</span><span>Direct agent · {liveDirect?.agent.status || "status unavailable"}</span></p></div></div>{(directContext?.title || directContext?.activity) && <section aria-label="Session context">{directContext.title && <div className="inbox-update inbox-session-context" dir="auto"><small>{directContext.titleLabel}</small>{directContext.title}</div>}{directContext.activity && <div className="inbox-update inbox-session-context" dir="auto"><small>{directContext.activityLabel} · OMP session</small>{directContext.activity}</div>}</section>}<div className="inbox-actions"><button type="button" className="inbox-btn" onClick={() => open({ workspace_id: direct.workspace_id, workspace_label: direct.workspace_label, tab_id: direct.tab_id, tab_label: direct.tab_label, pane_id: direct.pane_id })}>Open session</button></div></div> : <div className="inbox-content is-new"><div className="inbox-head" data-tone="review"><span className="inbox-kic is-lg"><UiIcon name="plus" /></span><div><h2>New work</h2><p className="inbox-facts">Send a request to a liaison.</p></div></div></div>}
-      <form className="inbox-compose" data-mode={mode} data-dragging={dragging || undefined} onDragOver={e => { if ((mode === "new" || mode === "followup") && current && view?.image_limits && !pending && !busy && Array.from(e.dataTransfer.types).includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setDragging(true); } }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }} onDrop={e => { setDragging(false); if ((mode === "new" || mode === "followup") && current && view?.image_limits && !pending && !busy && e.dataTransfer.files.length) { e.preventDefault(); images.add(e.dataTransfer.files); } }} onSubmit={e => { e.preventDefault(); void send(); }}>
+      <form className="inbox-compose" data-mode={mode} data-result-followup={!!thread?.unread_result_message_id && !followupOpen && !questions.length && !pending && !error || undefined} data-dragging={dragging || undefined} onDragOver={e => { if ((mode === "new" || mode === "followup") && current && view?.image_limits && !pending && !busy && Array.from(e.dataTransfer.types).includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setDragging(true); } }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }} onDrop={e => { setDragging(false); if ((mode === "new" || mode === "followup") && current && view?.image_limits && !pending && !busy && e.dataTransfer.files.length) { e.preventDefault(); images.add(e.dataTransfer.files); } }} onSubmit={e => { e.preventDefault(); void send(); }}>
         <div className="inbox-compose-head">
+          {thread && !questions.length && <strong className="inbox-compose-label">Follow up</strong>}
+          {thread?.unread_result_message_id && followupOpen && !pending && <button type="button" className="inbox-followup-cancel" onClick={() => { setFollowupOpen(false); requestAnimationFrame(() => followupRef.current?.focus()); }}>Cancel</button>}
           {thread && (questions.length > 0 || !!selectedQuestion) && <div className="inbox-seg" role="group" aria-label="Message type"><button type="button" aria-pressed={mode === "followup"} disabled={!!pending} onClick={() => setSelectedQuestion("")}>Follow up</button>{questions.length > 0 && <button type="button" aria-pressed={mode === "answer"} aria-disabled={!chosenQuestion && questions.length > 1} title={!chosenQuestion && questions.length > 1 ? "Pick a question above first" : undefined} disabled={!!pending} onClick={() => { if (questions.length === 1) setSelectedQuestion(questionKey(questions[0])); }}>Answer</button>}</div>}
           {!direct && (chosenQuestion ? <span className="inbox-dest"><UiIcon name="reply" /><span>{labels[questions.indexOf(chosenQuestion)]}</span></span> : thread?.owner_root_ids.length === 1 ? <span className="inbox-dest"><UiIcon name="user" /><span>{ownerLabel(view, thread.owner_root_ids[0])}</span></span> : <label className={mode === "new" ? "inbox-owner" : "inbox-pick"} data-empty={!(thread ? owner : newOwner)}>{mode === "new" && <span className="inbox-field-label">Owner</span>}<span className={mode === "new" ? "inbox-owner-control" : undefined}><UiIcon name="user" /><select aria-label="Owner" value={thread ? owner : newOwner} onChange={e => setOwner(e.target.value)} disabled={!!pending}><option value="">Choose owner</option>{(thread ? view?.owners.filter(o => thread.owner_root_ids.includes(o.root_id)) : newOwners)?.map(o => <option key={o.root_id} value={o.root_id}>{ownerOptionLabel(view!, o)}</option>)}</select></span></label>)}
           {thread && !chosenQuestion && thread.tasks.length > 0 && <label className="inbox-pick">About <select aria-label="Follow-up target" value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!!pending}><option value="">Whole thread</option>{thread.tasks.map(task => <option key={`${task.root_id}:${task.task_id}`} value={task.task_id}>{task.title} · {ownerLabel(view, task.root_id)}</option>)}</select></label>}
@@ -383,7 +434,7 @@ function AgentRow({ agent, context, selected, quiet = false, onSelect }: { agent
 }
 function ThreadRow({ thread, selected, onSelect }: { thread: InboxThread; selected: boolean; onSelect(): void }) {
   const state = tone(thread), quiet = thread.state !== "needs_you";
-  return <button type="button" className={`inbox-row${quiet ? " is-quiet" : ""}`} data-tone={state.kind} aria-current={selected ? "true" : undefined} onClick={onSelect} title={thread.title.text}><span className={`inbox-kic${quiet ? " is-sm" : ""}`} aria-hidden="true"><UiIcon name={state.icon} /></span><span className="inbox-row-body"><strong aria-label={thread.title.text}>{threadHeadline(thread)}</strong><span className="inbox-meta"><span className="inbox-meta-t">{!quiet && <><span className="inbox-row-state">{state.label}</span> · </>}<Time value={thread.updated_at} />{thread.project && ` · ${thread.project}`}</span></span>{quiet && thread.next?.source.kind === "owner_card" && <span className="inbox-row-next">{thread.next.text}</span>}</span></button>;
+  return <button type="button" className={`inbox-row${quiet ? " is-quiet" : ""}`} data-tone={state.kind} aria-current={selected ? "true" : undefined} onClick={onSelect} title={thread.title.text}><span className={`inbox-kic${quiet ? " is-sm" : ""}`} aria-hidden="true"><UiIcon name={state.icon} /></span><span className="inbox-row-body"><span className="inbox-sr">{state.label}: </span><strong>{threadHeadline(thread)}</strong><span className="inbox-row-next">{outcomeLine(thread)}</span><span className="inbox-meta"><span className="inbox-meta-t"><span className="inbox-row-state" aria-hidden="true">{state.label}</span> · <Time value={thread.updated_at} />{thread.project && ` · ${thread.project}`}</span></span></span></button>;
 }
 function Question({ question, label, selected, draft, recommendation, onSelect, onChoice }: { question: InboxQuestion; label: string; selected: boolean; draft: string; recommendation?: string; onSelect(): void; onChoice(value: string): void }) {
   return <section className="inbox-question" data-selected={selected}><button type="button" className="inbox-q-head" aria-pressed={selected} title={`Ask from ${label}`} onClick={onSelect}><span className="inbox-kic is-sm"><UiIcon name="help" /></span><span className="inbox-q-who">Ask from {label}</span><Time value={question.asked_at} /><span className="inbox-radio"><UiIcon name="check" /></span></button><div className="inbox-q-text"><InboxFeedback text={question.text.text} /></div>{question.choices.length > 0 && <div className="inbox-choices" role="group" aria-label={`Choices from ${label}`}>{question.choices.map(choice => { const recommended = !!recommendation && choice.trim().toLowerCase() === recommendation.trim().toLowerCase(); return <button type="button" className="inbox-chip" key={choice} aria-pressed={selected && draft === choice} onClick={() => onChoice(choice)}><span className="inbox-choice-radio" aria-hidden="true" /><span className="inbox-chip-t">{choice}</span>{recommended && <span className="inbox-rec"><UiIcon name="spark" />Recommended</span>}</button>; })}</div>}</section>;
@@ -393,11 +444,11 @@ function RequestCard({ thread, view, client, sessionId }: { thread: InboxThread;
   if (!request) return null;
   const binding = request.handoff.binding?.requested;
   const fields: Array<[string, string | null | undefined]> = [["Repository", binding?.repository_id], ["Space", binding?.workspace_id], ["Branch", binding?.branch], ["Base ref", binding?.base_ref]];
-  const receipts = thread.receipts.filter(r => r.kind !== "answer");
+  const receipts = thread.receipts.filter(r => r.message_id === request.message_id);
   return <section className="inbox-request"><div className="inbox-card-heading"><h3>Your request</h3><Time value={request.created_at} /></div><p className="inbox-request-text">{request.text}</p>
     <InboxImages client={client} sessionId={sessionId} images={request.images ?? []} label="Images in your request" />
     {fields.some(([, value]) => value) && <dl className="inbox-bindings">{fields.map(([label, value]) => value && <div key={label}><dt>{label}</dt><dd>{uuid.test(value) ? "Recorded" : value}</dd></div>)}</dl>}
-    {receipts.length > 0 && <p className="inbox-delivery">{receipts.length === 1 ? `Request to ${ownerLabel(view, receipts[0].to_run_id)}` : `${receipts.length} requests`}{receipts[receipts.length - 1].stage === "stored" ? " · waiting to be picked up" : receipts[receipts.length - 1].stage === "read" ? " · picked up" : " · acknowledged"}{(request.images?.length ?? 0) > 0 && ` · ${request.images.length} image${request.images.length === 1 ? "" : "s"}`}{receipts[receipts.length - 1].acked_at && <> <Time value={receipts[receipts.length - 1].acked_at} /></>}</p>}
+    {receipts.length > 0 && <p className="inbox-delivery">Request to {ownerLabel(view, receipts[0].to_run_id)} · {deliveryLabel(receipts[0].stage)}{(request.images?.length ?? 0) > 0 && ` · ${request.images.length} image${request.images.length === 1 ? "" : "s"}`}{receipts[0].acked_at && <> <Time value={receipts[0].acked_at} /></>}</p>}
   </section>;
 }
 
@@ -405,13 +456,13 @@ function WorkRail({ thread, view, displayed, open, wide, references }: { thread:
   const lanes = Array.from(new Set(thread.tasks.map(task => task.lane)));
   const claims = thread.facts.filter(fact => fact.source.kind === "worker");
   const kept = thread.facts.filter(fact => fact.text.startsWith("Cleanup Kept:"));
-  return <aside className="inbox-rail" aria-label="Work">
+  return <aside className="inbox-rail" aria-label="Work"><details className="inbox-supporting"><summary><UiIcon name="right" />Work details and diagnostics</summary>
     {thread.tasks.length > 0 && <details key={`tasks-${wide}`} open={wide || thread.tasks.some(task => task.run?.presence === "present") || undefined} className="inbox-rail-section"><summary><UiIcon name="right" />tasks · {thread.tasks.length}</summary>{lanes.map(lane => <div key={lane}><h4>{lane} · {thread.tasks.filter(task => task.lane === lane).length}</h4>{thread.tasks.filter(task => task.lane === lane).map(task => <div className="inbox-task" key={task.task_id}><strong>{task.title}</strong>{task.run?.presence === "present" && task.run.location && <div><span>Attempt {task.run.attempt}{task.run.agent_status && ` · ${task.run.agent_status}`}</span><button type="button" className="inbox-btn" aria-label={`Open ${task.title} · attempt ${task.run.attempt}`} disabled={view?.observation.status !== "fresh"} onClick={() => open(task.run!.location)}>Open</button></div>}</div>)}</div>)}</details>}
     {claims.length > 0 && <details key={`claims-${wide}`} open={wide || undefined} className="inbox-rail-section"><summary><UiIcon name="right" />reported by worker</summary><p className="inbox-rail-note">Worker claims. Cockpit has not verified them.</p><ul>{claims.map((fact, i) => <li key={i}>{fact.text}</li>)}</ul></details>}
     {kept.length > 0 && <section className="inbox-rail-section">{kept.map((fact, i) => <p className="inbox-note" key={i}>{fact.text}</p>)}</section>}
     {references.length > 0 && <details key={`references-${wide}`} open={wide || undefined} className="inbox-rail-section"><summary><UiIcon name="right" />references · {references.length}</summary>{references.map(value => <CopyValue key={value} value={value} />)}</details>}
     <Evidence thread={thread} view={view} displayed={displayed} />
-  </aside>;
+  </details></aside>;
 }
 
 function CopyValue({ value, label }: { value: string; label?: string }) {
@@ -440,8 +491,8 @@ function Evidence({ thread, view, displayed }: { thread: InboxThread; view: Inbo
   return <details className="inbox-evidence"><summary><UiIcon name="right" />Diagnostics</summary>
     {thread.next && thread.next.source.kind === "owner_card" && !displayed.includes(thread.next) && <><h3 className="inbox-ev-h">Next move</h3><p className="inbox-ev-p">{thread.next.text}</p></>}
     {facts.size > 0 && <><h3 className="inbox-ev-h">Recorded steps</h3>{Array.from(facts.values()).map(({ fact, count }, i) => <p className="inbox-fact" key={i}>{srcKind(fact) !== "recorded" && <span className="inbox-tag" data-kind={srcKind(fact)} title={source(fact)}>{srcLabel(fact)}</span>}<span>{fact.text}{count > 1 && ` ×${count}`}</span></p>)}</>}
-    {thread.receipts.length > 0 && <><h3 className="inbox-ev-h">Delivery</h3>{thread.receipts.map(r => <p className="inbox-ev-p" key={r.message_id}>{r.kind === "answer" ? "Answer" : "Request"} to {ownerLabel(view, r.to_run_id)} · {r.stage === "stored" ? "waiting to be picked up" : r.stage === "read" ? "picked up" : "acknowledged"}{r.stale ? " · stale" : ""} · <Time value={r.acked_at || r.created_at} /></p>)}</>}
-    {thread.receipts.length > 0 && <p className="inbox-rail-note">Acknowledged means received, not acted on.</p>}
+    {thread.receipts.length > 0 && <><h3 className="inbox-ev-h">Delivery</h3>{thread.receipts.map(r => <p className="inbox-ev-p" key={r.message_id}>{r.kind === "answer" ? "Answer" : "Request"} to {ownerLabel(view, r.to_run_id)} · {deliveryLabel(r.stage)}{r.stale ? " · stale" : ""} · <Time value={r.acked_at || r.created_at} /></p>)}</>}
+    {thread.receipts.length > 0 && <p className="inbox-rail-note">Received means the owner's inbox has it. It doesn't mean the owner acted on it.</p>}
     {thread.tasks.length > 0 && <><h3 className="inbox-ev-h">Tasks</h3>{thread.tasks.map(t => <p className="inbox-ev-p" key={t.task_id}>{[t.title, t.lane, ...(t.run ? [t.run.stage !== t.lane ? t.run.stage : null, t.run.presence] : [])].filter(Boolean).join(" · ")}</p>)}</>}
     {aiFields.length > 0 && <><h3 className="inbox-ev-h">Source</h3><p className="inbox-ev-p">AI summary for {Array.from(new Set(aiFields.map(([name]) => name))).join(", ")} from {Array.from(new Set(aiFields.map(([, v]) => v?.source.kind === "owner_card" ? v.source.harness : ""))).join(", ")}.</p></>}
     <h3 className="inbox-ev-h">IDs</h3><dl className="inbox-kv"><dt>Thread</dt><dd><CopyValue value={thread.thread_id} label="thread ID" /></dd>{fields.map(([label, value]) => value && uuid.test(value) && <div key={label}><dt>{label}</dt><dd><CopyValue value={value} label={`${label.toLowerCase()} ID`} /></dd></div>)}{thread.owner_root_ids.map((id, i) => <div key={`owner-${i}`}><dt>Owner</dt><dd><CopyValue value={id} label="owner ID" /></dd></div>)}{thread.questions.map((q, i) => <div key={`question-${i}`}><dt>Question</dt><dd><CopyValue value={q.question_message_id} label="question ID" /></dd></div>)}{thread.request && <div><dt>Request</dt><dd><CopyValue value={thread.request.message_id} label="request ID" /></dd></div>}{messageIds.map(id => <div key={`message-${id}`}><dt>Message</dt><dd><CopyValue value={id} label="message ID" /></dd></div>)}{thread.receipts.map((r, i) => r.attempt_run_id && <div key={`receipt-${i}`}><dt>Attempt run</dt><dd><CopyValue value={r.attempt_run_id} label="attempt run ID" /></dd></div>)}{thread.tasks.filter(t => t.run).map(t => <div key={t.task_id}><dt>Attempt run</dt><dd><CopyValue value={t.run!.run_id} label="attempt run ID" /></dd></div>)}</dl>

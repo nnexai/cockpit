@@ -215,7 +215,7 @@ describe("Inbox", () => {
     await flush(() => waits[1]!({ revision: 2, tasks_token: "changed", changed: true }));
     expect(client.orchestrationInbox).toHaveBeenCalledTimes(2);
   });
-  it("uses projected titles, bounds historic titles, and sizes the restored draft", async () => {
+  it("uses full projected titles and sizes the restored draft", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
     const fullTitle = `Historic ${"😀".repeat(140)}`;
     const request = "Short heading\n" + "Request body ".repeat(80);
@@ -229,7 +229,7 @@ describe("Inbox", () => {
     await flush(() => app.render());
     const rows = host.querySelectorAll<HTMLButtonElement>(".inbox-row");
     expect(rows[0]!.querySelector("strong")!.textContent).toBe("Short heading");
-    expect(Array.from(rows[1]!.querySelector("strong")!.textContent!).length).toBe(120);
+    expect(rows[1]!.querySelector("strong")!.textContent).toBe(fullTitle);
     expect(rows[1]!.title).toBe(fullTitle);
     await flush(() => text("Long draft"));
     expect(host.querySelector<HTMLTextAreaElement>("textarea")!.style.height).toBe("180px");
@@ -237,6 +237,8 @@ describe("Inbox", () => {
     expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("");
     expect(host.querySelector<HTMLTextAreaElement>("textarea")!.style.height).toBe("40px");
     expect(host.querySelector(".inbox-thread-heading h2")!.textContent).toBe("Short heading");
+    await flush(() => rows[1]!.click());
+    expect(host.querySelector(".inbox-thread-heading h2")!.textContent).toBe(fullTitle);
     await flush(() => host.querySelector<HTMLButtonElement>(".inbox-new")!.click());
     expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Long draft");
     expect(host.querySelector<HTMLTextAreaElement>("textarea")!.style.height).toBe("180px");
@@ -551,10 +553,23 @@ describe("Inbox", () => {
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Result"))!.click());
     const update = host.querySelector(".inbox-update")!;
-    expect(update.querySelector("small")?.textContent).toBe("Update from Liaison");
+    expect(update.querySelector("small")?.textContent).toContain("Result from Liaison");
     expect(update.querySelector("h2")?.textContent).toBe("Report");
     expect(update.querySelectorAll("li")).toHaveLength(2);
     expect(update.querySelector("strong")?.textContent).toBe("Completed");
+  });
+  it("shows handled generically and keeps follow-up separate from acknowledgement", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    inbox.threads = [{ thread_id: "thread", state: "handled", need: null, owner_root_ids: ["owner"], title: { text: "Earlier request", source: { kind: "user" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: { text: "The work was reported.", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result", at: "now", images: [] }, unread_result_message_id: null, tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    await flush(() => app.render());
+    const row = host.querySelector<HTMLButtonElement>(".inbox-row")!;
+    expect(row.textContent).toContain("The work was reported.");
+    expect(row.textContent).toContain("Handled");
+    await flush(() => row.click());
+    expect(host.querySelector(".inbox-handled")?.textContent).toContain("Handled. To ask for more, follow up.");
+    expect(host.querySelector(".inbox-handled")?.textContent).not.toContain("acknowledged");
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
   });
   it("shows a NeedsInput report as rich question text without changing its choices", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
@@ -571,14 +586,48 @@ describe("Inbox", () => {
   it("marks only the displayed result message read", async () => {
     const { client } = fixture(), app = setup(client);
     const inbox = view("a");
-    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "answer", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_result_message_id: "result-id", tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [{ run_id: "owner", question_message_id: "question-id", asked_at: "now", text: { text: "Choose a direction", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "question-id", at: "now", images: [] }, choices: ["Yes"], receipt: { status: "unresolved" } }], recommendation: null, reply: { text: "The result", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result-id", at: "now", images: [] }, unread_result_message_id: "result-id", tasks: [], receipts: [], facts: [], updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "done" } });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Result"))!.click());
     expect(client.orchestrationMutate).not.toHaveBeenCalled();
-    await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Mark read")!.click());
+    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-chip")!.click());
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.value).toBe("Yes");
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
+    expect(host.querySelector(".inbox-result-actions")?.textContent).toContain("doesn't answer questions");
+    await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Acknowledge")!.click());
     expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toEqual({ action: "thread_mark_read", thread_id: "thread", through_message_id: "result-id" });
+  });
+  it("does not acknowledge a result absent from the displayed report", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "answer", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: { text: "Earlier report", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "old-result", at: "now", images: [] }, unread_result_message_id: "new-result", tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    await flush(() => app.render());
+    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-row")!.click());
+    const button = Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Acknowledge")!;
+    expect(button.disabled).toBe(true);
+    expect(host.querySelector(".inbox-result-actions")?.textContent).toContain("not available");
+    await flush(() => button.click());
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+  it("does not steal focus when acknowledgement finishes after the user moves away", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "answer", owner_root_ids: ["owner"], title: { text: "Result", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: { text: "Report", source: { kind: "owner", run_id: "owner", harness: "omp" }, message_id: "result-id", at: "now", images: [] }, unread_result_message_id: "result-id", tasks: [], receipts: [], facts: [], updated_at: "now" }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    let finish!: () => void;
+    vi.mocked(client.orchestrationMutate).mockImplementation(() => new Promise(resolve => { finish = () => resolve({ revision: 2, result: { result: "done" } }); }));
+    await flush(() => app.render());
+    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-row")!.click());
+    const button = Array.from(host.querySelectorAll("button")).find(b => b.textContent === "Acknowledge")!;
+    await flush(() => { button.focus(); button.click(); });
+    const other = host.querySelector<HTMLButtonElement>(".inbox-new")!;
+    await flush(() => other.focus());
+    expect(document.activeElement).toBe(other);
+    const handled = { ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, state: "handled" as const, need: null, unread_result_message_id: null }] };
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(handled);
+    await flush(() => finish());
+    expect(document.activeElement).toBe(other);
   });
   it("fences a task follow-up with its owner's current task revision", async () => {
     const { client } = fixture(), app = setup(client);
