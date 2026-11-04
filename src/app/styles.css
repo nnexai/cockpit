@@ -11,3 +11,27 @@
 @import "./styles/tabs.css";
 @import "./styles/terminal.css";
 @import "./styles/overlays.css";
+
+/* Only the bundled Material Design private-use range changes title glyphs;
+   ordinary text and the separately configured terminal font are unaffected. */
+@font-face {
+  font-family: "Cockpit Nerd Symbols";
+  src: url("/fonts/MaterialDesignNerdSymbols.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 100 900;
+  unicode-range: U+F0001-F1AF0;
+}
+
+.session-name,
+.session-choice > span,
+.space-tree-child .space-label,
+.agent-location,
+.agent-purpose,
+.tab-label,
+.pane-title,
+.switcher-primary,
+.switcher-meta,
+.inbox-row-next,
+.inbox-session-context {
+  font-family: "Cockpit Nerd Symbols", var(--font-sans);
+}
