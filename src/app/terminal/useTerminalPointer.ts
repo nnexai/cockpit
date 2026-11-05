@@ -130,6 +130,11 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
     if (enabled) mouseModeRef.current = true;
     else clearMouseMode();
   };
+  // Herdr's current-stream mode, not xterm's rendered snapshot, governs
+  // whether a right-button gesture was forwarded to the application.
+  const routesContextMenu = (event: MouseEvent) => !scratch && terminalMouseInput && mouseModeRef.current
+    && event.button === 2 && !event.shiftKey
+    && (event as MouseEvent & { pointerType?: string }).pointerType !== "touch";
   const handleWheel = (terminal: Terminal, event: WheelEvent): boolean => {
     if (scratch) return true;
       cancelInertia();
@@ -247,6 +252,6 @@ export function useTerminalPointer(refs: TerminalRefs, control: TerminalControl,
       releaseCapturedPointer();
     },
   };
-  return { releaseCapturedPointer, clearMouseMode, applyMouseMode, handleWheel, handlers };
+  return { releaseCapturedPointer, clearMouseMode, applyMouseMode, routesContextMenu, handleWheel, handlers };
 }
 export type TerminalPointer = ReturnType<typeof useTerminalPointer>;

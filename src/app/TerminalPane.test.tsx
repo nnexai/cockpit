@@ -154,7 +154,7 @@ async function settle() {
   await Promise.resolve();
 }
 
-function pointer(type: string, timeStamp: number, button = 0, options: { pointerId?: number; shiftKey?: boolean; pointerType?: string; x?: number; y?: number } = {}) {
+function pointer(type: string, timeStamp: number, button = 0, options: { pointerId?: number; shiftKey?: boolean; ctrlKey?: boolean; altKey?: boolean; metaKey?: boolean; pointerType?: string; x?: number; y?: number } = {}) {
   const event = new Event(type, { bubbles: true, cancelable: true });
   Object.defineProperties(event, {
     button: { value: button },
@@ -163,9 +163,9 @@ function pointer(type: string, timeStamp: number, button = 0, options: { pointer
     pointerId: { value: options.pointerId ?? 1 },
     pointerType: { value: options.pointerType ?? "mouse" },
     shiftKey: { value: options.shiftKey ?? false },
-    ctrlKey: { value: false },
-    altKey: { value: false },
-    metaKey: { value: false },
+    ctrlKey: { value: options.ctrlKey ?? false },
+    altKey: { value: options.altKey ?? false },
+    metaKey: { value: options.metaKey ?? false },
     timeStamp: { value: timeStamp },
   });
   return event;
@@ -877,6 +877,86 @@ describe("TerminalPane fitting and pointer ownership", () => {
       expect(menu?.querySelector<HTMLButtonElement>('button[role="menuitem"]')?.disabled).toBe(false);
     } finally {
       await act(async () => root.unmount());
+      host.remove();
+    }
+  });
+
+  it("routes app-mode right clicks without stealing clipboard or keyboard menus", async () => {
+    const pointerCaptureNames = ["setPointerCapture", "releasePointerCapture", "hasPointerCapture"] as const;
+    const originalPointerCapture = Object.fromEntries(pointerCaptureNames.map((name) => [name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)]));
+    Object.assign(HTMLElement.prototype, {
+      setPointerCapture: vi.fn(),
+      releasePointerCapture: vi.fn(),
+      hasPointerCapture: vi.fn(() => true),
+    });
+    const sent: TerminalCommand[] = [];
+    const messages: Array<(value: TerminalStreamMessage) => void> = [];
+    const { client } = makeClient(sent, messages);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => {
+        root.render(<TerminalPane {...paneProps(client, true)} />);
+        await settle();
+      });
+      await act(async () => {
+        messages[0]!(message("owned"));
+        messages[0]!(mouseMode(true));
+      });
+      const screen = host.querySelector<HTMLElement>(".xterm-screen")!;
+      const menuEvent = (options: MouseEventInit = {}) => new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, ...options });
+      const appMenu = menuEvent({ ctrlKey: true, altKey: true, metaKey: true });
+      await act(async () => {
+        screen.dispatchEvent(pointer("pointerdown", 10, 2, { ctrlKey: true, altKey: true, metaKey: true }));
+        screen.dispatchEvent(appMenu);
+        screen.dispatchEvent(pointer("pointerup", 20, 2, { ctrlKey: true, altKey: true, metaKey: true }));
+      });
+      expect(appMenu.defaultPrevented).toBe(true);
+      expect(host.querySelector(".terminal-context-menu")).toBeNull();
+      expect(sent.filter(command => command.type === "terminal.mouse")).toEqual([
+        { type: "terminal.mouse", kind: "down", button: "right", column: 12, row: 4, modifiers: 14 },
+        { type: "terminal.mouse", kind: "up", button: "right", column: 12, row: 4, modifiers: 14 },
+      ]);
+
+      const openAndDismiss = async (event: MouseEvent) => {
+        await act(async () => { screen.dispatchEvent(event); });
+        expect(event.defaultPrevented).toBe(true);
+        expect(host.querySelector('[role="menu"][aria-label="Terminal clipboard actions"]')).not.toBeNull();
+        await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+      };
+      await act(async () => {
+        screen.dispatchEvent(pointer("pointerdown", 30, 2, { shiftKey: true }));
+        screen.dispatchEvent(pointer("pointerup", 40, 2, { shiftKey: true }));
+      });
+      await openAndDismiss(menuEvent({ shiftKey: true }));
+      await openAndDismiss(menuEvent({ button: 0 })); // Keyboard context-menu invocation.
+      for (const [key, shiftKey] of [["ContextMenu", false], ["F10", true]] as const) {
+        const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, shiftKey });
+        await act(async () => { screen.dispatchEvent(event); });
+        expect(event.defaultPrevented).toBe(true);
+        expect(host.querySelector('[role="menu"][aria-label="Terminal clipboard actions"]')).not.toBeNull();
+        await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+      }
+      const touchMenu = menuEvent();
+      Object.defineProperty(touchMenu, "pointerType", { value: "touch" });
+      await openAndDismiss(touchMenu);
+      expect(sent.filter(command => command.type === "terminal.mouse")).toHaveLength(2);
+
+      await act(async () => { messages[0]!(mouseMode(false)); });
+      await openAndDismiss(menuEvent());
+      await act(async () => {
+        messages[0]!(mouseMode(true));
+        root.render(<TerminalPane {...paneProps(client, false)} />);
+      });
+      await openAndDismiss(menuEvent());
+    } finally {
+      await act(async () => root.unmount());
+      for (const name of pointerCaptureNames) {
+        const descriptor = originalPointerCapture[name];
+        if (descriptor) Object.defineProperty(HTMLElement.prototype, name, descriptor);
+        else delete (HTMLElement.prototype as Partial<Record<typeof name, unknown>>)[name];
+      }
       host.remove();
     }
   });

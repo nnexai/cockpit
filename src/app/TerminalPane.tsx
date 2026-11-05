@@ -193,9 +193,20 @@ export function TerminalPane({ client, request, selected, presented = true, cont
         event.stopPropagation();
         void pasteFiles(files);
       }}
+      onKeyDownCapture={(event) => {
+        if (event.ctrlKey || event.altKey || event.metaKey || !(event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey))) return;
+        if (contextMenuRef.current?.contains(event.target as Node)) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const bounds = (event.target as HTMLElement).getBoundingClientRect();
+        contextSelectionRef.current = terminalRef.current?.getSelection() ?? null;
+        setTerminalContextPosition({ x: bounds.left + 24, y: bounds.bottom });
+        setTerminalContextOpen(true);
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
+        if (pointer.routesContextMenu(event.nativeEvent)) return;
         contextSelectionRef.current = terminalRef.current?.getSelection() ?? null;
         setTerminalContextPosition({ x: event.clientX, y: event.clientY });
         setTerminalContextOpen(true);
