@@ -40,7 +40,10 @@ fn report_owner<'a>(m: &Message, roots: &HashMap<&str, &'a Run>) -> Option<&'a R
     roots.get(run_id.as_str()).copied()
 }
 
-fn timeline(messages: &[&Message], all: &[Message], roots: &HashMap<&str, &Run>) -> (Vec<InboxEntry>, u32) {
+fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, roots: &HashMap<&str, &Run>) -> (Vec<InboxEntry>, u32, Vec<InboxEntry>, Option<u32>) {
+    let all = &state.messages;
+    let positions: HashMap<*const Message, usize> = all.iter().enumerate()
+        .map(|(index, message)| (message as *const Message, index)).collect();
     let mut entries = messages.to_vec();
     // Answers can predate thread attribution. Match both recipient and question ID:
     // message IDs are not globally unique across owner inboxes.
@@ -52,7 +55,7 @@ fn timeline(messages: &[&Message], all: &[Message], roots: &HashMap<&str, &Run>)
             entries.push(answer);
         }
     }
-    entries.sort_by_key(|m| message_order(m));
+    entries.sort_by_key(|m| positions[&(*m as *const Message)]);
     let mut had_request = false;
     let mut result = Vec::new();
     for m in entries.into_iter().filter(|m| !m.stale) {
@@ -73,12 +76,29 @@ fn timeline(messages: &[&Message], all: &[Message], roots: &HashMap<&str, &Run>)
             };
             (kind, report.summary.clone(), owner_source(root, false), if report.kind == ReportKind::Result { report.outcome } else { None })
         } else { continue };
-        result.push(InboxEntry { message_id: m.message_id.clone(), at: m.created_at.clone(), kind,
-            text: value, source, outcome, images: m.images.clone(), in_reply_to: m.in_reply_to.clone() });
+        let position = positions[&(m as *const Message)];
+        result.push(((position, 1, 0), InboxEntry { message_id: m.message_id.clone(), at: m.created_at.clone(), kind,
+            text: value, source, outcome, images: m.images.clone(), in_reply_to: m.in_reply_to.clone(), widget: None }));
     }
+    for (index, publication) in state.widget_publications.iter().enumerate().filter(|(_, p)|
+        p.thread_id == thread_id && roots.contains_key(p.root_id.as_str())) {
+        let root = roots[publication.root_id.as_str()];
+        let event = &publication.event;
+        result.push(((publication.message_position, 0, index), InboxEntry {
+            message_id: event.publication_id.clone(), at: publication.at.clone(), kind: InboxEntryKind::Widget,
+            text: event.title.clone(), source: if event.binding.run_id == root.run_id { owner_source(root, false) }
+                else { InboxSource::Worker { run_id: event.binding.run_id.clone() } }, outcome: None,
+            images: Vec::new(), in_reply_to: None, widget: Some(event.clone()),
+        }));
+    }
+    result.sort_by_key(|(order, _)| *order);
     let omitted = result.len().saturating_sub(120);
-    if omitted > 0 { result.drain(..omitted); }
-    (result, omitted as u32)
+    let mut earlier_widgets: Vec<_> = result.drain(..omitted).filter_map(|(_, entry)|
+        (entry.kind == InboxEntryKind::Widget).then_some(entry)).collect();
+    let earlier_omitted = earlier_widgets.len().saturating_sub(120);
+    earlier_widgets.drain(..earlier_omitted);
+    (result.into_iter().map(|(_, entry)| entry).collect(), omitted as u32, earlier_widgets,
+        (earlier_omitted > 0).then_some(earlier_omitted as u32))
 }
 
 fn task_evidence(state: &OrchestrationState, root_id: &str, task_id: &str, current: Option<&Run>) -> Option<InboxTaskEvidence> {
@@ -291,9 +311,11 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             }
         }
         facts.truncate(8);
-        let updated_at = messages.iter().map(|m| m.created_at.as_str()).max().unwrap_or(now).to_owned();
-        let (timeline, timeline_omitted) = timeline(&messages, &state.messages, &root_map);
-        threads.push(InboxThread { thread_id: id.into(), state: state_value, need, owner_root_ids: owner_ids.into_iter().map(str::to_owned).collect(), title, next, project, request: request_echo, follow_ups, questions: projected_questions, recommendation, reply, unread_result_message_id: unread, tasks, receipts, facts, updated_at, timeline, timeline_omitted });
+        let updated_at = messages.iter().map(|m| m.created_at.as_str())
+            .chain(state.widget_publications.iter().filter(|p| p.thread_id == id && root_map.contains_key(p.root_id.as_str())).map(|p| p.at.as_str()))
+            .max().unwrap_or(now).to_owned();
+        let (timeline, timeline_omitted, earlier_widgets, earlier_widgets_omitted) = timeline(&messages, state, id, &root_map);
+        threads.push(InboxThread { thread_id: id.into(), state: state_value, need, owner_root_ids: owner_ids.into_iter().map(str::to_owned).collect(), title, next, project, request: request_echo, follow_ups, questions: projected_questions, recommendation, reply, unread_result_message_id: unread, tasks, receipts, facts, updated_at, timeline, timeline_omitted, earlier_widgets: (!earlier_widgets.is_empty()).then_some(earlier_widgets), earlier_widgets_omitted });
     }
     threads.sort_by(|a,b| {
         let rank = |t: &InboxThread| match t.need { Some(InboxNeed::Decision) => 0, Some(InboxNeed::Answer) => 1, None if t.state == InboxState::Underway => 2, None => 3 };
@@ -425,6 +447,42 @@ mod tests {
                 scheduled: false, attempt: None, waiting: None }] }
     }
     #[test]
+    fn widget_publications_survive_storage_and_preserve_order_scope_and_cap() {
+        use cockpit_protocol::widget::{WidgetKey, WidgetLiveBinding};
+        use super::super::store::WidgetPublication;
+        let mut state = OrchestrationState { runs: vec![root("r")], ..Default::default() };
+        let mut request = message("request", "r", 1, Some("t"), MessageKind::Instruction);
+        request.handoff = Some(HandoffRecord { task_id: None, task_revision: None, attempt_run_id: None, binding: None, origin: OperatorOrigin::Browser });
+        request.created_at = "2026-10-06T12:00:00Z".into();
+        state.messages.push(request);
+        let event = InboxWidgetEvent { key: WidgetKey { session_id: "session".into(), tab_id: "tab".into(), id: "w".into() },
+            revision: 1, binding: WidgetLiveBinding { run_id: "r".into(), attempt: 1, session_id: "session".into(),
+                attachment_id: "attachment".into(), attachment_epoch: 1 }, title: "Original".into(),
+            publication_id: "incarnation-1".into(), content_sha256: "hash".into() };
+        state.widget_publications.push(WidgetPublication { thread_id: "t".into(), root_id: "r".into(),
+            at: NOW.into(), message_position: 1, event: event.clone() });
+        let mut second = event.clone();
+        second.publication_id = "incarnation-2".into();
+        state.widget_publications.push(WidgetPublication { thread_id: "other".into(), root_id: "r".into(),
+            at: NOW.into(), message_position: 1, event: second });
+        let mut update = report("update", "r", 2, Some("t"), ReportKind::Progress);
+        update.created_at = "2026-10-04T12:00:00Z".into();
+        state.messages.push(update);
+        let bytes = serde_json::to_vec(&state).unwrap();
+        let mut restored: OrchestrationState = serde_json::from_slice(&bytes).unwrap();
+        let projected = view(&restored, vec![]);
+        let entries = &projected.threads[0].timeline;
+        assert_eq!(entries.iter().map(|e| e.kind).collect::<Vec<_>>(),
+            vec![InboxEntryKind::Request, InboxEntryKind::Widget, InboxEntryKind::Update]);
+        assert_eq!(entries[1].widget.as_ref().unwrap().publication_id, "incarnation-1");
+        assert_eq!(entries[1].widget.as_ref().unwrap().title, "Original");
+        for seq in 3..=123 { restored.messages.push(report(&format!("update-{seq}"), "r", seq, Some("t"), ReportKind::Progress)); }
+        let projected = view(&restored, vec![]);
+        assert_eq!(projected.threads[0].timeline.len(), 120);
+        assert_eq!(projected.threads[0].earlier_widgets.as_ref().unwrap()[0].message_id, "incarnation-1");
+    }
+
+    #[test]
     fn timeline_orders_owner_reports_and_untagged_answers_and_caps() {
         let mut state = OrchestrationState { runs: vec![root("r")], ..Default::default() };
         let mut request = message("request", "r", 1, Some("t"), MessageKind::Instruction);
@@ -436,7 +494,7 @@ mod tests {
         answer.in_reply_to = Some("question".into());
         let mut stale = report("stale", "r", 6, Some("t"), ReportKind::Result);
         stale.stale = true;
-        state.messages.extend([answer, stale, follow, question, report("update", "r", 2, Some("t"), ReportKind::Progress), request]);
+        state.messages.extend([request, report("update", "r", 2, Some("t"), ReportKind::Progress), follow, question, answer, stale]);
         let projected = view(&state, vec![]);
         let entries = &projected.threads[0].timeline;
         assert_eq!(entries.iter().map(|e| e.kind).collect::<Vec<_>>(), vec![InboxEntryKind::Request, InboxEntryKind::Update, InboxEntryKind::FollowUp, InboxEntryKind::Question, InboxEntryKind::Answer]);

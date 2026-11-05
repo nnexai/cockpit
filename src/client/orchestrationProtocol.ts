@@ -149,8 +149,8 @@ const POLICY = definePolicy({
       "LiaisonLookupRequest", "LiaisonLookupResponse",
       "InboxRequest", "InboxView", "InboxObservation", "InboxOwner", "InboxLocation", "InboxSource", "InboxText",
       "OrchestrationImagePut", "OrchestrationImageRead", "OrchestrationImageMedia", "MessageImage", "ImageLimits",
-      "OrchestrationArtifactRead", "OrchestrationArtifactMedia", "InboxEntry", "InboxTaskEvidence", "InboxArtifact", "InboxDecision",
-      "InboxRequestEcho", "InboxQuestion", "InboxReceipt", "InboxRun", "InboxTaskLink", "InboxThread",
+      "OrchestrationArtifactRead", "OrchestrationArtifactMedia", "InboxTaskEvidence", "InboxArtifact", "InboxDecision",
+      "InboxRequestEcho", "InboxQuestion", "InboxReceipt", "InboxRun", "InboxTaskLink",
       "HandoffBinding", "HandoffBindingRecord", "BoundCheckout", "HandoffRecord", "ThreadCard", "AgentSendTarget",
       "OrchestrationAction[supervisor_start]", "OrchestrationAction[run_attach]",
       "OrchestrationAction[worker_start]", "OrchestrationAction[task_scope_update]", "OrchestrationAction[task_schedule]", "OrchestrationAction[task_schedule_cancel]", "OrchestrationAction[worker_replace]",
@@ -159,7 +159,7 @@ const POLICY = definePolicy({
       "OrchestrationActionResult[task_scheduled]", "OrchestrationActionResult[worker_replaced]",
       "OrchestrationActionResult[run_resumed]", "OrchestrationActionResult[run_attached]", "OrchestrationActionResult[task_unassigned]"]),
     // run_resume, ResumeRecord and LiaisonCandidate use generated required fields plus exact keys: complete also
-    // requires own optional fields, which Rust omits for additive fields (stop confirmation, fresh-conversation facts).
+    // requires own optional fields, which Rust omits for additive fields (including Inbox widgets).
     raw: new Set(["OrchestrationSnapshotRequest", "OrchestrationWaitRequest", "OrchestrationWaitResponse",
       "LiaisonLookupRequest", "LiaisonLookupResponse"]),
     absent: new Set(["TaskOwner.conversation", "TaskOwnership.schedule", "TaskSchedule.hold", "ScheduleHold.dependency_task_id", "ExecutionAttachment.process_scope", "DispatchState.scope_unit",
@@ -189,7 +189,7 @@ const POLICY = definePolicy({
       "LiaisonLookupRequest", "LiaisonLookupResponse", "LiaisonCandidate",
       "InboxRequest", "InboxView", "InboxObservation", "InboxOwner", "InboxLocation", "InboxSource", "InboxText",
       "OrchestrationImagePut", "OrchestrationImageRead", "OrchestrationImageMedia", "MessageImage", "ImageLimits",
-      "OrchestrationArtifactRead", "OrchestrationArtifactMedia", "InboxEntry", "InboxTaskEvidence", "InboxArtifact", "InboxDecision",
+      "OrchestrationArtifactRead", "OrchestrationArtifactMedia", "InboxEntry", "InboxWidgetEvent", "InboxTaskEvidence", "InboxArtifact", "InboxDecision",
       "InboxRequestEcho", "InboxQuestion", "InboxReceipt", "InboxRun", "InboxTaskLink", "InboxThread",
       "HandoffBinding", "HandoffBindingRecord", "BoundCheckout", "HandoffRecord", "ThreadCard", "AgentSendTarget",
       "ErrorResponse", "RootSummary", "TaskBoard", "TaskProject", "TaskView", "TaskWait", "TaskWaitRef", "Task", "TaskStep", "TaskStepProgress", "TaskDependencies",

@@ -562,6 +562,7 @@ export const wireRegistry = {
   "InboxReceipt": D12.wireInboxReceipt,
   "InboxRun": D12.wireInboxRun,
   "InboxEntryKind": D12.wireInboxEntryKind,
+  "InboxWidgetEvent": D12.wireInboxWidgetEvent,
   "InboxEntry": D12.wireInboxEntry,
   "InboxArtifactKind": D12.wireInboxArtifactKind,
   "InboxArtifact": D12.wireInboxArtifact,

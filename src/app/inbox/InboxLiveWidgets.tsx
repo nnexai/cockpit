@@ -1,28 +1,28 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { InboxThread, InboxView, WidgetSummary } from "../../protocol/generated/v1";
+import type { InboxWidgetEvent, WidgetSummary } from "../../protocol/generated/v1";
 import { WidgetFrame } from "../widgets/WidgetFrame";
 import { useWidgets, widgetKey, type WidgetStore } from "../widgets/widgetStore";
 import "../widgets/widgets.css";
 import "./inboxLiveWidgets.css";
 
-/** Only runs actually attached to this thread can supply a live card. */
-export function InboxLiveWidgets({ client, sessionId, thread, view, visible }: { client: CockpitClient; sessionId: string; thread: InboxThread; view: InboxView | null; visible: boolean }) {
+/** Resolve only the exact publication, never a later widget reusing the same public id. */
+export function InboxTimelineWidget({ client, sessionId, event, visible }: { client: CockpitClient; sessionId: string; event: InboxWidgetEvent; visible: boolean }) {
   const store = useWidgets(client);
-  const runs = [...thread.tasks.flatMap(task => task.run ? [task.run] : []),
-    ...(view?.owners.filter(owner => thread.owner_root_ids.includes(owner.root_id)) ?? [])];
-  const widgets = store.widgets(sessionId).filter(widget => {
-    const binding = widget.live?.binding, source = widget.source;
-    return widget.kind === "html" && binding && source && binding.session_id === sessionId
-      && runs.some(run => run.run_id === binding.run_id && run.attempt === binding.attempt
-        && run.session_id === binding.session_id && run.attachment_id === binding.attachment_id
-        && run.attachment_epoch === binding.attachment_epoch && (!run.location || (run.location.pane_id === source.pane_id
-        && run.location.tab_id === source.tab_id && run.location.workspace_id === source.space_id)));
-  });
-  if (!widgets.length) return null;
-  return <section className="inbox-live-widgets" aria-label="Live views from agents">
-    {widgets.map(widget => <InlineWidget key={widgetKey(widget.key)} widget={widget} store={store} visible={visible} />)}
-  </section>;
+  const widget = store.byKey.get(widgetKey(event.key));
+  const binding = widget?.live?.binding;
+  const expected = event.binding;
+  const matches = event.key.session_id === sessionId && widget?.kind === "html"
+    && widget.revision === event.revision && widget.content.sha256 === event.content_sha256
+    && widget.live?.publication_id === event.publication_id
+    && binding?.run_id === expected.run_id && binding.attempt === expected.attempt
+    && binding.session_id === expected.session_id && binding.attachment_id === expected.attachment_id
+    && binding.attachment_epoch === expected.attachment_epoch;
+  if (!matches || !widget) return <article className="inbox-live-widget">
+    <header><strong>{event.title}</strong><span>View unavailable</span></header>
+    <p>This published view is no longer available.</p>
+  </article>;
+  return <InlineWidget widget={widget} store={store} visible={visible} />;
 }
 
 function InlineWidget({ widget, store, visible }: { widget: WidgetSummary; store: WidgetStore; visible: boolean }) {
@@ -31,6 +31,13 @@ function InlineWidget({ widget, store, visible }: { widget: WidgetSummary; store
   const [focused, setFocused] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const key = widgetKey(widget.key);
+  useLayoutEffect(() => () => {
+    const node = host.current;
+    if (node?.contains(document.activeElement)) {
+      const row = node.closest<HTMLElement>(".inbox-widget-event");
+      if (row) { row.tabIndex = -1; row.focus({ preventScroll: true }); }
+    }
+  }, []);
   useEffect(() => {
     const node = host.current;
     if (!node) return;
@@ -62,7 +69,7 @@ function InlineWidget({ widget, store, visible }: { widget: WidgetSummary; store
   const updated = state ? new Date(state.updated_at_ms) : null;
   const validUpdated = updated && Number.isFinite(updated.getTime()) ? updated : null;
   return <article ref={host} tabIndex={-1} className="inbox-live-widget" onFocusCapture={() => setFocused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false); }}>
-    <header><strong>{widget.title}</strong><span role="status">{status}{validUpdated && <> · <time dateTime={validUpdated.toISOString()}>Updated {validUpdated.toLocaleTimeString()}</time></>}</span></header>
+    <header><strong>{widget.title}</strong><span><span role="status">{status}</span>{validUpdated && <> · <time dateTime={validUpdated.toISOString()}>Updated {validUpdated.toLocaleTimeString()}</time></>}</span></header>
     {error && <p role="alert">{error}</p>}
     {mounted && content.error && <p role="alert">{content.error} <button type="button" onClick={() => store.fetchContent(widget)}>Retry</button></p>}
     {mounted && !html && !content.error && <p role="status">Loading live view…</p>}

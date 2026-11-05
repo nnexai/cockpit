@@ -2222,6 +2222,31 @@ async fn lagged_waiter_retains_selection_outcome_despite_later_replacement_event
 }
 
 #[tokio::test]
+async fn anchored_attach_commits_before_exposure_and_rejects_duplicate() {
+    let f = Fixture::new();
+    let mut request = f.request("feed", "Choice");
+    request.title = Some("Feed".into());
+    f.service.show(request).await.unwrap();
+    let key = key("feed");
+    let binding = WidgetLiveBinding { run_id: "run".into(), attempt: 1, session_id: "daily".into(),
+        attachment_id: "attachment".into(), attachment_epoch: 1 };
+    let failed = f.service.attach_live_with_publication(&key, 1, binding.clone(), "credential".into(),
+        Some("first".into()), |_| Err(InspectionError::new("write_failed", "failed")));
+    assert!(failed.is_err());
+    assert!(f.summaries()[0].live.is_none());
+    f.service.attach_live_with_publication(&key, 1, binding.clone(), "credential".into(),
+        Some("second".into()), |summary| {
+            assert_eq!(summary.title, "Feed");
+            assert_eq!(summary.live.as_ref().unwrap().publication_id.as_deref(), Some("second"));
+            Ok(())
+        }).unwrap();
+    let duplicate = f.service.attach_live_with_publication(&key, 1, binding, "credential".into(),
+        Some("third".into()), |_| panic!("duplicate must not commit"));
+    assert!(duplicate.is_err());
+    assert_eq!(f.summaries()[0].live.as_ref().unwrap().publication_id.as_deref(), Some("second"));
+}
+
+#[tokio::test]
 async fn live_feed_fences_binding_and_revision_and_does_not_resurrect() {
     let f = Fixture::new();
     f.show("feed", "Feed").await;

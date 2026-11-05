@@ -322,6 +322,9 @@ pub enum WidgetLiveStatus {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 pub struct WidgetLive {
     pub binding: WidgetLiveBinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub publication_id: Option<String>,
     pub state: Option<WidgetLiveState>,
     pub status: WidgetLiveStatus,
 }

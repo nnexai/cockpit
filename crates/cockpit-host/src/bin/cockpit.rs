@@ -293,6 +293,9 @@ instructions. A replaced or removed widget ends the producer.")]
         id: Option<String>,
         #[arg(long)]
         revision: u64,
+        /// Publish the attachment into this explicitly owned Inbox thread.
+        #[arg(long)]
+        thread: Option<String>,
     },
 }
 
@@ -1066,7 +1069,7 @@ fn widget_wait_seconds(wait: bool, timeout: Option<u64>) -> Result<Option<u64>, 
 }
 
 async fn run_widget_live(
-    runtime: &BrowserRuntime, address: WidgetAddress, id: String, revision: u64,
+    runtime: &BrowserRuntime, address: WidgetAddress, id: String, revision: u64, thread: Option<String>,
 ) -> Result<u8, CliError> {
     use std::io::{BufRead, Write};
 
@@ -1081,7 +1084,7 @@ async fn run_widget_live(
         _ => return Err(CliError::widget("widget_not_owner", "a Cockpit job credential is required")),
     };
     let auth = WidgetProducerAuth { credential, conversation: caller.conversation.clone() };
-    runtime.widget_live_attach(address.clone(), id.clone(), revision, auth.clone())
+    runtime.widget_live_attach(address.clone(), id.clone(), revision, auth.clone(), thread)
         .await.map_err(CliError::owner)?;
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(8);
@@ -1244,8 +1247,8 @@ async fn run_widget(args: WidgetArgs) -> Result<u8, CliError> {
                 exit = status_exit;
                 value
             }
-            WidgetCommand::Live { revision, .. } => {
-                return run_widget_live(&runtime, address, id.expect("validated live id"), revision).await;
+            WidgetCommand::Live { revision, thread, .. } => {
+                return run_widget_live(&runtime, address, id.expect("validated live id"), revision, thread).await;
             }
         };
         format_widget_times(&mut output)?;

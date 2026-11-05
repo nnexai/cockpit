@@ -52,6 +52,18 @@ pub(crate) struct OrchestrationState {
     pub thread_links: Vec<ThreadLinkRecord>,
     #[serde(default)]
     pub thread_reads: Vec<ThreadReadRecord>,
+    #[serde(default)]
+    pub widget_publications: Vec<WidgetPublication>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WidgetPublication {
+    pub thread_id: String,
+    pub root_id: String,
+    pub at: String,
+    pub message_position: usize,
+    pub event: cockpit_protocol::orchestration::InboxWidgetEvent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -158,6 +170,7 @@ impl Default for OrchestrationState {
             owned_resources: Vec::new(),
             thread_links: Vec::new(),
             thread_reads: Vec::new(),
+            widget_publications: Vec::new(),
         }
     }
 }

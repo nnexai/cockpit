@@ -4,6 +4,7 @@ import { struct, tagged, literal, req, opt, named, str, bool, f64, u8, u16, u32,
 import { wireOrchestrationAction, wireOrchestrationActionResult } from "./orchestration_2";
 import { wireOrchestrationConfiguration, wireWorkspaceCheckoutOwnership, wireWorkspaceRecoveryAction, wireWorkspaceSetupRequest } from "./projects";
 import { wireErrorResponse } from "./v1";
+import { wireWidgetKey, wireWidgetLiveBinding } from "./widget";
 
 export const wireOrchestrationSnapshotRequest: WireDescriptor<V1.OrchestrationSnapshotRequest> = struct<V1.OrchestrationSnapshotRequest>("OrchestrationSnapshotRequest", {
   "session_id": req(str),
@@ -185,7 +186,16 @@ export const wireInboxRun: WireDescriptor<V1.InboxRun> = struct<V1.InboxRun>("In
   "report_images": req(list(named(() => wireMessageImage))),
 });
 
-export const wireInboxEntryKind: WireDescriptor<V1.InboxEntryKind> = literal<V1.InboxEntryKind>("InboxEntryKind", ["request", "follow_up", "answer", "question", "update", "result"]);
+export const wireInboxEntryKind: WireDescriptor<V1.InboxEntryKind> = literal<V1.InboxEntryKind>("InboxEntryKind", ["request", "follow_up", "answer", "question", "update", "result", "widget"]);
+
+export const wireInboxWidgetEvent: WireDescriptor<V1.InboxWidgetEvent> = struct<V1.InboxWidgetEvent>("InboxWidgetEvent", {
+  "key": req(named(() => wireWidgetKey)),
+  "revision": req(u53),
+  "binding": req(named(() => wireWidgetLiveBinding)),
+  "title": req(str),
+  "publication_id": req(str),
+  "content_sha256": req(str),
+});
 
 export const wireInboxEntry: WireDescriptor<V1.InboxEntry> = struct<V1.InboxEntry>("InboxEntry", {
   "message_id": req(str),
@@ -196,6 +206,7 @@ export const wireInboxEntry: WireDescriptor<V1.InboxEntry> = struct<V1.InboxEntr
   "outcome": req(nullable(named(() => wireReportOutcome)), { fill: null }),
   "images": req(list(named(() => wireMessageImage))),
   "in_reply_to": req(nullable(str), { fill: null }),
+  "widget": opt(named(() => wireInboxWidgetEvent), OMIT, { fill: null, rustOmits: true }),
 });
 
 export const wireInboxArtifactKind: WireDescriptor<V1.InboxArtifactKind> = literal<V1.InboxArtifactKind>("InboxArtifactKind", ["image", "html", "markdown", "other"]);
@@ -271,6 +282,8 @@ export const wireInboxThread: WireDescriptor<V1.InboxThread> = struct<V1.InboxTh
   "facts": req(list(named(() => wireInboxText))),
   "timeline": req(list(named(() => wireInboxEntry))),
   "timeline_omitted": req(u32),
+  "earlier_widgets": opt(list(named(() => wireInboxEntry)), OMIT, { fill: null, rustOmits: true }),
+  "earlier_widgets_omitted": opt(u32, OMIT, { fill: null, rustOmits: true }),
   "updated_at": req(str),
 });
 

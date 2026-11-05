@@ -758,6 +758,47 @@ impl OrchestrationService {
         )
     }
 
+    /// Record an explicitly attributed publication under the same lock as credential and
+    /// thread-link validation. The widget service holds its incarnation lock during this call.
+    pub fn publish_widget_to_thread(&self, thread_id: &str, credential_id: &str,
+        event: cockpit_protocol::orchestration::InboxWidgetEvent) -> Result<(), InspectionError> {
+        let locked = self.store.lock()?;
+        let mut state = locked.read()?;
+        let binding = &event.binding;
+        let attempt = u32::try_from(binding.attempt).map_err(|_| error("widget_live_unavailable", "invalid widget attempt"))?;
+        credentials::validate_widget_binding(&state, credential_id, &binding.run_id, attempt,
+            &binding.session_id, &binding.attachment_id, binding.attachment_epoch)?;
+        let run = state.runs.iter().find(|run| run.run_id == binding.run_id)
+            .ok_or_else(|| error("widget_live_unavailable", "widget run is unavailable"))?;
+        let root_id = run.root_id.clone();
+        let root = state.runs.iter().find(|root| root.run_id == root_id && root.root_id == root_id
+            && root.parent_run_id.is_none() && root.session_id == binding.session_id)
+            .ok_or_else(|| error("widget_live_unavailable", "widget root is unavailable"))?;
+        let root_id = root.run_id.clone();
+        let belongs = state.messages.iter().any(|m| !m.stale && m.thread_id.as_deref() == Some(thread_id)
+            && m.to_run_id == root_id && matches!(m.from, ActorRef::Operator) && m.handoff.is_some())
+            || state.thread_links.iter().any(|link| link.thread_id == thread_id && link.root_id == root_id);
+        let task_matches = run.run_id == root_id || run.task_id.as_ref().is_some_and(|task|
+            state.thread_links.iter().any(|link| link.thread_id == thread_id && link.root_id == root_id && &link.task_id == task)
+            || state.messages.iter().any(|m| !m.stale && m.thread_id.as_deref() == Some(thread_id)
+                && m.to_run_id == root_id && matches!(m.from, ActorRef::Operator)
+                && m.handoff.as_ref().and_then(|h| h.task_id.as_ref()) == Some(task)));
+        let visible_thread = state.messages.iter().any(|m| !m.stale && m.thread_id.as_deref() == Some(thread_id)
+            && ((m.to_run_id == root_id && matches!(m.from, ActorRef::Operator))
+                || (m.kind == MessageKind::Report && m.report.is_some()
+                    && matches!(&m.from, ActorRef::Run { run_id } if run_id == &root_id))));
+        if !belongs || !task_matches || !visible_thread || event.key.session_id != binding.session_id || thread_id.is_empty() {
+            return Err(error("widget_live_unavailable", "widget thread attribution is unavailable"));
+        }
+        state.widget_publications.push(store::WidgetPublication {
+            thread_id: thread_id.to_owned(), root_id, at: now(),
+            message_position: state.messages.len(), event,
+        });
+        let revision = locked.save(&mut state)?;
+        self.revision.send_replace(revision);
+        Ok(())
+    }
+
     pub fn committed_report_job_run(&self, caller: &AgentCaller, message_id: &str) -> Result<Run, InspectionError> {
         let state = self.store.lock()?.read_shared()?;
         let job = credentials::validate_committed_result_auth(&state, &caller.auth, message_id)?;

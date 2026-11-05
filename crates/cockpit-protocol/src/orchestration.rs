@@ -1596,7 +1596,18 @@ pub struct InboxRun {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
-pub enum InboxEntryKind { Request, FollowUp, Answer, Question, Update, Result }
+pub enum InboxEntryKind { Request, FollowUp, Answer, Question, Update, Result, Widget }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxWidgetEvent {
+    pub key: crate::widget::WidgetKey,
+    #[ts(type = "number")]
+    pub revision: u64,
+    pub binding: crate::widget::WidgetLiveBinding,
+    pub title: String,
+    pub publication_id: String,
+    pub content_sha256: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct InboxEntry {
@@ -1608,6 +1619,9 @@ pub struct InboxEntry {
     pub outcome: Option<ReportOutcome>,
     pub images: Vec<MessageImage>,
     pub in_reply_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub widget: Option<InboxWidgetEvent>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -1690,6 +1704,12 @@ pub struct InboxThread {
     pub facts: Vec<InboxText>,
     pub timeline: Vec<InboxEntry>,
     pub timeline_omitted: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub earlier_widgets: Option<Vec<InboxEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub earlier_widgets_omitted: Option<u32>,
     pub updated_at: String,
 }
 

@@ -158,6 +158,51 @@ fn credentialed_reads_reject_stale_or_forged_identity_without_writes() {
 }
 
 #[test]
+fn widget_publication_requires_current_binding_and_matching_thread_task() {
+    use cockpit_protocol::widget::{WidgetKey, WidgetLiveBinding};
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (task, worker, actor) = fixture.working(&root);
+    let (_, sibling, sibling_actor) = fixture.working(&root);
+    let root_actor = fixture.root_actor(&root);
+    fixture.seed_state(|state| {
+        messages::append(state, messages::AppendMessage { images: Vec::new(), thread_id: Some("thread".into()),
+            handoff: Some(HandoffRecord { task_id: Some(task.task_id.clone()), task_revision: None,
+                attempt_run_id: None, binding: None, origin: OperatorOrigin::Browser }),
+            from: ActorRef::Operator, to_run_id: &root, message_id: "request", kind: MessageKind::Instruction,
+            text: "request", in_reply_to: None, report: None, stale: false, escalated_from: None }).unwrap();
+    });
+    let make_event = |run_id: &str, actor: &Actor, publication: &str| {
+        let caller = caller(actor);
+        let state = fixture.state();
+        let run = state.runs.iter().find(|r| r.run_id == run_id).unwrap();
+        InboxWidgetEvent { key: WidgetKey { session_id: SESSION.into(), tab_id: "tab".into(), id: "widget".into() },
+            revision: 1, binding: WidgetLiveBinding { run_id: run_id.into(), attempt: run.attempt.into(),
+                session_id: SESSION.into(), attachment_id: caller.auth.attachment_id.clone(),
+                attachment_epoch: caller.auth.attachment_epoch }, title: "Widget".into(),
+            publication_id: publication.into(), content_sha256: "hash".into() }
+    };
+    let event = make_event(&worker, &actor, "first");
+    let credential = &caller(&actor).auth.credential_id;
+    let before = fixture.state_bytes();
+    assert!(fixture.service.publish_widget_to_thread("wrong", credential, event.clone()).is_err());
+    let sibling_event = make_event(&sibling, &sibling_actor, "sibling");
+    assert!(fixture.service.publish_widget_to_thread("thread", &caller(&sibling_actor).auth.credential_id, sibling_event).is_err());
+    let root_event = make_event(&root, &root_actor, "root");
+    assert!(fixture.service.publish_widget_to_thread("wrong", &caller(&root_actor).auth.credential_id, root_event.clone()).is_err());
+    let mut forged = event.clone();
+    forged.binding.attachment_epoch += 1;
+    assert!(fixture.service.publish_widget_to_thread("thread", credential, forged).is_err());
+    assert_eq!(fixture.state_bytes(), before);
+    fixture.service.publish_widget_to_thread("thread", credential, event).unwrap();
+    fixture.service.publish_widget_to_thread("thread", &caller(&root_actor).auth.credential_id, root_event).unwrap();
+    let state = fixture.state();
+    assert_eq!(state.widget_publications.len(), 2);
+    assert_eq!(state.widget_publications[0].event.publication_id, "first");
+    assert_eq!(state.widget_publications[1].event.publication_id, "root");
+}
+
+#[test]
 fn authenticated_run_identity_uses_current_durable_attachment_not_caller_location() {
     let fixture = Fixture::new();
     let root = fixture.root();

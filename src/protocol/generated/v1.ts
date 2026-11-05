@@ -1000,7 +1000,7 @@ export type WidgetLiveState = { version: number, value_json: string, updated_at_
 
 export type WidgetLiveStatus = "live" | "ended";
 
-export type WidgetLive = { binding: WidgetLiveBinding, state: WidgetLiveState | null, status: WidgetLiveStatus, };
+export type WidgetLive = { binding: WidgetLiveBinding, publication_id?: string, state: WidgetLiveState | null, status: WidgetLiveStatus, };
 
 export type WidgetLiveAction = { value_json: string, };
 
@@ -1094,9 +1094,11 @@ export type InboxReceipt = { message_id: string, kind: MessageKind, to_run_id: s
 
 export type InboxRun = { run_id: string, attempt: number, stage: RunStage, harness: string, session_id: string, attachment_id: string | null, attachment_epoch: number | null, presence: Presence, agent_status: string | null, location: InboxLocation | null, cleanup: Array<CleanupResourceSummary>, report_images: Array<MessageImage>, };
 
-export type InboxEntryKind = "request" | "follow_up" | "answer" | "question" | "update" | "result";
+export type InboxEntryKind = "request" | "follow_up" | "answer" | "question" | "update" | "result" | "widget";
 
-export type InboxEntry = { message_id: string, at: string, kind: InboxEntryKind, text: string, source: InboxSource, outcome: ReportOutcome | null, images: Array<MessageImage>, in_reply_to: string | null, };
+export type InboxWidgetEvent = { key: WidgetKey, revision: number, binding: WidgetLiveBinding, title: string, publication_id: string, content_sha256: string, };
+
+export type InboxEntry = { message_id: string, at: string, kind: InboxEntryKind, text: string, source: InboxSource, outcome: ReportOutcome | null, images: Array<MessageImage>, in_reply_to: string | null, widget?: InboxWidgetEvent, };
 
 export type InboxArtifactKind = "image" | "html" | "markdown" | "other";
 
@@ -1114,7 +1116,7 @@ export type InboxTaskEvidence = { run_id: string, attempt: number, attempts: num
 
 export type InboxTaskLink = { root_id: string, task_id: string, title: string, project: TaskProject | null, lane: TaskLane, run: InboxRun | null, evidence: InboxTaskEvidence | null, };
 
-export type InboxThread = { thread_id: string, state: InboxState, need: InboxNeed | null, owner_root_ids: Array<string>, title: InboxText, next: InboxText | null, project: string | null, request: InboxRequestEcho | null, follow_ups: Array<InboxRequestEcho>, questions: Array<InboxQuestion>, recommendation: InboxText | null, reply: InboxText | null, unread_result_message_id: string | null, tasks: Array<InboxTaskLink>, receipts: Array<InboxReceipt>, facts: Array<InboxText>, timeline: Array<InboxEntry>, timeline_omitted: number, updated_at: string, };
+export type InboxThread = { thread_id: string, state: InboxState, need: InboxNeed | null, owner_root_ids: Array<string>, title: InboxText, next: InboxText | null, project: string | null, request: InboxRequestEcho | null, follow_ups: Array<InboxRequestEcho>, questions: Array<InboxQuestion>, recommendation: InboxText | null, reply: InboxText | null, unread_result_message_id: string | null, tasks: Array<InboxTaskLink>, receipts: Array<InboxReceipt>, facts: Array<InboxText>, timeline: Array<InboxEntry>, timeline_omitted: number, earlier_widgets?: Array<InboxEntry>, earlier_widgets_omitted?: number, updated_at: string, };
 
 export type HandoffBinding = { repository_id: string | null, workspace_id: string | null, branch: string | null, base_ref: string | null, };
 

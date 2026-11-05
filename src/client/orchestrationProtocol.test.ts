@@ -1980,6 +1980,15 @@ describe("browser/native orchestration parity", () => {
     const nativeCall = vi.fn(async () => payload);
     const client = transport === "browser" ? createBrowserClient(browserCall) : createNativeClient(nativeCall);
     await expect(client.orchestrationInbox(request)).resolves.toEqual(view);
+    const legacyEntry = { message_id: "message", at, kind: "request", text: "Work", source: { kind: "user" }, outcome: null, images: [], in_reply_to: null };
+    const legacy = { ...view, threads: [{ ...thread, timeline: [legacyEntry] }] };
+    payload = legacy;
+    await expect(client.orchestrationInbox(request)).resolves.toEqual(legacy);
+    payload = { ...view, threads: [{ ...thread, timeline: [{ ...legacyEntry, unexpected: true }] }] };
+    await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
+    const { text: _missingText, ...incompleteEntry } = legacyEntry;
+    payload = { ...view, threads: [{ ...thread, timeline: [incompleteEntry] }] };
+    await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
     for (const bad of [
       { ...view, session_id: "other" },
       { ...view, unexpected: true },

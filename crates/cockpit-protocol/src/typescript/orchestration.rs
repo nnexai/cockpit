@@ -26,6 +26,7 @@ section!(
         InboxReceipt,
         InboxRun,
         InboxEntryKind,
+        InboxWidgetEvent,
         InboxEntry,
         InboxArtifactKind,
         InboxArtifact,

@@ -2,6 +2,11 @@
 import type * as V1 from "../v1";
 
 export interface WireTypes {
+  "OwnedResourceIdentity": V1.OwnedResourceIdentity;
+  "CleanupState": V1.CleanupState;
+  "CleanupReasonClass": V1.CleanupReasonClass;
+  "CleanupReason": V1.CleanupReason;
+  "CleanupEffectState": V1.CleanupEffectState;
   "CleanupEffectReceipt": V1.CleanupEffectReceipt;
   "CleanupItem": V1.CleanupItem;
   "OwnedResourceRecord": V1.OwnedResourceRecord;
@@ -47,6 +52,15 @@ export interface WireTypes {
 }
 
 export interface WireOwners {
+  "OwnedResourceIdentity": V1.OwnedResourceIdentity;
+  "OwnedResourceIdentity[worker_terminal]": Extract<V1.OwnedResourceIdentity, { "kind": "worker_terminal" }>;
+  "OwnedResourceIdentity[worktree]": Extract<V1.OwnedResourceIdentity, { "kind": "worktree" }>;
+  "OwnedResourceIdentity[branch]": Extract<V1.OwnedResourceIdentity, { "kind": "branch" }>;
+  "OwnedResourceIdentity[space]": Extract<V1.OwnedResourceIdentity, { "kind": "space" }>;
+  "OwnedResourceIdentity[scratch]": Extract<V1.OwnedResourceIdentity, { "kind": "scratch" }>;
+  "OwnedResourceIdentity[attempt_directory]": Extract<V1.OwnedResourceIdentity, { "kind": "attempt_directory" }>;
+  "OwnedResourceIdentity[fixture_set]": Extract<V1.OwnedResourceIdentity, { "kind": "fixture_set" }>;
+  "CleanupReason": V1.CleanupReason;
   "CleanupEffectReceipt": V1.CleanupEffectReceipt;
   "CleanupItem": V1.CleanupItem;
   "OwnedResourceRecord": V1.OwnedResourceRecord;
@@ -155,6 +169,17 @@ export interface WireOwners {
 }
 
 export interface WireFields {
+  "OwnedResourceIdentity.identity": (V1.OwnedResourceIdentity)["identity"];
+  "OwnedResourceIdentity[worker_terminal].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "worker_terminal" }>)["identity"];
+  "OwnedResourceIdentity[worktree].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "worktree" }>)["identity"];
+  "OwnedResourceIdentity[branch].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "branch" }>)["identity"];
+  "OwnedResourceIdentity[space].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "space" }>)["identity"];
+  "OwnedResourceIdentity[scratch].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "scratch" }>)["identity"];
+  "OwnedResourceIdentity[attempt_directory].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "attempt_directory" }>)["identity"];
+  "OwnedResourceIdentity[fixture_set].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "fixture_set" }>)["identity"];
+  "CleanupReason.class": (V1.CleanupReason)["class"];
+  "CleanupReason.code": (V1.CleanupReason)["code"];
+  "CleanupReason.message": (V1.CleanupReason)["message"];
   "CleanupEffectReceipt.effect_id": (V1.CleanupEffectReceipt)["effect_id"];
   "CleanupEffectReceipt.kind": (V1.CleanupEffectReceipt)["kind"];
   "CleanupEffectReceipt.identity_digest": (V1.CleanupEffectReceipt)["identity_digest"];
@@ -577,6 +602,15 @@ export interface WireFields {
 }
 
 export interface WireFieldNames {
+  "OwnedResourceIdentity": "identity";
+  "OwnedResourceIdentity[worker_terminal]": "identity";
+  "OwnedResourceIdentity[worktree]": "identity";
+  "OwnedResourceIdentity[branch]": "identity";
+  "OwnedResourceIdentity[space]": "identity";
+  "OwnedResourceIdentity[scratch]": "identity";
+  "OwnedResourceIdentity[attempt_directory]": "identity";
+  "OwnedResourceIdentity[fixture_set]": "identity";
+  "CleanupReason": "class" | "code" | "message";
   "CleanupEffectReceipt": "effect_id" | "kind" | "identity_digest" | "state" | "evidence" | "updated_at";
   "CleanupItem": "operation_id" | "state" | "reason" | "effects" | "updated_at";
   "OwnedResourceRecord": "resource_id" | "root_id" | "run_id" | "kind" | "ownership" | "creation_operation_id" | "identity" | "authority" | "consumers" | "integration_result_id" | "cleanup";
@@ -685,6 +719,14 @@ export interface WireFieldNames {
 }
 
 export interface WireChildNames {
+  "OwnedResourceIdentity.identity": "OwnedAttemptDirectoryIdentity" | "OwnedFilesystemIdentity" | "OwnedFixtureIdentity" | "OwnedGitIdentity" | "OwnedSpaceIdentity" | "RetirementIdentity";
+  "OwnedResourceIdentity[worker_terminal].identity": "RetirementIdentity";
+  "OwnedResourceIdentity[worktree].identity": "OwnedGitIdentity";
+  "OwnedResourceIdentity[branch].identity": "OwnedGitIdentity";
+  "OwnedResourceIdentity[space].identity": "OwnedSpaceIdentity";
+  "OwnedResourceIdentity[scratch].identity": "OwnedFilesystemIdentity";
+  "OwnedResourceIdentity[attempt_directory].identity": "OwnedAttemptDirectoryIdentity";
+  "OwnedResourceIdentity[fixture_set].identity": "OwnedFixtureIdentity";
   "CleanupItem.reason": "CleanupReason";
   "OwnedResourceRecord.identity": "OwnedResourceIdentity";
   "OwnedResourceRecord.cleanup": "CleanupItem";
@@ -781,6 +823,14 @@ export interface WireChildNames {
 }
 
 export interface WireTagNames {
+  "OwnedResourceIdentity": "kind";
+  "OwnedResourceIdentity[worker_terminal]": "kind";
+  "OwnedResourceIdentity[worktree]": "kind";
+  "OwnedResourceIdentity[branch]": "kind";
+  "OwnedResourceIdentity[space]": "kind";
+  "OwnedResourceIdentity[scratch]": "kind";
+  "OwnedResourceIdentity[attempt_directory]": "kind";
+  "OwnedResourceIdentity[fixture_set]": "kind";
   "RetirementState": "state";
   "RetirementState[waiting]": "state";
   "RetirementState[close_intent]": "state";
@@ -865,6 +915,15 @@ export interface WireTagNames {
 }
 
 export interface WireCheckpointFieldNames {
+  "OwnedResourceIdentity": "identity" | "kind";
+  "OwnedResourceIdentity[worker_terminal]": "identity" | "kind";
+  "OwnedResourceIdentity[worktree]": "identity" | "kind";
+  "OwnedResourceIdentity[branch]": "identity" | "kind";
+  "OwnedResourceIdentity[space]": "identity" | "kind";
+  "OwnedResourceIdentity[scratch]": "identity" | "kind";
+  "OwnedResourceIdentity[attempt_directory]": "identity" | "kind";
+  "OwnedResourceIdentity[fixture_set]": "identity" | "kind";
+  "CleanupReason": "class" | "code" | "message";
   "CleanupEffectReceipt": "effect_id" | "kind" | "identity_digest" | "state" | "evidence" | "updated_at";
   "CleanupItem": "operation_id" | "state" | "reason" | "effects" | "updated_at";
   "OwnedResourceRecord": "resource_id" | "root_id" | "run_id" | "kind" | "ownership" | "creation_operation_id" | "identity" | "authority" | "consumers" | "integration_result_id" | "cleanup";

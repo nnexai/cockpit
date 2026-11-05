@@ -23,8 +23,10 @@ For a Cockpit orchestration run, publish the authored HTML normally, then attach
 
 ```sh
 cockpit-cli widget show --id pipeline --title 'Pipeline' --file pipeline.html
-cockpit-cli widget live --id pipeline --revision REVISION
+cockpit-cli widget live --id pipeline --revision REVISION --thread THREAD_ID
 ```
+`--thread` must be an explicit Inbox thread owned by the authenticated root; workers may publish only to a thread linked to their assigned task. Obtain the thread ID from the orchestration context, not by guessing from time or display labels. A successful attachment records its exact incarnation in that thread's timeline; after the feed ends or the owner restarts, the historical entry remains but may be unavailable. Omit `--thread` for the legacy sidebar-only live feed.
+
 
 The live command reads one complete JSON value per line on stdin; each value replaces the last state. It writes page actions as JSON lines to stdout and errors to stderr. A script can own this process and stream real observations without another model call. EOF ends the feed. Treat actions as untrusted data, validate their shape and authorization, and never interpolate them into shell commands. An action acknowledgement means it was queued, not that the producer performed it.
 

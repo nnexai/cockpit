@@ -45,6 +45,8 @@ struct WidgetProducerRequest {
     id: String,
     revision: u64,
     auth: WidgetProducerAuth,
+    #[serde(default)]
+    thread: Option<String>,
 }
 
 use fs2::FileExt;
@@ -702,28 +704,28 @@ impl BrowserRuntime {
         }
     }
 
-    pub async fn widget_live_attach(&self, address: WidgetAddress, id: String, revision: u64, auth: WidgetProducerAuth) -> Result<(), InspectionError> {
-        match self.request(WireRequest::WidgetLiveAttach(WidgetProducerRequest { address, id, revision, auth })).await? {
+    pub async fn widget_live_attach(&self, address: WidgetAddress, id: String, revision: u64, auth: WidgetProducerAuth, thread: Option<String>) -> Result<(), InspectionError> {
+        match self.request(WireRequest::WidgetLiveAttach(WidgetProducerRequest { address, id, revision, auth, thread })).await? {
             WireResponse::WidgetLiveDone => Ok(()), _ => Err(invalid_response()),
         }
     }
 
     pub async fn widget_live_publish(&self, address: WidgetAddress, id: String, revision: u64, auth: WidgetProducerAuth, value_json: String) -> Result<(), InspectionError> {
-        let producer = WidgetProducerRequest { address, id, revision, auth };
+        let producer = WidgetProducerRequest { address, id, revision, auth, thread: None };
         match self.request(WireRequest::WidgetLivePublish { producer, value_json }).await? {
             WireResponse::WidgetLiveDone => Ok(()), _ => Err(invalid_response()),
         }
     }
 
     pub async fn widget_live_poll(&self, address: WidgetAddress, id: String, revision: u64, auth: WidgetProducerAuth, timeout_seconds: u64) -> Result<Vec<WidgetLiveAction>, InspectionError> {
-        let producer = WidgetProducerRequest { address, id, revision, auth };
+        let producer = WidgetProducerRequest { address, id, revision, auth, thread: None };
         match self.request(WireRequest::WidgetLivePoll { producer, timeout_seconds }).await? {
             WireResponse::WidgetLiveActions(actions) => Ok(actions), _ => Err(invalid_response()),
         }
     }
 
     pub async fn widget_live_end(&self, address: WidgetAddress, id: String, revision: u64, auth: WidgetProducerAuth) -> Result<(), InspectionError> {
-        match self.request(WireRequest::WidgetLiveEnd(WidgetProducerRequest { address, id, revision, auth })).await? {
+        match self.request(WireRequest::WidgetLiveEnd(WidgetProducerRequest { address, id, revision, auth, thread: None })).await? {
             WireResponse::WidgetLiveDone => Ok(()), _ => Err(invalid_response()),
         }
     }
@@ -937,7 +939,21 @@ async fn dispatch(
         WireRequest::WidgetLiveAttach(producer) => {
             let widgets = widget_service(widgets)?;
             let (key, binding, credential_id) = authenticate_widget_producer(state_root, widgets, &producer).await?;
-            widgets.attach_live(&key, producer.revision, binding, credential_id)?;
+            if let Some(thread) = producer.thread.as_deref() {
+                let publication_id = uuid::Uuid::new_v4().to_string();
+                let orchestration = cockpit_core::orchestration::OrchestrationService::open_state_root(state_root)?;
+                widgets.attach_live_with_publication(&key, producer.revision, binding.clone(), credential_id.clone(),
+                    Some(publication_id.clone()), |summary| {
+                        orchestration.publish_widget_to_thread(thread, &credential_id,
+                            cockpit_protocol::orchestration::InboxWidgetEvent {
+                                key: key.clone(), revision: producer.revision, binding,
+                                title: summary.title.clone(), publication_id,
+                                content_sha256: summary.content.sha256.clone(),
+                            })
+                    })?;
+            } else {
+                widgets.attach_live(&key, producer.revision, binding, credential_id)?;
+            }
             Ok(WireResponse::WidgetLiveDone)
         }
         WireRequest::WidgetLivePublish { producer, value_json } => {

@@ -26,6 +26,7 @@ export interface WireTypes {
   "InboxReceipt": V1.InboxReceipt;
   "InboxRun": V1.InboxRun;
   "InboxEntryKind": V1.InboxEntryKind;
+  "InboxWidgetEvent": V1.InboxWidgetEvent;
   "InboxEntry": V1.InboxEntry;
   "InboxArtifactKind": V1.InboxArtifactKind;
   "InboxArtifact": V1.InboxArtifact;
@@ -136,11 +137,6 @@ export interface WireTypes {
   "OwnedAttemptDirectoryIdentity": V1.OwnedAttemptDirectoryIdentity;
   "FixtureAdapterId": V1.FixtureAdapterId;
   "OwnedFixtureIdentity": V1.OwnedFixtureIdentity;
-  "OwnedResourceIdentity": V1.OwnedResourceIdentity;
-  "CleanupState": V1.CleanupState;
-  "CleanupReasonClass": V1.CleanupReasonClass;
-  "CleanupReason": V1.CleanupReason;
-  "CleanupEffectState": V1.CleanupEffectState;
 }
 
 export interface WireOwners {
@@ -171,6 +167,7 @@ export interface WireOwners {
   "InboxQuestion": V1.InboxQuestion;
   "InboxReceipt": V1.InboxReceipt;
   "InboxRun": V1.InboxRun;
+  "InboxWidgetEvent": V1.InboxWidgetEvent;
   "InboxEntry": V1.InboxEntry;
   "InboxArtifact": V1.InboxArtifact;
   "InboxDecision": V1.InboxDecision;
@@ -264,15 +261,6 @@ export interface WireOwners {
   "OwnedFilesystemIdentity": V1.OwnedFilesystemIdentity;
   "OwnedAttemptDirectoryIdentity": V1.OwnedAttemptDirectoryIdentity;
   "OwnedFixtureIdentity": V1.OwnedFixtureIdentity;
-  "OwnedResourceIdentity": V1.OwnedResourceIdentity;
-  "OwnedResourceIdentity[worker_terminal]": Extract<V1.OwnedResourceIdentity, { "kind": "worker_terminal" }>;
-  "OwnedResourceIdentity[worktree]": Extract<V1.OwnedResourceIdentity, { "kind": "worktree" }>;
-  "OwnedResourceIdentity[branch]": Extract<V1.OwnedResourceIdentity, { "kind": "branch" }>;
-  "OwnedResourceIdentity[space]": Extract<V1.OwnedResourceIdentity, { "kind": "space" }>;
-  "OwnedResourceIdentity[scratch]": Extract<V1.OwnedResourceIdentity, { "kind": "scratch" }>;
-  "OwnedResourceIdentity[attempt_directory]": Extract<V1.OwnedResourceIdentity, { "kind": "attempt_directory" }>;
-  "OwnedResourceIdentity[fixture_set]": Extract<V1.OwnedResourceIdentity, { "kind": "fixture_set" }>;
-  "CleanupReason": V1.CleanupReason;
 }
 
 export interface WireFields {
@@ -376,6 +364,12 @@ export interface WireFields {
   "InboxRun.location": (V1.InboxRun)["location"];
   "InboxRun.cleanup": (V1.InboxRun)["cleanup"];
   "InboxRun.report_images": (V1.InboxRun)["report_images"];
+  "InboxWidgetEvent.key": (V1.InboxWidgetEvent)["key"];
+  "InboxWidgetEvent.revision": (V1.InboxWidgetEvent)["revision"];
+  "InboxWidgetEvent.binding": (V1.InboxWidgetEvent)["binding"];
+  "InboxWidgetEvent.title": (V1.InboxWidgetEvent)["title"];
+  "InboxWidgetEvent.publication_id": (V1.InboxWidgetEvent)["publication_id"];
+  "InboxWidgetEvent.content_sha256": (V1.InboxWidgetEvent)["content_sha256"];
   "InboxEntry.message_id": (V1.InboxEntry)["message_id"];
   "InboxEntry.at": (V1.InboxEntry)["at"];
   "InboxEntry.kind": (V1.InboxEntry)["kind"];
@@ -384,6 +378,7 @@ export interface WireFields {
   "InboxEntry.outcome": (V1.InboxEntry)["outcome"];
   "InboxEntry.images": (V1.InboxEntry)["images"];
   "InboxEntry.in_reply_to": (V1.InboxEntry)["in_reply_to"];
+  "InboxEntry.widget": (V1.InboxEntry)["widget"];
   "InboxArtifact.path": (V1.InboxArtifact)["path"];
   "InboxArtifact.name": (V1.InboxArtifact)["name"];
   "InboxArtifact.kind": (V1.InboxArtifact)["kind"];
@@ -434,6 +429,8 @@ export interface WireFields {
   "InboxThread.facts": (V1.InboxThread)["facts"];
   "InboxThread.timeline": (V1.InboxThread)["timeline"];
   "InboxThread.timeline_omitted": (V1.InboxThread)["timeline_omitted"];
+  "InboxThread.earlier_widgets": (V1.InboxThread)["earlier_widgets"];
+  "InboxThread.earlier_widgets_omitted": (V1.InboxThread)["earlier_widgets_omitted"];
   "InboxThread.updated_at": (V1.InboxThread)["updated_at"];
   "HandoffBinding.repository_id": (V1.HandoffBinding)["repository_id"];
   "HandoffBinding.workspace_id": (V1.HandoffBinding)["workspace_id"];
@@ -824,17 +821,6 @@ export interface WireFields {
   "OwnedFixtureIdentity.creation_operation_id": (V1.OwnedFixtureIdentity)["creation_operation_id"];
   "OwnedFixtureIdentity.filesystem": (V1.OwnedFixtureIdentity)["filesystem"];
   "OwnedFixtureIdentity.processes": (V1.OwnedFixtureIdentity)["processes"];
-  "OwnedResourceIdentity.identity": (V1.OwnedResourceIdentity)["identity"];
-  "OwnedResourceIdentity[worker_terminal].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "worker_terminal" }>)["identity"];
-  "OwnedResourceIdentity[worktree].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "worktree" }>)["identity"];
-  "OwnedResourceIdentity[branch].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "branch" }>)["identity"];
-  "OwnedResourceIdentity[space].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "space" }>)["identity"];
-  "OwnedResourceIdentity[scratch].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "scratch" }>)["identity"];
-  "OwnedResourceIdentity[attempt_directory].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "attempt_directory" }>)["identity"];
-  "OwnedResourceIdentity[fixture_set].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "fixture_set" }>)["identity"];
-  "CleanupReason.class": (V1.CleanupReason)["class"];
-  "CleanupReason.code": (V1.CleanupReason)["code"];
-  "CleanupReason.message": (V1.CleanupReason)["message"];
 }
 
 export interface WireFieldNames {
@@ -865,14 +851,15 @@ export interface WireFieldNames {
   "InboxQuestion": "run_id" | "question_message_id" | "asked_at" | "text" | "choices" | "receipt";
   "InboxReceipt": "message_id" | "kind" | "to_run_id" | "attempt_run_id" | "stage" | "created_at" | "acked_at" | "stale";
   "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "session_id" | "attachment_id" | "attachment_epoch" | "presence" | "agent_status" | "location" | "cleanup" | "report_images";
-  "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to";
+  "InboxWidgetEvent": "key" | "revision" | "binding" | "title" | "publication_id" | "content_sha256";
+  "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to" | "widget";
   "InboxArtifact": "path" | "name" | "kind" | "recorded";
   "InboxDecision": "question" | "answer" | "asked_at" | "answered_at" | "by";
   "InboxTaskResult": "summary" | "outcome" | "at";
   "InboxTaskIntegration": "target" | "commit";
   "InboxTaskEvidence": "run_id" | "attempt" | "attempts" | "result" | "checks" | "commits" | "head_commit" | "integration" | "artifacts" | "images" | "decisions";
   "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence";
-  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "updated_at";
+  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
   "HandoffBinding": "repository_id" | "workspace_id" | "branch" | "base_ref";
   "HandoffBindingRecord": "requested" | "repository_common_dir" | "workspace_checkout";
   "BoundCheckout": "path" | "common_dir" | "branch" | "head";
@@ -958,15 +945,6 @@ export interface WireFieldNames {
   "OwnedFilesystemIdentity": "creation_operation_id" | "machine_id" | "root" | "device" | "inode" | "manifest_path" | "manifest_device" | "manifest_inode";
   "OwnedAttemptDirectoryIdentity": "creation_operation_id" | "root" | "device" | "inode";
   "OwnedFixtureIdentity": "adapter" | "creation_operation_id" | "filesystem" | "processes";
-  "OwnedResourceIdentity": "identity";
-  "OwnedResourceIdentity[worker_terminal]": "identity";
-  "OwnedResourceIdentity[worktree]": "identity";
-  "OwnedResourceIdentity[branch]": "identity";
-  "OwnedResourceIdentity[space]": "identity";
-  "OwnedResourceIdentity[scratch]": "identity";
-  "OwnedResourceIdentity[attempt_directory]": "identity";
-  "OwnedResourceIdentity[fixture_set]": "identity";
-  "CleanupReason": "class" | "code" | "message";
 }
 
 export interface WireChildNames {
@@ -983,7 +961,10 @@ export interface WireChildNames {
   "InboxQuestion.text": "InboxText";
   "InboxQuestion.receipt": "QuestionReceipt";
   "InboxRun.location": "InboxLocation";
+  "InboxWidgetEvent.key": "WidgetKey";
+  "InboxWidgetEvent.binding": "WidgetLiveBinding";
   "InboxEntry.source": "InboxSource";
+  "InboxEntry.widget": "InboxWidgetEvent";
   "InboxTaskEvidence.result": "InboxTaskResult";
   "InboxTaskEvidence.integration": "InboxTaskIntegration";
   "InboxTaskLink.project": "TaskProject";
@@ -1043,14 +1024,6 @@ export interface WireChildNames {
   "ResourceBuildRegistration.expected_holder": "AttachmentReference";
   "ResourceBuildRegistration.process": "NativeProcessIdentity";
   "OwnedFixtureIdentity.filesystem": "OwnedFilesystemIdentity";
-  "OwnedResourceIdentity.identity": "OwnedAttemptDirectoryIdentity" | "OwnedFilesystemIdentity" | "OwnedFixtureIdentity" | "OwnedGitIdentity" | "OwnedSpaceIdentity" | "RetirementIdentity";
-  "OwnedResourceIdentity[worker_terminal].identity": "RetirementIdentity";
-  "OwnedResourceIdentity[worktree].identity": "OwnedGitIdentity";
-  "OwnedResourceIdentity[branch].identity": "OwnedGitIdentity";
-  "OwnedResourceIdentity[space].identity": "OwnedSpaceIdentity";
-  "OwnedResourceIdentity[scratch].identity": "OwnedFilesystemIdentity";
-  "OwnedResourceIdentity[attempt_directory].identity": "OwnedAttemptDirectoryIdentity";
-  "OwnedResourceIdentity[fixture_set].identity": "OwnedFixtureIdentity";
 }
 
 export interface WireTagNames {
@@ -1085,14 +1058,6 @@ export interface WireTagNames {
   "Integration[pending]": "state";
   "Integration[not_applicable]": "state";
   "Integration[integrated]": "state";
-  "OwnedResourceIdentity": "kind";
-  "OwnedResourceIdentity[worker_terminal]": "kind";
-  "OwnedResourceIdentity[worktree]": "kind";
-  "OwnedResourceIdentity[branch]": "kind";
-  "OwnedResourceIdentity[space]": "kind";
-  "OwnedResourceIdentity[scratch]": "kind";
-  "OwnedResourceIdentity[attempt_directory]": "kind";
-  "OwnedResourceIdentity[fixture_set]": "kind";
 }
 
 export interface WireCheckpointFieldNames {
@@ -1123,14 +1088,15 @@ export interface WireCheckpointFieldNames {
   "InboxQuestion": "run_id" | "question_message_id" | "asked_at" | "text" | "choices" | "receipt";
   "InboxReceipt": "message_id" | "kind" | "to_run_id" | "attempt_run_id" | "stage" | "created_at" | "acked_at" | "stale";
   "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "session_id" | "attachment_id" | "attachment_epoch" | "presence" | "agent_status" | "location" | "cleanup" | "report_images";
-  "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to";
+  "InboxWidgetEvent": "key" | "revision" | "binding" | "title" | "publication_id" | "content_sha256";
+  "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to" | "widget";
   "InboxArtifact": "path" | "name" | "kind" | "recorded";
   "InboxDecision": "question" | "answer" | "asked_at" | "answered_at" | "by";
   "InboxTaskResult": "summary" | "outcome" | "at";
   "InboxTaskIntegration": "target" | "commit";
   "InboxTaskEvidence": "run_id" | "attempt" | "attempts" | "result" | "checks" | "commits" | "head_commit" | "integration" | "artifacts" | "images" | "decisions";
   "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence";
-  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "updated_at";
+  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
   "HandoffBinding": "repository_id" | "workspace_id" | "branch" | "base_ref";
   "HandoffBindingRecord": "requested" | "repository_common_dir" | "workspace_checkout";
   "BoundCheckout": "path" | "common_dir" | "branch" | "head";
@@ -1216,15 +1182,6 @@ export interface WireCheckpointFieldNames {
   "OwnedFilesystemIdentity": "creation_operation_id" | "machine_id" | "root" | "device" | "inode" | "manifest_path" | "manifest_device" | "manifest_inode";
   "OwnedAttemptDirectoryIdentity": "creation_operation_id" | "root" | "device" | "inode";
   "OwnedFixtureIdentity": "adapter" | "creation_operation_id" | "filesystem" | "processes";
-  "OwnedResourceIdentity": "identity" | "kind";
-  "OwnedResourceIdentity[worker_terminal]": "identity" | "kind";
-  "OwnedResourceIdentity[worktree]": "identity" | "kind";
-  "OwnedResourceIdentity[branch]": "identity" | "kind";
-  "OwnedResourceIdentity[space]": "identity" | "kind";
-  "OwnedResourceIdentity[scratch]": "identity" | "kind";
-  "OwnedResourceIdentity[attempt_directory]": "identity" | "kind";
-  "OwnedResourceIdentity[fixture_set]": "identity" | "kind";
-  "CleanupReason": "class" | "code" | "message";
 }
 
 export type WireOmittableField =
@@ -1243,6 +1200,7 @@ export type WireOmittableField =
   | "InboxRun.location"
   | "InboxEntry.outcome"
   | "InboxEntry.in_reply_to"
+  | "InboxEntry.widget"
   | "InboxDecision.answer"
   | "InboxDecision.answered_at"
   | "InboxDecision.by"
@@ -1260,6 +1218,8 @@ export type WireOmittableField =
   | "InboxThread.recommendation"
   | "InboxThread.reply"
   | "InboxThread.unread_result_message_id"
+  | "InboxThread.earlier_widgets"
+  | "InboxThread.earlier_widgets_omitted"
   | "HandoffBinding.repository_id"
   | "HandoffBinding.workspace_id"
   | "HandoffBinding.branch"
@@ -1359,6 +1319,9 @@ export type WireOmittableField =
   | never;
 
 export type WireOptionalField =
+  | "InboxEntry.widget"
+  | "InboxThread.earlier_widgets"
+  | "InboxThread.earlier_widgets_omitted"
   | "UnmanagedAgent.expected_target"
   | "ResumeRecord.fresh_conversation"
   | "ResumeRecord.previous_conversation"
@@ -1389,6 +1352,7 @@ export type WireListField =
   | "InboxThread.receipts"
   | "InboxThread.facts"
   | "InboxThread.timeline"
+  | "InboxThread.earlier_widgets"
   | "ThreadCard.choices"
   | "OrchestrationSnapshot.roots"
   | "OrchestrationSnapshot.runs"

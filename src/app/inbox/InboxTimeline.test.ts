@@ -41,4 +41,26 @@ describe("groupTimeline", () => {
       { kind: "entry", entry: followUp, answers: [] },
     ]);
   });
+
+  it("keeps a publication between updates rather than hiding it in a collapsed group", () => {
+    const before = [entry("1", "update"), entry("2", "update"), entry("3", "update")];
+    const publication = entry("publication", "widget");
+    const after = [entry("4", "update"), entry("5", "update"), entry("6", "update")];
+    expect(groupTimeline([...before, publication, ...after])).toEqual([
+      { kind: "updates", entries: before },
+      { kind: "entry", entry: publication, answers: [] },
+      { kind: "updates", entries: after },
+    ]);
+  });
+
+  it("does not move an answer across a widget publication", () => {
+    const question = entry("q", "question");
+    const publication = entry("w", "widget");
+    const answer = entry("a", "answer", "q");
+    expect(groupTimeline([question, publication, answer])).toEqual([
+      { kind: "entry", entry: question, answers: [] },
+      { kind: "entry", entry: publication, answers: [] },
+      { kind: "entry", entry: answer, answers: [] },
+    ]);
+  });
 });

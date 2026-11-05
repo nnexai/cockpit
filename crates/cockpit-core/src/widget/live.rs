@@ -82,18 +82,25 @@ impl WidgetService {
 
     // The caller must authenticate this binding before passing it to the service.
     pub fn attach_live(&self, key: &WidgetKey, revision: u64, binding: WidgetLiveBinding, credential_id: String) -> Result<(), InspectionError> {
-        self.update_live(key, revision, true, |widget| {
+        self.attach_live_with_publication(key, revision, binding, credential_id, None, |_| Ok(()))
+    }
+
+    /// Commit durable publication while the exact widget incarnation is locked, before exposing it.
+    pub fn attach_live_with_publication(&self, key: &WidgetKey, revision: u64, binding: WidgetLiveBinding,
+        credential_id: String, publication_id: Option<String>,
+        commit: impl FnOnce(&WidgetSummary) -> Result<(), InspectionError>) -> Result<(), InspectionError> {
+        self.update_live_commit(key, revision, true, |widget| {
             if !widget.summary.source.as_ref().is_some_and(|source| source.status == WidgetSourceStatus::Present) {
                 return Err(unavailable());
             }
             if widget.summary.live.as_ref().is_some_and(|live| live.status == WidgetLiveStatus::Live) {
                 return Err(unavailable());
             }
-            widget.summary.live = Some(WidgetLive { binding, state: None, status: WidgetLiveStatus::Live });
+            widget.summary.live = Some(WidgetLive { binding, publication_id, state: None, status: WidgetLiveStatus::Live });
             widget.live_credential_id = Some(credential_id);
             widget.live_lease_at_ms = (self.clock)();
             Ok(())
-        })
+        }, commit)
     }
 
     pub fn publish_live(&self, key: &WidgetKey, revision: u64, binding: &WidgetLiveBinding, credential_id: &str, value_json: String) -> Result<(), InspectionError> {
@@ -120,6 +127,12 @@ impl WidgetService {
     }
 
     fn update_live(&self, key: &WidgetKey, revision: u64, clear_actions: bool, update: impl FnOnce(&mut Widget) -> Result<(), InspectionError>) -> Result<(), InspectionError> {
+        self.update_live_commit(key, revision, clear_actions, update, |_| Ok(()))
+    }
+
+    fn update_live_commit(&self, key: &WidgetKey, revision: u64, clear_actions: bool,
+        update: impl FnOnce(&mut Widget) -> Result<(), InspectionError>,
+        commit: impl FnOnce(&WidgetSummary) -> Result<(), InspectionError>) -> Result<(), InspectionError> {
         let mut store = self.store.lock();
         self.expire_live_locked(&mut store);
         let widget = widget_mut(&mut store, key, revision)?;
@@ -143,6 +156,12 @@ impl WidgetService {
             return Err(InspectionError::new("widget_limit", "owner widget snapshot byte limit reached"));
         }
         let widget = widget_mut(&mut store, key, revision)?;
+        if let Err(err) = commit(&widget.summary) {
+            widget.summary = old_summary;
+            widget.live_credential_id = old_credential;
+            widget.live_lease_at_ms = old_lease;
+            return Err(err);
+        }
         widget.snapshot_bytes = new_widget_bytes;
         let summary = widget.summary.clone();
         if clear_actions { widget.live_actions.clear(); }

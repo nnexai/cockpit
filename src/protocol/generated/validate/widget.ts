@@ -195,6 +195,7 @@ export const wireWidgetLiveStatus: WireDescriptor<V1.WidgetLiveStatus> = literal
 
 export const wireWidgetLive: WireDescriptor<V1.WidgetLive> = struct<V1.WidgetLive>("WidgetLive", {
   "binding": req(named(() => wireWidgetLiveBinding)),
+  "publication_id": opt(str, OMIT, { fill: null, rustOmits: true }),
   "state": req(nullable(named(() => wireWidgetLiveState)), { fill: null }),
   "status": req(named(() => wireWidgetLiveStatus)),
 });

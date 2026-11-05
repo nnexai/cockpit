@@ -215,6 +215,7 @@ export interface WireFields {
   "WidgetLiveState.value_json": (V1.WidgetLiveState)["value_json"];
   "WidgetLiveState.updated_at_ms": (V1.WidgetLiveState)["updated_at_ms"];
   "WidgetLive.binding": (V1.WidgetLive)["binding"];
+  "WidgetLive.publication_id": (V1.WidgetLive)["publication_id"];
   "WidgetLive.state": (V1.WidgetLive)["state"];
   "WidgetLive.status": (V1.WidgetLive)["status"];
   "WidgetLiveAction.value_json": (V1.WidgetLiveAction)["value_json"];
@@ -308,7 +309,7 @@ export interface WireFieldNames {
   "WidgetSelectionFacts": "revision" | "at_ms" | "read_at_ms";
   "WidgetLiveBinding": "run_id" | "attempt" | "session_id" | "attachment_id" | "attachment_epoch";
   "WidgetLiveState": "version" | "value_json" | "updated_at_ms";
-  "WidgetLive": "binding" | "state" | "status";
+  "WidgetLive": "binding" | "publication_id" | "state" | "status";
   "WidgetLiveAction": "value_json";
   "WidgetLiveActionRequest": "key" | "revision" | "binding" | "content_sha256" | "value_json";
   "WidgetLiveActionResponse": never;
@@ -427,7 +428,7 @@ export interface WireCheckpointFieldNames {
   "WidgetSelectionFacts": "revision" | "at_ms" | "read_at_ms";
   "WidgetLiveBinding": "run_id" | "attempt" | "session_id" | "attachment_id" | "attachment_epoch";
   "WidgetLiveState": "version" | "value_json" | "updated_at_ms";
-  "WidgetLive": "binding" | "state" | "status";
+  "WidgetLive": "binding" | "publication_id" | "state" | "status";
   "WidgetLiveAction": "value_json";
   "WidgetLiveActionRequest": "key" | "revision" | "binding" | "content_sha256" | "value_json";
   "WidgetLiveActionResponse": never;
@@ -480,6 +481,7 @@ export type WireOmittableField =
   | "WidgetSourceSummary.agent_label"
   | "WidgetSourceSummary.fingerprint_prefix"
   | "WidgetSelectionFacts.read_at_ms"
+  | "WidgetLive.publication_id"
   | "WidgetLive.state"
   | "WidgetSummary.source"
   | "WidgetSummary.selection"
@@ -494,6 +496,7 @@ export type WireOmittableField =
   | never;
 
 export type WireOptionalField =
+  | "WidgetLive.publication_id"
   | "WidgetSummary.live"
   | never;
 
