@@ -14,7 +14,7 @@ Agent rows can also show session context: a current tool activity while working,
 
 **Ask an agent…** (`Ctrl+Shift+A`, `Cmd+Shift+A` on macOS, also in Commands) opens a one-line composer over the selected Space. OMP is preselected; available agents (OMP, Claude Code, Codex CLI, Pi, Copilot CLI, OpenCode) are discovered using the initialized login-shell PATH, then installed NVM versions for clients not already found. The same cached PATH is used to launch; restart Cockpit to refresh discovery. Enter starts the agent in a new tab named after the question, with the question as its startup argument, and switches to that tab; Shift+Enter adds a line, Escape closes and keeps the draft. The folder defaults to the Space checkout, else the selected terminal's folder; click it to change.
 
-**Quick terminal** (``Ctrl+` ``, or Commands) toggles a throwaway shell over the current tab, in the selected terminal's folder, without creating a Herdr pane. It uses Herdr's configured default shell and shell mode, like a new pane. Its shell size follows the visible terminal on opening and when the window changes size. The same keys or the close button end the shell immediately; exiting the shell closes it too. Focus returns to the previous control.
+**Quick terminal** (``Ctrl+` ``, or Commands) toggles a throwaway shell over Workbench or Inbox, using the selected Workbench tab's live terminal and its folder, without creating a Herdr pane. It uses Herdr's configured default shell and shell mode, like a new pane. The centered overlay adapts to the visible viewport, including the mobile keyboard. The same keys or the close button end the shell immediately; exiting the shell closes it too. Focus and text selection return to the previous control; Inbox drafts remain in place. Other Workbench shortcuts do not run from Inbox.
 
 **Pull Space (fast-forward only)** and **Push Space to upstream** are keyless Space commands. Commands names the selected Space's own branch and upstream, including linked worktrees; a row's inline count or context menu targets that row without selecting it. Pull never merges, rebases or stashes, and push never forces or sets an upstream. Counts describe the last fetched tracking refs; an in-sync or ahead-only branch can still be pulled from Commands or the menu. A cached diverged branch is blocked. Results stay under the affected row; an uncertain result offers no Retry—check that Space's terminal first.
 
@@ -29,7 +29,7 @@ In Overview, select a task to inspect its recorded history beside Board or Graph
 | Keys | Action |
 | --- | --- |
 | Ctrl+Shift+A | Ask an agent…. Starts the agent in a new tab with your question. Cmd+Shift+A on macOS; available in terminals and editors outside dialogs. |
-| Ctrl+` | Toggle quick terminal. A throwaway shell over the current tab, in the selected terminal's folder. The same keys close it and end the shell; exiting the shell closes it too. |
+| Ctrl+` | Toggle quick terminal. A throwaway shell over Workbench or Inbox, in the selected Workbench terminal's folder. The same keys close it and end the shell; exiting the shell closes it too. |
 | Ctrl+K | Go to Space or agent…. Fuzzy search over this session's Spaces and agents. Cmd+K on macOS; available in terminals and editors outside dialogs. |
 | Ctrl+Shift+L | Liaison. Goes to the liaison from any Space; the same keys return. Starts or resumes it when it is not running. |
 

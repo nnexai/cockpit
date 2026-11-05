@@ -48,17 +48,18 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function mount({ cwd, rect = new DOMRect(100, 80, 800, 600) }: { cwd?: string; rect?: DOMRect } = {}) {
-  const opener = document.createElement("button");
+function mount({ cwd, rect = new DOMRect(100, 80, 800, 600), textOpener = false }: { cwd?: string; rect?: DOMRect; textOpener?: boolean } = {}) {
+  const opener = textOpener ? document.createElement("textarea") : document.createElement("button");
   const area = document.createElement("div");
   area.className = "workarea-content";
   area.getBoundingClientRect = () => rect;
   const host = document.createElement("div");
   document.body.append(opener, area, host);
+  if (opener instanceof HTMLTextAreaElement) { opener.value = "draft text"; opener.setSelectionRange(2, 6, "backward"); }
   opener.focus();
   root = createRoot(host);
   const onDismiss = vi.fn();
-  act(() => root!.render(<QuickTerminal client={{} as CockpitClient} sessionId="source-session" paneId="source-pane" cwd={cwd} focusEpoch={7} returnFocus={opener} suspended={false} onDismiss={onDismiss} />));
+  act(() => root!.render(<QuickTerminal client={{} as CockpitClient} sessionId="source-session" paneId="source-pane" cwd={cwd} focusEpoch={7} returnFocus={opener} returnSelection={textOpener ? { start: 2, end: 6, direction: "backward" } : null} suspended={false} onDismiss={onDismiss} />));
   const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
   const terminal = host.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")!;
   const close = host.querySelector<HTMLButtonElement>('button[aria-label="Close quick terminal"]')!;
@@ -114,6 +115,28 @@ describe("QuickTerminal", () => {
     expect(probe.onDismiss).toHaveBeenCalledOnce();
     await act(async () => { root!.unmount(); root = null; });
     expect(document.activeElement).toBe(probe.opener);
+  });
+
+  it("restores a composer's draft and selection after the terminal closes", async () => {
+    const probe = mount({ textOpener: true });
+    await act(async () => { root!.unmount(); root = null; });
+    const opener = probe.opener as HTMLTextAreaElement;
+    expect(document.activeElement).toBe(opener);
+    expect(opener.value).toBe("draft text");
+    expect([opener.selectionStart, opener.selectionEnd, opener.selectionDirection]).toEqual([2, 6, "backward"]);
+  });
+
+  it("centers within the visible viewport and follows mobile keyboard resizing", () => {
+    const viewport = Object.assign(new EventTarget(), { offsetLeft: 10, offsetTop: 20, width: 360, height: 600 });
+    vi.stubGlobal("visualViewport", viewport);
+    const { dialog } = mount();
+    expect(parseFloat(dialog.style.left)).toBeCloseTo(24.4);
+    expect(parseFloat(dialog.style.top)).toBeCloseTo(62);
+    expect(parseFloat(dialog.style.width)).toBeCloseTo(331.2);
+    expect(parseFloat(dialog.style.height)).toBeCloseTo(516);
+    act(() => { viewport.height = 280; viewport.dispatchEvent(new Event("resize")); });
+    expect(parseFloat(dialog.style.top)).toBeCloseTo(39.6);
+    expect(parseFloat(dialog.style.height)).toBeCloseTo(240.8);
   });
 
   it("leaves Tab from the terminal available to the shell while cycling focus from the close button", () => {

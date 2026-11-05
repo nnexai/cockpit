@@ -42,7 +42,7 @@ export function Workbench(props: WorkbenchProps) {
   const runtime = useWorkbenchState(props, sendAgentsOpen, inboxOpen);
   const actions = useWorkbenchActions(props, runtime);
   const power = useAgentPower((runtime.snapshot?.agents ?? []).some(agent => stateClass(agent.status) === "working"), runtime.setPrefixHint);
-  const [quickTerminal, setQuickTerminal] = useState<{ sessionId: string; paneId: string; cwd: string | null; returnFocus: HTMLElement | null } | null>(null);
+  const [quickTerminal, setQuickTerminal] = useState<{ sessionId: string; paneId: string; cwd: string | null; returnFocus: HTMLElement | null; returnSelection: { start: number; end: number; direction: "forward" | "backward" | "none" } | null } | null>(null);
   const [closedWidgets, setClosedWidgets] = useState<WidgetSummary[]>([]);
   const [reopenedWidget, setReopenedWidget] = useState<string | null>(null);
   const updatePending = useRef(false);
@@ -52,7 +52,11 @@ export function Workbench(props: WorkbenchProps) {
     if (quickTerminalRef.current) return;
     if (!props.state.sessionId || !runtime.sourcePaneId || props.state.sync !== "live") { runtime.setPrefixHint("A live terminal in this tab is required"); return; }
     const focused = runtime.commandsOpen ? runtime.commandsOpener.current : document.activeElement;
-    setQuickTerminal({ sessionId: props.state.sessionId, paneId: runtime.sourcePaneId, cwd: runtime.snapshot?.panes.find(pane => pane.id === runtime.sourcePaneId)?.cwd ?? null, returnFocus: focused instanceof HTMLElement ? focused : null });
+    const selection = focused instanceof HTMLTextAreaElement || focused instanceof HTMLInputElement
+      ? focused.selectionStart !== null && focused.selectionEnd !== null
+        ? { start: focused.selectionStart, end: focused.selectionEnd, direction: focused.selectionDirection ?? "none" } : null
+      : null;
+    setQuickTerminal({ sessionId: props.state.sessionId, paneId: runtime.sourcePaneId, cwd: runtime.snapshot?.panes.find(pane => pane.id === runtime.sourcePaneId)?.cwd ?? null, returnFocus: focused instanceof HTMLElement ? focused : null, returnSelection: selection });
   };
   const origin = useRef<{ sessionId: string | null; selection: Selection } | null>(null);
   const { liaison, overviewOpen, closeOverview } = runtime;
@@ -94,7 +98,7 @@ export function Workbench(props: WorkbenchProps) {
       props.onFocus({ kind: "space", target_id: previousSpace.id }, { spaceId: previousSpace.id, tabId, paneId });
     }
   };
-  const input = useWorkbenchInput(props, runtime, actions, openQuickTerminal, toggleLiaison);
+  const input = useWorkbenchInput(props, runtime, actions, openQuickTerminal, toggleLiaison, inboxOpen);
   const ask = useQuickAsk({
     client: props.client, sessionId: props.state.sessionId, serverInstance: runtime.snapshot?.server_instance ?? null,
     spaceId: runtime.confirmedSpaceId, initialCwd: runtime.selectedSpace?.git?.checkout_path ?? runtime.selectedPane?.cwd ?? "",
@@ -210,17 +214,17 @@ export function Workbench(props: WorkbenchProps) {
     await runtime.supervisorTerminal(location.pane_id);
   };
   const currentSpace = byId(runtime.spaces, runtime.confirmedSpaceId);
-  return <><nav className="view-bar" aria-label="Application views">
+  return <><nav className="view-bar" aria-label="Application views" inert={Boolean(quickTerminal)}>
     <button type="button" aria-current={!inboxOpen ? "page" : undefined} onClick={() => setInboxOpen(false)}><UiIcon name="grid" /> <span className="view-bar-label">Workbench</span></button>
     <button type="button" aria-current={inboxOpen ? "page" : undefined} aria-label={inboxAttention.count > 0 ? `Inbox, ${inboxAttention.count} ${inboxAttention.count === 1 ? "item" : "items"} needing attention` : undefined} disabled={!inboxOpen && runtime.modalOpen} onClick={() => setInboxOpen(true)}><UiIcon name="comment" /> <span className="view-bar-label">Inbox</span>{inboxAttention.count > 0 && <span className="view-bar-count" aria-hidden="true">{inboxAttention.count}</span>}</button>
     {!inboxOpen && inboxAttention.preview && <span className="view-bar-preview" title={inboxAttention.preview}>{inboxAttention.preview}</span>}
   </nav>
-    <Inbox client={props.client} sessionId={props.state.sessionId} active={inboxOpen} currentSpace={currentSpace ? { id: currentSpace.id, label: currentSpace.label } : null} attention={runtime.attention} snapshot={props.state.sync === "live" ? runtime.snapshot : null} onOpenLocation={openInboxLocation} onAttentionChange={setInboxAttention} />
+    <Inbox client={props.client} sessionId={props.state.sessionId} active={inboxOpen} inert={Boolean(quickTerminal)} currentSpace={currentSpace ? { id: currentSpace.id, label: currentSpace.label } : null} attention={runtime.attention} snapshot={props.state.sync === "live" ? runtime.snapshot : null} onOpenLocation={openInboxLocation} onAttentionChange={setInboxAttention} />
     <div className="inbox-workbench" hidden={inboxOpen}><WorkbenchContent {...props} {...runtime} {...actions} inboxActive={inboxOpen} onUpdate={installUpdate} closedWidgets={closedWidgets} liaisonAction={{ label: liaisonLabel, reason: liaisonReason, running, inPane: inLiaisonPane, toggle: toggleLiaison }} ask={ask} quickTerminalOpen={Boolean(quickTerminal)} commandActions={commandActions} commandFailureMessage={commandFailureMessage} commandStatus={commandStatus} />
-    {quickTerminal ? <QuickTerminal client={props.client} sessionId={quickTerminal.sessionId} paneId={quickTerminal.paneId} cwd={quickTerminal.cwd} focusEpoch={props.state.epoch} returnFocus={quickTerminal.returnFocus} suspended={Boolean(popup)} onDismiss={() => setQuickTerminal(null)} /> : null}
     {sendAgentsOpen && props.state.sessionId ? <SendAgentDialog key={props.state.sessionId} targets={(props.state.sync === "live" ? runtime.snapshot?.agents ?? [] : []).filter(agent => stateClass(agent.status) === "idle").map(agent => ({
       paneId: agent.pane_id, label: agent.title || agent.name, space: `${spaces.find(space => space.id === agent.space_id)?.label ?? "Space"} · ${allTabs.find(tab => tab.id === agent.tab_id)?.label ?? "tab"}`,
     }))} onSend={async (paneId, text) => { await props.client.orchestrationAgentSend({ session_id: props.state.sessionId!, reference: paneId, text }); }} onClose={() => setSendAgentsOpen(false)} /> : null}</div>
+    {quickTerminal ? <QuickTerminal client={props.client} sessionId={quickTerminal.sessionId} paneId={quickTerminal.paneId} cwd={quickTerminal.cwd} focusEpoch={props.state.epoch} returnFocus={quickTerminal.returnFocus} returnSelection={quickTerminal.returnSelection} suspended={Boolean(popup)} onDismiss={() => setQuickTerminal(null)} /> : null}
     <div className="workarea-statusbar" style={{ left: inboxOpen || runtime.narrowViewport || runtime.sidebarCollapsed ? 0 : runtime.sidebarWidth - 1 }} inert={Boolean(popup) || Boolean(quickTerminal)}>
       <BrowserCleanupNotices ctx={ctx} activeTabId={props.selection.tabId} fallback={<ErrorSlot placement="pane" message={[runtime.lifecycleError, props.layoutError, runtime.liaison.error, runtime.supervisorNavigationError].filter(Boolean).join(" · ")} actions={runtime.lifecycleError || props.layoutError ? <>
         <button type="button" onClick={props.onReconnect}>Resync</button>

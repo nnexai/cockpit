@@ -222,6 +222,30 @@ describe("direct quick chords", () => {
     expect(armed()).toBe(false);
   });
 
+  it("routes only the quick terminal chord in Inbox, including from the composer", () => {
+    const target = mount("<textarea>draft</textarea>", "textarea");
+    const { route, runCommand } = harness(false, { inboxActive: true });
+    const quick = keyEvent({ key: "`", code: "Backquote", ctrlKey: true, target });
+    route(quick);
+    expect(quick.preventDefault).toHaveBeenCalledOnce();
+    expect(runCommand).toHaveBeenCalledExactlyOnceWith("quick-terminal");
+    for (const event of [ctrlB(), keyEvent({ key: "A", ctrlKey: true, shiftKey: true, target }), keyEvent({ key: "x", target })]) {
+      route(event);
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    }
+    expect(runCommand).toHaveBeenCalledOnce();
+  });
+
+  it("does not open the Inbox quick terminal through a modal or a composing event", () => {
+    const modal = harness(true, { inboxActive: true });
+    const composing = harness(false, { inboxActive: true });
+    const event = { key: "`", code: "Backquote", ctrlKey: true };
+    modal.route(keyEvent(event));
+    composing.route(keyEvent({ ...event, isComposing: true }));
+    expect(modal.runCommand).not.toHaveBeenCalled();
+    expect(composing.runCommand).not.toHaveBeenCalled();
+  });
+
   it("routes the liaison chord ahead of an armed prefix and ignores repeats and modals", () => {
     const { route, runCommand, armed } = harness();
     route(ctrlB());

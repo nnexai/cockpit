@@ -14,7 +14,7 @@ import { useInboxImages } from "./useInboxImages";
 import "./inbox.css";
 
 export type { InboxLocation } from "../../protocol/generated/v1";
-export type InboxProps = { client: CockpitClient; sessionId: string | null; active: boolean; currentSpace: { id: string; label: string } | null; attention: AgentAttentionState; snapshot: SessionSnapshotResponse | null; onOpenLocation(location: InboxLocation): Promise<void>; onAttentionChange?(value: { count: number; preview: string | null }): void };
+export type InboxProps = { client: CockpitClient; sessionId: string | null; active: boolean; inert?: boolean; currentSpace: { id: string; label: string } | null; attention: AgentAttentionState; snapshot: SessionSnapshotResponse | null; onOpenLocation(location: InboxLocation): Promise<void>; onAttentionChange?(value: { count: number; preview: string | null }): void };
 
 type Pending = { action: OrchestrationAction; text: string; store: string; key: string };
 const source = (value: InboxText) => value.source.kind === "owner_card" ? `AI synthesis · ${value.source.harness}` : value.source.kind === "owner" ? `Owner · ${value.source.harness}` : value.source.kind === "worker" ? "Worker claim" : value.source.kind === "user" ? "Your request" : "Recorded fact";
@@ -62,7 +62,7 @@ function Time({ value }: { value: string | null | undefined }) {
 export function Inbox(props: InboxProps) {
   const [sessions, setSessions] = useState<string[]>(() => props.sessionId ? [props.sessionId] : []);
   useEffect(() => { if (props.sessionId) setSessions(s => s.includes(props.sessionId!) ? s : [...s, props.sessionId!]); else props.onAttentionChange?.({ count: 0, preview: null }); }, [props.sessionId, props.onAttentionChange]);
-  return <div className="inbox-root" hidden={!props.active}>{!props.sessionId && <p className="inbox-empty">Select a session to see your inbox.</p>}{sessions.map(id => <SessionInbox key={id} {...props} sessionId={id} current={props.sessionId === id} visible={props.active && props.sessionId === id} />)}</div>;
+  return <div className="inbox-root" hidden={!props.active} inert={props.inert}>{!props.sessionId && <p className="inbox-empty">Select a session to see your inbox.</p>}{sessions.map(id => <SessionInbox key={id} {...props} sessionId={id} current={props.sessionId === id} visible={props.active && props.sessionId === id} />)}</div>;
 }
 
 function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpenLocation, onAttentionChange, attention, snapshot }: Omit<InboxProps, "active" | "sessionId"> & { sessionId: string; visible: boolean; current: boolean }) {

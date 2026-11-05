@@ -6,25 +6,26 @@ import { UiIcon } from "../UiIcon";
 
 type Props = {
   client: CockpitClient; sessionId: string; paneId: string; focusEpoch: number;
-  returnFocus: HTMLElement | null; suspended: boolean; cwd?: string | null; onDismiss(): void;
+  returnFocus: HTMLElement | null; returnSelection?: { start: number; end: number; direction: "forward" | "backward" | "none" } | null; suspended: boolean; cwd?: string | null; onDismiss(): void;
 };
 
 /** A throwaway shell floating over the work area. Closing ends the shell immediately. */
-export function QuickTerminal({ client, sessionId, paneId, focusEpoch, returnFocus, suspended, cwd, onDismiss }: Props) {
+export function QuickTerminal({ client, sessionId, paneId, focusEpoch, returnFocus, returnSelection, suspended, cwd, onDismiss }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const terminate = useRef<(() => boolean) | null>(null);
   const suspendedRef = useRef(suspended);
   suspendedRef.current = suspended;
-  const [rect, setRect] = useState<DOMRect | null>(null);
+  const [viewport, setViewport] = useState(() => ({ left: 0, top: 0, width: window.innerWidth, height: window.innerHeight }));
   useLayoutEffect(() => {
-    const target = document.querySelector<HTMLElement>(".workarea-content");
-    if (!target) return;
-    const update = () => setRect(target.getBoundingClientRect());
+    const visual = window.visualViewport;
+    const update = () => setViewport(visual
+      ? { left: visual.offsetLeft, top: visual.offsetTop, width: visual.width, height: visual.height }
+      : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight });
     update();
-    const observer = new ResizeObserver(update);
-    observer.observe(target);
     window.addEventListener("resize", update);
-    return () => { observer.disconnect(); window.removeEventListener("resize", update); };
+    visual?.addEventListener("resize", update);
+    visual?.addEventListener("scroll", update);
+    return () => { window.removeEventListener("resize", update); visual?.removeEventListener("resize", update); visual?.removeEventListener("scroll", update); };
   }, []);
   useEffect(() => {
     container.current?.focus();
@@ -32,8 +33,14 @@ export function QuickTerminal({ client, sessionId, paneId, focusEpoch, returnFoc
       if (!suspendedRef.current && container.current && event.target instanceof Node && !container.current.contains(event.target)) container.current.querySelector<HTMLElement>(".xterm-helper-textarea, button")?.focus();
     };
     document.addEventListener("focusin", focus);
-    return () => { document.removeEventListener("focusin", focus); queueMicrotask(() => { if (returnFocus?.isConnected) returnFocus.focus(); }); };
-  }, [returnFocus]);
+    return () => { document.removeEventListener("focusin", focus); queueMicrotask(() => {
+      if (!returnFocus?.isConnected) return;
+      returnFocus.focus({ preventScroll: true });
+      if (returnSelection && (returnFocus instanceof HTMLTextAreaElement || returnFocus instanceof HTMLInputElement) && returnFocus.selectionStart !== null) {
+        returnFocus.setSelectionRange(returnSelection.start, returnSelection.end, returnSelection.direction);
+      }
+    }); };
+  }, [returnFocus, returnSelection]);
   // Unmounting releases the stream, which also ends the shell; terminating first just makes it prompt.
   const close = () => { terminate.current?.(); onDismiss(); };
   const keyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -49,12 +56,12 @@ export function QuickTerminal({ client, sessionId, paneId, focusEpoch, returnFoc
     }
   };
   const shortcut = formatShortcut("quick-terminal");
-  // Horizontally centred on the window (the sidebar must not shift it); vertically placed in the work area.
-  const width = Math.min(window.innerWidth - 16, Math.max(320, Math.min(1040, window.innerWidth * 0.8)));
-  const height = rect ? Math.min(rect.height - 16, Math.max(200, Math.min(680, rect.height * 0.78))) : 0;
+  // Use the visible viewport, including when a mobile keyboard changes its bounds.
+  const width = Math.max(0, Math.min(viewport.width - 16, viewport.width * 0.92, 1440));
+  const height = Math.max(0, Math.min(viewport.height - 16, viewport.height * 0.86, 960));
   return <div className="quick-terminal-backdrop" inert={suspended}>
     <div ref={container} tabIndex={-1} className="quick-terminal" role="dialog" aria-modal="true" aria-label="Quick terminal" onKeyDownCapture={keyDown}
-      style={rect ? { left: (window.innerWidth - width) / 2, top: rect.top + Math.min(48, (rect.height - height) / 2), width, height } : undefined}>
+      style={{ left: viewport.left + (viewport.width - width) / 2, top: viewport.top + (viewport.height - height) / 2, width, height }}>
       <header className="quick-terminal-header">
         <UiIcon name="terminal" />
         <span className="quick-terminal-cwd" title={cwd ?? undefined}><bdi>{cwd ?? "Quick terminal"}</bdi></span>

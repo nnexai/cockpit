@@ -9,6 +9,7 @@ function editableTarget(target: EventTarget | null): boolean {
 export type WorkbenchKeyEvent = Pick<KeyboardEvent, "key" | "shiftKey" | "ctrlKey" | "altKey" | "metaKey" | "target" | "isComposing" | "preventDefault" | "stopPropagation"> & Partial<Pick<KeyboardEvent, "code" | "repeat">>;
 export type WorkbenchKeyRouting = {
   modalOpen: boolean;
+  inboxActive?: boolean;
   prefixActive: boolean;
   runCommand: (command: PrefixCommand) => void;
   setPrefixActive: (active: boolean) => void;
@@ -59,6 +60,17 @@ export function routeWorkbenchKeydown(event: WorkbenchKeyEvent, routing: Workben
     return;
   }
   if (modalOpen) return;
+  // Inbox keeps its own editors and controls; only the quick terminal chord is shared.
+  if (routing.inboxActive) {
+    if (routing.herdrPrefixes?.some(prefix => herdrBindingMatches(prefix, event))
+      || matchingHerdrCommand(routing.herdrBindings ?? [], event as HerdrBindingEvent, false)) return;
+    if (directCommandForEvent({ key: event.key, code: event.code ?? "", ctrlKey: event.ctrlKey, metaKey: event.metaKey, shiftKey: event.shiftKey, altKey: event.altKey }) !== "quick-terminal") return;
+    event.preventDefault();
+    event.stopPropagation();
+    routing.setPrefixActive(false);
+    if (!event.repeat) routing.runCommand("quick-terminal");
+    return;
+  }
   if (prefixSafe && !routing.prefixActive) {
     const custom = matchingHerdrCommand(routing.herdrBindings ?? [], event as HerdrBindingEvent, false);
     if (custom) {

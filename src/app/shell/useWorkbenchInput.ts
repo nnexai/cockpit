@@ -12,7 +12,7 @@ import type { WorkbenchActions, PaneFocusDirection } from "./useWorkbenchActions
 export interface WorkbenchInput {
   customCommandReason: string | undefined; runCommand(command: PrefixCommand): void; runHerdrCommand(command: HerdrCommand): void;
 }
-export function useWorkbenchInput(props: WorkbenchProps, runtime: WorkbenchState, actions: WorkbenchActions, openQuickTerminal: () => void, onLiaison: () => void): WorkbenchInput {
+export function useWorkbenchInput(props: WorkbenchProps, runtime: WorkbenchState, actions: WorkbenchActions, openQuickTerminal: () => void, onLiaison: () => void, inboxActive: boolean): WorkbenchInput {
   const { state, selection, tabLayout, onMutate, onSplit } = props;
   const { spaces, tabs, panes, snapshot, localLeaves, selectedLeaf, modalOpen, mutationBusy, libraryOpen, openLibrary, closeLibrary, openSessionChooser, setAskOpen, canvasRef, view, exitForPaneCommand, setPrefixHint, setSetupOpen, setCommandsOpen, setSwitcherOpen, runGitAction, narrowViewport, drawerOpen, sidebarCollapsed, openDrawer, toggleSidebarCollapsed, toggleSidebar, shell, popup, popupPending, setPopupPending, setCommandNotice, prefixActive, armedPrefix, customPrefixes, customBindings, setArmedPrefix, setPrefixActive } = runtime;
   const { beginRename, closeSpace, closeTab, closeLeaf, zoom, focusTab, selectLeaf, neighbour, swap, toggleBrowser } = actions;
@@ -97,7 +97,7 @@ export function useWorkbenchInput(props: WorkbenchProps, runtime: WorkbenchState
   }, [customCommandReason, popup, shell, snapshot, onMutate]);
   useEffect(() => {
     const keydown = (event: WorkbenchKeyEvent) => {
-      routeWorkbenchKeydown(event, { modalOpen, serverModalOpen: Boolean(popup), popupPending: Boolean(popupPending), prefixActive, prefixOrigin: armedPrefix.origin, herdrPrefixes: customPrefixes, onPrefixArm: (origin, label) => setArmedPrefix({ origin, label }), runCommand, herdrBindings: customBindings, runHerdrCommand, setPrefixActive: active => { setPrefixActive(active); acknowledgeWidgetPrefix(active, event.target); }, setCommandsOpen, onQuickSwitch: () => { setPrefixHint(null); setSwitcherOpen(true); }, onUnboundPrefixKey: setPrefixHint });
+      routeWorkbenchKeydown(event, { modalOpen: inboxActive ? runtime.statusBarSuspended : modalOpen, inboxActive, serverModalOpen: Boolean(popup), popupPending: Boolean(popupPending), prefixActive, prefixOrigin: armedPrefix.origin, herdrPrefixes: customPrefixes, onPrefixArm: (origin, label) => setArmedPrefix({ origin, label }), runCommand, herdrBindings: customBindings, runHerdrCommand, setPrefixActive: active => { setPrefixActive(active); acknowledgeWidgetPrefix(active, event.target); }, setCommandsOpen, onQuickSwitch: () => { setPrefixHint(null); setSwitcherOpen(true); }, onUnboundPrefixKey: setPrefixHint });
     };
     const widgetShortcut = (event: Event) => {
       if (!(event instanceof CustomEvent)) return;
@@ -129,6 +129,6 @@ export function useWorkbenchInput(props: WorkbenchProps, runtime: WorkbenchState
       window.removeEventListener("keydown", keydown, true);
       window.removeEventListener("cockpit-widget-shortcut", widgetShortcut);
     };
-  }, [prefixActive, armedPrefix, runCommand, modalOpen, popup, popupPending, shell, runHerdrCommand]);
+  }, [prefixActive, armedPrefix, runCommand, modalOpen, inboxActive, runtime.statusBarSuspended, popup, popupPending, shell, runHerdrCommand]);
   return { customCommandReason, runCommand, runHerdrCommand };
 }
