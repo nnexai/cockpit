@@ -44,7 +44,7 @@ describe("historical timeline widgets", () => {
       timeline: [entry("request", "request", "Before"), { ...entry("publication", "widget", ""), widget: event }, entry("follow-up", "follow_up", "After")] } as unknown as InboxThread;
     const host = document.createElement("div");
     const root = createRoot(host);
-    act(() => root.render(createElement(InboxTimeline, { thread, view: null, client, sessionId: "session", ownerLabel: id => id, visible: true })));
+    act(() => root.render(createElement(InboxTimeline, { thread, view: null, client, sessionId: "session", ownerLabel: id => id, visible: true, questionCard: () => null, resultActions: null, acknowledged: null, recommendation: null })));
     const text = host.textContent!;
     expect(text.indexOf("Before")).toBeLessThan(text.indexOf("Published view"));
     expect(text.indexOf("Published view")).toBeLessThan(text.indexOf("After"));
@@ -65,7 +65,7 @@ describe("historical timeline widgets", () => {
       state: "underway", questions: [], receipts: [], timeline: [] } as unknown as InboxThread;
     const host = document.createElement("div");
     const root = createRoot(host);
-    act(() => root.render(createElement(InboxTimeline, { thread, view: null, client, sessionId: "session", ownerLabel: id => id, visible: true })));
+    act(() => root.render(createElement(InboxTimeline, { thread, view: null, client, sessionId: "session", ownerLabel: id => id, visible: true, questionCard: () => null, resultActions: null, acknowledged: null, recommendation: null })));
     expect(host.textContent).toContain("Earlier live views");
     expect(host.textContent).toContain("3 older live views not shown");
     expect(host.textContent).toContain("Older view");

@@ -3,7 +3,7 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
-import type { InboxLocation, InboxView, LiaisonLookupResponse, OrchestrationMutationResponse, OrchestrationWaitResponse, SessionSnapshotResponse } from "../../protocol/generated/v1";
+import type { InboxLocation, InboxQuestion, InboxThread, InboxView, LiaisonLookupResponse, OrchestrationMutationResponse, OrchestrationWaitResponse, SessionSnapshotResponse } from "../../protocol/generated/v1";
 import type { AgentAttentionState } from "../session/agentAttention";
 import type { AttentionRow } from "../sidebar/agentAttentionModel";
 import { Inbox } from "./Inbox";
@@ -510,7 +510,7 @@ describe("Inbox", () => {
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "other", seq: 1, duplicate: false, stale: false } });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Work"))!.click());
-    await flush(() => (host.querySelectorAll<HTMLButtonElement>(".inbox-question .inbox-q-head")[1]!).click());
+    await flush(() => host.querySelectorAll<HTMLButtonElement>('[role="radio"]')[1]!.click());
     await flush(() => text("Use the second option")); await flush(submit);
     expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "message_send", to_run_id: "other", kind: "answer", in_reply_to: "q2", text: "Use the second option" });
   });
@@ -538,16 +538,16 @@ describe("Inbox", () => {
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 3, result: { result: "message", to_run_id: "other", seq: 1, duplicate: false, stale: false } });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Work"))!.click());
-    const ownerQuestion = host.querySelectorAll<HTMLButtonElement>(".inbox-question .inbox-q-head")[0]!;
-    const otherQuestion = host.querySelectorAll<HTMLButtonElement>(".inbox-question .inbox-q-head")[1]!;
-    await flush(() => otherQuestion.click());
-    expect(ownerQuestion.getAttribute("aria-pressed")).toBe("false");
-    expect(otherQuestion.getAttribute("aria-pressed")).toBe("true");
-    const target = Array.from(host.querySelectorAll<HTMLButtonElement>(".inbox-seg button")).find(button => button.textContent === "Answer")!;
-    expect(target.getAttribute("aria-pressed")).toBe("true");
+    const chips = () => host.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    const selectedQuestion = () => host.querySelector<HTMLElement>('.inbox-question[data-selected="true"]')?.dataset.openQuestion;
+    expect(host.querySelector<HTMLTextAreaElement>("textarea")!.disabled).toBe(true);
+    await flush(() => chips()[1]!.click());
+    expect(chips()[0]!.getAttribute("aria-checked")).toBe("false");
+    expect(chips()[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(selectedQuestion()).toBe(JSON.stringify(["other", "shared"]));
     await flush(() => text("Answer for the other root"));
     await flush(() => waits[0]!({ revision: 2, tasks_token: "updated", changed: true }));
-    expect(otherQuestion.getAttribute("aria-pressed")).toBe("true");
+    expect(selectedQuestion()).toBe(JSON.stringify(["other", "shared"]));
     expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Answer for the other root");
     await flush(submit);
     expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "message_send", to_run_id: "other", kind: "answer", in_reply_to: "shared", text: "Answer for the other root" });
@@ -561,13 +561,14 @@ describe("Inbox", () => {
     vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, questions: [first] }] });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Work"))!.click());
-    await flush(() => host.querySelectorAll<HTMLButtonElement>(".inbox-question .inbox-q-head")[1]!.click());
+    await flush(() => host.querySelectorAll<HTMLButtonElement>('[role="radio"]')[1]!.click());
     await flush(() => text("My answer"));
     await flush(() => waits[0]!({ revision: 2, tasks_token: "updated", changed: true }));
     await flush(submit);
     expect(client.orchestrationMutate).not.toHaveBeenCalled();
-    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("My answer");
-    expect(host.textContent).toContain("selected question changed");
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+    expect(host.querySelector(".inbox-stranded blockquote")!.textContent).toBe("My answer");
+    expect(host.textContent).toContain("Not sent");
   });
   it("does not send a vanished question as an owner follow-up", async () => {
     const { client, waits } = fixture(), app = setup(client);
@@ -577,13 +578,14 @@ describe("Inbox", () => {
     vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, questions: [] }] });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Work"))!.click());
-    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-question .inbox-q-head")!.click());
+    expect(host.querySelector('textarea[aria-label="Answer to the selected question"]')).not.toBeNull();
     await flush(() => text("My answer"));
     await flush(() => waits[0]!({ revision: 2, tasks_token: "updated", changed: true }));
     await flush(submit);
     expect(client.orchestrationMutate).not.toHaveBeenCalled();
-    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("My answer");
-    expect(host.textContent).toContain("selected question changed");
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("");
+    expect(host.querySelector(".inbox-stranded blockquote")!.textContent).toBe("My answer");
+    expect(host.textContent).toContain("no longer open");
   });
   it("shows the selected owner report as rich feedback with its provenance", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
@@ -740,7 +742,7 @@ describe("Inbox", () => {
     expect(row.textContent).toContain("Repair index");
     await flush(() => f.choose("Alpha"));
     expect(host.querySelector(".inbox-content")?.textContent).toContain("Repair index");
-    expect(host.querySelector(".inbox-head")?.textContent).toContain("Direct agent · idle");
+    expect(host.querySelector(".inbox-thread-header")?.textContent).toContain("Direct agent · idle");
     expect(host.querySelector('[aria-label="Session context"]')?.textContent).toContain("Session title");
     expect(host.querySelector('[aria-label="Session context"]')?.textContent).toContain("Session recap · OMP session");
     expect(host.querySelector(".inbox-content")?.textContent).toContain("Index repaired");
@@ -754,7 +756,7 @@ describe("Inbox", () => {
     expect(host.querySelector(".inbox-content")?.textContent).not.toContain("Repair index");
     expect(host.querySelector(".inbox-content")?.textContent).not.toContain("Index repaired");
     await flush(() => f.app.render("a", true, { ...withContext, agents: [{ ...withContext.agents[0]!, name: "other-harness" }, withContext.agents[1]!] }));
-    expect(host.querySelector(".inbox-head")?.textContent).toContain("status unavailable");
+    expect(host.querySelector(".inbox-thread-header")?.textContent).toContain("status unavailable");
     expect(host.querySelector(".inbox-content")?.textContent).not.toContain("Repair index");
   });
   it("sends a direct request only with the captured occupant identity", async () => {
@@ -811,7 +813,7 @@ describe("Inbox", () => {
     expect(host.textContent).toContain("Submitted to Alpha’s terminal. Not confirmed read.");
     vi.mocked(f.client.orchestrationInbox).mockResolvedValue({ ...f.inbox, revision: 2, unmanaged_agents: [f.agent("a", "Alpha", "later"), f.agent("b", "Beta")] });
     await flush(() => f.app.render("a", true, f.snapshot("working", 2)));
-    expect(host.querySelector(".inbox-head")?.textContent).toContain("working");
+    expect(host.querySelector(".inbox-thread-header")?.textContent).toContain("working");
     expect(host.textContent).toContain("Submitted to Alpha’s terminal");
     expect(host.textContent).not.toContain("Direct messages are available only");
     expect(host.textContent).not.toContain("Agent identity changed");
@@ -829,7 +831,7 @@ describe("Inbox", () => {
     await flush(() => text("First")); await flush(submit);
     expect(host.textContent).toContain("Submitted to Alpha’s terminal. Not confirmed read.");
     await flush(() => f.app.render("a", true, f.snapshot("done", 2)));
-    expect(host.querySelector(".inbox-head")?.textContent).toContain("done");
+    expect(host.querySelector(".inbox-thread-header")?.textContent).toContain("done");
     expect(host.textContent).toContain("Submitted to Alpha’s terminal. Not confirmed read.");
     await flush(() => text("Second")); await flush(submit);
     expect(f.client.orchestrationAgentSend).toHaveBeenCalledTimes(1);
@@ -899,7 +901,7 @@ describe("Inbox", () => {
       if (outcome === "accepted") resolve();
       else reject(new CockpitClientError("http_error", "Alpha failure", { operationCode: outcome === "busy" ? "agent_not_idle" : outcome === "stale" ? "stale_identity" : "herdr_outcome_unknown" }));
     });
-    expect(host.querySelector(".inbox-head")?.textContent).toContain("Beta");
+    expect(host.querySelector(".inbox-thread-header")?.textContent).toContain("Beta");
     expect(host.textContent).not.toContain("Submitted to Alpha");
     expect(host.textContent).not.toContain("Not sent.");
     expect(host.textContent).not.toContain("Alpha failure");
@@ -911,5 +913,223 @@ describe("Inbox", () => {
       await flush(submit);
       expect(f.client.orchestrationAgentSend).toHaveBeenCalledTimes(1);
     }
+  });
+});
+
+const ownerSource = { kind: "owner" as const, run_id: "owner", harness: "omp" };
+function question(id: string, body: string, choices: string[] = [], run = "owner"): InboxQuestion {
+  return { run_id: run, question_message_id: id, asked_at: "now", text: { text: body, source: { kind: "owner" as const, run_id: run, harness: "omp" }, message_id: id, at: "now", images: [] }, choices, receipt: { status: "unresolved" as const } };
+}
+function entry(message_id: string, kind: "question" | "update" | "result", at: string, body: string, outcome: "succeeded" | "failed" | null = null) {
+  return { message_id, at, kind, text: body, source: ownerSource, outcome, images: [], in_reply_to: null };
+}
+function dockThread(questions: InboxQuestion[], extra: Partial<InboxThread> = {}): InboxThread {
+  return { thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Plan", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions, recommendation: null, reply: null, unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now", ...extra };
+}
+async function mountThread(thread: InboxThread, make: typeof fixture = fixture) {
+  const { client, waits } = make(), app = setup(client), inbox = view("a");
+  inbox.threads = [thread];
+  vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+  vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "owner", seq: 1, duplicate: false, stale: false } });
+  await flush(() => app.render());
+  await flush(() => host.querySelector<HTMLButtonElement>(".inbox-row")!.click());
+  return { client, waits, inbox };
+}
+const chips = () => Array.from(host.querySelectorAll<HTMLButtonElement>('[role="radio"]'));
+const field = () => host.querySelector<HTMLTextAreaElement>("textarea")!;
+const press = (label: string) => flush(() => Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(b => b.textContent === label)!.click());
+const mutation = (client: CockpitClient, call = 0) => vi.mocked(client.orchestrationMutate).mock.calls[call]![0].action;
+
+describe("Inbox reply dock", () => {
+  it("shows an open question once, where it was asked, and preselects a single question", async () => {
+    const { client } = await mountThread(dockThread([question("q", "Which database?", ["Postgres"])], { timeline: [entry("q", "question", "2026-11-04T10:00:00Z", "Which database?"), entry("u", "update", "2026-11-04T10:05:00Z", "Later update")] }));
+    expect(host.querySelectorAll("[data-open-question]")).toHaveLength(1);
+    expect(Array.from(host.querySelectorAll(".inbox-feedback")).filter(node => node.textContent === "Which database?")).toHaveLength(1);
+    expect(host.querySelector(".inbox-open-q")).toBeNull();
+    const timeline = host.querySelector(".inbox-timeline")!;
+    expect(timeline.querySelector(".inbox-question")!.getAttribute("aria-label")).toBe("Open question 1 of 1 from Liaison");
+    expect(timeline.textContent!.indexOf("Which database?")).toBeLessThan(timeline.textContent!.indexOf("Later update"));
+    expect(chips()[0]!.getAttribute("aria-checked")).toBe("true");
+    expect(field().getAttribute("aria-label")).toBe("Answer to the selected question");
+    expect(host.querySelector(".inbox-quote")!.textContent).toContain("Answering Liaison");
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+  it("keeps a separate draft for each open question and the follow-up, and answers only the selected question", async () => {
+    const { client } = await mountThread(dockThread([question("q1", "First?"), question("q2", "Second?", [], "other")], { owner_root_ids: ["owner", "other"] }));
+    await flush(() => chips()[0]!.click()); await flush(() => text("answer one"));
+    await flush(() => chips()[1]!.click()); expect(field().value).toBe(""); await flush(() => text("answer two"));
+    await flush(() => chips()[2]!.click()); expect(field().value).toBe(""); await flush(() => text("a follow-up"));
+    await flush(() => chips()[0]!.click()); expect(field().value).toBe("answer one");
+    await flush(() => chips()[1]!.click()); expect(field().value).toBe("answer two");
+    expect(host.querySelector(".inbox-draft-badge")!.textContent).toBe("Draft ×3");
+    expect(chips().every(chip => chip.querySelector(".inbox-chip-dot"))).toBe(true);
+    vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "other", seq: 1, duplicate: false, stale: false } });
+    await flush(submit);
+    expect(client.orchestrationMutate).toHaveBeenCalledTimes(1);
+    expect(mutation(client)).toMatchObject({ action: "message_send", kind: "answer", to_run_id: "other", in_reply_to: "q2", text: "answer two" });
+    await flush(() => chips()[0]!.click());
+    expect(field().value).toBe("answer one");
+  });
+  it("pauses the field until a target is chosen when several questions are open, and arrows move without entering the field", async () => {
+    await mountThread(dockThread([question("q1", "First?"), question("q2", "Second?", [], "other")], { owner_root_ids: ["owner", "other"] }));
+    expect(chips().every(chip => chip.getAttribute("aria-checked") === "false")).toBe(true);
+    expect(chips().filter(chip => chip.tabIndex === 0)).toHaveLength(1);
+    expect(field().disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>(".inbox-send")!.disabled).toBe(true);
+    expect(host.querySelector(".inbox-quote")!.textContent).toContain("Choose what you are replying to");
+    chips()[0]!.focus();
+    await flush(() => chips()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(chips()[1]);
+    expect(chips()[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(field().disabled).toBe(false);
+    expect(document.activeElement).not.toBe(field());
+    await flush(() => chips()[2]!.click());
+    expect(host.querySelector(".inbox-quote")!.textContent).toContain("not an answer; 2 questions stay open");
+  });
+  it("never replaces a different draft with a choice without asking", async () => {
+    const { client } = await mountThread(dockThread([question("q", "Which?", ["Yes", "No"])]));
+    const choice = (label: string) => Array.from(host.querySelectorAll<HTMLButtonElement>(".inbox-choice")).find(b => b.textContent!.startsWith(label))!;
+    await flush(() => choice("Yes").click());
+    expect(field().value).toBe("Yes");
+    expect(choice("Yes").getAttribute("aria-pressed")).toBe("true");
+    await flush(() => text("my own words"));
+    expect(choice("Yes").getAttribute("aria-pressed")).toBe("false");
+    await flush(() => choice("No").click());
+    expect(host.querySelector('[role="alertdialog"]')).not.toBeNull();
+    expect(field().value).toBe("my own words");
+    expect(document.activeElement?.textContent).toBe("Replace");
+    await flush(() => host.querySelector('[role="alertdialog"]')!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+    expect(host.querySelector('[role="alertdialog"]')).toBeNull();
+    expect(field().value).toBe("my own words");
+    await flush(() => choice("No").click()); await press("Add below");
+    expect(field().value).toBe("my own words\nNo");
+    await flush(() => choice("Yes").click()); await press("Replace");
+    expect(field().value).toBe("Yes");
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+  it("sends answers without images and keeps follow-up images with the follow-up draft", async () => {
+    const { client } = await mountThread(dockThread([question("q", "Which?")]), imageFixture);
+    await flush(() => chips()[1]!.click());
+    await flush(() => pickImages(new File(["abc"], "photo.png", { type: "image/png" })));
+    expect(host.querySelector('[aria-label="Remove photo.png"]')).not.toBeNull();
+    await flush(() => chips()[0]!.click());
+    expect(host.querySelector(".inbox-image-tray")).toBeNull();
+    expect(host.querySelector('input[type="file"]')).toBeNull();
+    expect(host.querySelector(".inbox-compose-hint")!.textContent).toContain("Answers are text only — the 1 image in your follow-up draft is not included");
+    await flush(() => text("Blue")); await flush(submit);
+    expect(mutation(client)).toMatchObject({ action: "message_send", kind: "answer", text: "Blue" });
+    expect("images" in mutation(client)).toBe(false);
+    expect(chips()[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(host.querySelector('[aria-label="Remove photo.png"]')).not.toBeNull();
+  });
+  it("keeps the draft and returns to follow-up when the owner reports the question changed", async () => {
+    const { client } = await mountThread(dockThread([question("q", "Which?")]));
+    vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "owner", seq: 1, duplicate: false, stale: true } });
+    await flush(() => text("Blue")); await flush(submit);
+    expect(host.querySelector('[role="alert"]')!.textContent).toContain("The question changed before your answer was delivered. Not sent.");
+    expect(chips()[1]!.getAttribute("aria-checked")).toBe("true");
+    await flush(() => chips()[0]!.click());
+    expect(field().value).toBe("Blue");
+  });
+  it("carries a typed answer to the replacement question without sending it", async () => {
+    const { client, inbox, waits } = await mountThread(dockThread([question("old", "Which?")]));
+    await flush(() => text("Blue"));
+    vi.mocked(client.orchestrationInbox).mockResolvedValue({ ...inbox, revision: 2, threads: [dockThread([question("new", "Which, now?")])] });
+    await flush(() => waits[0]!({ revision: 2, tasks_token: "updated", changed: true }));
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
+    expect(chips()[1]!.getAttribute("aria-checked")).toBe("true");
+    expect(field().value).toBe("");
+    expect(host.querySelector('[role="alert"]')!.textContent).toContain("kept under the updated question");
+    await flush(() => chips()[0]!.click());
+    expect(field().value).toBe("Blue");
+    expect(host.textContent).toContain("Draft carried over from the earlier version of this question");
+    expect(host.querySelector(".inbox-q-updated")!.textContent).toContain("Updated by Liaison");
+    await flush(submit);
+    expect(mutation(client)).toMatchObject({ action: "message_send", kind: "answer", in_reply_to: "new", text: "Blue" });
+  });
+  it("hosts result actions in the unread result card and keeps follow-up and acknowledgement separate", async () => {
+    const { client } = await mountThread(dockThread([], { need: "answer", reply: { text: "Done", source: ownerSource, message_id: "result", at: "now", images: [] }, unread_result_message_id: "result", timeline: [entry("result", "result", "2026-11-04T10:00:00Z", "Done", "failed")] }));
+    const card = host.querySelector(".inbox-result")!;
+    expect(host.querySelectorAll(".inbox-result-actions")).toHaveLength(1);
+    expect(card.querySelector(".inbox-result-actions")).not.toBeNull();
+    expect(card.textContent).toContain("Failed");
+    expect(host.querySelector(".inbox-row")!.textContent).toContain("Result · Failed");
+    expect(host.querySelector(".inbox-thread-header .inbox-state")!.textContent).toBe("Result · Failed");
+    const composer = host.querySelector("form.inbox-compose")!;
+    expect(composer.hasAttribute("data-result-followup")).toBe(true);
+    await press("Follow up");
+    expect(composer.hasAttribute("data-result-followup")).toBe(false);
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
+    await press("Acknowledge");
+    expect(mutation(client)).toEqual({ action: "thread_mark_read", thread_id: "thread", through_message_id: "result" });
+  });
+  it("keeps drafts and pauses replies when live sessions are unavailable", async () => {
+    const { client, inbox, waits } = await mountThread(dockThread([question("q", "Which?")]));
+    await flush(() => text("Blue"));
+    vi.mocked(client.orchestrationInbox).mockResolvedValue({ ...inbox, revision: 2, observation: { status: "unavailable", error: { code: "unavailable", message: "Unavailable" } } });
+    await flush(() => waits[0]!({ revision: 2, tasks_token: "updated", changed: true }));
+    expect(host.textContent).toContain("Can’t see live sessions right now. Replies are paused; your draft is kept.");
+    expect(field().value).toBe("Blue");
+    expect(host.querySelector<HTMLButtonElement>(".inbox-send")!.disabled).toBe(true);
+    await flush(submit);
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe("Inbox surfaces", () => {
+  it("labels several questions from one owner by number, not by run identity", async () => {
+    await mountThread(dockThread([question("q1", "First?"), question("q2", "Second?")]));
+    expect(Array.from(host.querySelectorAll(".inbox-question")).map(card => card.getAttribute("aria-label"))).toEqual(["Open question 1 of 2 from Liaison", "Open question 2 of 2 from Liaison"]);
+    expect(Array.from(host.querySelectorAll(".inbox-question header strong")).map(node => node.textContent)).toEqual(["Liaison asks · Q1", "Liaison asks · Q2"]);
+    expect(chips().map(chip => chip.textContent)).toEqual(["Answer Q1", "Answer Q2", "Follow up"]);
+    expect(host.querySelector(".inbox-row")!.textContent).toContain("2 questions");
+  });
+  it("shows an answered question as one entry with its answer and a delivery receipt that never claims it was read", async () => {
+    const answer = { message_id: "a", at: "2026-11-04T10:02:00Z", kind: "answer" as const, text: "Postgres", source: { kind: "user" as const }, outcome: null, images: [], in_reply_to: "q" };
+    await mountThread(dockThread([], { state: "handled", need: null, receipts: [{ message_id: "a", kind: "answer", to_run_id: "owner", attempt_run_id: null, stage: "stored", created_at: "now", acked_at: null, stale: false }], timeline: [entry("q", "question", "2026-11-04T10:00:00Z", "Which database?"), answer] }));
+    expect(host.querySelectorAll("[data-open-question]")).toHaveLength(0);
+    const answered = host.querySelector(".inbox-answer")!;
+    expect(answered.textContent).toContain("You answered");
+    expect(answered.textContent).toContain("Postgres");
+    expect(answered.querySelector(".inbox-receipt")!.textContent).toBe("Stored · waiting to be picked up");
+    expect(Array.from(host.querySelectorAll(".inbox-timeline .inbox-feedback")).filter(node => node.textContent === "Which database?")).toHaveLength(1);
+  });
+  it("announces a confirmed answer and how many questions remain open", async () => {
+    await mountThread(dockThread([question("q1", "First?"), question("q2", "Second?")]));
+    await flush(() => chips()[0]!.click()); await flush(() => text("one")); await flush(submit);
+    expect(host.querySelector(".inbox-main .inbox-sr[role=status]")!.textContent).toBe("Answer sent to Liaison. Stored, waiting to be picked up. 1 question still open.");
+  });
+  it("moves focus between queue rows with the arrow keys without opening or selecting anything", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    inbox.threads = [dockThread([question("q1", "First?")], { thread_id: "one", title: { text: "One", source: { kind: "recorded" }, message_id: null, at: null, images: [] } }), dockThread([question("q2", "Second?")], { thread_id: "two", title: { text: "Two", source: { kind: "recorded" }, message_id: null, at: null, images: [] } })];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    await flush(() => app.render());
+    const rows = () => Array.from(host.querySelectorAll<HTMLButtonElement>(".inbox-row"));
+    rows()[0]!.focus();
+    await flush(() => rows()[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(rows()[1]);
+    expect(rows().some(row => row.getAttribute("aria-current") === "true")).toBe(false);
+    await flush(() => rows()[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })));
+    expect(document.activeElement).toBe(rows()[0]);
+  });
+  it("keeps Back in the shared header of every detail view and offers no composer until the inbox has loaded", async () => {
+    const { client } = fixture(), app = setup(client);
+    vi.mocked(client.orchestrationInbox).mockReturnValue(new Promise(() => {}));
+    await flush(() => app.render());
+    expect(host.querySelector(".inbox-thread-header h2")!.textContent).toBe("New work");
+    expect(host.querySelector(".inbox-thread-header .inbox-back")!.getAttribute("aria-label")).toBe("Back to inbox");
+    expect(host.querySelector("textarea")).toBeNull();
+    expect(host.querySelector(".inbox-detail [role=status]")!.textContent).toContain("Loading the inbox");
+  });
+  it("says when the selected work has left the inbox instead of offering a form that cannot send", async () => {
+    const { client, inbox, waits } = await mountThread(dockThread([question("q", "Which?")]));
+    vi.mocked(client.orchestrationInbox).mockResolvedValue({ ...inbox, revision: 2, threads: [] });
+    await flush(() => waits[0]!({ revision: 2, tasks_token: "updated", changed: true }));
+    expect(host.querySelector(".inbox-thread-header h2")!.textContent).toBe("Work no longer available");
+    expect(host.querySelector("textarea")).toBeNull();
+  });
+  it("states an empty Work panel", async () => {
+    await mountThread(dockThread([question("q", "Which?")]));
+    expect(host.querySelector('[aria-label="Work"]')!.textContent).toContain("No linked tasks yet.");
   });
 });

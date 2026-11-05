@@ -7,6 +7,7 @@ import { InboxFeedback } from "./InboxFeedback";
 import { InboxImages } from "./InboxImages";
 
 type Props = {
+  id?: string;
   thread: InboxThread;
   view: InboxView | null;
   client: CockpitClient;
@@ -86,12 +87,13 @@ function TaskCard({ task, client, sessionId, open, liveOpen, initiallyOpen }: { 
   </details>;
 }
 
-export function InboxWork({ thread, client, sessionId, open, liveOpen, diagnostics }: Props) {
+export function InboxWork({ id, thread, client, sessionId, open, liveOpen, diagnostics }: Props) {
   const active = thread.tasks.filter(task => task.lane !== "accepted");
   const done = thread.tasks.filter(task => task.lane === "accepted").sort((a, b) => (b.evidence?.result?.at ?? "").localeCompare(a.evidence?.result?.at ?? ""));
   const card = (task: InboxTaskLink, initiallyOpen: boolean) => <TaskCard key={`${task.root_id}:${task.task_id}`} task={task} client={client} sessionId={sessionId} open={open} liveOpen={liveOpen} initiallyOpen={initiallyOpen} />;
-  return <aside className="inbox-work" aria-label="Work">
+  return <aside id={id} className="inbox-work" aria-label="Work">
     <div className="inbox-work-head"><h3>Work</h3><span>{thread.tasks.length} {thread.tasks.length === 1 ? "task" : "tasks"}</span></div>
+    {thread.tasks.length === 0 && <p className="inbox-work-empty">No linked tasks yet.</p>}
     <div className="inbox-tasks">{active.map(task => card(task, true))}{done.slice(0, 2).map(task => card(task, true))}
       {done.length > 2 && <details className="inbox-donemore"><summary><Chevron /><span>{done.length - 2} more done</span></summary><div className="inbox-tasks">{done.slice(2).map(task => card(task, false))}</div></details>}
     </div>

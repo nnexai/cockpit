@@ -9,7 +9,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Change | Current owner |
 | --- | --- |
 | Shell composition | `src/app/App.tsx`; `src/app/shell/Workbench.tsx`; `src/app/shell/WorkbenchContent.tsx` |
-| Inbox screen and structured thread cards | `src/app/inbox/Inbox.tsx`; `src/app/inbox/inbox.css`; Workbench shell retains the existing Space-oriented canvas |
+| Inbox screen and structured thread cards | `src/app/inbox/Inbox.tsx` (queue, shared detail header, selection, drafts, send); `InboxTimeline.tsx` (timeline, answered-question entries, open-question and result-action placement); `InboxQuestionCard.tsx`, `InboxReplyControls.tsx` (reply targets, choice replacement); `inboxDrafts.ts` (per-question draft identity, carry-over, badge); `inboxDelivery.ts` (receipt wording); `inbox.css`, `inbox-detail.css`; Workbench shell retains the existing Space-oriented canvas |
 | Session hooks | `src/app/shell/useOrderedSession.ts`; `src/app/shell/useSessionStream.ts`; `src/app/shell/useSessionControl.ts` |
 | Recovery and sidebar state | `src/app/shell/useSessionRecovery.ts`; `src/app/shell/useSidebarState.ts`; `src/app/shell/useWorkbenchUI.ts` |
 | Workbench state/actions/input | `src/app/shell/useWorkbenchState.ts`; `src/app/shell/useWorkbenchActions.ts`; `src/app/shell/useWorkbenchInput.ts` |

@@ -99,5 +99,5 @@ export function useInboxImages(client: CockpitClient, sessionId: string, key: st
     <span className="inbox-sr" role="status">{announcement}</span>
   </>;
   const picker = (disabled: boolean) => <><input ref={input} hidden type="file" accept={limits?.mime_types.join(",")} multiple onChange={event => { if (event.currentTarget.files) add(event.currentTarget.files); event.currentTarget.value = ""; }} /><button ref={attach} type="button" className="inbox-btn inbox-attach" aria-label="Attach images" aria-describedby={[entries.length > 0 && imageDescription, atLimit && limitDescription].filter(Boolean).join(" ") || undefined} disabled={disabled || !limits || atLimit} onClick={() => input.current?.click()}>Attach</button></>;
-  return { entries, ready, ids, add, clear, controls, picker };
+  return { entries, ready, ids, add, clear, controls, picker, count: (draftKey: string) => drafts[draftKey]?.length ?? 0 };
 }
