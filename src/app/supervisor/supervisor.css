@@ -32,6 +32,7 @@
 .attempt-stalled { --task-color:var(--blocked); }
 .lane-blocked .liaison-task-dot { background:transparent; border:1.5px solid var(--text-muted); }
 .liaison-task-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-primary); font-size:var(--font-size-xs); font-weight:500; }
+.liaison-task-rail .liaison-task-title { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; white-space:normal; overflow-wrap:anywhere; line-height:1.3; }
 .lane-blocked .liaison-task-title { color:var(--text-secondary); }
 .lane-accepted .liaison-task-title { color:var(--text-secondary); font-weight:400; }
 .liaison-task-stage, .liaison-task-after, .liaison-task-status { font-size:var(--font-size-control); color:var(--text-muted); }

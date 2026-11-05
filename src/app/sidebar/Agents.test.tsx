@@ -42,6 +42,30 @@ it("filters idle agents by default and acknowledges an unseen result", async () 
   } finally { await act(async () => root.unmount()); host.remove(); }
 });
 
+it("omits repeated selected state flags but preserves distinct and unselected flags", async () => {
+  const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
+  const retained = { ...response, records: [{ pane_id: "a", terminal_id: "ta", agent: "one", last: { epoch: 1, seq: 2, status: "working", observed_at: "now" }, completion: { epoch: 1, seq: 1, at: "now", inferred: false }, acked: null }] };
+  const attention: ComponentProps<typeof Agents>["attention"] = { availability: "ready", response: retained, pending: new Set(), notes: new Map(), announcement: "", activate: vi.fn(), seen: vi.fn(async () => true), retry: vi.fn(), clearNote: vi.fn() };
+  const agent = { ...snapshot.agents[0]!, space_id: "space" };
+  const props: ComponentProps<typeof Agents> = { snapshot: { ...snapshot, agents: [{ ...agent, status: "done" }] }, attention, live: true, spaces: [{ id: "space", label: "Space", number: 1, tab_count: 1, pane_count: 1, focused: false, agent_status: "idle", git: null }], tabs: [], selectedPaneId: "a", pendingPaneId: null, loading: false, hasSession: true, onSelect: vi.fn(), focusRef: { current: null }, view: "attention", onViewChange: vi.fn() };
+  try {
+    await act(async () => root.render(createElement(Agents, props)));
+    const row = host.querySelector<HTMLButtonElement>('[data-row-id="a:one"]')!;
+    expect(row.querySelector(".agent-sub")?.textContent).toBe("Done · one");
+    expect(row.getAttribute("aria-current")).toBe("true");
+    await act(async () => root.render(createElement(Agents, { ...props, snapshot: { ...snapshot, agents: [{ ...agent, status: "blocked" }] } })));
+    expect(row.querySelector(".agent-sub")?.textContent).toBe("Blocked · one");
+    await act(async () => root.render(createElement(Agents, { ...props, snapshot: { ...snapshot, agents: [{ ...agent, status: "working" }] } })));
+    expect(row.querySelector(".agent-sub")?.textContent).toBe("Working · one · Unseen");
+    expect(row.getAttribute("aria-label")).toContain("earlier result not seen");
+    await act(async () => root.render(createElement(Agents, { ...props, selectedPaneId: null })));
+    expect(row.querySelector(".agent-flag")?.textContent).toBe("Done");
+    await act(async () => root.render(createElement(Agents, { ...props, pendingPaneId: "a" })));
+    expect(row.querySelector(".agent-flag")?.textContent).toBe("Done");
+    expect(row.getAttribute("aria-busy")).toBe("true");
+  } finally { await act(async () => root.unmount()); host.remove(); }
+});
+
 it("keeps active statuses visible when unavailable and fences a pointer that moved to another row", async () => {
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host); const select = vi.fn();
   const active = { ...snapshot, agents: [{ ...snapshot.agents[0]!, status: "working" }, snapshot.agents[1]!] };

@@ -15,6 +15,16 @@ async function render(tasks: TaskView[]) {
   const snapshot = orchestrationFixture(tasks);
   await act(async () => root!.render(<TaskRail tasks={tasks} snapshot={snapshot} rootId="root" fresh waiting={false} status={null} onOverview={vi.fn()} />));
 }
+it("retains full task titles and stage words in rail rows", async () => {
+  const title = "Experiment with agent steering and busy delivery across a long-running task";
+  const task = taskFixture("task", { lane: "working" });
+  await render([{ ...task, task: { ...task.task, title } }]);
+  const row = host.querySelector<HTMLButtonElement>("[data-row-key]")!;
+  expect(row.querySelector(".liaison-task-title")?.textContent).toBe(title);
+  expect(row.querySelector(".liaison-task-title")?.getAttribute("title")).toBe(title);
+  expect(row.querySelector(".liaison-task-stage")?.textContent).toBe("working");
+  expect(row.getAttribute("aria-label")).toBe(`${title}, working. Open history`);
+});
 it("restores the originating row after Escape and does not steal focus on snapshot updates", async () => {
   const task = taskFixture("task");
   await render([task]);
