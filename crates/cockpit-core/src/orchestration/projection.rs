@@ -333,14 +333,9 @@ fn task_wait(
     });
     let refs = |ids: Vec<&str>| ids.into_iter().filter_map(|id|
         titles.get(id).map(|title| TaskWaitRef { id: id.into(), title: title.clone() })).collect();
+    // A done task never waits; an unrecorded merge surfaces as dependency_input on a blocked successor.
     if view.task.checked {
-        let accepted = state.runs.iter().filter(|run| run.root_id == root_id
-            && run.task_id.as_deref() == Some(view.task.task_id.as_str())
-            && run.close_reason == Some(CloseReason::Accepted))
-            .max_by(|a, b| attempt_order(a).cmp(&attempt_order(b)));
-        return accepted.filter(|run| matches!(run.integration, Integration::Pending)
-            && matches!(run.source_output, Some(SourceOutput::Code { .. })) && run.result.is_some())
-            .and_then(|_| make(TaskWaitCause::Integration, None, vec![], None, None));
+        return None;
     }
     if let Some(run) = current.filter(|run| run.stage != RunStage::Closed) {
         if let Some(resume) = run.resume.as_ref().filter(|resume| resume.phase == ResumePhase::Blocked) {
@@ -1180,7 +1175,7 @@ mod tests {
     }
 
     #[test]
-    fn integration_wait_requires_accepted_code_output() {
+    fn checked_task_with_unrecorded_merge_is_not_waiting() {
         let mut durable = state(worker(RunStage::Closed));
         durable.runs[1].close_reason = Some(CloseReason::Accepted);
         let mut result = asking().last_report.unwrap();
@@ -1188,22 +1183,15 @@ mod tests {
         result.kind = ReportKind::Result;
         result.outcome = Some(ReportOutcome::Succeeded);
         durable.runs[1].result = Some(result);
-        let mut view = board().tasks.remove(0);
-        view.task.checked = true;
-        let titles = HashMap::new();
-        durable.runs[1].source_output = Some(SourceOutput::NonCode {
-            result_message_id: "result".into(), task_revision: "revision".into(),
-            artifacts: vec![], focused_checks: vec![],
-        });
-        assert!(task_wait(&durable, ROOT, &view, None, &titles).is_none());
         durable.runs[1].source_output = Some(SourceOutput::Code {
             repository_key: "repo".into(), checkout_key: "checkout".into(), base_commit: "base".into(),
             head_commit: "head".into(), commits: vec![], task_revision: "revision".into(),
             result_message_id: "result".into(), focused_checks: vec![],
         });
-        assert_eq!(task_wait(&durable, ROOT, &view, None, &titles).unwrap().cause, TaskWaitCause::Integration);
-        durable.runs[1].integration = Integration::NotApplicable { reason: "recorded".into(), result_message_id: "result".into() };
-        assert!(task_wait(&durable, ROOT, &view, None, &titles).is_none());
+        assert!(matches!(durable.runs[1].integration, Integration::Pending));
+        let mut view = board().tasks.remove(0);
+        view.task.checked = true;
+        assert!(task_wait(&durable, ROOT, &view, None, &HashMap::new()).is_none());
     }
 
     #[test]

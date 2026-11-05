@@ -1170,7 +1170,7 @@ export type TaskWait = { cause: TaskWaitCause, since: string | null, held_by: Ar
 
 export type TaskWaitRef = { id: string, title: string, };
 
-export type TaskWaitCause = "recovery_blocked" | "question" | "review" | "integration" | "prerequisites" | "dependency_input" | "capacity" | "resource" | "schedule_hold" | "dispatch";
+export type TaskWaitCause = "recovery_blocked" | "question" | "review" | "prerequisites" | "dependency_input" | "capacity" | "resource" | "schedule_hold" | "dispatch";
 
 export type TaskLane = "blocked" | "ready" | "working" | "review" | "accepted";
 

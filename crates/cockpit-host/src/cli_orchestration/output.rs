@@ -217,7 +217,6 @@ fn print_waiting(waiting: &cockpit_protocol::orchestration::TaskWait) {
         TaskWaitCause::RecoveryBlocked => "recovery blocked",
         TaskWaitCause::Question => "question",
         TaskWaitCause::Review => "review",
-        TaskWaitCause::Integration => "integration",
         TaskWaitCause::Prerequisites => "prerequisites",
         TaskWaitCause::DependencyInput => "dependency input",
         TaskWaitCause::Capacity => "capacity",

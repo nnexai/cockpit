@@ -515,7 +515,7 @@ export const wireTaskWaitRef: WireDescriptor<V1.TaskWaitRef> = struct<V1.TaskWai
   "title": req(str),
 });
 
-export const wireTaskWaitCause: WireDescriptor<V1.TaskWaitCause> = literal<V1.TaskWaitCause>("TaskWaitCause", ["recovery_blocked", "question", "review", "integration", "prerequisites", "dependency_input", "capacity", "resource", "schedule_hold", "dispatch"]);
+export const wireTaskWaitCause: WireDescriptor<V1.TaskWaitCause> = literal<V1.TaskWaitCause>("TaskWaitCause", ["recovery_blocked", "question", "review", "prerequisites", "dependency_input", "capacity", "resource", "schedule_hold", "dispatch"]);
 
 export const wireTaskLane: WireDescriptor<V1.TaskLane> = literal<V1.TaskLane>("TaskLane", ["blocked", "ready", "working", "review", "accepted"]);
 

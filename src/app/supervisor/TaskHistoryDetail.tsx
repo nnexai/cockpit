@@ -53,7 +53,6 @@ export const waitCopy = {
   recovery_blocked: ["Worker recovery is blocked.", "The recovery blocker is resolved.", "The liaison resolves the blocker"],
   question: ["A worker question needs an answer.", "The question is answered.", "Answer through the liaison"],
   review: ["The result is waiting for review.", "The liaison accepts or returns the result.", "The liaison reviews it"],
-  integration: ["Accepted work isn't merged into the target yet.", "The merge into the target is recorded.", "The liaison integrates it"],
   prerequisites: ["Prerequisite tasks aren't done yet.", "Those tasks are done.", "Starts automatically"],
   dependency_input: ["A prerequisite's output isn't in the target branch yet.", "That output is merged into the target branch.", "The liaison integrates the prerequisite"],
   capacity: ["All worker slots for this project are in use.", "A worker slot frees up.", "Starts automatically"],
