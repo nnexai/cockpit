@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Message, Report, Run } from "../../protocol/generated/v1";
+import type { Message, Report, Run, UnreflectedInput } from "../../protocol/generated/v1";
 import { formatEventTime, formatGap, taskHistory } from "./taskHistory";
 import { orchestrationFixture, runFixture, taskFixture } from "./testFixtures";
 
@@ -7,6 +7,9 @@ const at = "2026-10-07T12:00:00Z", later = "2026-10-07T12:02:00Z";
 function worker(overrides: Partial<Run> = {}) { return runFixture({ kind: "worker", run_id: "worker", root_id: "root", task_id: "task", stage: "working", ...overrides }); }
 function report(kind: Report["kind"], messageId: string): Report { return { message_id: messageId, kind, outcome: kind === "result" ? "succeeded" : null, summary: `Summary ${messageId}`, plan: null, source_output: null, at }; }
 function message(value: Report, overrides: Partial<Message> = {}): Message { return { message_id: value.message_id, from: { type: "run", run_id: "worker" }, to_run_id: "root", kind: "report", text: value.summary, report: value, in_reply_to: null, stale: false, escalated_from: null, stage: "acked", seq: 1, created_at: value.at, acked_at: later, ...overrides }; }
+function input(overrides: Partial<UnreflectedInput> = {}): UnreflectedInput {
+  return { run_id: "worker", result_message_id: "result", message_id: "input", seq: 3, kind: "instruction", from: { type: "operator" }, stage: "acked", after_result: true, created_at: at, acked_at: later, ...overrides };
+}
 
 describe("task history evidence", () => {
   it("isolates root/task attempts and deduplicates reports while preserving superseded attempts", () => {
@@ -72,6 +75,35 @@ describe("task history evidence", () => {
     expect(taskHistory(snapshot, "root", task, [task], true).attempts[0].events.find(event => event.kind === "question")).toMatchObject({ open: false });
     snapshot.runs = [worker({ stage: "closed", close_reason: "accepted", result })];
     expect(taskHistory(snapshot, "root", task, [task], true).outcome).toMatchObject({ stage: "ready", accepted: false });
+  });
+
+  it("derives scoped input history, preserves result ordering under clock skew, and clears on a newer result", () => {
+    const task = taskFixture("task"), result = { ...report("result", "result"), at: later };
+    const run = worker({ stage: "reported", result });
+    const snapshot = orchestrationFixture([task], [run, worker({ run_id: "foreign", root_id: "other" })]);
+    snapshot.unreflected_inputs = [input({ seq: 5 }), input({ message_id: "missing", seq: 4 }), input({ run_id: "foreign" })];
+    snapshot.messages = [message(result, { message_id: "input", to_run_id: "other", text: "wrong recipient" }), message(result, { message_id: "input", to_run_id: "worker", text: "<img onerror=alert(1)>", images: [{ image_id: "image", mime_type: "image/png", width: 1, height: 1, bytes: 1 }] })];
+    const history = taskHistory(snapshot, "root", task, [task], true);
+    expect(history.unreflectedNotice).toBe("2 inputs sent after the Result");
+    expect(history.attempts[0].events.map(event => event.kind)).toEqual(["started", "result", "unreflected_input", "unreflected_input"]);
+    expect(history.attempts[0].events[2]).toMatchObject({ messageId: "missing", text: null, at, sortAt: later });
+    expect(history.attempts[0].events[3]).toMatchObject({ messageId: "input", text: "<img onerror=alert(1)>", imageCount: 1, by: "you", closed: false });
+    expect(taskHistory(snapshot, "root", task, [task, task], true)).toMatchObject({ identity: "ambiguous", unreflectedNotice: null, attempts: [] });
+    snapshot.runs = [{ ...run, result: { ...result, message_id: "new-result" } }];
+    expect(taskHistory(snapshot, "root", task, [task], true)).toMatchObject({ unreflectedNotice: null, attempts: [{ events: expect.not.arrayContaining([expect.objectContaining({ kind: "unreflected_input" })]) }] });
+  });
+
+  it("keeps closed input history but not its notice, and distinguishes stored-before labels", () => {
+    const task = taskFixture("task"), result = report("result", "result");
+    const snapshot = orchestrationFixture([task], [worker({ stage: "reported", result })]);
+    snapshot.unreflected_inputs = [input({ after_result: false, stage: "stored" }), input({ message_id: "second" })];
+    expect(taskHistory(snapshot, "root", task, [task], true).unreflectedNotice).toBe("1 input sent after the Result · 1 sent before it, still waiting to be picked up");
+    snapshot.unreflected_inputs.pop();
+    expect(taskHistory(snapshot, "root", task, [task], true).unreflectedNotice).toBe("1 input sent before the Result, still waiting to be picked up");
+    snapshot.runs = [worker({ stage: "closed", close_reason: "accepted", result })];
+    const history = taskHistory(snapshot, "root", task, [task], true);
+    expect(history.unreflectedNotice).toBeNull();
+    expect(history.attempts[0].events.find(event => event.kind === "unreflected_input")).toMatchObject({ stage: "stored", afterResult: false, closed: true });
   });
 
   it("omits invalid times and refuses negative answer durations", () => {

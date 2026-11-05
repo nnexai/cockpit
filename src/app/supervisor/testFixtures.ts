@@ -21,7 +21,7 @@ export function orchestrationFixture(tasks: TaskView[] = [], runs: Run[] = [runF
   return {
     session_id: "session-1", state_store_id: "store", revision: 1, tasks_token: "tasks", roots: [],
     board: runs.length ? { root_id: "root", path: "/state/tasks.md", doc_revision: "doc", unidentified_items: 0, diagnostics: [], tasks } : null,
-    runs, messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
+    runs, messages: [], questions: [], unreflected_inputs: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
     runtime: { status: "fresh", endpoint_identity: "fixture-endpoint", observed_at: "2026-10-07T12:00:00Z", runs: runs.map(run => ({ run_id: run.run_id, presence: "present", actual_agent: true, workspace_id: "space-1", workspace_label: "Project", tab_id: "tab-2", tab_label: "Liaison", pane_id: "pane-2", agent_status: "working", state_changed_at: null })) },
   };
 }

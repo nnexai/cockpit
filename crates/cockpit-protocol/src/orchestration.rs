@@ -55,6 +55,7 @@ pub struct OrchestrationSnapshot {
     pub runs: Vec<Run>,      // every run under roots of this session
     pub messages: Vec<Message>, // for those runs; bodies included (≤16 KiB each)
     pub questions: Vec<QuestionStatus>,
+    pub unreflected_inputs: Vec<UnreflectedInput>,
     pub task_ownership: Vec<TaskOwnership>,
     pub intents: Vec<TaskIntent>,
     pub assignment_intents: Vec<TaskAssignmentIntent>,
@@ -1370,6 +1371,23 @@ pub struct Message {
     pub stale: bool,            // sender attempt superseded / caller mismatch evidence
     pub escalated_from: Option<String>,
     pub stage: DeliveryStage,
+    pub created_at: String,
+    pub acked_at: Option<String>,
+}
+/// Meaningful input the run's current Result provably does not reflect.
+/// Metadata only; bodies stay in `messages` for authorized readers.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct UnreflectedInput {
+    pub run_id: String,
+    pub result_message_id: String,
+    pub message_id: String,
+    #[ts(type = "number")]
+    pub seq: u64,
+    pub kind: MessageKind,
+    pub from: ActorRef,
+    pub stage: DeliveryStage,
+    /// True if appended after the Result; false if it was never pulled.
+    pub after_result: bool,
     pub created_at: String,
     pub acked_at: Option<String>,
 }

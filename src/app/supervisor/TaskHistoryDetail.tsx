@@ -35,6 +35,15 @@ function HistoryEventRow({ event }: { event: HistoryEvent }) {
       tone = event.outcome === "succeeded" ? " is-ok" : event.outcome === "failed" ? " is-bad" : "";
       detail = <><p className="liaison-result-summary">{event.summary}</p><Facts facts={event.facts} /></>;
       break;
+    case "unreflected_input": {
+      const kind = event.inputKind === "instruction" ? "Instruction" : event.inputKind === "answer" ? "Answer" : event.inputKind === "cancel_request" ? "Cancel request" : "Message";
+      const stage = event.stage === "stored" ? event.closed ? "no pickup recorded" : "waiting to be picked up" : event.stage === "read" ? "picked up" : "captured, processing not confirmed";
+      label = `${kind} sent ${event.afterResult ? "after" : "before"} the Result`;
+      tone = " is-wait";
+      sub = `${stage} · from ${event.by}${event.closed ? " · attempt closed; it can't report on this" : ""}`;
+      detail = <><p className="liaison-result-summary is-full">{event.text ?? "Text isn't available in this view."}</p>{event.imageCount ? <p className="liaison-event-sub">{event.imageCount} image{event.imageCount === 1 ? "" : "s"} attached; not shown here.</p> : null}<p className="liaison-event-sub">{event.closed ? "Nothing is replayed. If it's still wanted, ask the liaison for a follow-up task." : "The liaison can wait for a new Result or send the task back."}</p></>;
+      break;
+    }
     case "merged":
       label = `Merged into ${event.target}`; tone = " is-ok"; detail = <Facts facts={event.facts} />;
       break;
@@ -103,11 +112,12 @@ export function TaskHistoryDetail({ view, history }: { view: TaskView; history: 
     <TaskProgress view={view} history={history} />
     {view.waiting ? <WaitingDetail waiting={view.waiting} /> : null}
     {history?.liveUnavailable ? <p className="liaison-history-notice" role="status">Live worker state unavailable — showing recorded history.</p> : null}
+    {history?.unreflectedNotice ? <p className="liaison-history-notice">{history.unreflectedNotice}. See History below.</p> : null}
     {!history ? <p className="liaison-empty">History unavailable — no task snapshot is available.</p> : history.identity === "ambiguous" ? <p className="liaison-empty">History unavailable — this task's ID appears more than once in the task file.</p> : <>
       {!history.attempts.length && !history.scheduledAt ? <p className="liaison-empty"><strong>{view.task.checked ? "No history to show" : "No attempts yet"}</strong>{view.task.checked ? "Only the task's checked state was found; no attempts or results are recorded for it." : "History appears here once a worker starts."}</p> : <>
         <h3>History</h3>
         {history.attempts.map((attempt, i) => {
-          const events = <ol className="liaison-history" aria-label={`Attempt ${attempt.attempt} events`}>{attempt.events.map((event, j) => <HistoryEventRow key={j} event={event} />)}</ol>;
+          const events = <ol className="liaison-history" aria-label={`Attempt ${attempt.attempt} events`}>{attempt.events.map((event, j) => <HistoryEventRow key={event.kind === "unreflected_input" ? `input:${event.messageId}` : `event:${j}`} event={event} />)}</ol>;
           return i < history.attempts.length - 1 ? <details className="liaison-attempt" key={attempt.runId}><summary><span>Attempt {attempt.attempt} · {attempt.end}</span><span className="liaison-attempt-worker">{attempt.label}</span>{attempt.reason ? <span className="liaison-attempt-why">{attempt.reason}</span> : null}</summary>{events}</details> : <div key={attempt.runId}><div className="liaison-attempt-label"><span>Attempt {attempt.attempt}</span><span>{attempt.label}</span></div>{attempt.reason ? <p className="liaison-attempt-reason">{attempt.reason}</p> : null}{events}</div>;
         })}
         {history.scheduledAt && !history.attempts.some(attempt => attempt.end === "current") ? <ol className="liaison-history"><li className="liaison-event"><div className="liaison-event-line"><span className="liaison-event-title">Scheduled</span><EventTime at={history.scheduledAt} /></div></li></ol> : null}

@@ -36,6 +36,7 @@ export interface WireTypes {
   "MessageKind": V1.MessageKind;
   "DeliveryStage": V1.DeliveryStage;
   "Message": V1.Message;
+  "UnreflectedInput": V1.UnreflectedInput;
   "QuestionStatus": V1.QuestionStatus;
   "QuestionReceipt": V1.QuestionReceipt;
   "AnswerReceipt": V1.AnswerReceipt;
@@ -89,6 +90,7 @@ export interface WireOwners {
   "ActorRef[dispatcher]": Extract<V1.ActorRef, { "type": "dispatcher" }>;
   "Report": V1.Report;
   "Message": V1.Message;
+  "UnreflectedInput": V1.UnreflectedInput;
   "QuestionStatus": V1.QuestionStatus;
   "QuestionReceipt": V1.QuestionReceipt;
   "QuestionReceipt[unresolved]": Extract<V1.QuestionReceipt, { "status": "unresolved" }>;
@@ -346,6 +348,16 @@ export interface WireFields {
   "Message.stage": (V1.Message)["stage"];
   "Message.created_at": (V1.Message)["created_at"];
   "Message.acked_at": (V1.Message)["acked_at"];
+  "UnreflectedInput.run_id": (V1.UnreflectedInput)["run_id"];
+  "UnreflectedInput.result_message_id": (V1.UnreflectedInput)["result_message_id"];
+  "UnreflectedInput.message_id": (V1.UnreflectedInput)["message_id"];
+  "UnreflectedInput.seq": (V1.UnreflectedInput)["seq"];
+  "UnreflectedInput.kind": (V1.UnreflectedInput)["kind"];
+  "UnreflectedInput.from": (V1.UnreflectedInput)["from"];
+  "UnreflectedInput.stage": (V1.UnreflectedInput)["stage"];
+  "UnreflectedInput.after_result": (V1.UnreflectedInput)["after_result"];
+  "UnreflectedInput.created_at": (V1.UnreflectedInput)["created_at"];
+  "UnreflectedInput.acked_at": (V1.UnreflectedInput)["acked_at"];
   "QuestionStatus.run_id": (V1.QuestionStatus)["run_id"];
   "QuestionStatus.question_message_id": (V1.QuestionStatus)["question_message_id"];
   "QuestionStatus.asked_at": (V1.QuestionStatus)["asked_at"];
@@ -639,6 +651,7 @@ export interface WireFieldNames {
   "ActorRef[dispatcher]": never;
   "Report": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "card" | "at";
   "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "images" | "in_reply_to" | "report" | "thread_id" | "handoff" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
+  "UnreflectedInput": "run_id" | "result_message_id" | "message_id" | "seq" | "kind" | "from" | "stage" | "after_result" | "created_at" | "acked_at";
   "QuestionStatus": "run_id" | "question_message_id" | "asked_at" | "thread_id" | "receipt";
   "QuestionReceipt": never;
   "QuestionReceipt[unresolved]": never;
@@ -763,6 +776,7 @@ export interface WireChildNames {
   "Message.from": "ActorRef";
   "Message.report": "Report";
   "Message.handoff": "HandoffRecord";
+  "UnreflectedInput.from": "ActorRef";
   "QuestionStatus.receipt": "QuestionReceipt";
   "QuestionReceipt.answer": "AnswerReceipt";
   "QuestionReceipt[answer_delivered].answer": "AnswerReceipt";
@@ -952,6 +966,7 @@ export interface WireCheckpointFieldNames {
   "ActorRef[dispatcher]": "type";
   "Report": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "card" | "at";
   "Message": "message_id" | "to_run_id" | "seq" | "from" | "kind" | "text" | "images" | "in_reply_to" | "report" | "thread_id" | "handoff" | "stale" | "escalated_from" | "stage" | "created_at" | "acked_at";
+  "UnreflectedInput": "run_id" | "result_message_id" | "message_id" | "seq" | "kind" | "from" | "stage" | "after_result" | "created_at" | "acked_at";
   "QuestionStatus": "run_id" | "question_message_id" | "asked_at" | "thread_id" | "receipt";
   "QuestionReceipt": "answer" | "status";
   "QuestionReceipt[unresolved]": "status";
@@ -1091,6 +1106,7 @@ export type WireOmittableField =
   | "Message.handoff"
   | "Message.escalated_from"
   | "Message.acked_at"
+  | "UnreflectedInput.acked_at"
   | "QuestionStatus.thread_id"
   | "AnswerReceipt.acked_at"
   | "TaskIntent.origin"

@@ -108,6 +108,7 @@
 .liaison-event-facts dt { flex:none; }
 .liaison-event-facts dd { margin:0; color:var(--text-secondary); min-width:0; }
 .liaison-result-summary { color:var(--text-secondary); white-space:pre-wrap; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
+.liaison-result-summary.is-full { display:block; -webkit-line-clamp:unset; overflow:visible; }
 .liaison-progress { list-style:none; padding:0; }
 .liaison-progress li { display:flex; gap:8px; }
 .liaison-progress li > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

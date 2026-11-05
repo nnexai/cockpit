@@ -383,3 +383,54 @@ it("shows unknown live worker state when no current agent can be observed", asyn
   await render([task], { snapshot, fresh: false });
   expect(host.querySelector('[aria-label="Task attention"]')?.textContent).toContain("Live worker state unknown");
 });
+
+it("shows recorded inputs without implying processing, retains disclosures on refresh, and removes reported-only notice on acceptance", async () => {
+  const task = taskFixture("Work", { current_run_id: "worker", lane: "review" });
+  const result = { message_id: "result", kind: "result" as const, outcome: "succeeded" as const, summary: "Done", plan: null, source_output: null, at: "2026-10-07T12:02:00Z" };
+  const worker = runFixture({ kind: "worker", run_id: "worker", task_id: "Work", stage: "reported", result });
+  const snapshot = orchestrationFixture([task], [worker]);
+  const receipt = { run_id: "worker", result_message_id: "result", message_id: "input", seq: 3, kind: "instruction" as const, from: { type: "operator" as const }, stage: "acked" as const, after_result: true, created_at: worker.created_at, acked_at: worker.created_at };
+  snapshot.unreflected_inputs = [receipt];
+  const body = `<img onerror="alert(1)">\n${"x".repeat(16000)}`;
+  snapshot.messages = [{ message_id: "input", from: receipt.from, to_run_id: "worker", kind: "instruction", text: body, images: [{ image_id: "image", mime_type: "image/png", width: 1, height: 1, bytes: 1 }], report: null, in_reply_to: null, stale: false, escalated_from: null, stage: "acked", seq: 3, created_at: worker.created_at, acked_at: worker.created_at }];
+  await render([task], { snapshot });
+  const attention = host.querySelector<HTMLButtonElement>(".liaison-attention button")!;
+  expect(attention.textContent).toContain("1 input sent after the Result");
+  act(() => { attention.focus(); attention.click(); });
+  expect(host.querySelector(".liaison-history-notice")?.textContent).toBe("1 input sent after the Result. See History below.");
+  const detail = host.querySelector(".liaison-detail")!;
+  const row = [...detail.querySelectorAll("li")].find(element => element.textContent?.includes("Instruction sent after the Result"))!;
+  expect(row.textContent).toContain("captured, processing not confirmed · from you");
+  expect(row.querySelector(".is-full")?.textContent).toBe(body);
+  expect(row.querySelector("img")).toBeNull();
+  expect(row.textContent).toContain("1 image attached; not shown here.");
+  expect(row.textContent).toContain("The liaison can wait for a new Result or send the task back.");
+  const disclosure = row.querySelector("details")!;
+  act(() => { disclosure.open = true; });
+  snapshot.unreflected_inputs = [{ ...receipt, message_id: "earlier", seq: 2 }, receipt];
+  await render([task], { snapshot: { ...snapshot } });
+  expect([...host.querySelectorAll<HTMLDetailsElement>(".liaison-event details")].find(element => element.textContent?.includes(body))?.open).toBe(true);
+  expect(host.textContent).toContain("Text isn't available in this view.");
+  const accepted = { ...worker, stage: "closed" as const, close_reason: "accepted" as const };
+  await render([task], { snapshot: { ...snapshot, runs: [accepted] } });
+  expect(host.querySelector(".liaison-attention")).toBeNull();
+  expect(host.querySelector(".liaison-history-notice")).toBeNull();
+  expect(host.querySelector(".liaison-detail")?.textContent).toContain("attempt closed; it can't report on this");
+  expect(host.querySelector(".liaison-detail")?.textContent).toContain("Nothing is replayed. If it's still wanted, ask the liaison for a follow-up task.");
+  expect(host.textContent).not.toMatch(/not seen|never received|ignored|unprocessed/i);
+});
+
+it("describes stored input before the Result according to the attempt's state", async () => {
+  const task = taskFixture("Work", { current_run_id: "worker", lane: "review" });
+  const result = { message_id: "result", kind: "result" as const, outcome: "succeeded" as const, summary: "Done", plan: null, source_output: null, at: "2026-10-07T12:02:00Z" };
+  const worker = runFixture({ kind: "worker", run_id: "worker", task_id: "Work", stage: "reported", result });
+  const snapshot = orchestrationFixture([task], [worker]);
+  snapshot.unreflected_inputs = [{ run_id: "worker", result_message_id: "result", message_id: "input", seq: 1, kind: "answer", from: { type: "run", run_id: "root" }, stage: "stored", after_result: false, created_at: worker.created_at, acked_at: null }];
+  await render([task], { snapshot });
+  expect(host.querySelector(".liaison-attention")?.textContent).toContain("1 input sent before the Result, still waiting to be picked up");
+  act(() => host.querySelector<HTMLButtonElement>(".liaison-attention button")!.click());
+  expect(host.querySelector(".liaison-detail")?.textContent).toContain("Answer sent before the Result");
+  expect(host.querySelector(".liaison-detail")?.textContent).toContain("waiting to be picked up · from the liaison");
+  await render([task], { snapshot: { ...snapshot, runs: [{ ...worker, stage: "closed", close_reason: "accepted" }] } });
+  expect(host.querySelector(".liaison-detail")?.textContent).toContain("no pickup recorded · from the liaison");
+});

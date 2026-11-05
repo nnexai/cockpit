@@ -707,6 +707,7 @@ export const wireRegistry = {
   "MessageKind": D12.wireMessageKind,
   "DeliveryStage": D12.wireDeliveryStage,
   "Message": D12.wireMessage,
+  "UnreflectedInput": D12.wireUnreflectedInput,
   "QuestionStatus": D12.wireQuestionStatus,
   "QuestionReceipt": D12.wireQuestionReceipt,
   "AnswerReceipt": D12.wireAnswerReceipt,

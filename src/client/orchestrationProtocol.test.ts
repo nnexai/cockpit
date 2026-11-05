@@ -220,6 +220,7 @@ const snapshot: OrchestrationSnapshot = {
     origin: null, supervisor_run_id: null, conversation: null, result_message_id: null }],
   assignment_intents: [{ root_id: "root", task_id: assignmentTaskId, state: "conflict" }],
   questions: [{ run_id: "run", question_message_id: "question", asked_at: at, receipt: { status: "unresolved" } }],
+  unreflected_inputs: [],
   runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: at,
     runs: [{ run_id: "run", presence: "present", actual_agent: true, workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Worker", pane_id: "moved-pane", agent_status: "idle", state_changed_at: at }] },
   unmanaged_agents: [{ workspace_id: "space", workspace_label: "Space", tab_id: "other-tab", tab_label: "Unmanaged", pane_id: "other-pane",
@@ -310,6 +311,25 @@ const defaultedSnapshotFields: Readonly<Record<string, true>> = {
 };
 
 describe("orchestration protocol boundary", () => {
+  it("strictly validates unreflected input metadata", () => {
+    const input = { run_id: "run", result_message_id: "result", message_id: "input", seq: 2,
+      kind: "instruction", from: { type: "operator" }, stage: "stored", after_result: true,
+      created_at: at, acked_at: null };
+    const dto = { ...snapshot, unreflected_inputs: [input] };
+    expect(parseOrchestrationSnapshot(dto).unreflected_inputs).toEqual([input]);
+    for (const path of fieldPaths(input)) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["unreflected_inputs", 0, ...path], undefined, true)), path.join("."))
+        .toThrow(CockpitClientError);
+    }
+    for (const invalid of [
+      { ...input, extra: true }, { ...input, run_id: "" }, { ...input, result_message_id: "" },
+      { ...input, message_id: "" }, { ...input, created_at: "invalid" }, { ...input, acked_at: "invalid" },
+      { ...input, kind: "unknown" }, { ...input, stage: "unknown" }, { ...input, seq: -1 },
+      { ...input, after_result: "true" }, { ...input, from: { type: "operator", extra: true } },
+    ]) expect(() => parseOrchestrationSnapshot({ ...snapshot, unreflected_inputs: [invalid] })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationSnapshot(replaceField(dto, ["unreflected_inputs"], undefined, true))).toThrow(CockpitClientError);
+  });
+
   it("validates image references on handoffs, reports, and messages", () => {
     const image_id = `sha256-${hash}`;
     const handoff = { action: "thread_handoff", message_id: "message", thread_id: prerequisiteId,

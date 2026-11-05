@@ -709,7 +709,7 @@ describe("Inbox", () => {
     const inbox = view("a");
     inbox.threads = [{ thread_id: "thread", state: "underway", need: null, owner_root_ids: ["owner"], title: { text: "Task", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_result_message_id: null, tasks: [{ root_id: "owner", task_id: "task-id", title: "Task", project: null, lane: "working", run: null, evidence: null }], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
     vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
-    client.orchestrationSnapshot = vi.fn(async () => ({ session_id: "a", state_store_id: "store-a", board: { root_id: "owner", tasks: [{ task: { task_id: "task-id", task_revision: "revision" } }] } })) as unknown as CockpitClient["orchestrationSnapshot"];
+    client.orchestrationSnapshot = vi.fn(async () => ({ session_id: "a", state_store_id: "store-a", unreflected_inputs: [], board: { root_id: "owner", tasks: [{ task: { task_id: "task-id", task_revision: "revision" } }] } })) as unknown as CockpitClient["orchestrationSnapshot"];
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "owner", seq: 1, duplicate: false, stale: false } });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Task"))!.click());

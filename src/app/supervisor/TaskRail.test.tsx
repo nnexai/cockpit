@@ -110,7 +110,7 @@ it("shows liaison-owned waits without invented times and omits merge for non-cod
     lane: "review",
     waiting: { cause: "review", since: null, held_by: [], code: null, detail: null, next_automatic: false },
   });
-  const history: TaskHistory = { taskId: "report", identity: "unique", outcome: { stage: "review", scheduled: false, accepted: false, attempt: 1, kept: 0, stalled: false }, sub: null, scheduledAt: null, attempts: [], leftBehind: [], liveUnavailable: false };
+  const history: TaskHistory = { taskId: "report", identity: "unique", outcome: { stage: "review", scheduled: false, accepted: false, attempt: 1, kept: 0, stalled: false }, sub: null, scheduledAt: null, attempts: [], leftBehind: [], liveUnavailable: false, unreflectedNotice: null };
   if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
   await act(async () => root!.render(<TaskHistoryDetail view={task} history={history} />));
   const rail = host.querySelector('[aria-label="Task progress"]')!;
@@ -126,7 +126,7 @@ it("shows liaison-owned waits without invented times and omits merge for non-cod
 
 it("marks recorded integration as merged and hides the waiting block when clear", async () => {
   const task = taskFixture("code", { lane: "accepted", waiting: null });
-  const history: TaskHistory = { taskId: "code", identity: "unique", outcome: { stage: "done", scheduled: false, accepted: true, attempt: 1, kept: 0, stalled: false }, sub: { kind: "merged", target: "main" }, scheduledAt: null, attempts: [], leftBehind: [], liveUnavailable: false };
+  const history: TaskHistory = { taskId: "code", identity: "unique", outcome: { stage: "done", scheduled: false, accepted: true, attempt: 1, kept: 0, stalled: false }, sub: { kind: "merged", target: "main" }, scheduledAt: null, attempts: [], leftBehind: [], liveUnavailable: false, unreflectedNotice: null };
   if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
   await act(async () => root!.render(<TaskHistoryDetail view={task} history={history} />));
   expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Merged");

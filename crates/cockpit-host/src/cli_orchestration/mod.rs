@@ -47,6 +47,7 @@ pub(crate) const RUN_HELP: &str = r#"RUN accepts a full UUID, unique UUID prefix
 or a unique task title substring selecting its current run. Use --operator
 for explicit local management; credentialed workers report their own work.
 Accept reads the current task revision when --task-revision is omitted.
+Run show lists inputs needing review alongside the current Result; accept does not block on them.
 Operator handoff defaults to the preferred liaison; --owner selects another
 root. --thread reuses a thread; otherwise a new thread ID is printed.
 Optional --task uses the current revision unless --task-revision is supplied.
@@ -598,7 +599,27 @@ impl RunArgs {
                     images,
                 }, fresh)).await?, self.common.json)
             },
-            RunOperation::Mutation(action) => emit(&Box::pin(context.mutate_with_fresh(action, fresh)).await?, self.common.json),
+            RunOperation::Mutation(action) => {
+                let accepted_run = match &action {
+                    OrchestrationAction::Accept { run_id, .. } => Some(run_id.clone()),
+                    _ => None,
+                };
+                let response = Box::pin(context.mutate_with_fresh(action, fresh)).await?;
+                emit(&response, self.common.json)?;
+                if let Some(run_id) = accepted_run {
+                    // Acceptance is already committed; a failed read must not turn it
+                    // into a failed or apparently retryable mutation.
+                    match context.snapshot(self.common.root.clone()).await {
+                        Ok(snapshot) => {
+                            if let Some(notice) = unreflected_inputs_notice(&snapshot, &run_id) {
+                                eprintln!("{notice}");
+                            }
+                        }
+                        Err(error) => eprintln!("Unreflected input check unavailable: {}", error.message),
+                    }
+                }
+                Ok(())
+            },
         }
     }
 }
@@ -637,8 +658,60 @@ async fn show_run(
     if let Some(object) = value.as_object_mut() {
         object.insert("waiting".into(), serde_json::to_value(waiting)
             .map_err(|error| CliError::new("orchestration_output", error.to_string()))?);
+        object.insert("unreflected_inputs".into(), unreflected_inputs_json(&snapshot, &run.run_id));
     }
     emit(&value, common.json)
+}
+
+fn unreflected_inputs_json(
+    snapshot: &cockpit_protocol::orchestration::OrchestrationSnapshot,
+    run_id: &str,
+) -> serde_json::Value {
+    let entries = snapshot.unreflected_inputs.iter().filter(|input| input.run_id == run_id)
+        .map(|input| {
+            let mut value = serde_json::to_value(input).expect("input metadata is serializable");
+            let text = snapshot.messages.iter().find(|message|
+                message.message_id == input.message_id && message.to_run_id == input.run_id)
+                .map(|message| &message.text);
+            value.as_object_mut().expect("input metadata is an object")
+                .insert("text".into(), serde_json::json!(text));
+            value
+        }).collect::<Vec<_>>();
+    serde_json::Value::Array(entries)
+}
+
+fn unreflected_inputs_notice(
+    snapshot: &cockpit_protocol::orchestration::OrchestrationSnapshot,
+    run_id: &str,
+) -> Option<String> {
+    use cockpit_protocol::orchestration::{DeliveryStage, MessageKind};
+    use std::fmt::Write;
+
+    let inputs: Vec<_> = snapshot.unreflected_inputs.iter()
+        .filter(|input| input.run_id == run_id).collect();
+    let first = inputs.first()?;
+    let mut notice = format!("Accepted Result {} has {} input(s) needing review:",
+        first.result_message_id, inputs.len());
+    for input in inputs {
+        let kind = match input.kind {
+            MessageKind::Instruction => "instruction",
+            MessageKind::Answer => "answer",
+            MessageKind::CancelRequest => "cancel_request",
+            MessageKind::WorkBrief => "work_brief",
+            MessageKind::SupervisorBrief => "supervisor_brief",
+            MessageKind::Report => "report",
+            MessageKind::Observation => "observation",
+        };
+        let stage = match input.stage {
+            DeliveryStage::Stored => "waiting to be picked up",
+            DeliveryStage::Read => "picked up",
+            DeliveryStage::Acked => "captured, processing not confirmed",
+        };
+        let ordering = if input.after_result { "sent after the Result" } else { "no pickup recorded before the Result" };
+        let _ = write!(notice, "\n  {} {} seq {}: {}; {}", input.message_id, kind, input.seq, stage, ordering);
+    }
+    let _ = write!(notice, "\nThis attempt is closed and cannot report on them. Inspect bodies with\n`run show {run_id} --json` (unreflected_inputs). Do not replay automatically;\nif still wanted, create a follow-up task (task create --follow-up-of).");
+    Some(notice)
 }
 
 impl InboxArgs {

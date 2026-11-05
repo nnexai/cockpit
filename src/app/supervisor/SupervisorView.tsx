@@ -3,7 +3,7 @@ import type { OrchestrationSnapshot, Run, TaskView } from "../../protocol/genera
 import { SupervisorTasks, taskLanes } from "./SupervisorTasks";
 import { SupervisorGraph } from "./SupervisorGraph";
 import { TaskHistoryDetail, waitCopy } from "./TaskHistoryDetail";
-import { taskHistory } from "./taskHistory";
+import { taskHistory, unreflectedInputLabel } from "./taskHistory";
 import { dependencySummary, uniqueTask } from "./dependencies";
 import { groupTasks } from "./taskProjects";
 import "./supervisor.css";
@@ -35,6 +35,10 @@ function taskAttention(snapshot: OrchestrationSnapshot | null, rootId: string | 
           const runtimeFact = item.kind === "runtime_blocked" || item.kind === "idle_without_report" || item.kind === "exited_without_report" || item.kind === "dispatch_unknown";
           labels.add(runtimeFact && (!fresh || snapshot.runtime.status !== "fresh") ? `Last observed: ${attentionLabels[item.kind]}` : attentionLabels[item.kind]);
         }
+      }
+      if (run.stage === "reported") {
+        const label = unreflectedInputLabel(snapshot.unreflected_inputs.filter(input => input.run_id === run.run_id && input.result_message_id === run.result?.message_id));
+        if (label) labels.add(label);
       }
       const observation = snapshot.runtime.status === "fresh" ? snapshot.runtime.runs.find(item => item.run_id === run.run_id) : null;
       const observedAgent = observation?.presence === "present" && observation.actual_agent;

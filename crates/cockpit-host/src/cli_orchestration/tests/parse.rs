@@ -1299,3 +1299,77 @@ fn task_inputs_projection_keeps_direct_order_and_opaque_source_references() {
         ["kind", "result_message_id", "task_revision", "artifacts", "focused_checks"]
             .into_iter().collect());
 }
+
+fn unreflected_snapshot() -> cockpit_protocol::orchestration::OrchestrationSnapshot {
+    serde_json::from_value(serde_json::json!({
+        "session_id": "session", "state_store_id": "store", "revision": 1,
+        "tasks_token": "", "roots": [], "board": null, "runs": [], "messages": [],
+        "questions": [], "unreflected_inputs": [], "task_ownership": [], "intents": [],
+        "assignment_intents": [], "cleanup": [],
+        "restoration": {"reattached": 0, "total_attachments": 0, "cleanup_pending": 0},
+        "runtime": {"status": "fresh", "endpoint_identity": "endpoint", "observed_at": "now", "runs": []},
+        "unmanaged_agents": [], "attention": []
+    })).unwrap()
+}
+
+fn unreflected_input(id: &str, run: &str, stage: &str, after: bool) -> cockpit_protocol::orchestration::UnreflectedInput {
+    serde_json::from_value(serde_json::json!({
+        "run_id": run, "result_message_id": "result", "message_id": id, "seq": 4,
+        "kind": "instruction", "from": {"type": "operator"}, "stage": stage,
+        "after_result": after, "created_at": "now", "acked_at": null
+    })).unwrap()
+}
+
+#[test]
+fn unreflected_json_joins_only_authorized_matching_message() {
+    use serde_json::json;
+    let mut snapshot = unreflected_snapshot();
+    assert_eq!(super::super::unreflected_inputs_json(&snapshot, "worker"), json!([]));
+    assert!(super::super::unreflected_inputs_notice(&snapshot, "worker").is_none());
+    snapshot.unreflected_inputs.push(unreflected_input("input", "worker", "acked", true));
+    snapshot.unreflected_inputs.push(unreflected_input("missing", "worker", "stored", false));
+    snapshot.unreflected_inputs.push(unreflected_input("foreign", "other", "read", true));
+    let message = |to: &str, text: &str| serde_json::from_value(json!({
+        "message_id": "input", "to_run_id": to, "seq": 4, "from": {"type": "operator"},
+        "kind": "instruction", "text": text, "in_reply_to": null, "report": null,
+        "stale": false, "escalated_from": null, "stage": "acked",
+        "created_at": "now", "acked_at": null
+    })).unwrap();
+    snapshot.messages.push(message("other", "foreign body"));
+    snapshot.messages.push(message("worker", "visible body"));
+    let result = super::super::unreflected_inputs_json(&snapshot, "worker");
+    assert_eq!(result.as_array().unwrap().len(), 2);
+    assert_eq!(result[0], json!({
+        "run_id": "worker", "result_message_id": "result", "message_id": "input",
+        "seq": 4, "kind": "instruction", "from": {"type": "operator"},
+        "stage": "acked", "after_result": true, "created_at": "now", "acked_at": null,
+        "text": "visible body"
+    }));
+    assert!(result[1]["text"].is_null());
+    let notice = super::super::unreflected_inputs_notice(&snapshot, "worker").unwrap();
+    assert!(!notice.contains("visible body"));
+    assert!(!notice.contains("foreign body"));
+    assert!(super::super::unreflected_inputs_notice(&snapshot, "unknown").is_none());
+}
+
+#[test]
+fn unreflected_accept_notice_names_stages_and_order_without_bodies() {
+    let mut snapshot = unreflected_snapshot();
+    snapshot.unreflected_inputs.push(unreflected_input("stored", "worker", "stored", false));
+    snapshot.unreflected_inputs.push(unreflected_input("read", "worker", "read", true));
+    snapshot.unreflected_inputs.push(unreflected_input("acked", "worker", "acked", true));
+    snapshot.unreflected_inputs.push(unreflected_input("foreign", "other", "acked", true));
+    let notice = super::super::unreflected_inputs_notice(&snapshot, "worker").unwrap();
+    assert!(notice.contains("Accepted Result result"));
+    assert!(notice.contains("3 input(s) needing review"));
+    assert!(notice.lines().any(|line| line.contains("stored instruction seq 4")
+        && line.contains("waiting to be picked up") && line.contains("no pickup recorded before the Result")));
+    assert!(notice.lines().any(|line| line.contains("read instruction seq 4")
+        && line.contains("picked up") && line.contains("sent after the Result")));
+    assert!(notice.lines().any(|line| line.contains("acked instruction seq 4")
+        && line.contains("captured, processing not confirmed") && line.contains("sent after the Result")));
+    assert!(!notice.contains("foreign"));
+    assert!(notice.contains("run show worker --json"));
+    assert!(notice.contains("Do not replay automatically"));
+    assert!(notice.contains("task create --follow-up-of"));
+}

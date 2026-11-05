@@ -1710,7 +1710,7 @@ describe("Orchestration attachment transport cutover", () => {
     const saved: OrchestrationSnapshot = {
       state_store_id: "a".repeat(64), cleanup: [], restoration: { reattached: 0, total_attachments: 1, cleanup_pending: 0 },
       session_id: "session-1", revision: 1, tasks_token: "a".repeat(64), roots: [], board: null, runs: [run],
-      messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+      messages: [], questions: [], unreflected_inputs: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "unavailable", error: { code: "offline", message: "Observation unavailable" } },
     };
     let payload: unknown = saved;

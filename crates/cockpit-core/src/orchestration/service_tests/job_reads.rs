@@ -26,6 +26,86 @@ fn resource(run: &Run) -> OwnedResourceRecord {
             reason: None, effects: Vec::new(), updated_at: now() },
     }
 }
+#[test]
+fn unreflected_acknowledged_input_is_scoped_and_frozen_on_acceptance() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let root_actor = fixture.root_actor(&root);
+    let (task, run_id, worker) = fixture.working(&root);
+
+    fixture.apply(&worker, fixture.successful_result(&worker)).unwrap();
+    let result_id = fixture.run(&run_id).result.unwrap().message_id;
+    let message_id = id();
+    let instruction = OrchestrationAction::MessageSend {
+        message_id: message_id.clone(),
+        images: Vec::new(),
+        to_run_id: run_id.clone(),
+        kind: MessageKind::Instruction,
+        text: "Consider this instruction after the Result".into(),
+        in_reply_to: None,
+        original_task_revision: None,
+        original_claim_id: None,
+    };
+    fixture.apply(&root_actor, instruction.clone()).unwrap();
+    let pulled = fixture.apply(&worker, OrchestrationAction::InboxPull {
+        after_seq: 0, limit: 100,
+    }).unwrap();
+    let OrchestrationActionResult::Inbox { messages, read_through_seq } = pulled.result else {
+        panic!("expected inbox");
+    };
+    assert!(messages.iter().any(|message| message.message_id == message_id));
+    fixture.apply(&worker, OrchestrationAction::InboxAck {
+        through_seq: read_through_seq,
+    }).unwrap();
+
+    // A worker may read its inbox but not the Result addressed to its parent.
+    // Check while its credential is still valid; acceptance closes the run.
+    let worker_snapshot = fixture.service.job_snapshot_saved(caller(&worker), SESSION).unwrap();
+    assert!(worker_snapshot.unreflected_inputs.is_empty());
+    assert!(worker_snapshot.messages.iter().all(|message| message.to_run_id == run_id));
+    assert!(worker_snapshot.messages.iter().any(|message| message.message_id == message_id));
+    assert!(!worker_snapshot.messages.iter().any(|message| message.message_id == result_id));
+
+    fixture.apply(&root_actor, OrchestrationAction::Accept {
+        run_id: run_id.clone(), expected_task_revision: task.task_revision,
+    }).unwrap();
+    assert_eq!(fixture.run(&run_id).close_reason, Some(CloseReason::Accepted));
+
+    let request = OrchestrationSnapshotRequest {
+        session_id: SESSION.into(), root_id: Some(root.clone()),
+    };
+    let operator = fixture.service.snapshot_saved(&request).unwrap();
+    let root_snapshot = fixture.service.job_snapshot_saved(caller(&root_actor), SESSION).unwrap();
+    assert_eq!(operator.unreflected_inputs.len(), 1);
+    assert_eq!(root_snapshot.unreflected_inputs.len(), 1);
+    let entry = &operator.unreflected_inputs[0];
+    let durable = fixture.state().messages.into_iter()
+        .find(|message| message.message_id == message_id).unwrap();
+    assert_eq!(entry.run_id, run_id);
+    assert_eq!(entry.result_message_id, result_id);
+    assert_eq!(entry.message_id, message_id);
+    assert_eq!(entry.seq, durable.seq);
+    assert_eq!(entry.kind, MessageKind::Instruction);
+    assert!(matches!(&entry.from, ActorRef::Run { run_id } if run_id == &root));
+    assert_eq!(entry.stage, DeliveryStage::Acked);
+    assert!(entry.after_result);
+    assert_eq!(entry.created_at, durable.created_at);
+    assert!(entry.acked_at.is_some());
+    assert_eq!(entry.acked_at, durable.acked_at);
+    let before = serde_json::to_value(&operator.unreflected_inputs).unwrap();
+    assert_eq!(serde_json::to_value(&root_snapshot.unreflected_inputs).unwrap(), before);
+
+    let mut late = instruction;
+    if let OrchestrationAction::MessageSend { message_id, .. } = &mut late {
+        *message_id = id();
+    }
+    assert_code(fixture.apply(&root_actor, late), "invalid_stage");
+    let after = fixture.service.snapshot_saved(&request).unwrap();
+    assert_eq!(serde_json::to_value(&after.unreflected_inputs).unwrap(), before);
+    let root_after = fixture.service.job_snapshot_saved(caller(&root_actor), SESSION).unwrap();
+    assert_eq!(serde_json::to_value(&root_after.unreflected_inputs).unwrap(), before);
+}
+
 
 #[test]
 fn credentialed_reads_isolate_every_projection_and_redact_own_and_sibling_launch_capabilities() {

@@ -9,7 +9,7 @@ import { acceptsSupervisorSnapshot, useSupervisor } from "./useSupervisor";
 const snapshot: OrchestrationSnapshot = {
   state_store_id: "store", session_id: "session-a", revision: 12, tasks_token: "external-edit-a",
   roots: [], board: { root_id: "root-a", path: "/state/tasks/root-a.md", doc_revision: "doc-a", unidentified_items: 0, diagnostics: [], tasks: [] },
-  runs: [], messages: [], questions: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
+  runs: [], messages: [], questions: [], unreflected_inputs: [], task_ownership: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
   cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
   runtime: { status: "fresh", endpoint_identity: "endpoint", observed_at: "2026-10-07T12:00:00Z", runs: [] },
 };

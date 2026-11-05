@@ -61,6 +61,55 @@ pub(crate) fn question_statuses(run: &Run, inbox: &[&Message], events: &[Message
     }).collect()
 }
 
+/// Uses durable append order, never timestamps or delivery stage as processing proof.
+fn unreflected_inputs(runs: &[&Run], messages: &[&Message]) -> Vec<UnreflectedInput> {
+    let eligible: HashMap<&str, &str> = runs.iter().filter_map(|run| {
+        let eligible_stage = run.stage == RunStage::Reported
+            || (run.stage == RunStage::Closed && run.close_reason == Some(CloseReason::Accepted));
+        if run.kind != RunKind::Worker || run.task_id.is_none() || !eligible_stage {
+            return None;
+        }
+        Some((run.run_id.as_str(), run.result.as_ref()?.message_id.as_str()))
+    }).collect();
+    let mut result_positions = HashMap::new();
+    for (position, message) in messages.iter().enumerate() {
+        if message.kind != MessageKind::Report {
+            continue;
+        }
+        if let ActorRef::Run { run_id } = &message.from {
+            if eligible.get(run_id.as_str()).is_some_and(|id| *id == message.message_id) {
+                result_positions.insert(run_id.as_str(), position);
+            }
+        }
+    }
+    messages.iter().enumerate().filter_map(|(position, message)| {
+        let run_id = message.to_run_id.as_str();
+        let result_position = *result_positions.get(run_id)?;
+        if message.stale
+            || !matches!(message.kind, MessageKind::Instruction | MessageKind::Answer | MessageKind::CancelRequest)
+            || !super::messages::inbox_meaningful(message)
+        {
+            return None;
+        }
+        let after_result = position > result_position;
+        if !after_result && message.stage != DeliveryStage::Stored {
+            return None;
+        }
+        Some(UnreflectedInput {
+            run_id: message.to_run_id.clone(),
+            result_message_id: eligible[run_id].to_owned(),
+            message_id: message.message_id.clone(),
+            seq: message.seq,
+            kind: message.kind,
+            from: message.from.clone(),
+            stage: message.stage,
+            after_result,
+            created_at: message.created_at.clone(),
+            acked_at: message.acked_at.clone(),
+        })
+    }).collect()
+}
+
 /// Joins durable intent and canonical Markdown with one fresh runtime observation.
 /// No runtime evidence is written back, and no observation can complete a task.
 pub(crate) fn snapshot(
@@ -135,6 +184,7 @@ pub(crate) fn snapshot(
         &runs, &inboxes, &observations, &intents, &run_by_id, &state.messages,
         AttentionClock { at: clock, text: now },
     );
+    let unreflected_inputs = unreflected_inputs(&runs, &messages);
     let mut open_counts: HashMap<&str, u32> = HashMap::new();
     for run in &runs {
         if run.stage != RunStage::Closed {
@@ -175,6 +225,7 @@ pub(crate) fn snapshot(
         }).collect(),
         messages: messages.into_iter().cloned().collect(),
         questions,
+        unreflected_inputs,
         task_ownership: state
             .task_ownership
             .iter()
@@ -1069,6 +1120,145 @@ mod tests {
             created_at: START.into(),
             acked_at: None,
         }
+    }
+
+    fn reported_state() -> OrchestrationState {
+        let mut run = worker(RunStage::Reported);
+        let report = Report {
+            message_id: "result-1".into(), kind: ReportKind::Result, outcome: None,
+            summary: "result".into(), plan: None, source_output: None, card: None, at: START.into(),
+        };
+        run.result = Some(report.clone());
+        run.last_report = Some(report);
+        state(run)
+    }
+
+    fn named_input(id: &str, kind: MessageKind, stage: DeliveryStage) -> Message {
+        let mut message = brief(kind, stage);
+        message.message_id = id.into();
+        message.seq = 42;
+        if stage == DeliveryStage::Acked { message.acked_at = Some(NOW.into()); }
+        message
+    }
+
+    #[test]
+    fn unreflected_inputs_use_append_order_and_preserve_delivery_metadata() {
+        let mut durable = reported_state();
+        for (id, kind, stage) in [
+            ("stored", MessageKind::Instruction, DeliveryStage::Stored),
+            ("read", MessageKind::Answer, DeliveryStage::Read),
+            ("acked", MessageKind::CancelRequest, DeliveryStage::Acked),
+        ] {
+            durable.messages.push(named_input(id, kind, stage));
+        }
+        let projected = project(&durable, Ok(runtime("done")));
+        let entries = &projected.unreflected_inputs;
+        assert_eq!(entries.len(), 3);
+        for (entry, (id, kind, stage)) in entries.iter().zip([
+            ("stored", MessageKind::Instruction, DeliveryStage::Stored),
+            ("read", MessageKind::Answer, DeliveryStage::Read),
+            ("acked", MessageKind::CancelRequest, DeliveryStage::Acked),
+        ]) {
+            assert_eq!(entry.run_id, WORKER);
+            assert_eq!(entry.result_message_id, "result-1");
+            assert_eq!(entry.message_id, id);
+            assert_eq!(entry.seq, 42);
+            assert_eq!(entry.kind, kind);
+            assert!(matches!(entry.from, ActorRef::Operator));
+            assert_eq!(entry.stage, stage);
+            assert!(entry.after_result);
+            assert_eq!(entry.created_at, START);
+            assert_eq!(entry.acked_at.as_deref(), if stage == DeliveryStage::Acked { Some(NOW) } else { None });
+        }
+        // A later Result clears already delivered earlier inputs, not a still-stored one.
+        durable.messages[1].stage = DeliveryStage::Acked;
+        let mut next = durable.runs[1].result.clone().unwrap();
+        next.message_id = "result-2".into();
+        durable.runs[1].result = Some(next.clone());
+        durable.runs[1].last_report = Some(next);
+        record_main_report(&mut durable, 1);
+        assert!(project(&durable, Ok(runtime("done"))).unreflected_inputs.is_empty());
+    }
+
+    #[test]
+    fn unreflected_inputs_exclude_nonmeaningful_and_pre_result_delivered_messages() {
+        let mut durable = reported_state();
+        let result = durable.messages.remove(0);
+        for (id, stage) in [("before-stored", DeliveryStage::Stored), ("before-read", DeliveryStage::Read), ("before-acked", DeliveryStage::Acked)] {
+            durable.messages.push(named_input(id, MessageKind::Instruction, stage));
+        }
+        durable.messages.push(result);
+        let mut stale = named_input("stale", MessageKind::Instruction, DeliveryStage::Stored);
+        stale.stale = true;
+        durable.messages.push(stale);
+        durable.messages.push(named_input("brief", MessageKind::WorkBrief, DeliveryStage::Stored));
+        let mut progress = named_input("progress", MessageKind::Report, DeliveryStage::Stored);
+        progress.report = Some(Report { message_id: "progress".into(), kind: ReportKind::Progress,
+            outcome: None, summary: String::new(), plan: None, source_output: None, card: None, at: START.into() });
+        durable.messages.push(progress);
+        let mut self_answer = named_input("self-answer", MessageKind::Answer, DeliveryStage::Stored);
+        self_answer.from = ActorRef::Run { run_id: WORKER.into() };
+        durable.messages.push(self_answer);
+        let projected = project(&durable, Ok(runtime("done")));
+        assert_eq!(projected.unreflected_inputs.len(), 1);
+        assert_eq!(projected.unreflected_inputs[0].message_id, "before-stored");
+        assert!(!projected.unreflected_inputs[0].after_result);
+    }
+
+    #[test]
+    fn unreflected_inputs_require_eligible_run_and_matching_visible_result() {
+        let mut durable = reported_state();
+        durable.messages.push(named_input("late", MessageKind::Instruction, DeliveryStage::Acked));
+        assert_eq!(project(&durable, Ok(runtime("done"))).unreflected_inputs.len(), 1);
+        durable.runs[1].stage = RunStage::Closed;
+        durable.runs[1].close_reason = Some(CloseReason::Accepted);
+        assert_eq!(project(&durable, Ok(runtime("done"))).unreflected_inputs.len(), 1);
+        for reason in [CloseReason::Cancelled, CloseReason::Superseded] {
+            durable.runs[1].close_reason = Some(reason);
+            assert!(project(&durable, Ok(runtime("done"))).unreflected_inputs.is_empty());
+        }
+        durable.runs[1].stage = RunStage::Working;
+        assert!(project(&durable, Ok(runtime("done"))).unreflected_inputs.is_empty());
+        durable.runs[1].stage = RunStage::Reported;
+        durable.runs[1].task_id = None;
+        assert!(project(&durable, Ok(runtime("done"))).unreflected_inputs.is_empty());
+        durable.runs[1].task_id = Some(TASK.into());
+        durable.runs[1].result = None;
+        assert!(project(&durable, Ok(runtime("done"))).unreflected_inputs.is_empty());
+        durable.runs[1].result = durable.runs[1].last_report.clone();
+        durable.messages[0].from = ActorRef::Operator;
+        assert!(project(&durable, Ok(runtime("done"))).unreflected_inputs.is_empty());
+        durable.messages[0].from = ActorRef::Run { run_id: WORKER.into() };
+        durable.messages[0].kind = MessageKind::Observation;
+        assert!(project(&durable, Ok(runtime("done"))).unreflected_inputs.is_empty());
+        durable.messages.remove(0);
+        assert!(project(&durable, Ok(runtime("done"))).unreflected_inputs.is_empty());
+    }
+
+    #[test]
+    fn unreflected_inputs_are_session_scoped() {
+        let mut durable = reported_state();
+        let mut foreign_root = worker(RunStage::Active);
+        foreign_root.session_id = "foreign".into();
+        foreign_root.run_id = "foreign-root".into();
+        foreign_root.root_id = "foreign-root".into();
+        foreign_root.parent_run_id = None;
+        let mut foreign_worker = durable.runs[1].clone();
+        foreign_worker.session_id = "foreign".into();
+        foreign_worker.run_id = "foreign-worker".into();
+        foreign_worker.root_id = "foreign-root".into();
+        foreign_worker.parent_run_id = Some("foreign-root".into());
+        foreign_worker.result.as_mut().unwrap().message_id = "foreign-result".into();
+        durable.runs.extend([foreign_root, foreign_worker]);
+        let mut foreign_result = durable.messages[0].clone();
+        foreign_result.message_id = "foreign-result".into();
+        foreign_result.to_run_id = "foreign-root".into();
+        foreign_result.from = ActorRef::Run { run_id: "foreign-worker".into() };
+        durable.messages.push(foreign_result);
+        let mut foreign_input = named_input("foreign-input", MessageKind::Instruction, DeliveryStage::Stored);
+        foreign_input.to_run_id = "foreign-worker".into();
+        durable.messages.push(foreign_input);
+        assert!(project(&durable, Ok(runtime("done"))).unreflected_inputs.is_empty());
     }
 
     fn asking() -> Run {

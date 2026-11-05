@@ -1140,7 +1140,7 @@ export type OrchestrationSnapshot = { session_id: string,
 /**
  * Opaque canonical durable-store identity, independent of native sessions.
  */
-state_store_id: string, revision: number, tasks_token: string, roots: Array<RootSummary>, board: TaskBoard | null, runs: Array<Run>, messages: Array<Message>, questions: Array<QuestionStatus>, task_ownership: Array<TaskOwnership>, intents: Array<TaskIntent>, assignment_intents: Array<TaskAssignmentIntent>, cleanup: Array<RunCleanupSummary>, restoration: RestorationSummary, runtime: RuntimeObservation, unmanaged_agents: Array<UnmanagedAgent>, attention: Array<Attention>, };
+state_store_id: string, revision: number, tasks_token: string, roots: Array<RootSummary>, board: TaskBoard | null, runs: Array<Run>, messages: Array<Message>, questions: Array<QuestionStatus>, unreflected_inputs: Array<UnreflectedInput>, task_ownership: Array<TaskOwnership>, intents: Array<TaskIntent>, assignment_intents: Array<TaskAssignmentIntent>, cleanup: Array<RunCleanupSummary>, restoration: RestorationSummary, runtime: RuntimeObservation, unmanaged_agents: Array<UnmanagedAgent>, attention: Array<Attention>, };
 
 export type AgentSendTarget = { endpoint_identity: string, workspace_id: string, tab_id: string, pane_id: string, terminal_id: string, agent_kind: string, agent_name: string | null, native_session_id: string | null, native_session_file: string | null, state_changed_at: string | null, };
 
@@ -1417,6 +1417,12 @@ export type MessageKind = "work_brief" | "supervisor_brief" | "instruction" | "a
 export type DeliveryStage = "stored" | "read" | "acked";
 
 export type Message = { message_id: string, to_run_id: string, seq: number, from: ActorRef, kind: MessageKind, text: string, images?: Array<MessageImage>, in_reply_to: string | null, report: Report | null, thread_id?: string | null, handoff?: HandoffRecord | null, stale: boolean, escalated_from: string | null, stage: DeliveryStage, created_at: string, acked_at: string | null, };
+
+export type UnreflectedInput = { run_id: string, result_message_id: string, message_id: string, seq: number, kind: MessageKind, from: ActorRef, stage: DeliveryStage,
+/**
+ * True if appended after the Result; false if it was never pulled.
+ */
+after_result: boolean, created_at: string, acked_at: string | null, };
 
 export type QuestionStatus = { run_id: string, question_message_id: string, asked_at: string, thread_id?: string | null, receipt: QuestionReceipt, };
 

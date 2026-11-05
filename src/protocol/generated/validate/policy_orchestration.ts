@@ -474,6 +474,7 @@ export interface WireFields {
   "OrchestrationSnapshot.runs": (V1.OrchestrationSnapshot)["runs"];
   "OrchestrationSnapshot.messages": (V1.OrchestrationSnapshot)["messages"];
   "OrchestrationSnapshot.questions": (V1.OrchestrationSnapshot)["questions"];
+  "OrchestrationSnapshot.unreflected_inputs": (V1.OrchestrationSnapshot)["unreflected_inputs"];
   "OrchestrationSnapshot.task_ownership": (V1.OrchestrationSnapshot)["task_ownership"];
   "OrchestrationSnapshot.intents": (V1.OrchestrationSnapshot)["intents"];
   "OrchestrationSnapshot.assignment_intents": (V1.OrchestrationSnapshot)["assignment_intents"];
@@ -869,7 +870,7 @@ export interface WireFieldNames {
   "OrchestrationWaitResponse": "revision" | "tasks_token" | "changed";
   "OrchestrationMutationRequest": "session_id" | "expected_revision" | "action";
   "OrchestrationMutationResponse": "revision" | "result";
-  "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "task_ownership" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
+  "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "unreflected_inputs" | "task_ownership" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
   "AgentSendTarget": "endpoint_identity" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "agent_kind" | "agent_name" | "native_session_id" | "native_session_file" | "state_changed_at";
   "UnmanagedAgent": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_name" | "agent_status" | "state_changed_at" | "expected_target";
   "RootSummary": "root_id" | "label" | "kind" | "open_runs" | "needs_you";
@@ -1106,7 +1107,7 @@ export interface WireCheckpointFieldNames {
   "OrchestrationWaitResponse": "revision" | "tasks_token" | "changed";
   "OrchestrationMutationRequest": "session_id" | "expected_revision" | "action";
   "OrchestrationMutationResponse": "revision" | "result";
-  "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "task_ownership" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
+  "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "unreflected_inputs" | "task_ownership" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
   "AgentSendTarget": "endpoint_identity" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "agent_kind" | "agent_name" | "native_session_id" | "native_session_file" | "state_changed_at";
   "UnmanagedAgent": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_name" | "agent_status" | "state_changed_at" | "expected_target";
   "RootSummary": "root_id" | "label" | "kind" | "open_runs" | "needs_you";
@@ -1358,6 +1359,7 @@ export type WireListField =
   | "OrchestrationSnapshot.runs"
   | "OrchestrationSnapshot.messages"
   | "OrchestrationSnapshot.questions"
+  | "OrchestrationSnapshot.unreflected_inputs"
   | "OrchestrationSnapshot.task_ownership"
   | "OrchestrationSnapshot.intents"
   | "OrchestrationSnapshot.assignment_intents"

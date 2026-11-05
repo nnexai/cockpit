@@ -1,4 +1,4 @@
-import type { CleanupReasonClass, CleanupState, Message, OrchestrationSnapshot, OwnedResourceKind, Report, ReportOutcome, ResumePhase, Run, TaskView } from "../../protocol/generated/v1";
+import type { CleanupReasonClass, CleanupState, DeliveryStage, Message, MessageKind, OrchestrationSnapshot, OwnedResourceKind, Report, ReportOutcome, ResumePhase, Run, TaskView, UnreflectedInput } from "../../protocol/generated/v1";
 import { dependencySummary, uniqueTask } from "./dependencies";
 
 export type HistoryFact = { label: string; value: string };
@@ -7,6 +7,7 @@ export type HistoryEvent =
   | { kind: "progress"; at: string; items: { at: string; text: string }[]; earlier: number }
   | { kind: "question"; at: string; answer: { at: string; by: "you" | "liaison" | "agent" | "cockpit" } | null; open: boolean }
   | { kind: "result"; at: string; outcome: ReportOutcome | null; summary: string; facts: HistoryFact[] }
+  | { kind: "unreflected_input"; at: string; sortAt: string; messageId: string; seq: number; inputKind: MessageKind; by: "you" | "the liaison" | "Cockpit" | "another agent"; stage: DeliveryStage; afterResult: boolean; text: string | null; imageCount: number; closed: boolean }
   | { kind: "merged"; at: string | null; target: string; facts: HistoryFact[] }
   | { kind: "recovery"; at: string; phase: ResumePhase; cause: string | null };
 export type HistoryAttempt = { runId: string; attempt: number; label: string; end: "current" | "accepted" | "replaced" | "failed" | "cancelled"; reason: string | null; events: HistoryEvent[] };
@@ -19,7 +20,7 @@ export type TaskHistory = {
   taskId: string; identity: "unique" | "ambiguous";
   outcome: { stage: string; scheduled: boolean; accepted: boolean; attempt: number | null; kept: number; stalled: boolean };
   sub: { kind: "merged"; target: string } | { kind: "no_merge" } | { kind: "merge_not_recorded" } | { kind: "after"; text: string } | { kind: "reconnecting"; phase: ResumePhase } | { kind: "not_started" } | null;
-  scheduledAt: string | null; attempts: HistoryAttempt[]; leftBehind: LeftBehindRow[]; liveUnavailable: boolean;
+  scheduledAt: string | null; attempts: HistoryAttempt[]; leftBehind: LeftBehindRow[]; liveUnavailable: boolean; unreflectedNotice: string | null;
 };
 
 const humanize = (code: string) => code.replaceAll("_", " ").replace(/^./, c => c.toUpperCase());
@@ -27,6 +28,15 @@ const timestamp = (value: string | null) => value ? Date.parse(value) : NaN;
 const compareTime = (a: string | null, b: string | null) => (Number.isFinite(timestamp(a)) ? timestamp(a) : Infinity) - (Number.isFinite(timestamp(b)) ? timestamp(b) : Infinity);
 const branch = (ref: string) => ref.replace(/^refs\/heads\//, "");
 const cleanupState = (state: CleanupState): LeftBehindRow["state"] => state === "pending" || state === "running" || state === "reconciling" ? "cleaning" : state === "waiting_integration" ? "waiting" : state;
+
+export function unreflectedInputLabel(inputs: readonly UnreflectedInput[]): string | null {
+  const after = inputs.filter(input => input.after_result).length;
+  const before = inputs.length - after;
+  if (!after && !before) return null;
+  const first = after ? `${after} input${after === 1 ? "" : "s"} sent after the Result` : "";
+  const second = before ? `${before}${after ? "" : ` input${before === 1 ? "" : "s"}`} sent before ${after ? "it" : "the Result"}, still waiting to be picked up` : "";
+  return [first, second].filter(Boolean).join(" · ");
+}
 
 function resultFacts(run: Run, report: Report): HistoryFact[] {
   const source = report.source_output ?? (run.source_output?.result_message_id === report.message_id ? run.source_output : null);
@@ -42,14 +52,20 @@ function resultFacts(run: Run, report: Report): HistoryFact[] {
 /** Derive one selected task, not a second lifecycle store. Generic updated_at is never an event time. */
 export function taskHistory(snapshot: OrchestrationSnapshot, rootId: string, view: TaskView, tasks: readonly TaskView[], runtimeFresh: boolean): TaskHistory {
   const stage = view.task.checked || view.lane === "accepted" ? "done" : view.attempt?.state === "starting" ? "starting" : view.attempt?.state === "stalled" ? "stalled" : view.lane;
-  const history: TaskHistory = { taskId: view.task.task_id, identity: "unique", outcome: { stage, scheduled: view.scheduled, accepted: false, attempt: null, kept: 0, stalled: view.attempt?.state === "stalled" }, sub: null, scheduledAt: null, attempts: [], leftBehind: [], liveUnavailable: !runtimeFresh };
+  const history: TaskHistory = { taskId: view.task.task_id, identity: "unique", outcome: { stage, scheduled: view.scheduled, accepted: false, attempt: null, kept: 0, stalled: view.attempt?.state === "stalled" }, sub: null, scheduledAt: null, attempts: [], leftBehind: [], liveUnavailable: !runtimeFresh, unreflectedNotice: null };
   if (!uniqueTask(tasks, view.task.task_id)) return { ...history, identity: "ambiguous" };
   const runs = snapshot.runs.filter(run => run.root_id === rootId && run.task_id === view.task.task_id && run.kind !== "supervisor").sort((a, b) => a.attempt - b.attempt);
   const runIds = new Set(runs.map(run => run.run_id));
   const reports = new Map<string, Map<string, Report>>();
   const answers = new Map<string, Map<string, Message>>();
+  const inputMessages = new Map<string, Map<string, Message>>();
   for (const message of snapshot.messages) {
     if (message.stale) continue;
+    if (runIds.has(message.to_run_id)) {
+      let bucket = inputMessages.get(message.to_run_id);
+      if (!bucket) inputMessages.set(message.to_run_id, bucket = new Map());
+      bucket.set(message.message_id, message);
+    }
     if (message.kind === "report" && message.from.type === "run" && runIds.has(message.from.run_id) && message.report) {
       let bucket = reports.get(message.from.run_id);
       if (!bucket) reports.set(message.from.run_id, bucket = new Map());
@@ -85,6 +101,14 @@ export function taskHistory(snapshot: OrchestrationSnapshot, rootId: string, vie
         events.push({ kind: "question", at: report.at, answer: answer ? { at: answer.created_at, by } : null, open: run.stage !== "closed" && !answer && latestQuestionOrResult?.message_id === report.message_id });
       }
     }
+    const inputs = snapshot.unreflected_inputs.filter(input => input.run_id === run.run_id && input.result_message_id === run.result?.message_id);
+    for (const input of inputs) {
+      const message = inputMessages.get(run.run_id)?.get(input.message_id);
+      const sortAt = input.after_result && run.result && compareTime(input.created_at, run.result.at) < 0 ? run.result.at : input.created_at;
+      const by = input.from.type === "operator" ? "you" : input.from.type === "dispatcher" ? "Cockpit" : input.from.run_id === rootId ? "the liaison" : "another agent";
+      events.push({ kind: "unreflected_input", at: input.created_at, sortAt, messageId: input.message_id, seq: input.seq, inputKind: input.kind, by, stage: input.stage, afterResult: input.after_result, text: message?.text ?? null, imageCount: message?.images?.length ?? 0, closed: run.stage === "closed" });
+    }
+    if (index === runs.length - 1 && run.stage === "reported") history.unreflectedNotice = unreflectedInputLabel(inputs);
     if (progress.length) {
       progress.sort((a, b) => compareTime(a.at, b.at));
       events.push({ kind: "progress", at: progress[0].at, items: progress.slice(-10), earlier: Math.max(0, progress.length - 10) });
@@ -94,7 +118,7 @@ export function taskHistory(snapshot: OrchestrationSnapshot, rootId: string, vie
       { label: "Target", value: `${branch(run.integration.target_ref)} · ${run.integration.target_commit.slice(0, 7)}` },
     ] });
     if (run.stage !== "closed" && run.resume) events.push({ kind: "recovery", at: run.resume.updated_at, phase: run.resume.phase, cause: run.resume.cause ? humanize(run.resume.cause.code) : null });
-    const rest = events.splice(1).sort((a, b) => compareTime(a.at, b.at));
+    const rest = events.splice(1).sort((a, b) => compareTime(a.kind === "unreflected_input" ? a.sortAt : a.at, b.kind === "unreflected_input" ? b.sortAt : b.at) || (a.kind === "unreflected_input" && b.kind === "unreflected_input" ? a.seq - b.seq : 0));
     events.push(...rest);
     const end: HistoryAttempt["end"] = run.stage !== "closed" ? "current" : run.close_reason === "superseded" ? "replaced" : run.close_reason ?? "failed";
     const errorCode = run.resume?.cause?.code ?? run.dispatch?.error?.code;

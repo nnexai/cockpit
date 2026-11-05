@@ -357,6 +357,7 @@ export const wireOrchestrationSnapshot: WireDescriptor<V1.OrchestrationSnapshot>
   "runs": req(list(named(() => wireRun))),
   "messages": req(list(named(() => wireMessage))),
   "questions": req(list(named(() => wireQuestionStatus))),
+  "unreflected_inputs": req(list(named(() => wireUnreflectedInput))),
   "task_ownership": req(list(named(() => wireTaskOwnership))),
   "intents": req(list(named(() => wireTaskIntent))),
   "assignment_intents": req(list(named(() => wireTaskAssignmentIntent))),
@@ -1266,6 +1267,19 @@ export const wireMessage: WireDescriptor<V1.Message> = struct<V1.Message>("Messa
   "stale": req(bool),
   "escalated_from": req(nullable(str), { fill: null }),
   "stage": req(named(() => wireDeliveryStage)),
+  "created_at": req(str),
+  "acked_at": req(nullable(str), { fill: null }),
+});
+
+export const wireUnreflectedInput: WireDescriptor<V1.UnreflectedInput> = struct<V1.UnreflectedInput>("UnreflectedInput", {
+  "run_id": req(str),
+  "result_message_id": req(str),
+  "message_id": req(str),
+  "seq": req(u53),
+  "kind": req(named(() => wireMessageKind)),
+  "from": req(named(() => wireActorRef)),
+  "stage": req(named(() => wireDeliveryStage)),
+  "after_result": req(bool),
   "created_at": req(str),
   "acked_at": req(nullable(str), { fill: null }),
 });

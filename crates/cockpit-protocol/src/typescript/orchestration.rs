@@ -171,6 +171,7 @@ section!(
         MessageKind,
         DeliveryStage,
         Message,
+        UnreflectedInput,
         QuestionStatus,
         QuestionReceipt,
         AnswerReceipt,
