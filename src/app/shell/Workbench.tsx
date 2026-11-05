@@ -21,6 +21,9 @@ import { useAgentPower } from "./useAgentPower";
 import { SendAgentDialog } from "../quickAsk/SendAgentDialog";
 import { Inbox, type InboxLocation } from "../inbox/Inbox";
 import { UiIcon } from "../UiIcon";
+import { ErrorSlot } from "../ErrorSlot";
+import { BrowserCleanupNotices } from "../layout/BrowserCleanupNotices";
+import { SubscriptionLimits } from "../limits/SubscriptionLimits";
 
 export interface WorkbenchProps {
   client: CockpitClient; state: SessionState; sessions: SessionSummary[]; selection: Selection; terminalMouseInput: boolean; mutations: MutationCoordinatorState;
@@ -36,7 +39,7 @@ export function Workbench(props: WorkbenchProps) {
   const [inboxOpen, setInboxOpen] = useState(false);
   const [inboxAttention, setInboxAttention] = useState<{ count: number; preview: string | null }>({ count: 0, preview: null });
   useEffect(() => { setSendAgentsOpen(false); }, [props.state.sessionId]);
-  const runtime = useWorkbenchState(props, sendAgentsOpen || inboxOpen);
+  const runtime = useWorkbenchState(props, sendAgentsOpen, inboxOpen);
   const actions = useWorkbenchActions(props, runtime);
   const power = useAgentPower((runtime.snapshot?.agents ?? []).some(agent => stateClass(agent.status) === "working"), runtime.setPrefixHint);
   const [quickTerminal, setQuickTerminal] = useState<{ sessionId: string; paneId: string; cwd: string | null; returnFocus: HTMLElement | null } | null>(null);
@@ -217,5 +220,13 @@ export function Workbench(props: WorkbenchProps) {
     {quickTerminal ? <QuickTerminal client={props.client} sessionId={quickTerminal.sessionId} paneId={quickTerminal.paneId} cwd={quickTerminal.cwd} focusEpoch={props.state.epoch} returnFocus={quickTerminal.returnFocus} suspended={Boolean(popup)} onDismiss={() => setQuickTerminal(null)} /> : null}
     {sendAgentsOpen && props.state.sessionId ? <SendAgentDialog key={props.state.sessionId} targets={(props.state.sync === "live" ? runtime.snapshot?.agents ?? [] : []).filter(agent => stateClass(agent.status) === "idle").map(agent => ({
       paneId: agent.pane_id, label: agent.title || agent.name, space: `${spaces.find(space => space.id === agent.space_id)?.label ?? "Space"} · ${allTabs.find(tab => tab.id === agent.tab_id)?.label ?? "tab"}`,
-    }))} onSend={async (paneId, text) => { await props.client.orchestrationAgentSend({ session_id: props.state.sessionId!, reference: paneId, text }); }} onClose={() => setSendAgentsOpen(false)} /> : null}</div></>;
+    }))} onSend={async (paneId, text) => { await props.client.orchestrationAgentSend({ session_id: props.state.sessionId!, reference: paneId, text }); }} onClose={() => setSendAgentsOpen(false)} /> : null}</div>
+    <div className="workarea-statusbar" style={{ left: inboxOpen || runtime.narrowViewport || runtime.sidebarCollapsed ? 0 : runtime.sidebarWidth - 1 }} inert={Boolean(popup) || Boolean(quickTerminal)}>
+      <BrowserCleanupNotices ctx={ctx} activeTabId={props.selection.tabId} fallback={<ErrorSlot placement="pane" message={[runtime.lifecycleError, props.layoutError, runtime.liaison.error, runtime.supervisorNavigationError].filter(Boolean).join(" · ")} actions={runtime.lifecycleError || props.layoutError ? <>
+        <button type="button" onClick={props.onReconnect}>Resync</button>
+        <button type="button" onClick={() => { runtime.setLifecycleError(null); props.onDismissLayoutError(); }}>Dismiss</button>
+      </> : null} />} />
+      {!limits.absent ? <SubscriptionLimits snapshot={limits.snapshot} link={limits.link} now={limits.now} open={runtime.limitsOpen}
+        onOpenChange={setLimitsOpen} suspended={runtime.statusBarSuspended || Boolean(quickTerminal)} commandOpener={runtime.commandsOpener} /> : null}
+    </div></>;
 }

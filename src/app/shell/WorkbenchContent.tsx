@@ -1,10 +1,7 @@
 import type { WidgetSummary } from "../../protocol/generated/v1";
 import type { CSSProperties, ReactNode } from "react";
 import { UiIcon } from "../UiIcon";
-import { ErrorSlot } from "../ErrorSlot";
 import { ServerPopup } from "../ServerPopup";
-import { BrowserCleanupNotices } from "../layout/BrowserCleanupNotices";
-import { SubscriptionLimits } from "../limits/SubscriptionLimits";
 import { armedPrefixHint, withShortcut } from "../input/shortcuts";
 import { SetupDialog } from "../projects/SetupDialog";
 import { TeardownDialog } from "../projects/TeardownDialog";
@@ -49,12 +46,12 @@ export type WorkbenchContentProps = WorkbenchProps & WorkbenchState & WorkbenchA
 
 export function WorkbenchContent(props: WorkbenchContentProps) {
   const {
-    client, state, sessions, selection, terminalMouseInput, mutations, ctx, onSession, onReconnect, onRefreshSessions, onMutate, onRetryMutation, layoutError, onDismissLayoutError,
+    client, state, sessions, selection, terminalMouseInput, mutations, ctx, onSession, onReconnect, onRefreshSessions, onMutate, onRetryMutation,
     snapshot, shell, popup, popupPending, sidebarWidth, sidebarCollapsed, narrowViewport, drawerOpen, sidebarSession, sidebarCloseRef, spaces, spaceGit, spaceServices, gitBlocked, gitActions, gitPoll, editing, mutationBusy, modalOpen, allTabs,
     closeDrawer, openSessionChooser, setEditing, focusSpace, focusService, openContext, setSetupOpen, focusAgent, updateSidebarWidth, openDrawer, toggleSidebarCollapsed,
     overviewOpen, closeOverview, widgetDots, widgetsPending, showWidgets, tabs, browserOpen, browserReason, libraryOpen, notesOpen, closeNotes, openNotes, focusTab, toggleBrowser, closeLibrary, openLibrary, setCommandsOpen,
-    liaison, supervisorNavigationError, librarySpace, captureLibraryInvoker, libraryCommand,
-    lifecycleError, setLifecycleError, limits, limitsOpen, setLimitsOpen, commandsOpener, dialog, setDialog, panes, localLeaves, swap, lastTerminalMessage,
+    liaison, librarySpace, captureLibraryInvoker, libraryCommand,
+    dialog, setDialog, panes, localLeaves, swap, lastTerminalMessage,
     commandsOpen, switcherOpen, setSwitcherOpen, setSwitchTarget, confirmedSpaceId, confirmedPaneId, commandActions, commandStatus, setSessionChooserOpen, libraryAddOpen, setLibraryAddOpen, sessionChooserOpen, setupOpen, setupParent, recoveryOpen, setRecoveryOpen, teardownSpaceId, setTeardownSpaceId,
     prefixActive, armedPrefix, commandNotice, commandFailureMessage, gitNotice, prefixHint,
   } = props;
@@ -94,14 +91,6 @@ export function WorkbenchContent(props: WorkbenchContentProps) {
         {overviewOpen ? <SupervisorView key={`${liaison.snapshot?.state_store_id}:${liaison.root?.run_id}`} tasks={liaison.tasks} runs={liaison.snapshot?.runs.filter(run => run.root_id === liaison.root?.run_id) ?? []} snapshot={liaison.snapshot} rootId={liaison.root?.run_id ?? null} fresh={liaison.fresh} waiting={liaison.waiting} status={liaison.status} onClose={() => { closeOverview(); if (selection.paneId !== liaison.paneId && liaison.startAvailable) void liaison.start(); }} /> : null}
         {notesOpen ? <NotesView key={`${state.sessionId}:${selection.spaceId}`} client={client} space={librarySpace} onClose={closeNotes} /> : libraryOpen ? <LibraryView client={client} onClose={closeLibrary} onCaptureInvoker={captureLibraryInvoker} command={libraryCommand} space={librarySpace} /> : props.inboxActive ? null : <WorkbenchCanvas {...props} />}
         <span className="sr-only" role="status" aria-live="polite">{liaison.waiting ? "Supervisor is waiting for you." : ""}</span>
-      </div>
-      <div className="workarea-statusbar">
-      <BrowserCleanupNotices ctx={ctx} activeTabId={selection.tabId} fallback={<ErrorSlot placement="pane" message={[lifecycleError, layoutError, liaison.error, supervisorNavigationError].filter(Boolean).join(" · ")} actions={lifecycleError || layoutError ? <>
-        <button type="button" onClick={onReconnect}>Resync</button>
-        <button type="button" onClick={() => { setLifecycleError(null); onDismissLayoutError(); }}>Dismiss</button>
-      </> : null} />} />
-      {!limits.absent ? <SubscriptionLimits snapshot={limits.snapshot} link={limits.link} now={limits.now} open={limitsOpen}
-        onOpenChange={setLimitsOpen} suspended={modalOpen} commandOpener={commandsOpener} /> : null}
       </div>
     </main>
     <ResourceContextMenu {...props} />

@@ -125,7 +125,7 @@ summary:focus-visible {
   .view-bar-preview { display: none; }
 }
 .inbox-workbench .workbench { height: calc(var(--app-height) - var(--view-bar-height)); }
-.app-shell > .inbox-root { height: calc(var(--app-height) - var(--view-bar-height)); }
+.app-shell > .inbox-root { height: calc(var(--app-height) - var(--view-bar-height) - 28px); }
 
 .workbench {
   display: flex;
@@ -275,6 +275,7 @@ summary:focus-visible {
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+  padding-bottom: 28px;
   background: var(--terminal-bg);
 }
 
@@ -308,10 +309,11 @@ summary:focus-visible {
 .workarea-statusbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  flex: 0 0 28px;
   height: 28px;
   min-width: 0;
-  position: relative;
+  position: absolute;
+  right: 0;
+  bottom: 0;
   z-index: var(--z-panel);
   container: statusbar / inline-size;
 }

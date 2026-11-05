@@ -22,7 +22,7 @@ import type { WorkbenchProps } from "./Workbench";
 
 export interface WorkbenchState extends WorkbenchView, WorkareaController, SidebarState, WidgetWindowState, LiaisonNavigation, WorkbenchUI {
   libraryOpen: boolean; notesOpen: boolean; overviewOpen: boolean; liaison: LiaisonController; libraryCommand: LibraryCommand | null;
-  mutationBusy: boolean; modalOpen: boolean; browserOpen: boolean; browserInputActive: boolean; browserReason: string | null;
+  mutationBusy: boolean; modalOpen: boolean; statusBarSuspended: boolean; browserOpen: boolean; browserInputActive: boolean; browserReason: string | null;
   viewerSources: ViewerSourcesState; sidebarSession: SessionSummary | undefined;
   gitPoll: { spaces: ReadonlyMap<string, SpaceGitStatus>; error: string | undefined; refresh(): void };
   spaceGit: ReadonlyMap<string, SpaceGitStatus>; gitBlocked: string | undefined; gitActions: SpaceGitActions;
@@ -35,7 +35,7 @@ export interface WorkbenchState extends WorkbenchView, WorkareaController, Sideb
   gitNotice: { sessionId: string | null; text: string } | null;
   runGitAction(spaceId: string, action: SpaceGitAction): void;
 }
-export function useWorkbenchState(props: WorkbenchProps, externalModal = false): WorkbenchState {
+export function useWorkbenchState(props: WorkbenchProps, externalModal = false, inboxOpen = false): WorkbenchState {
   const { client, state, selection, tabLayout, mutations } = props;
   const view = workbenchView(state, selection, tabLayout, mutations);
   const { snapshot, spaces, allTabs, tabs, selectedTab, sourcePaneId, selectedLeaf, shell, popup } = view;
@@ -51,7 +51,8 @@ export function useWorkbenchState(props: WorkbenchProps, externalModal = false):
   const { sidebarCollapsed, narrowViewport, drawerOpen } = sidebar;
   const { popupPending, dialog, commandsOpen, switcherOpen, sessionChooserOpen, setupOpen, recoveryOpen, teardownSpaceId, libraryAddOpen, askOpen } = ui;
   const mutationBusy = mutations.pending !== null;
-  const modalOpen = externalModal || Boolean(popup || popupPending) || dialog !== null || commandsOpen || switcherOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen || askOpen || liaison.recovery !== null;
+  const statusBarSuspended = externalModal || Boolean(popup || popupPending) || dialog !== null || commandsOpen || switcherOpen || sessionChooserOpen || setupOpen || recoveryOpen || teardownSpaceId !== null || libraryAddOpen || askOpen || liaison.recovery !== null;
+  const modalOpen = statusBarSuspended || inboxOpen;
   const gitPoll = useSpaceGitStatus(client, state.sync === "live" ? state.sessionId : null, spaceCheckoutKey(spaces, snapshot?.panes ?? []));
   const spaceGit = gitPoll.spaces;
   const spaceServices = useSpaceServiceStatus(client, state.sync === "live" ? state.sessionId : null, snapshot, narrowViewport ? drawerOpen : !sidebarCollapsed);
@@ -95,6 +96,6 @@ export function useWorkbenchState(props: WorkbenchProps, externalModal = false):
   const browserReason = !selectedTab ? "Select a tab first" : state.sync !== "live" ? "Herdr is not live" : browserOpenDisabledReason(props.ctx, selectedTab.id);
   return { ...view, ...workarea, ...ui, ...widget, ...navigation, ...sidebar, libraryOpen, notesOpen, overviewOpen, liaison,
     libraryCommand: workarea.view.kind === "library" ? workarea.view.command : null,
-    mutationBusy, modalOpen, viewerSources, browserOpen, browserInputActive, browserReason,
+    mutationBusy, modalOpen, statusBarSuspended, viewerSources, browserOpen, browserInputActive, browserReason,
     sidebarSession: props.sessions.find(session => session.id === state.sessionId), gitPoll, spaceGit, spaceServices, spaceCpu, spaceTags, attention, tagEditorRequest, requestTagEditor, gitBlocked, gitActions, gitNotice, runGitAction };
 }
