@@ -2,6 +2,9 @@
 import type * as V1 from "../v1";
 
 export interface WireTypes {
+  "CleanupItem": V1.CleanupItem;
+  "OwnedResourceRecord": V1.OwnedResourceRecord;
+  "ResourceRegister": V1.ResourceRegister;
   "CleanupFinish": V1.CleanupFinish;
   "CleanupFinishResult": V1.CleanupFinishResult;
   "CleanupResourceSummary": V1.CleanupResourceSummary;
@@ -43,6 +46,9 @@ export interface WireTypes {
 }
 
 export interface WireOwners {
+  "CleanupItem": V1.CleanupItem;
+  "OwnedResourceRecord": V1.OwnedResourceRecord;
+  "ResourceRegister": V1.ResourceRegister;
   "CleanupFinish": V1.CleanupFinish;
   "CleanupFinishResult": V1.CleanupFinishResult;
   "CleanupResourceSummary": V1.CleanupResourceSummary;
@@ -147,6 +153,25 @@ export interface WireOwners {
 }
 
 export interface WireFields {
+  "CleanupItem.operation_id": (V1.CleanupItem)["operation_id"];
+  "CleanupItem.state": (V1.CleanupItem)["state"];
+  "CleanupItem.reason": (V1.CleanupItem)["reason"];
+  "CleanupItem.effects": (V1.CleanupItem)["effects"];
+  "CleanupItem.updated_at": (V1.CleanupItem)["updated_at"];
+  "OwnedResourceRecord.resource_id": (V1.OwnedResourceRecord)["resource_id"];
+  "OwnedResourceRecord.root_id": (V1.OwnedResourceRecord)["root_id"];
+  "OwnedResourceRecord.run_id": (V1.OwnedResourceRecord)["run_id"];
+  "OwnedResourceRecord.kind": (V1.OwnedResourceRecord)["kind"];
+  "OwnedResourceRecord.ownership": (V1.OwnedResourceRecord)["ownership"];
+  "OwnedResourceRecord.creation_operation_id": (V1.OwnedResourceRecord)["creation_operation_id"];
+  "OwnedResourceRecord.identity": (V1.OwnedResourceRecord)["identity"];
+  "OwnedResourceRecord.authority": (V1.OwnedResourceRecord)["authority"];
+  "OwnedResourceRecord.consumers": (V1.OwnedResourceRecord)["consumers"];
+  "OwnedResourceRecord.integration_result_id": (V1.OwnedResourceRecord)["integration_result_id"];
+  "OwnedResourceRecord.cleanup": (V1.OwnedResourceRecord)["cleanup"];
+  "ResourceRegister.operation_id": (V1.ResourceRegister)["operation_id"];
+  "ResourceRegister.run_id": (V1.ResourceRegister)["run_id"];
+  "ResourceRegister.resource": (V1.ResourceRegister)["resource"];
   "CleanupFinish.operation_id": (V1.CleanupFinish)["operation_id"];
   "CleanupFinish.root_id": (V1.CleanupFinish)["root_id"];
   "CleanupFinish.run_id": (V1.CleanupFinish)["run_id"];
@@ -544,6 +569,9 @@ export interface WireFields {
 }
 
 export interface WireFieldNames {
+  "CleanupItem": "operation_id" | "state" | "reason" | "effects" | "updated_at";
+  "OwnedResourceRecord": "resource_id" | "root_id" | "run_id" | "kind" | "ownership" | "creation_operation_id" | "identity" | "authority" | "consumers" | "integration_result_id" | "cleanup";
+  "ResourceRegister": "operation_id" | "run_id" | "resource";
   "CleanupFinish": "operation_id" | "root_id" | "run_id";
   "CleanupFinishResult": "operation_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count" | "duplicate";
   "CleanupResourceSummary": "resource_id" | "kind" | "ownership" | "cleanup";
@@ -648,6 +676,10 @@ export interface WireFieldNames {
 }
 
 export interface WireChildNames {
+  "CleanupItem.reason": "CleanupReason";
+  "OwnedResourceRecord.identity": "OwnedResourceIdentity";
+  "OwnedResourceRecord.cleanup": "CleanupItem";
+  "ResourceRegister.resource": "OwnedResourceIdentity";
   "CleanupResourceSummary.cleanup": "CleanupItem";
   "NativeShellIdentity.process": "NativeProcessIdentity";
   "RetirementIdentity.herdr_peer": "NativeProcessIdentity";
@@ -824,6 +856,9 @@ export interface WireTagNames {
 }
 
 export interface WireCheckpointFieldNames {
+  "CleanupItem": "operation_id" | "state" | "reason" | "effects" | "updated_at";
+  "OwnedResourceRecord": "resource_id" | "root_id" | "run_id" | "kind" | "ownership" | "creation_operation_id" | "identity" | "authority" | "consumers" | "integration_result_id" | "cleanup";
+  "ResourceRegister": "operation_id" | "run_id" | "resource";
   "CleanupFinish": "operation_id" | "root_id" | "run_id";
   "CleanupFinishResult": "operation_id" | "items" | "removed_count" | "waiting_count" | "kept_count" | "unknown_count" | "duplicate";
   "CleanupResourceSummary": "resource_id" | "kind" | "ownership" | "cleanup";
@@ -928,6 +963,10 @@ export interface WireCheckpointFieldNames {
 }
 
 export type WireOmittableField =
+  | "CleanupItem.operation_id"
+  | "CleanupItem.reason"
+  | "OwnedResourceRecord.creation_operation_id"
+  | "OwnedResourceRecord.integration_result_id"
   | "CleanupFinish.run_id"
   | "RetirementIdentity.attachment_id"
   | "RetirementIdentity.attachment_epoch"
@@ -1067,6 +1106,8 @@ export type WireOptionalField =
   | never;
 
 export type WireListField =
+  | "CleanupItem.effects"
+  | "OwnedResourceRecord.consumers"
   | "CleanupFinishResult.items"
   | "RunCleanupSummary.items"
   | "RetirementState[waiting].blockers"

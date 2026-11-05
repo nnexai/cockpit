@@ -48,6 +48,48 @@ function HistoryEventRow({ event }: { event: HistoryEvent }) {
   return <li className={`liaison-event${tone}`}>{detail ? <details><summary>{row}</summary><div className="liaison-event-body">{detail}</div></details> : <div className="liaison-event-line">{row}</div>}{sub ? <div className="liaison-event-sub">{sub}</div> : null}</li>;
 }
 
+// [headline, clears when, next step]; Next names who acts, matching next_automatic.
+export const waitCopy = {
+  recovery_blocked: ["Worker recovery is blocked.", "The recovery blocker is resolved.", "The liaison resolves the blocker"],
+  question: ["A worker question needs an answer.", "The question is answered.", "Answer through the liaison"],
+  review: ["The result is waiting for review.", "The liaison accepts or returns the result.", "The liaison reviews it"],
+  integration: ["Accepted work isn't merged into the target yet.", "The merge into the target is recorded.", "The liaison integrates it"],
+  prerequisites: ["Prerequisite tasks aren't done yet.", "Those tasks are done.", "Starts automatically"],
+  dependency_input: ["A prerequisite's output isn't in the target branch yet.", "That output is merged into the target branch.", "The liaison integrates the prerequisite"],
+  capacity: ["All worker slots for this project are in use.", "A worker slot frees up.", "Starts automatically"],
+  resource: ["Waiting for a shared resource.", "The current holder releases it.", "Continues automatically"],
+  schedule_hold: ["Scheduling is on hold.", "The hold is resolved.", "The liaison resolves the hold"],
+  dispatch: ["Scheduled and waiting to start.", "A worker starts.", "Starts automatically"],
+} as const satisfies Record<NonNullable<TaskView["waiting"]>["cause"], readonly [string, string, string]>;
+
+function TaskProgress({ view, history }: { view: TaskView; history: TaskHistory | null }) {
+  const merged = history?.sub?.kind === "merged";
+  const steps = ["Ready", "Working", "Review", "Accepted", ...(history?.sub?.kind === "no_merge" ? [] : ["Merged"])];
+  const current = merged ? 4 : view.lane === "accepted" || view.task.checked ? 3 : view.lane === "review" ? 2 : view.lane === "working" ? 1 : 0;
+  return <ol className="liaison-task-progress" aria-label="Task progress">{steps.map((step, index) =>
+    <li key={step} className={index < current ? "is-complete" : index === current ? "is-current" : undefined} aria-current={index === current ? "step" : undefined}>
+      <span className="liaison-progress-mark" aria-hidden="true" /><span>{step}</span>
+    </li>)}</ol>;
+}
+
+function WaitingDetail({ waiting }: { waiting: NonNullable<TaskView["waiting"]> }) {
+  const [headline, clears, next] = waitCopy[waiting.cause];
+  // Raw codes only explain generic holds; named causes already say what is wrong.
+  const code = waiting.cause === "schedule_hold" || waiting.cause === "recovery_blocked" ? waiting.code : null;
+  return <section className="liaison-wait-detail" aria-label="Why is this waiting">
+    <p className="liaison-wait-heading">Why is this waiting?</p>
+    <p className="liaison-wait-headline">{headline}</p>
+    {waiting.detail ? <p className="liaison-wait-description">{waiting.detail}</p> : null}
+    <dl className="liaison-wait-facts">
+      {waiting.held_by.length ? <><dt>Held by</dt><dd>{waiting.held_by.map((ref, index) => <span key={`${ref.id}:${index}`}>{index ? ", " : ""}{ref.title}</span>)}</dd></> : null}
+      <dt>Clears when</dt><dd>{clears}</dd>
+      {waiting.since && formatEventTime(waiting.since, new Date()) ? <><dt>Since</dt><dd><EventTime at={waiting.since} /></dd></> : null}
+      {code ? <><dt>Code</dt><dd><code>{code}</code></dd></> : null}
+    </dl>
+    <p className="liaison-wait-next"><strong>Next:</strong> {next}</p>
+  </section>;
+}
+
 export function TaskHistoryDetail({ view, history }: { view: TaskView; history: TaskHistory | null }) {
   const outcome = history?.outcome;
   const stage = outcome?.stage ?? (view.task.checked ? "done" : view.lane);
@@ -57,8 +99,10 @@ export function TaskHistoryDetail({ view, history }: { view: TaskView; history: 
     <div className={`liaison-detail-summary lane-${view.lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}`}>
       <span className="liaison-task-dot" aria-hidden="true" /><h2>{view.task.title}</h2>
       <p className="liaison-detail-outcome"><span className={outcome?.stalled ? "stalled" : undefined}>{stage[0].toUpperCase() + stage.slice(1)}</span>{outcome?.scheduled ? " · scheduled" : ""}{outcome?.accepted ? " · accepted" : ""}{outcome?.attempt ? ` · attempt ${outcome.attempt}` : ""}{outcome?.kept ? <> · <span className="kept">{outcome.kept} resource{outcome.kept === 1 ? "" : "s"} kept</span></> : null}</p>
-      {subText ? <p className="liaison-detail-sub">{subText}</p> : null}
+      {!view.waiting && subText ? <p className="liaison-detail-sub">{subText}</p> : null}
     </div>
+    <TaskProgress view={view} history={history} />
+    {view.waiting ? <WaitingDetail waiting={view.waiting} /> : null}
     {history?.liveUnavailable ? <p className="liaison-history-notice" role="status">Live worker state unavailable — showing recorded history.</p> : null}
     {!history ? <p className="liaison-empty">History unavailable — no task snapshot is available.</p> : history.identity === "ambiguous" ? <p className="liaison-empty">History unavailable — this task's ID appears more than once in the task file.</p> : <>
       {!history.attempts.length && !history.scheduledAt ? <p className="liaison-empty"><strong>{view.task.checked ? "No history to show" : "No attempts yet"}</strong>{view.task.checked ? "Only the task's checked state was found; no attempts or results are recorded for it." : "History appears here once a worker starts."}</p> : <>
@@ -67,7 +111,7 @@ export function TaskHistoryDetail({ view, history }: { view: TaskView; history: 
           const events = <ol className="liaison-history" aria-label={`Attempt ${attempt.attempt} events`}>{attempt.events.map((event, j) => <HistoryEventRow key={j} event={event} />)}</ol>;
           return i < history.attempts.length - 1 ? <details className="liaison-attempt" key={attempt.runId}><summary><span>Attempt {attempt.attempt} · {attempt.end}</span><span className="liaison-attempt-worker">{attempt.label}</span>{attempt.reason ? <span className="liaison-attempt-why">{attempt.reason}</span> : null}</summary>{events}</details> : <div key={attempt.runId}><div className="liaison-attempt-label"><span>Attempt {attempt.attempt}</span><span>{attempt.label}</span></div>{attempt.reason ? <p className="liaison-attempt-reason">{attempt.reason}</p> : null}{events}</div>;
         })}
-        {history.scheduledAt && !history.attempts.some(attempt => attempt.end === "current") ? <ol className="liaison-history"><li className="liaison-event"><div className="liaison-event-line"><span className="liaison-event-title">Scheduled</span><EventTime at={history.scheduledAt} /></div><p className="liaison-event-sub">{view.dependencies.state === "blocked" ? "Waiting for prerequisites" : "Waiting for dispatch"}</p></li></ol> : null}
+        {history.scheduledAt && !history.attempts.some(attempt => attempt.end === "current") ? <ol className="liaison-history"><li className="liaison-event"><div className="liaison-event-line"><span className="liaison-event-title">Scheduled</span><EventTime at={history.scheduledAt} /></div></li></ol> : null}
       </>}
       {history.leftBehind.length ? <><h3>Left behind</h3><ul className="liaison-left">{history.leftBehind.map(row => {
         // Removal/closure is durable evidence, not invalidated by losing live observation.

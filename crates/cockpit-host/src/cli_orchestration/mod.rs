@@ -614,7 +614,24 @@ async fn show_run(
                 CliError::new("run_not_found", "run is not in the selected session/root")
             })?
     };
-    emit(run, common.json)
+    let task_snapshot = if run.task_id.is_some()
+        && snapshot.board.as_ref().is_none_or(|board| board.root_id != run.root_id)
+    {
+        Some(context.snapshot(Some(run.root_id.clone())).await?)
+    } else {
+        None
+    };
+    let board = task_snapshot.as_ref().unwrap_or(&snapshot).board.as_ref();
+    let waiting = board.and_then(|board| board.tasks.iter()
+        .find(|view| Some(&view.task.task_id) == run.task_id.as_ref()))
+        .and_then(|view| view.waiting.as_ref());
+    let mut value = serde_json::to_value(run)
+        .map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+    if let Some(object) = value.as_object_mut() {
+        object.insert("waiting".into(), serde_json::to_value(waiting)
+            .map_err(|error| CliError::new("orchestration_output", error.to_string()))?);
+    }
+    emit(&value, common.json)
 }
 
 impl InboxArgs {

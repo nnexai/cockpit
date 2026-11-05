@@ -2,7 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { OrchestrationSnapshot, Run, TaskView } from "../../protocol/generated/v1";
 import { SupervisorTasks, taskLanes } from "./SupervisorTasks";
 import { SupervisorGraph } from "./SupervisorGraph";
-import { TaskHistoryDetail } from "./TaskHistoryDetail";
+import { TaskHistoryDetail, waitCopy } from "./TaskHistoryDetail";
 import { taskHistory } from "./taskHistory";
 import { dependencySummary, uniqueTask } from "./dependencies";
 import { groupTasks } from "./taskProjects";
@@ -42,7 +42,7 @@ function taskAttention(snapshot: OrchestrationSnapshot | null, rootId: string | 
     }
     if ((!view.current_run_id || run?.stage === "queued") && !view.task.checked && (view.scheduled || view.lane === "blocked")) {
       const dependency = dependencySummary(view, tasks);
-      labels.add(dependency ? `Blocked: ${dependency}` : view.lane === "blocked" ? "Blocked; reason unknown" : "Waiting for dispatch; reason unknown");
+      labels.add(dependency ? `Blocked: ${dependency}` : view.waiting ? waitCopy[view.waiting.cause][0] : view.lane === "blocked" ? "Blocked; reason unknown" : "Waiting for dispatch; reason unknown");
     }
     if (labels.size && run && run.stage !== "closed" && snapshot.runtime.status === "fresh") {
       const observation = snapshot.runtime.runs.find(item => item.run_id === run.run_id);

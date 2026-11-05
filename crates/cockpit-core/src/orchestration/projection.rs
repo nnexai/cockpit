@@ -284,12 +284,15 @@ fn project_board(
                         "Canonical task document was not supplied",
                     )
                 })?;
+            let titles: HashMap<String, String> = board.tasks.iter()
+                .map(|view| (view.task.task_id.clone(), view.task.title.clone())).collect();
             for view in &mut board.tasks {
                 let current = current_task_run(state, root_id, &view.task.task_id);
                 view.current_run_id = current.map(|run| run.run_id.clone());
                 view.lane = lane(&view.task, &view.dependencies, current, &intent_runs);
                 view.scheduled = state.task_ownership.iter().any(|record|
                     record.root_id == root_id && record.task_id == view.task.task_id && record.schedule.is_some());
+                view.waiting = task_wait(state, root_id, view, current, &titles);
                 view.project = task_project(state, root_id, &view.task.task_id, runtime);
                 view.attempt = current.filter(|run| run.stage != RunStage::Closed).map(|run| AttemptBadge {
                     run_id: run.run_id.clone(), attempt: run.attempt,
@@ -317,6 +320,100 @@ fn project_board(
         }
     };
     Ok(board)
+}
+
+fn task_wait(
+    state: &OrchestrationState, root_id: &str, view: &TaskView, current: Option<&Run>,
+    titles: &HashMap<String, String>,
+) -> Option<TaskWait> {
+    let make = |cause, since, held_by, code, detail| Some(TaskWait {
+        cause, since, held_by, code, detail,
+        next_automatic: matches!(cause, TaskWaitCause::Prerequisites | TaskWaitCause::Capacity
+            | TaskWaitCause::Resource | TaskWaitCause::Dispatch),
+    });
+    let refs = |ids: Vec<&str>| ids.into_iter().filter_map(|id|
+        titles.get(id).map(|title| TaskWaitRef { id: id.into(), title: title.clone() })).collect();
+    if view.task.checked {
+        let accepted = state.runs.iter().filter(|run| run.root_id == root_id
+            && run.task_id.as_deref() == Some(view.task.task_id.as_str())
+            && run.close_reason == Some(CloseReason::Accepted))
+            .max_by(|a, b| attempt_order(a).cmp(&attempt_order(b)));
+        return accepted.filter(|run| matches!(run.integration, Integration::Pending)
+            && matches!(run.source_output, Some(SourceOutput::Code { .. })) && run.result.is_some())
+            .and_then(|_| make(TaskWaitCause::Integration, None, vec![], None, None));
+    }
+    if let Some(run) = current.filter(|run| run.stage != RunStage::Closed) {
+        if let Some(resume) = run.resume.as_ref().filter(|resume| resume.phase == ResumePhase::Blocked) {
+            return make(TaskWaitCause::RecoveryBlocked, None, vec![],
+                resume.cause.as_ref().map(|cause| cause.code.clone()), None);
+        }
+        if let Some(dispatch) = run.dispatch.as_ref().filter(|dispatch|
+            matches!(dispatch.step, DispatchStep::NeedsReview | DispatchStep::PlanFailed
+                | DispatchStep::SetupUnknown | DispatchStep::LaunchUnknown | DispatchStep::MoveUnknown)
+                || dispatch.latch_state == Some(AgentLatchState::Unknown)) {
+            return make(TaskWaitCause::RecoveryBlocked, None, vec![],
+                dispatch.error.as_ref().map(|error| error.code.clone()), None);
+        }
+        let inbox: Vec<&Message> = state.messages.iter().filter(|message| message.to_run_id == run.run_id).collect();
+        if let Some(question) = question_statuses(run, &inbox, &state.messages).into_iter()
+            .find(|question| matches!(question.receipt, QuestionReceipt::Unresolved)) {
+            return make(TaskWaitCause::Question, Some(question.asked_at), vec![], None, None);
+        }
+        if run.stage == RunStage::Reported {
+            return make(TaskWaitCause::Review, run.result.as_ref().map(|report| report.at.clone()), vec![], None, None);
+        }
+    }
+    let unmet: Vec<&str> = view.dependencies.unmet.iter()
+        .filter(|blocker| blocker.reason == TaskDependencyBlockerReason::Unchecked)
+        .map(|blocker| blocker.task_id.as_str()).collect();
+    if !unmet.is_empty() {
+        return make(TaskWaitCause::Prerequisites, None, refs(unmet), None, None);
+    }
+    let schedule = state.task_ownership.iter().find(|owner|
+        owner.root_id == root_id && owner.task_id == view.task.task_id).and_then(|owner| owner.schedule.as_ref());
+    let pending_schedule = schedule.filter(|_| current.is_none_or(|run| run.stage == RunStage::Closed));
+    if let Some(hold) = pending_schedule.and_then(|schedule| schedule.hold.as_ref())
+        .filter(|hold| hold.code == "dependency_input_not_materialized") {
+        return make(TaskWaitCause::DependencyInput, Some(hold.at.clone()),
+            refs(hold.dependency_task_id.as_deref().into_iter().collect()), Some(hold.code.clone()), None);
+    }
+    if pending_schedule.is_some() && view.dependencies.state == TaskDependencyState::Invalid {
+        return make(TaskWaitCause::ScheduleHold, None, vec![],
+            view.dependencies.problems.first().map(|problem| problem.code.clone()), None);
+    }
+    if let Some(schedule) = pending_schedule
+        && let Some(root) = state.runs.iter().find(|run| run.run_id == root_id)
+        && let Some(key) = super::mutate::runs::scheduled_project_key(state, root, &view.task, schedule)
+        && super::mutate::runs::project_capacity_full(state, &root.session_id, key, root.launch_config.max_parallel) {
+        return make(TaskWaitCause::Capacity, None, vec![], None, None);
+    }
+    if let Some(run) = current.filter(|run| run.stage != RunStage::Closed)
+        && let Some(attachment) = &run.attachment
+        && let Some(request) = state.resource_requests.iter().find(|request|
+            request.holder.run_id == run.run_id && request.holder.attachment_id == attachment.attachment_id
+                && request.holder.attachment_epoch == attachment.epoch
+                && matches!(request.state, ResourceRequestState::Queued | ResourceRequestState::Blocked)) {
+        let holders = state.resource_requests.iter().filter(|holder|
+            holder.request_id != request.request_id && holder.state == ResourceRequestState::Held
+                && holder.machine_id == request.machine_id
+                && super::resource_queue::overlaps(&holder.resource_key, &request.resource_key))
+            .filter_map(|holder| state.runs.iter().find(|candidate| candidate.run_id == holder.holder.run_id
+                && candidate.root_id == root_id && candidate.attachment.as_ref().is_some_and(|attachment|
+                    attachment.attachment_id == holder.holder.attachment_id
+                        && attachment.epoch == holder.holder.attachment_epoch)))
+            .filter_map(|holder| holder.task_id.as_deref()).collect();
+        return make(TaskWaitCause::Resource, None, refs(holders), None, request.blocked_reason.clone());
+    }
+    if let Some(schedule) = pending_schedule {
+        if let Some(hold) = &schedule.hold {
+            return make(TaskWaitCause::ScheduleHold, Some(hold.at.clone()), vec![], Some(hold.code.clone()), None);
+        }
+        return make(TaskWaitCause::Dispatch, Some(schedule.scheduled_at.clone()), vec![], None, None);
+    }
+    if let Some(run) = current.filter(|run| matches!(run.stage, RunStage::Queued | RunStage::Starting)) {
+        return make(TaskWaitCause::Dispatch, Some(run.created_at.clone()), vec![], None, None);
+    }
+    None
 }
 
 pub(super) fn task_project(
@@ -850,6 +947,7 @@ mod tests {
                 current_run_id: None,
                 scheduled: false,
                 attempt: None,
+                waiting: None,
                 project: None,
                 dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: Vec::new(), problems: Vec::new() },
             }],
@@ -926,7 +1024,7 @@ mod tests {
             operation_id: "op".into(), principal_key: "principal".into(),
             target: Some(DispatchTarget::ExistingSpace { workspace_id: "space".into() }),
             brief: "brief".into(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
-            label: None, scheduled_at: START.into(),
+            label: None, scheduled_at: START.into(), hold: None,
         });
         let mut view = runtime("working");
         view.workspaces.push(super::super::herdr::RuntimeWorkspace {
@@ -997,6 +1095,150 @@ mod tests {
             message.acked_at = Some(NOW.into());
         }
         message
+    }
+
+    #[test]
+    fn waiting_precedence_uses_current_question_and_recorded_recovery() {
+        let mut durable = state(asking());
+        let mut view = board().tasks.remove(0);
+        view.dependencies.state = TaskDependencyState::Blocked;
+        view.dependencies.unmet.push(TaskDependencyBlocker {
+            task_id: "prerequisite".into(), reason: TaskDependencyBlockerReason::Unchecked,
+        });
+        let titles = HashMap::new();
+        let wait = |state: &OrchestrationState| task_wait(state, ROOT, &view, Some(&state.runs[1]), &titles).unwrap();
+        assert_eq!(wait(&durable).cause, TaskWaitCause::Question);
+        durable.runs[1].resume = Some(ResumeRecord {
+            operation_id: "op".into(), run_id: WORKER.into(), previous_attachment_epoch: None,
+            fresh_conversation: None, previous_conversation: None, session_namespace: None,
+            phase: ResumePhase::Blocked, cause: None, decision_id: None,
+            replacement_attachment_epoch: None, updated_at: NOW.into(),
+        });
+        let recovery = wait(&durable);
+        assert_eq!(recovery.cause, TaskWaitCause::RecoveryBlocked);
+        assert!(recovery.since.is_none());
+        durable.runs[1].resume = None;
+        durable.messages.push(answer(DeliveryStage::Stored));
+        assert_eq!(wait(&durable).cause, TaskWaitCause::Prerequisites);
+        durable.runs[1].stage = RunStage::Reported;
+        assert_eq!(wait(&durable).cause, TaskWaitCause::Review);
+    }
+
+    #[test]
+    fn dependency_input_wait_names_only_the_recorded_prerequisite() {
+        let mut durable = state(worker(RunStage::Closed));
+        durable.task_ownership[0].owner = None;
+        durable.task_ownership[0].schedule = Some(TaskSchedule {
+            operation_id: "op".into(), principal_key: "operator".into(), target: None,
+            brief: String::new(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
+            label: None, scheduled_at: START.into(), hold: Some(ScheduleHold {
+                code: "dependency_input_not_materialized".into(), at: NOW.into(),
+                dependency_task_id: Some("dependency".into()),
+            }),
+        });
+        let view = board().tasks.remove(0);
+        let titles = HashMap::from([("dependency".into(), "Prerequisite".into()), ("other".into(), "Other".into())]);
+        let wait = task_wait(&durable, ROOT, &view, None, &titles).unwrap();
+        assert_eq!(wait.cause, TaskWaitCause::DependencyInput);
+        assert_eq!(wait.since.as_deref(), Some(NOW));
+        assert_eq!(wait.held_by.len(), 1);
+        assert_eq!(wait.held_by[0].id, "dependency");
+        assert_eq!(wait.held_by[0].title, "Prerequisite");
+        assert!(!wait.next_automatic);
+        durable.task_ownership[0].schedule = None;
+        assert!(task_wait(&durable, ROOT, &view, None, &titles).is_none());
+    }
+
+    #[test]
+    fn working_and_unscheduled_tasks_do_not_invent_waits() {
+        let mut durable = state(worker(RunStage::Working));
+        let mut view = board().tasks.remove(0);
+        let titles = HashMap::new();
+        assert!(task_wait(&durable, ROOT, &view, Some(&durable.runs[1]), &titles).is_none());
+        durable.task_ownership[0].owner = None;
+        assert!(task_wait(&durable, ROOT, &view, None, &titles).is_none());
+        view.task.checked = true;
+        assert!(task_wait(&durable, ROOT, &view, None, &titles).is_none());
+    }
+
+    #[test]
+    fn invalid_graph_without_unmet_prerequisites_is_not_automatic() {
+        let mut durable = state(worker(RunStage::Closed));
+        durable.task_ownership[0].owner = None;
+        durable.task_ownership[0].schedule = Some(TaskSchedule {
+            operation_id: "op".into(), principal_key: "operator".into(), target: None,
+            brief: String::new(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
+            label: None, scheduled_at: START.into(), hold: None,
+        });
+        let mut view = board().tasks.remove(0);
+        view.dependencies.state = TaskDependencyState::Invalid;
+        view.dependencies.problems.push(ErrorResponse { code: "cycle".into(), message: "cycle".into() });
+        let wait = task_wait(&durable, ROOT, &view, None, &HashMap::new()).unwrap();
+        assert_eq!(wait.cause, TaskWaitCause::ScheduleHold);
+        assert_eq!(wait.code.as_deref(), Some("cycle"));
+        assert!(!wait.next_automatic);
+    }
+
+    #[test]
+    fn integration_wait_requires_accepted_code_output() {
+        let mut durable = state(worker(RunStage::Closed));
+        durable.runs[1].close_reason = Some(CloseReason::Accepted);
+        let mut result = asking().last_report.unwrap();
+        result.message_id = "result".into();
+        result.kind = ReportKind::Result;
+        result.outcome = Some(ReportOutcome::Succeeded);
+        durable.runs[1].result = Some(result);
+        let mut view = board().tasks.remove(0);
+        view.task.checked = true;
+        let titles = HashMap::new();
+        durable.runs[1].source_output = Some(SourceOutput::NonCode {
+            result_message_id: "result".into(), task_revision: "revision".into(),
+            artifacts: vec![], focused_checks: vec![],
+        });
+        assert!(task_wait(&durable, ROOT, &view, None, &titles).is_none());
+        durable.runs[1].source_output = Some(SourceOutput::Code {
+            repository_key: "repo".into(), checkout_key: "checkout".into(), base_commit: "base".into(),
+            head_commit: "head".into(), commits: vec![], task_revision: "revision".into(),
+            result_message_id: "result".into(), focused_checks: vec![],
+        });
+        assert_eq!(task_wait(&durable, ROOT, &view, None, &titles).unwrap().cause, TaskWaitCause::Integration);
+        durable.runs[1].integration = Integration::NotApplicable { reason: "recorded".into(), result_message_id: "result".into() };
+        assert!(task_wait(&durable, ROOT, &view, None, &titles).is_none());
+    }
+
+    #[test]
+    fn resource_wait_uses_reason_and_exact_overlapping_holder_task() {
+        let mut durable = state(worker(RunStage::Working));
+        let mut holder = worker(RunStage::Working);
+        holder.run_id = "holder".into();
+        holder.task_id = Some("holder-task".into());
+        let holder_attachment = holder.attachment.as_ref().unwrap();
+        let reference = |run: &Run| AttachmentReference {
+            run_id: run.run_id.clone(), attachment_id: run.attachment.as_ref().unwrap().attachment_id.clone(),
+            attachment_epoch: run.attachment.as_ref().unwrap().epoch,
+        };
+        let source = ResourceSourceIdentity { checkout_key: "checkout".into(), source_commit: "commit".into(),
+            source_tree: "tree".into(), input_configuration: "input".into(), toolchain_fingerprint: "toolchain".into() };
+        let request = ResourceRequestRecord { request_id: "request".into(), sequence: 2, resource_key: "/build/sub".into(),
+            source_identity: source.clone(), holder: reference(&durable.runs[1]), state: ResourceRequestState::Blocked,
+            build_processes: vec![], machine_id: "machine".into(), blocked_reason: Some("incompatible source".into()),
+            updated_at: START.into() };
+        let held = ResourceRequestRecord { request_id: "held".into(), sequence: 1, resource_key: "/build".into(),
+            source_identity: source, holder: AttachmentReference { run_id: holder.run_id.clone(),
+                attachment_id: holder_attachment.attachment_id.clone(), attachment_epoch: holder_attachment.epoch },
+            state: ResourceRequestState::Held, build_processes: vec![], machine_id: "machine".into(),
+            blocked_reason: None, updated_at: START.into() };
+        durable.runs.push(holder);
+        durable.resource_requests.extend([request, held]);
+        let titles = HashMap::from([("holder-task".into(), "Holder task".into())]);
+        let wait = task_wait(&durable, ROOT, &board().tasks[0], Some(&durable.runs[1]), &titles).unwrap();
+        assert_eq!(wait.cause, TaskWaitCause::Resource);
+        assert_eq!(wait.detail.as_deref(), Some("incompatible source"));
+        assert!(wait.code.is_none());
+        assert_eq!(wait.held_by.len(), 1);
+        assert_eq!(wait.held_by[0].id, "holder-task");
+        durable.resource_requests[1].machine_id = "other".into();
+        assert!(task_wait(&durable, ROOT, &board().tasks[0], Some(&durable.runs[1]), &titles).unwrap().held_by.is_empty());
     }
 
     fn project(

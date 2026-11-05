@@ -52,7 +52,7 @@
 .liaison-task-rail .liaison-earlier-toggle:hover { color:var(--text-primary); text-decoration:underline; }
 .liaison-task-rail > header button.liaison-detail-back { width:auto; flex:0 0 auto; padding:0 8px 0 4px; font-size:var(--font-size-control); }
 .liaison-task-rail.has-detail > header > button:last-child { margin-left:auto; }
-.liaison-detail { flex:1 1 0; min-height:0; overflow:auto; padding:0 0 10px; overflow-wrap:anywhere; }
+.liaison-detail { flex:1 1 0; min-height:0; overflow:auto; padding:0 0 10px; overflow-wrap:anywhere; container-type:inline-size; container-name:liaison-detail; }
 .liaison-detail p, .liaison-detail h2, .liaison-detail h3, .liaison-detail ol, .liaison-detail ul, .liaison-detail dl { margin:0; }
 .liaison-detail-summary { padding:10px 10px 8px; display:grid; grid-template-columns:14px minmax(0,1fr); column-gap:8px; row-gap:3px; border-bottom:1px solid var(--border); }
 .liaison-detail-summary .liaison-task-dot { margin-top:6px; }
@@ -61,6 +61,28 @@
 .liaison-detail-sub { color:var(--text-muted); }
 .liaison-detail-outcome .kept { color:var(--warning); }
 .liaison-detail-outcome .stalled { color:var(--blocked); }
+.liaison-task-progress { display:grid; grid-auto-columns:minmax(0,1fr); grid-auto-flow:column; list-style:none; padding:14px 8px 10px; }
+.liaison-task-progress li { position:relative; display:grid; justify-items:center; align-content:start; gap:5px; min-width:0; color:var(--text-muted); font-size:var(--font-size-2xs); text-align:center; }
+.liaison-task-progress li::before { content:""; position:absolute; top:7px; left:-50%; width:100%; height:1px; background:var(--border-strong); }
+.liaison-task-progress li:first-child::before { display:none; }
+.liaison-progress-mark { position:relative; z-index:1; box-sizing:border-box; width:15px; height:15px; border:2px solid var(--border-strong); border-radius:50%; background:var(--surface); }
+.liaison-task-progress .is-complete { color:var(--text-secondary); }
+.liaison-task-progress .is-complete .liaison-progress-mark { border-color:var(--done); background:var(--done); }
+.liaison-task-progress .is-complete .liaison-progress-mark::after { content:""; position:absolute; left:4px; top:1px; width:3px; height:6px; border:solid var(--surface); border-width:0 2px 2px 0; transform:rotate(45deg); }
+.liaison-task-progress .is-current { color:var(--text-primary); font-weight:600; }
+.liaison-task-progress .is-current .liaison-progress-mark { border-color:var(--warning); border-style:dashed; box-shadow:0 0 0 3px color-mix(in srgb, var(--warning) 16%, transparent); }
+.liaison-wait-detail { display:grid; gap:8px; margin:4px 10px 0; padding:10px; border:1px solid var(--border); border-left:3px solid var(--warning); border-radius:var(--radius-control); background:var(--chrome-bg); font-size:var(--font-size-control); }
+.liaison-wait-heading { color:var(--text-muted); font-size:var(--font-size-2xs); font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+.liaison-wait-headline { color:var(--text-primary); font-weight:600; line-height:1.4; }
+.liaison-wait-description { color:var(--text-secondary); white-space:pre-wrap; }
+.liaison-wait-facts { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:5px 10px; }
+.liaison-wait-facts dt { color:var(--text-muted); }
+.liaison-wait-facts dd { min-width:0; margin:0; color:var(--text-secondary); }
+.liaison-wait-next { padding:7px 8px; border-radius:var(--radius-control); background:var(--surface); color:var(--text-secondary); }
+@container liaison-detail (max-width:300px) {
+  .liaison-wait-facts { grid-template-columns:minmax(0,1fr); gap:2px; }
+  .liaison-wait-facts dd + dt { margin-top:5px; }
+}
 .liaison-detail .liaison-history-notice { margin:8px 10px 0; padding:5px 8px; border-left:2px solid var(--warning); background:var(--chrome-bg); font-size:var(--font-size-control); color:var(--text-secondary); }
 .liaison-detail h3 { font-size:var(--font-size-control); font-weight:500; color:var(--text-secondary); padding:10px 10px 4px; }
 .liaison-history { list-style:none; padding:0 10px; }

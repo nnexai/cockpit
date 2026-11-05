@@ -1150,7 +1150,9 @@ export type TaskOwnership = { root_id: string, task_id: string, generation: numb
 
 export type TaskOwner = { run_id: string, conversation: ConversationIdentity | null, claim_operation_id: string, };
 
-export type TaskSchedule = { operation_id: string, principal_key: string, target: DispatchTarget | null, brief: string, cleanup_policy: WorkerCleanupPolicy, label: string | null, scheduled_at: string, };
+export type TaskSchedule = { operation_id: string, principal_key: string, target: DispatchTarget | null, brief: string, cleanup_policy: WorkerCleanupPolicy, label: string | null, scheduled_at: string, hold: ScheduleHold | null, };
+
+export type ScheduleHold = { code: string, at: string, dependency_task_id: string | null, };
 
 export type ReplacementPlacement = { "placement": "same_checkout" } | { "placement": "isolated_worktree", base_commit: string, } | { "placement": "isolated_directory", directory: string, };
 
@@ -1162,7 +1164,13 @@ export type TaskDependencyBlockerReason = "unchecked" | "missing" | "ambiguous";
 
 export type TaskProject = { key: string | null, label: string, };
 
-export type TaskView = { task: Task, project: TaskProject | null, lane: TaskLane, current_run_id: string | null, dependencies: TaskDependencies, scheduled: boolean, attempt: AttemptBadge | null, };
+export type TaskView = { task: Task, project: TaskProject | null, lane: TaskLane, current_run_id: string | null, dependencies: TaskDependencies, scheduled: boolean, attempt: AttemptBadge | null, waiting: TaskWait | null, };
+
+export type TaskWait = { cause: TaskWaitCause, since: string | null, held_by: Array<TaskWaitRef>, code: string | null, detail: string | null, next_automatic: boolean, };
+
+export type TaskWaitRef = { id: string, title: string, };
+
+export type TaskWaitCause = "recovery_blocked" | "question" | "review" | "integration" | "prerequisites" | "dependency_input" | "capacity" | "resource" | "schedule_hold" | "dispatch";
 
 export type TaskLane = "blocked" | "ready" | "working" | "review" | "accepted";
 

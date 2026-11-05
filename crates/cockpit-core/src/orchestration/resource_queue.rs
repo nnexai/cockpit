@@ -303,7 +303,7 @@ fn enqueue(state: &mut OrchestrationState, request: &ResourceRequest,
     Ok(record)
 }
 
-fn overlaps(a: &str, b: &str) -> bool {
+pub(super) fn overlaps(a: &str, b: &str) -> bool {
     let a = Path::new(a); let b = Path::new(b);
     a.starts_with(b) || b.starts_with(a)
 }

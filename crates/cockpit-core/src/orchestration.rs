@@ -399,7 +399,7 @@ impl OrchestrationService {
             }
         }
         let tasks = document.tasks.into_iter().zip(facts).map(|(task, dependencies)| TaskView {
-            task, dependencies, lane: TaskLane::Ready, current_run_id: None, scheduled: false, attempt: None, project: None,
+            task, dependencies, lane: TaskLane::Ready, current_run_id: None, scheduled: false, attempt: None, project: None, waiting: None,
         }).collect();
         Ok(TaskBoard {
             root_id: root_id.into(),

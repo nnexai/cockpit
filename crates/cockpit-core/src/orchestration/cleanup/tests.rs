@@ -854,7 +854,7 @@ async fn scheduled_inputs_keep_git_ref_wakes_after_predecessor_resources_are_rem
         state.task_ownership.push(TaskOwnership { root_id: fixture.run.root_id.clone(), task_id: id(),
             generation: 0, owner: None, schedule: Some(TaskSchedule { operation_id: id(), principal_key: "root".into(),
                 target: None, brief: "waiting on actual integrated input".into(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
-                label: None, scheduled_at: now() }) });
+                label: None, scheduled_at: now(), hold: None }) });
         locked.save(&mut state).unwrap();
     }
     assert_eq!(fixture.service.cleanup_ref_watch_paths().unwrap(), vec![expected]);

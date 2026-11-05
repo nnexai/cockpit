@@ -456,6 +456,13 @@ export const wireTaskSchedule: WireDescriptor<V1.TaskSchedule> = struct<V1.TaskS
   "cleanup_policy": req(named(() => wireWorkerCleanupPolicy)),
   "label": req(nullable(str), { fill: null }),
   "scheduled_at": req(str),
+  "hold": req(nullable(named(() => wireScheduleHold)), { fill: null }),
+});
+
+export const wireScheduleHold: WireDescriptor<V1.ScheduleHold> = struct<V1.ScheduleHold>("ScheduleHold", {
+  "code": req(str),
+  "at": req(str),
+  "dependency_task_id": req(nullable(str), { fill: null }),
 });
 
 export const wireReplacementPlacement: WireDescriptor<V1.ReplacementPlacement> = tagged<V1.ReplacementPlacement, "placement">("ReplacementPlacement", "placement", {
@@ -491,7 +498,24 @@ export const wireTaskView: WireDescriptor<V1.TaskView> = struct<V1.TaskView>("Ta
   "dependencies": req(named(() => wireTaskDependencies)),
   "scheduled": req(bool),
   "attempt": req(nullable(named(() => wireAttemptBadge)), { fill: null }),
+  "waiting": req(nullable(named(() => wireTaskWait)), { fill: null }),
 });
+
+export const wireTaskWait: WireDescriptor<V1.TaskWait> = struct<V1.TaskWait>("TaskWait", {
+  "cause": req(named(() => wireTaskWaitCause)),
+  "since": req(nullable(str), { fill: null }),
+  "held_by": req(list(named(() => wireTaskWaitRef))),
+  "code": req(nullable(str), { fill: null }),
+  "detail": req(nullable(str), { fill: null }),
+  "next_automatic": req(bool),
+});
+
+export const wireTaskWaitRef: WireDescriptor<V1.TaskWaitRef> = struct<V1.TaskWaitRef>("TaskWaitRef", {
+  "id": req(str),
+  "title": req(str),
+});
+
+export const wireTaskWaitCause: WireDescriptor<V1.TaskWaitCause> = literal<V1.TaskWaitCause>("TaskWaitCause", ["recovery_blocked", "question", "review", "integration", "prerequisites", "dependency_input", "capacity", "resource", "schedule_hold", "dispatch"]);
 
 export const wireTaskLane: WireDescriptor<V1.TaskLane> = literal<V1.TaskLane>("TaskLane", ["blocked", "ready", "working", "review", "accepted"]);
 

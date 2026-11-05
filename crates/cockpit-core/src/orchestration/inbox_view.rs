@@ -406,7 +406,7 @@ mod tests {
                 relations_diagnostic: None, checked: true, line: 1, task_revision: String::new(), diagnostic: None },
                 project: None, lane: TaskLane::Ready, current_run_id: None,
                 dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: vec![], problems: vec![] },
-                scheduled: false, attempt: None }] }
+                scheduled: false, attempt: None, waiting: None }] }
     }
     #[test]
     fn timeline_orders_owner_reports_and_untagged_answers_and_caps() {

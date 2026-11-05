@@ -392,7 +392,7 @@ pub(super) fn schedule(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -
         }
         Some(TaskSchedule { operation_id: operation_id.clone(), principal_key: super::resume::principal_key(ctx)?,
             target: target.clone().map(unfocused), brief: brief.clone(), cleanup_policy: *cleanup_policy,
-            label: label.clone(), scheduled_at: now() })
+            label: label.clone(), scheduled_at: now(), hold: None })
     } else { None };
     let index = ownership_index(ctx.state, root_id, task_id);
     if schedule.is_some() && ctx.state.task_ownership[index].schedule.is_some() && !corrected_attempt {
@@ -811,6 +811,9 @@ impl OrchestrationService {
         let start = create_attempt(&mut ctx, AttemptRequest { operation_id: &operation_id,
             root_id: &candidate.root_id, task_id: &candidate.task_id, target, brief: &schedule.brief,
             cleanup_policy: schedule.cleanup_policy, label: schedule.label.as_deref(), generation })?;
+        if let Some(schedule) = ctx.state.task_ownership[ownership_index].schedule.as_mut() {
+            schedule.hold = None;
+        }
         let provenance = if resolved.shared_by_default {
             let DispatchTarget::ExistingSpace { workspace_id } = resolved.normalized_target.as_ref().expect("validated shared target") else { unreachable!() };
             vec![super::super::store::DurableEffectReceipt::ScheduledSharedSource {

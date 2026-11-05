@@ -4,6 +4,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { TaskView } from "../../protocol/generated/v1";
 import { TaskRail } from "./SupervisorTasks";
+import { TaskHistoryDetail } from "./TaskHistoryDetail";
+import type { TaskHistory } from "./taskHistory";
 import { orchestrationFixture, taskFixture } from "./testFixtures";
 
 let root: Root | null = null, host: HTMLDivElement;
@@ -75,4 +77,48 @@ it("returns from vanished task history without taking focus from an external inp
   expect(host.querySelector('[aria-label="History of task"]')).toBeNull();
   expect(document.activeElement).toBe(input);
   input.remove();
+});
+
+it("shows recorded waiting facts and accessible task progress in the shared detail", async () => {
+  const task = taskFixture("dependent", {
+    lane: "blocked",
+    waiting: { cause: "dependency_input", since: "2026-10-01T12:00:00Z", held_by: [{ id: "predecessor", title: "Predecessor" }], code: "dependency_input_not_materialized", detail: "The frozen base lacks the output.", next_automatic: true },
+  });
+  if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
+  await act(async () => root!.render(<TaskHistoryDetail view={task} history={null} />));
+  const rail = host.querySelector('[aria-label="Task progress"]')!;
+  expect([...rail.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Ready", "Working", "Review", "Accepted", "Merged"]);
+  expect(rail.querySelector('[aria-current="step"]')?.textContent).toBe("Ready");
+  const wait = host.querySelector('[aria-label="Why is this waiting"]')!;
+  expect(wait.textContent).toContain("Predecessor");
+  expect(wait.textContent).toContain("The frozen base lacks the output.");
+  expect(wait.querySelector("time")?.getAttribute("datetime")).toBe("2026-10-01T12:00:00Z");
+});
+
+it("shows liaison-owned waits without invented times and omits merge for non-code work", async () => {
+  const task = taskFixture("report", {
+    lane: "review",
+    waiting: { cause: "review", since: null, held_by: [], code: null, detail: null, next_automatic: false },
+  });
+  const history: TaskHistory = { taskId: "report", identity: "unique", outcome: { stage: "review", scheduled: false, accepted: false, attempt: 1, kept: 0, stalled: false }, sub: null, scheduledAt: null, attempts: [], leftBehind: [], liveUnavailable: false };
+  if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
+  await act(async () => root!.render(<TaskHistoryDetail view={task} history={history} />));
+  const rail = host.querySelector('[aria-label="Task progress"]')!;
+  expect(rail.querySelector('[aria-current="step"]')?.textContent).toBe("Review");
+  const wait = host.querySelector('[aria-label="Why is this waiting"]')!;
+  expect(wait.textContent).not.toContain("Held by");
+  expect(wait.textContent).not.toContain("Since");
+  expect(wait.querySelector("time")).toBeNull();
+  await act(async () => root!.render(<TaskHistoryDetail view={{ ...task, lane: "accepted", waiting: null }} history={{ ...history, sub: { kind: "no_merge" } }} />));
+  expect([...host.querySelectorAll('[aria-label="Task progress"] li')].map(item => item.textContent)).toEqual(["Ready", "Working", "Review", "Accepted"]);
+  expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Accepted");
+});
+
+it("marks recorded integration as merged and hides the waiting block when clear", async () => {
+  const task = taskFixture("code", { lane: "accepted", waiting: null });
+  const history: TaskHistory = { taskId: "code", identity: "unique", outcome: { stage: "done", scheduled: false, accepted: true, attempt: 1, kept: 0, stalled: false }, sub: { kind: "merged", target: "main" }, scheduledAt: null, attempts: [], leftBehind: [], liveUnavailable: false };
+  if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
+  await act(async () => root!.render(<TaskHistoryDetail view={task} history={history} />));
+  expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Merged");
+  expect(host.querySelector('[aria-label="Why is this waiting"]')).toBeNull();
 });

@@ -164,6 +164,9 @@ pub(super) fn emit_task_board(board: TaskBoard, json: bool) -> Result<(), CliErr
                 .map(|progress| format!("{}/{}", progress.done, progress.total))
                 .unwrap_or_else(|| "unavailable".into()),
         );
+        if let Some(waiting) = &view.waiting {
+            print_waiting(waiting);
+        }
     }
     Ok(())
 }
@@ -198,8 +201,46 @@ pub(super) fn emit_runs(
                 .and_then(|item| item.agent_status.as_deref())
                 .unwrap_or("unobserved")
         );
+        if let Some(waiting) = snapshot.board.as_ref()
+            .and_then(|board| board.tasks.iter().find(|view| view.current_run_id.as_ref() == Some(&run.run_id)))
+            .and_then(|view| view.waiting.as_ref())
+        {
+            print_waiting(waiting);
+        }
     }
     Ok(())
+}
+
+fn print_waiting(waiting: &cockpit_protocol::orchestration::TaskWait) {
+    use cockpit_protocol::orchestration::TaskWaitCause;
+    let cause = match waiting.cause {
+        TaskWaitCause::RecoveryBlocked => "recovery blocked",
+        TaskWaitCause::Question => "question",
+        TaskWaitCause::Review => "review",
+        TaskWaitCause::Integration => "integration",
+        TaskWaitCause::Prerequisites => "prerequisites",
+        TaskWaitCause::DependencyInput => "dependency input",
+        TaskWaitCause::Capacity => "capacity",
+        TaskWaitCause::Resource => "resource",
+        TaskWaitCause::ScheduleHold => "schedule hold",
+        TaskWaitCause::Dispatch => "dispatch",
+    };
+    print!("  waiting: {cause}");
+    if let Some(code) = &waiting.code {
+        print!(" [{code}]");
+    }
+    if let Some(detail) = &waiting.detail {
+        print!(" — {detail}");
+    }
+    if !waiting.held_by.is_empty() {
+        print!(" (held by ");
+        for (index, item) in waiting.held_by.iter().enumerate() {
+            if index > 0 { print!(", "); }
+            print!("{}", item.title);
+        }
+        print!(")");
+    }
+    println!();
 }
 
 pub(super) fn run_depth(run: &Run, runs: &[Run]) -> usize {

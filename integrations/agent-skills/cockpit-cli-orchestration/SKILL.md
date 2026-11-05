@@ -247,6 +247,12 @@ Review is a source Result awaiting review; Accepted requires root acceptance.
 Check off only actually completed canonical steps. Checklist completion, idle,
 process exit, registration and message capture never substitute for acceptance.
 Accepted history remains read-only.
+For why a task is waiting, read `waiting` from `task show TASK --json` or
+`task list --json` rather than inferring a cause from transcripts. The field
+is a recorded-state projection, not live-process evidence; a missing cause or
+time must not be invented. `run show RUN --json` exposes the associated task's
+current `waiting` (including for an older attempt); `run list --json` includes
+it in `board.tasks` when a board is selected.
 `run list` / `run show` are saved durable snapshots, not fresh Herdr/process
 liveness. Empty `attention` does not prove runtime health. Use separate fresh,
 identity-bound physical evidence before lifecycle actions.

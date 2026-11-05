@@ -2930,7 +2930,7 @@ async fn path_schedule_fixture(mode: &str) -> (ReviewFixture, Arc<Dispatcher>) {
                     path: checkout.to_string_lossy().into_owned(), label: None, task_name: None, focus: false,
                 } }
             }) }, brief: "Execute independently".into(), cleanup_policy: cockpit_protocol::orchestration::WorkerCleanupPolicy::OwnedWhenSafe,
-            label: None, scheduled_at: now() };
+            label: None, scheduled_at: now(), hold: None };
         state.operations.push(DurableOperationRecord { operation_id: operation_id.clone(),
             actor_run_id: Some(fixture.run.run_id.clone()), principal_key: schedule.principal_key.clone(),
             root_id: fixture.run.run_id.clone(), kind: DurableOperationKind::TaskSchedule,
@@ -2946,6 +2946,30 @@ async fn path_schedule_fixture(mode: &str) -> (ReviewFixture, Arc<Dispatcher>) {
     locked.save(&mut state).unwrap();
     drop(locked);
     (fixture, dispatcher)
+}
+
+#[tokio::test]
+async fn schedule_hold_is_durable_deduplicated_and_cleared_on_launch() {
+    let (fixture, dispatcher) = path_schedule_fixture("git").await;
+    let candidate = fixture.service.schedule_candidates(4).unwrap().remove(0);
+    let error = InspectionError::new("dependency_input_not_materialized", "missing input");
+    fixture.service.record_schedule_hold(&candidate, &error, Some("prerequisite".into())).unwrap();
+    fixture.service.record_schedule_hold(&candidate, &error, Some("prerequisite".into())).unwrap();
+    {
+        let state = fixture.service.store.lock().unwrap().read().unwrap();
+        let hold = state.task_ownership.iter().find(|owner| owner.task_id == candidate.task_id)
+            .unwrap().schedule.as_ref().unwrap().hold.as_ref().unwrap();
+        assert_eq!(hold.code, error.code);
+        assert_eq!(hold.dependency_task_id.as_deref(), Some("prerequisite"));
+        assert_eq!(state.messages.iter().filter(|message| message.message_id ==
+            uuid::Uuid::new_v5(&uuid::Uuid::parse_str(&candidate.schedule.operation_id).unwrap(),
+                b"schedule-hold:dependency_input_not_materialized").to_string()).count(), 1);
+    }
+    let resolved = dispatcher.resolve_schedule_target(&candidate).await.unwrap();
+    fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap();
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert!(state.task_ownership.iter().find(|owner| owner.task_id == candidate.task_id)
+        .unwrap().schedule.as_ref().unwrap().hold.is_none());
 }
 
 #[tokio::test]

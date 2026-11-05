@@ -59,12 +59,16 @@ export interface WireTypes {
   "TaskOwnership": V1.TaskOwnership;
   "TaskOwner": V1.TaskOwner;
   "TaskSchedule": V1.TaskSchedule;
+  "ScheduleHold": V1.ScheduleHold;
   "ReplacementPlacement": V1.ReplacementPlacement;
   "TaskDependencyState": V1.TaskDependencyState;
   "TaskDependencyBlocker": V1.TaskDependencyBlocker;
   "TaskDependencyBlockerReason": V1.TaskDependencyBlockerReason;
   "TaskProject": V1.TaskProject;
   "TaskView": V1.TaskView;
+  "TaskWait": V1.TaskWait;
+  "TaskWaitRef": V1.TaskWaitRef;
+  "TaskWaitCause": V1.TaskWaitCause;
   "TaskLane": V1.TaskLane;
   "AttemptBadge": V1.AttemptBadge;
   "AttemptState": V1.AttemptState;
@@ -138,9 +142,6 @@ export interface WireTypes {
   "CleanupReason": V1.CleanupReason;
   "CleanupEffectState": V1.CleanupEffectState;
   "CleanupEffectReceipt": V1.CleanupEffectReceipt;
-  "CleanupItem": V1.CleanupItem;
-  "OwnedResourceRecord": V1.OwnedResourceRecord;
-  "ResourceRegister": V1.ResourceRegister;
 }
 
 export interface WireOwners {
@@ -200,6 +201,7 @@ export interface WireOwners {
   "TaskOwnership": V1.TaskOwnership;
   "TaskOwner": V1.TaskOwner;
   "TaskSchedule": V1.TaskSchedule;
+  "ScheduleHold": V1.ScheduleHold;
   "ReplacementPlacement": V1.ReplacementPlacement;
   "ReplacementPlacement[same_checkout]": Extract<V1.ReplacementPlacement, { "placement": "same_checkout" }>;
   "ReplacementPlacement[isolated_worktree]": Extract<V1.ReplacementPlacement, { "placement": "isolated_worktree" }>;
@@ -207,6 +209,8 @@ export interface WireOwners {
   "TaskDependencyBlocker": V1.TaskDependencyBlocker;
   "TaskProject": V1.TaskProject;
   "TaskView": V1.TaskView;
+  "TaskWait": V1.TaskWait;
+  "TaskWaitRef": V1.TaskWaitRef;
   "AttemptBadge": V1.AttemptBadge;
   "DispatchTarget": V1.DispatchTarget;
   "DispatchTarget[setup]": Extract<V1.DispatchTarget, { "target": "setup" }>;
@@ -271,9 +275,6 @@ export interface WireOwners {
   "OwnedResourceIdentity[fixture_set]": Extract<V1.OwnedResourceIdentity, { "kind": "fixture_set" }>;
   "CleanupReason": V1.CleanupReason;
   "CleanupEffectReceipt": V1.CleanupEffectReceipt;
-  "CleanupItem": V1.CleanupItem;
-  "OwnedResourceRecord": V1.OwnedResourceRecord;
-  "ResourceRegister": V1.ResourceRegister;
 }
 
 export interface WireFields {
@@ -553,6 +554,10 @@ export interface WireFields {
   "TaskSchedule.cleanup_policy": (V1.TaskSchedule)["cleanup_policy"];
   "TaskSchedule.label": (V1.TaskSchedule)["label"];
   "TaskSchedule.scheduled_at": (V1.TaskSchedule)["scheduled_at"];
+  "TaskSchedule.hold": (V1.TaskSchedule)["hold"];
+  "ScheduleHold.code": (V1.ScheduleHold)["code"];
+  "ScheduleHold.at": (V1.ScheduleHold)["at"];
+  "ScheduleHold.dependency_task_id": (V1.ScheduleHold)["dependency_task_id"];
   "ReplacementPlacement[isolated_worktree].base_commit": (Extract<V1.ReplacementPlacement, { "placement": "isolated_worktree" }>)["base_commit"];
   "ReplacementPlacement[isolated_directory].directory": (Extract<V1.ReplacementPlacement, { "placement": "isolated_directory" }>)["directory"];
   "TaskDependencyBlocker.task_id": (V1.TaskDependencyBlocker)["task_id"];
@@ -566,6 +571,15 @@ export interface WireFields {
   "TaskView.dependencies": (V1.TaskView)["dependencies"];
   "TaskView.scheduled": (V1.TaskView)["scheduled"];
   "TaskView.attempt": (V1.TaskView)["attempt"];
+  "TaskView.waiting": (V1.TaskView)["waiting"];
+  "TaskWait.cause": (V1.TaskWait)["cause"];
+  "TaskWait.since": (V1.TaskWait)["since"];
+  "TaskWait.held_by": (V1.TaskWait)["held_by"];
+  "TaskWait.code": (V1.TaskWait)["code"];
+  "TaskWait.detail": (V1.TaskWait)["detail"];
+  "TaskWait.next_automatic": (V1.TaskWait)["next_automatic"];
+  "TaskWaitRef.id": (V1.TaskWaitRef)["id"];
+  "TaskWaitRef.title": (V1.TaskWaitRef)["title"];
   "AttemptBadge.run_id": (V1.AttemptBadge)["run_id"];
   "AttemptBadge.attempt": (V1.AttemptBadge)["attempt"];
   "AttemptBadge.state": (V1.AttemptBadge)["state"];
@@ -821,25 +835,6 @@ export interface WireFields {
   "CleanupEffectReceipt.state": (V1.CleanupEffectReceipt)["state"];
   "CleanupEffectReceipt.evidence": (V1.CleanupEffectReceipt)["evidence"];
   "CleanupEffectReceipt.updated_at": (V1.CleanupEffectReceipt)["updated_at"];
-  "CleanupItem.operation_id": (V1.CleanupItem)["operation_id"];
-  "CleanupItem.state": (V1.CleanupItem)["state"];
-  "CleanupItem.reason": (V1.CleanupItem)["reason"];
-  "CleanupItem.effects": (V1.CleanupItem)["effects"];
-  "CleanupItem.updated_at": (V1.CleanupItem)["updated_at"];
-  "OwnedResourceRecord.resource_id": (V1.OwnedResourceRecord)["resource_id"];
-  "OwnedResourceRecord.root_id": (V1.OwnedResourceRecord)["root_id"];
-  "OwnedResourceRecord.run_id": (V1.OwnedResourceRecord)["run_id"];
-  "OwnedResourceRecord.kind": (V1.OwnedResourceRecord)["kind"];
-  "OwnedResourceRecord.ownership": (V1.OwnedResourceRecord)["ownership"];
-  "OwnedResourceRecord.creation_operation_id": (V1.OwnedResourceRecord)["creation_operation_id"];
-  "OwnedResourceRecord.identity": (V1.OwnedResourceRecord)["identity"];
-  "OwnedResourceRecord.authority": (V1.OwnedResourceRecord)["authority"];
-  "OwnedResourceRecord.consumers": (V1.OwnedResourceRecord)["consumers"];
-  "OwnedResourceRecord.integration_result_id": (V1.OwnedResourceRecord)["integration_result_id"];
-  "OwnedResourceRecord.cleanup": (V1.OwnedResourceRecord)["cleanup"];
-  "ResourceRegister.operation_id": (V1.ResourceRegister)["operation_id"];
-  "ResourceRegister.run_id": (V1.ResourceRegister)["run_id"];
-  "ResourceRegister.resource": (V1.ResourceRegister)["resource"];
 }
 
 export interface WireFieldNames {
@@ -898,14 +893,17 @@ export interface WireFieldNames {
   "TaskDependencies": "state" | "unmet" | "problems";
   "TaskOwnership": "root_id" | "task_id" | "generation" | "owner" | "schedule";
   "TaskOwner": "run_id" | "conversation" | "claim_operation_id";
-  "TaskSchedule": "operation_id" | "principal_key" | "target" | "brief" | "cleanup_policy" | "label" | "scheduled_at";
+  "TaskSchedule": "operation_id" | "principal_key" | "target" | "brief" | "cleanup_policy" | "label" | "scheduled_at" | "hold";
+  "ScheduleHold": "code" | "at" | "dependency_task_id";
   "ReplacementPlacement": never;
   "ReplacementPlacement[same_checkout]": never;
   "ReplacementPlacement[isolated_worktree]": "base_commit";
   "ReplacementPlacement[isolated_directory]": "directory";
   "TaskDependencyBlocker": "task_id" | "reason";
   "TaskProject": "key" | "label";
-  "TaskView": "task" | "project" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt";
+  "TaskView": "task" | "project" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt" | "waiting";
+  "TaskWait": "cause" | "since" | "held_by" | "code" | "detail" | "next_automatic";
+  "TaskWaitRef": "id" | "title";
   "AttemptBadge": "run_id" | "attempt" | "state";
   "DispatchTarget": never;
   "DispatchTarget[setup]": "request";
@@ -970,9 +968,6 @@ export interface WireFieldNames {
   "OwnedResourceIdentity[fixture_set]": "identity";
   "CleanupReason": "class" | "code" | "message";
   "CleanupEffectReceipt": "effect_id" | "kind" | "identity_digest" | "state" | "evidence" | "updated_at";
-  "CleanupItem": "operation_id" | "state" | "reason" | "effects" | "updated_at";
-  "OwnedResourceRecord": "resource_id" | "root_id" | "run_id" | "kind" | "ownership" | "creation_operation_id" | "identity" | "authority" | "consumers" | "integration_result_id" | "cleanup";
-  "ResourceRegister": "operation_id" | "run_id" | "resource";
 }
 
 export interface WireChildNames {
@@ -1014,10 +1009,12 @@ export interface WireChildNames {
   "TaskOwnership.schedule": "TaskSchedule";
   "TaskOwner.conversation": "ConversationIdentity";
   "TaskSchedule.target": "DispatchTarget";
+  "TaskSchedule.hold": "ScheduleHold";
   "TaskView.task": "Task";
   "TaskView.project": "TaskProject";
   "TaskView.dependencies": "TaskDependencies";
   "TaskView.attempt": "AttemptBadge";
+  "TaskView.waiting": "TaskWait";
   "DispatchTarget.request": "WorkspaceSetupRequest";
   "DispatchTarget[setup].request": "WorkspaceSetupRequest";
   "ProjectIdentity.source": "ProjectSource";
@@ -1055,10 +1052,6 @@ export interface WireChildNames {
   "OwnedResourceIdentity[scratch].identity": "OwnedFilesystemIdentity";
   "OwnedResourceIdentity[attempt_directory].identity": "OwnedAttemptDirectoryIdentity";
   "OwnedResourceIdentity[fixture_set].identity": "OwnedFixtureIdentity";
-  "CleanupItem.reason": "CleanupReason";
-  "OwnedResourceRecord.identity": "OwnedResourceIdentity";
-  "OwnedResourceRecord.cleanup": "CleanupItem";
-  "ResourceRegister.resource": "OwnedResourceIdentity";
 }
 
 export interface WireTagNames {
@@ -1159,14 +1152,17 @@ export interface WireCheckpointFieldNames {
   "TaskDependencies": "state" | "unmet" | "problems";
   "TaskOwnership": "root_id" | "task_id" | "generation" | "owner" | "schedule";
   "TaskOwner": "run_id" | "conversation" | "claim_operation_id";
-  "TaskSchedule": "operation_id" | "principal_key" | "target" | "brief" | "cleanup_policy" | "label" | "scheduled_at";
+  "TaskSchedule": "operation_id" | "principal_key" | "target" | "brief" | "cleanup_policy" | "label" | "scheduled_at" | "hold";
+  "ScheduleHold": "code" | "at" | "dependency_task_id";
   "ReplacementPlacement": "base_commit" | "directory" | "placement";
   "ReplacementPlacement[same_checkout]": "placement";
   "ReplacementPlacement[isolated_worktree]": "base_commit" | "placement";
   "ReplacementPlacement[isolated_directory]": "directory" | "placement";
   "TaskDependencyBlocker": "task_id" | "reason";
   "TaskProject": "key" | "label";
-  "TaskView": "task" | "project" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt";
+  "TaskView": "task" | "project" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt" | "waiting";
+  "TaskWait": "cause" | "since" | "held_by" | "code" | "detail" | "next_automatic";
+  "TaskWaitRef": "id" | "title";
   "AttemptBadge": "run_id" | "attempt" | "state";
   "DispatchTarget": "base_ref" | "branch" | "request" | "source_root" | "source_workspace_id" | "target" | "workspace_id";
   "DispatchTarget[setup]": "request" | "target";
@@ -1231,9 +1227,6 @@ export interface WireCheckpointFieldNames {
   "OwnedResourceIdentity[fixture_set]": "identity" | "kind";
   "CleanupReason": "class" | "code" | "message";
   "CleanupEffectReceipt": "effect_id" | "kind" | "identity_digest" | "state" | "evidence" | "updated_at";
-  "CleanupItem": "operation_id" | "state" | "reason" | "effects" | "updated_at";
-  "OwnedResourceRecord": "resource_id" | "root_id" | "run_id" | "kind" | "ownership" | "creation_operation_id" | "identity" | "authority" | "consumers" | "integration_result_id" | "cleanup";
-  "ResourceRegister": "operation_id" | "run_id" | "resource";
 }
 
 export type WireOmittableField =
@@ -1304,10 +1297,16 @@ export type WireOmittableField =
   | "TaskOwner.conversation"
   | "TaskSchedule.target"
   | "TaskSchedule.label"
+  | "TaskSchedule.hold"
+  | "ScheduleHold.dependency_task_id"
   | "TaskProject.key"
   | "TaskView.project"
   | "TaskView.current_run_id"
   | "TaskView.attempt"
+  | "TaskView.waiting"
+  | "TaskWait.since"
+  | "TaskWait.code"
+  | "TaskWait.detail"
   | "DispatchTarget[space_worktree].branch"
   | "DispatchTarget[space_worktree].base_ref"
   | "DispatchTarget[owned_attempt_directory].source_workspace_id"
@@ -1356,10 +1355,6 @@ export type WireOmittableField =
   | "ResourceRequestRecord.blocked_reason"
   | "OwnedGitIdentity.branch_ref"
   | "CleanupEffectReceipt.evidence"
-  | "CleanupItem.operation_id"
-  | "CleanupItem.reason"
-  | "OwnedResourceRecord.creation_operation_id"
-  | "OwnedResourceRecord.integration_result_id"
   | never;
 
 export type WireOptionalField =
@@ -1410,6 +1405,7 @@ export type WireListField =
   | "Task.depends_on"
   | "TaskDependencies.unmet"
   | "TaskDependencies.problems"
+  | "TaskWait.held_by"
   | "SetupSummary.effects"
   | "SetupSummary.warnings"
   | "LiaisonLookupResponse[resolved].roots"
@@ -1427,7 +1423,5 @@ export type WireListField =
   | "IntegrationRecordResult.checks"
   | "ResourceRequestRecord.build_processes"
   | "OwnedFixtureIdentity.processes"
-  | "CleanupItem.effects"
-  | "OwnedResourceRecord.consumers"
   | never;
 

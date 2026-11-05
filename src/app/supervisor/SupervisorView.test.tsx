@@ -352,7 +352,8 @@ it("keeps scheduled and prerequisite-blocked task facts visible on the board", a
   const queued = taskFixture("Queued", { scheduled: true });
   const blocked = taskFixture("Blocked", { lane: "blocked", dependencies: { state: "blocked", unmet: [{ task_id: "Prerequisite", reason: "unchecked" }], problems: [] } });
   const unknown = taskFixture("Unknown blocker", { lane: "blocked" });
-  await render([prerequisite, queued, blocked, unknown]);
+  const held = taskFixture("Held", { scheduled: true, waiting: { cause: "schedule_hold", since: null, held_by: [], code: "workspace_missing", detail: null, next_automatic: false } });
+  await render([prerequisite, queued, blocked, unknown, held]);
   const cards = [...host.querySelectorAll<HTMLButtonElement>(".liaison-card-open")];
   expect(cards.find(card => card.textContent?.includes("Queued"))?.textContent).toContain("scheduled");
   expect(cards.find(card => card.textContent?.includes("Blocked"))?.textContent).toContain("after “Prerequisite”");
@@ -360,6 +361,8 @@ it("keeps scheduled and prerequisite-blocked task facts visible on the board", a
   expect(panel.textContent).toContain("Waiting for dispatch; reason unknown");
   expect(panel.textContent).toContain("Blocked: after “Prerequisite”");
   expect(panel.textContent).toContain("Blocked; reason unknown");
+  expect(panel.textContent).toContain("Scheduling is on hold.");
+  expect(panel.textContent?.match(/Waiting for dispatch; reason unknown/g)).toHaveLength(1);
 });
 
 it("shows unknown live worker state when no current agent can be observed", async () => {

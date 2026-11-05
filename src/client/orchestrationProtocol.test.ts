@@ -197,7 +197,7 @@ const snapshot: OrchestrationSnapshot = {
   session_id: "session", revision: 2, tasks_token: hash,
   roots: [{ root_id: "root", label: "Supervisor", kind: "supervisor", open_runs: 1, needs_you: 1 }],
   board: { root_id: "root", path: "/tasks/root.md", doc_revision: hash, unidentified_items: 0,
-    diagnostics: [{ code: "task_id_duplicate", message: "Duplicate" }], tasks: [{ task, project: { key: "repo", label: "Repository" }, lane: "working", current_run_id: "run", dependencies, scheduled: false, attempt: null }] },
+    diagnostics: [{ code: "task_id_duplicate", message: "Duplicate" }], tasks: [{ task, project: { key: "repo", label: "Repository" }, lane: "working", current_run_id: "run", dependencies, scheduled: false, attempt: null, waiting: null }] },
   runs: [{
     session_id: "session", brief: "Implement the assigned task", run_id: "run", kind: "worker", label: "Worker", root_id: "root",
     parent_run_id: "root", task_id: "task", attempt: 1, task_revision_at_start: hash, stage: "working", close_reason: null,
@@ -374,7 +374,17 @@ describe("orchestration protocol boundary", () => {
     const schedule = { operation_id: assignmentTaskId, principal_key: "conversation-key", target: null,
       brief: "Implement when ready", cleanup_policy: "owned_when_safe" as const, label: null, scheduled_at: at };
     const dto = { ...snapshot, task_ownership: [{ ...snapshot.task_ownership[0]!, schedule }] };
-    expect(parseOrchestrationSnapshot(dto).task_ownership[0]!.schedule).toEqual(schedule);
+    expect(parseOrchestrationSnapshot(dto).task_ownership[0]!.schedule).toEqual({ ...schedule, hold: null });
+    const hold = { code: "dependency_input_not_materialized", at, dependency_task_id: prerequisiteId };
+    const heldDto = { ...snapshot, task_ownership: [{ ...snapshot.task_ownership[0]!, schedule: { ...schedule, hold } }] };
+    expect(parseOrchestrationSnapshot(heldDto).task_ownership[0]!.schedule?.hold).toEqual(hold);
+    const legacyHold = { code: hold.code, at };
+    expect(parseOrchestrationSnapshot({ ...snapshot, task_ownership: [{ ...snapshot.task_ownership[0]!, schedule: { ...schedule, hold: legacyHold } }] })
+      .task_ownership[0]!.schedule?.hold).toEqual({ ...legacyHold, dependency_task_id: null });
+    for (const invalid of [{ ...hold, at: "invalid" }, { ...hold, code: "" }, { ...hold, extra: true }]) {
+      expect(() => parseOrchestrationSnapshot({ ...snapshot, task_ownership: [{ ...snapshot.task_ownership[0]!, schedule: { ...schedule, hold: invalid } }] }))
+        .toThrow(CockpitClientError);
+    }
     for (const project of [null, { key: null, label: "Local" }, { key: "repo", label: "Repository" }]) {
       const view = { ...snapshot.board!.tasks[0]!, project };
       expect(parseOrchestrationSnapshot({ ...snapshot, board: { ...snapshot.board!, tasks: [view] } })

@@ -190,7 +190,7 @@ fn acceptance_stops_durable_schedule_without_discarding_attempt_or_owner() {
     fixture.edit(|state| state.task_ownership[0].schedule = Some(TaskSchedule {
         operation_id: id(), principal_key: "root".into(), target: None,
         brief: "scheduled contract".into(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
-        label: None, scheduled_at: now(),
+        label: None, scheduled_at: now(), hold: None,
     }));
     fixture.accept();
     let state = fixture.state();
@@ -434,6 +434,7 @@ fn unknown_attention_is_visible_for_closed_runs_and_retention_is_not_recovery() 
                     current_run_id: None,
                     scheduled: false,
                     attempt: None,
+                    waiting: None,
                     project: None,
                     dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: Vec::new(), problems: Vec::new() },
                 }).collect(),

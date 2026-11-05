@@ -198,6 +198,36 @@ pub struct TaskView {
     pub dependencies: TaskDependencies,
     pub scheduled: bool,
     pub attempt: Option<AttemptBadge>,
+    #[serde(default)]
+    pub waiting: Option<TaskWait>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct TaskWait {
+    pub cause: TaskWaitCause,
+    pub since: Option<String>,
+    pub held_by: Vec<TaskWaitRef>,
+    pub code: Option<String>,
+    pub detail: Option<String>,
+    pub next_automatic: bool,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct TaskWaitRef {
+    pub id: String,
+    pub title: String,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskWaitCause {
+    RecoveryBlocked, Question, Review, Integration, Prerequisites, DependencyInput,
+    Capacity, Resource, ScheduleHold, Dispatch,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleHold {
+    pub code: String,
+    pub at: String,
+    #[serde(default)]
+    pub dependency_task_id: Option<String>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -441,6 +471,8 @@ pub struct TaskSchedule {
     pub cleanup_policy: WorkerCleanupPolicy,
     pub label: Option<String>,
     pub scheduled_at: String,
+    #[serde(default)]
+    pub hold: Option<ScheduleHold>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "placement", rename_all = "snake_case")]

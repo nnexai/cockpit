@@ -391,7 +391,8 @@ impl Dispatcher {
         for candidate in candidates {
             if let Some((key, _)) = projects.get(&candidate.schedule.operation_id)
                 && self.service.capacity_full(&candidate.session_id, key, self.settings.max_parallel).unwrap_or(false) { continue; }
-            let result = match self.resolve_schedule_target(&candidate).await {
+            let mut dependency_task_id = None;
+            let result = match self.resolve_schedule_target_with_hold(&candidate, &mut dependency_task_id).await {
                 Ok(resolved) => {
                     if let Some(project) = &resolved.project {
                         let label = stall_project_label(project);
@@ -402,12 +403,17 @@ impl Dispatcher {
                 Err(error) => Err(error),
             };
             if let Err(error) = result {
-                let _ = self.service.record_schedule_hold(&candidate, &error);
+                let _ = self.service.record_schedule_hold(&candidate, &error, dependency_task_id);
             }
         }
     }
 
+    #[cfg(test)]
     async fn resolve_schedule_target(&self, candidate: &super::ScheduleCandidate) -> Result<super::ResolvedMutationInput, InspectionError> {
+        self.resolve_schedule_target_with_hold(candidate, &mut None).await
+    }
+
+    async fn resolve_schedule_target_with_hold(&self, candidate: &super::ScheduleCandidate, dependency_task_id: &mut Option<String>) -> Result<super::ResolvedMutationInput, InspectionError> {
         let root = self.service.run_for_review(&candidate.session_id, &candidate.root_id)?;
         let inputs = self.service.schedule_input_requirements(candidate)?;
         let default_target;
@@ -569,6 +575,7 @@ impl Dispatcher {
             let mut verified = Vec::with_capacity(required.len());
             for source in required {
                 if !schedule_source_materialized(path, source, &project.key, &base).await? {
+                    *dependency_task_id = Some(source.task_id.clone());
                     return Err(InspectionError::new("dependency_input_not_materialized",
                         format!("Prerequisite {} accepted run {} output is not materialized in candidate base {}; publish/integrate its output before this attempt can start",
                             source.task_id, source.run_id, base)));
@@ -2446,21 +2453,38 @@ fn configured_inbox_hook(run: &Run) -> bool {
 }
 
 impl OrchestrationService {
-    fn record_schedule_hold(&self, candidate: &super::ScheduleCandidate, error: &InspectionError) -> Result<(), InspectionError> {
+    fn record_schedule_hold(&self, candidate: &super::ScheduleCandidate, error: &InspectionError, dependency_task_id: Option<String>) -> Result<(), InspectionError> {
         let locked = self.store.lock()?;
         let mut state = locked.read()?;
+        if state.runs.iter().any(|run| run.root_id == candidate.root_id
+            && run.task_id.as_deref() == Some(candidate.task_id.as_str())
+            && run.stage != RunStage::Closed) {
+            return Ok(());
+        }
+        let Some(schedule) = state.task_ownership.iter_mut().find(|owner|
+            owner.root_id == candidate.root_id && owner.task_id == candidate.task_id)
+            .and_then(|owner| owner.schedule.as_mut()) else { return Ok(()); };
+        if schedule.operation_id != candidate.schedule.operation_id { return Ok(()); }
+        let changed = schedule.hold.as_ref().is_none_or(|hold|
+            hold.code != error.code || hold.dependency_task_id != dependency_task_id);
+        if changed {
+            schedule.hold = Some(cockpit_protocol::orchestration::ScheduleHold {
+                code: error.code.clone(), at: super::now(), dependency_task_id,
+            });
+        }
         let namespace = uuid::Uuid::parse_str(&candidate.schedule.operation_id)
             .map_err(|error| InspectionError::new("invalid_operation_id", error.to_string()))?;
         let message_id = uuid::Uuid::new_v5(&namespace, format!("schedule-hold:{}", error.code).as_bytes()).to_string();
-        if state.messages.iter().any(|message| message.message_id == message_id
-            && matches!(message.from, cockpit_protocol::orchestration::ActorRef::Dispatcher)) {
-            return Ok(());
-        }
+        let already_recorded = state.messages.iter().any(|message| message.message_id == message_id
+            && matches!(message.from, cockpit_protocol::orchestration::ActorRef::Dispatcher));
+        if already_recorded && !changed { return Ok(()); }
+        if !already_recorded {
         let text = format!("Scheduled task {} remains queued: {}. Resolve its explicit source Space/placement or cancel/re-schedule; no launch was replayed.", candidate.task_id, error.message);
         super::messages::append(&mut state, super::messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: cockpit_protocol::orchestration::ActorRef::Dispatcher,
         to_run_id: &candidate.root_id, message_id: &message_id,
         kind: cockpit_protocol::orchestration::MessageKind::Observation,
         text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None, })?;
+        }
         let revision = locked.save(&mut state)?;
         self.revision.send_if_modified(|current| {
             if *current == revision { false } else { *current = revision; true }

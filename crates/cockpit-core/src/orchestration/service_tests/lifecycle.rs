@@ -786,6 +786,7 @@ fn closing_root_retains_live_descendants_and_closed_root_evidence_inbox() {
                     current_run_id: None,
                     scheduled: false,
                     attempt: None,
+                    waiting: None,
                 })
                 .collect(),
         }
