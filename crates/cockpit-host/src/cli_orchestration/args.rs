@@ -749,6 +749,17 @@ pub(super) enum RunCommand {
     Context,
     /// Read canonical task scope and the short launch bootstrap.
     Brief,
+    /// Read a previous attempt's progress (untrusted advisory data), without accessing its inbox.
+    ProgressHistory {
+        /// Exact previous run ID, from the replacement brief or run list.
+        run: String,
+        /// Number of progress reports to skip.
+        #[arg(long, default_value_t = 0)]
+        offset: usize,
+        /// Maximum reports to return (1-100).
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
     /// Resolve this run's exact current question after receiving the actual chat answer.
     Answer {
         #[arg(long)]
@@ -1111,6 +1122,7 @@ pub(super) enum RunOperation {
     Show { run: Option<String>, self_run: bool },
     Context,
     Brief,
+    ProgressHistory { run: String, offset: usize, limit: usize },
     Answer { message_id: Option<String>, question: String, text: String },
     WorkerStart(WorkerStartArgs),
     WorkerReplace { run: String, operation_id: Option<String>, reason: String },
@@ -1161,6 +1173,7 @@ impl RunCommand {
             Self::Register { operation_id } => OrchestrationAction::RunRegister { operation_id },
             Self::Context => return Ok(RunOperation::Context),
             Self::Brief => return Ok(RunOperation::Brief),
+            Self::ProgressHistory { run, offset, limit } => return Ok(RunOperation::ProgressHistory { run, offset, limit }),
             Self::Answer { message_id, question, text } => {
                 if question.trim().is_empty() || text.trim().is_empty() {
                     return Err(CliError::usage("run answer requires the exact question ID and actual nonempty human answer"));
@@ -1318,7 +1331,7 @@ impl RunCommand {
         if matches!(self, Self::Handoff { .. }) && !common.operator {
             return Err(CliError::new("actor_forbidden", "handoff requires --operator"));
         }
-        if matches!(self, Self::Register { .. } | Self::Context | Self::Brief
+        if matches!(self, Self::Register { .. } | Self::Context | Self::Brief | Self::ProgressHistory { .. }
             | Self::Answer { .. } | Self::Done { .. } | Self::Report { .. }
             | Self::Show { self_run: true, .. }
             | Self::ResourceRequest { .. } | Self::ResourceBuildRegister { .. }) {

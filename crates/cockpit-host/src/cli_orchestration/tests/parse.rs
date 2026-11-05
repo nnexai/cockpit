@@ -1021,6 +1021,16 @@ fn replacement_brief_and_self_selection_need_no_conversation_flags() {
 }
 
 #[test]
+fn progress_history_requires_exact_run_and_preserves_paging() {
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "progress-history", "previous", "--offset", "50", "--limit", "25", "--json",
+    ]).unwrap().command else { panic!("expected run") };
+    assert!(matches!(args.command.operation(&args.common).unwrap(),
+        RunOperation::ProgressHistory { run, offset: 50, limit: 25 } if run == "previous"));
+    assert!(TestCli::try_parse_from(["test", "run", "progress-history"]).is_err());
+}
+
+#[test]
 fn task_inputs_selects_explicit_or_own_task_without_a_mutation_action() {
     for (flags, expected_task, expected_self) in [
         (vec!["test", "task", "inputs", "task-id"], Some("task-id"), false),

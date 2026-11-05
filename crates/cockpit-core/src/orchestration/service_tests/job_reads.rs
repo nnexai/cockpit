@@ -158,6 +158,68 @@ fn credentialed_reads_reject_stale_or_forged_identity_without_writes() {
 }
 
 #[test]
+fn predecessor_progress_is_bounded_task_scoped_read_only_and_never_exposes_private_messages() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, own, actor) = fixture.working(&root);
+    let (_, sibling, _) = fixture.working(&root);
+    let foreign_root = fixture.root();
+    let (_, foreign, _) = fixture.working(&foreign_root);
+    let predecessor = id();
+    let foreign_same_task = id();
+    fixture.seed_state(|state| {
+        let current = state.runs.iter_mut().find(|run| run.run_id == own).unwrap();
+        current.attempt = 2;
+        let mut prior = current.clone();
+        prior.run_id = predecessor.clone();
+        prior.attempt = 1;
+        prior.stage = RunStage::Closed;
+        let mut cross_root = prior.clone();
+        cross_root.run_id = foreign_same_task.clone();
+        cross_root.root_id = foreign_root.clone();
+        state.runs.push(cross_root);
+        state.runs.push(prior);
+        for (message_id, kind, text) in [
+            ("artifact", ReportKind::Progress, "artifact: /tmp/result"),
+            ("question", ReportKind::NeedsInput, "PRIVATE QUESTION"),
+            ("later", ReportKind::Progress, "later status"),
+        ] {
+            let report = Report { message_id: message_id.into(), kind, outcome: None, summary: text.into(),
+                plan: None, source_output: None, card: None, at: now() };
+            messages::append(state, messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None,
+                from: ActorRef::Run { run_id: predecessor.clone() }, to_run_id: &root, message_id,
+                kind: MessageKind::Report, text, in_reply_to: None, report: Some(report),
+                stale: false, escalated_from: None }).unwrap();
+        }
+        private_message(state, &predecessor, "PRIVATE ANSWER");
+        state.runs.iter_mut().find(|run| run.run_id == predecessor).unwrap().last_report =
+            state.messages.iter().find(|message| message.message_id == "later").unwrap().report.clone();
+    });
+    let root_actor = fixture.root_actor(&root);
+    let before = fixture.state_bytes();
+    let history = fixture.service.predecessor_progress(caller(&actor), SESSION, &predecessor, 0, 1).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].summary, "artifact: /tmp/result");
+    let next = fixture.service.predecessor_progress(caller(&actor), SESSION, &predecessor, 1, 100).unwrap();
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].summary, "later status");
+    assert!(fixture.service.predecessor_progress(caller(&actor), SESSION, &predecessor, 2, 1).unwrap().is_empty());
+    for invalid in [&own, &sibling, &foreign, &foreign_same_task, &root] {
+        assert_eq!(fixture.service.predecessor_progress(caller(&actor), SESSION, invalid, 0, 10).unwrap_err().code,
+            "predecessor_not_found");
+    }
+    assert_eq!(fixture.service.predecessor_progress(caller(&root_actor), SESSION, &predecessor, 0, 10).unwrap_err().code,
+        "predecessor_not_found");
+    assert_eq!(fixture.service.predecessor_progress(caller(&actor), SESSION, &predecessor, 0, 101).unwrap_err().code, "invalid_limit");
+    assert_eq!(fixture.service.predecessor_progress(caller(&actor), SESSION, &predecessor, 0, 0).unwrap_err().code, "invalid_limit");
+    assert_eq!(fixture.service.predecessor_progress(caller(&actor), "foreign-session", &predecessor, 0, 10).unwrap_err().code, "session_mismatch");
+    let mut forged = caller(&actor).clone();
+    forged.assignment_generation = Some(0);
+    assert_eq!(fixture.service.predecessor_progress(&forged, SESSION, &predecessor, 0, 10).unwrap_err().code, "job_unauthorized");
+    assert_eq!(fixture.state_bytes(), before);
+}
+
+#[test]
 fn widget_publication_requires_current_binding_and_matching_thread_task() {
     use cockpit_protocol::widget::{WidgetKey, WidgetLiveBinding};
     let fixture = Fixture::new();

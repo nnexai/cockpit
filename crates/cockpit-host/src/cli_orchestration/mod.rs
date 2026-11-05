@@ -498,6 +498,12 @@ impl RunArgs {
             }
             RunOperation::Show { run, self_run } =>
                 show_run(&context, &self.common, run, self_run).await,
+            RunOperation::ProgressHistory { run, offset, limit } => {
+                let Some(cockpit_core::orchestration::Actor::Agent(caller)) = &context.actor else { unreachable!() };
+                context.check_caller().await?;
+                let reports = context.service.predecessor_progress(caller, &context.session, &run, offset, limit)?;
+                emit(&serde_json::json!({ "run_id": run, "offset": offset, "limit": limit, "reports": reports }), self.common.json)
+            },
             RunOperation::Context => {
                 let Some(cockpit_core::orchestration::Actor::Agent(caller)) = &context.actor else { unreachable!() };
                 let (own, role) = context.service.job_role(caller)?;

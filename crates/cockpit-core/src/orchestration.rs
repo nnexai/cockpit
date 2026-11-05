@@ -520,6 +520,32 @@ impl OrchestrationService {
         Ok(snapshot)
     }
 
+    /// Explicit, read-only continuity data; never exposes another run's inbox.
+    pub fn predecessor_progress(&self, caller: &AgentCaller, session_id: &str, predecessor: &str,
+        offset: usize, limit: usize) -> Result<Vec<Report>, InspectionError> {
+        validate_identity(session_id)?;
+        if !(1..=100).contains(&limit) {
+            return Err(error("invalid_limit", "Progress history limit must be between 1 and 100"));
+        }
+        let locked = self.store.lock()?;
+        let state = locked.read_shared()?;
+        let job = credentials::validate_caller(&state, caller)?;
+        scope_run(&state, session_id, job.run_index)?;
+        let own = &state.runs[job.run_index];
+        let prior = state.runs.iter().find(|run| run.run_id == predecessor
+            && run.session_id == own.session_id && run.root_id == own.root_id
+            && run.kind == RunKind::Worker && run.task_id.is_some() && run.task_id == own.task_id
+            && run.attempt < own.attempt);
+        if job.role != JobRole::Worker || prior.is_none() {
+            return Err(error("predecessor_not_found", "Predecessor not found for this task"));
+        }
+        Ok(state.messages.iter().filter(|message| {
+            message.kind == MessageKind::Report
+                && matches!(&message.from, ActorRef::Run { run_id } if run_id == predecessor)
+                && message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Progress)
+        }).filter_map(|message| message.report.as_ref()).skip(offset).take(limit).cloned().collect())
+    }
+
     pub fn recorded_runs(&self, session_id: &str) -> Result<(u64, Vec<Run>), InspectionError> {
         validate_identity(session_id)?;
         let state = self.store.lock()?.read_shared()?;
