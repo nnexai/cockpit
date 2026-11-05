@@ -994,7 +994,21 @@ export type WidgetSourceSummary = { pane_id: string, tab_id: string, space_id: s
 
 export type WidgetSelectionFacts = { revision: number, at_ms: number, read_at_ms: number | null, };
 
-export type WidgetSummary = { key: WidgetKey, space_id: string, title: string, revision: number, created_seq: number, kind: WidgetKind, presentation: WidgetPresentation, content: WidgetContentFacts, warnings: Array<string>, source: WidgetSourceSummary | null, arrival: WidgetArrival, resolved_from: WidgetResolvedFrom, change: WidgetChange, created_at_ms: number, updated_at_ms: number, selection: WidgetSelectionFacts | null, };
+export type WidgetLiveBinding = { run_id: string, attempt: number, session_id: string, attachment_id: string, attachment_epoch: number, };
+
+export type WidgetLiveState = { version: number, value_json: string, updated_at_ms: number, };
+
+export type WidgetLiveStatus = "live" | "ended";
+
+export type WidgetLive = { binding: WidgetLiveBinding, state: WidgetLiveState | null, status: WidgetLiveStatus, };
+
+export type WidgetLiveAction = { value_json: string, };
+
+export type WidgetLiveActionRequest = { key: WidgetKey, revision: number, binding: WidgetLiveBinding, content_sha256: string, value_json: string, };
+
+export type WidgetLiveActionResponse = Record<symbol, never>;
+
+export type WidgetSummary = { key: WidgetKey, space_id: string, title: string, revision: number, created_seq: number, kind: WidgetKind, presentation: WidgetPresentation, content: WidgetContentFacts, warnings: Array<string>, source: WidgetSourceSummary | null, arrival: WidgetArrival, resolved_from: WidgetResolvedFrom, change: WidgetChange, created_at_ms: number, updated_at_ms: number, selection: WidgetSelectionFacts | null, live?: WidgetLive, };
 
 export type WidgetRemovalReason = "user" | "agent" | "retired";
 
@@ -1060,7 +1074,7 @@ export type InboxObservation = { "status": "fresh", observed_at: string, } | { "
 
 export type OwnerAvailability = "available" | "starting" | "absent" | "unknown";
 
-export type InboxOwner = { root_id: string, label: string, kind: RunKind, stage: RunStage, harness: string, availability: OwnerAvailability, location: InboxLocation | null, undelivered: number, };
+export type InboxOwner = { root_id: string, run_id: string, attempt: number, session_id: string, attachment_id: string | null, attachment_epoch: number | null, label: string, kind: RunKind, stage: RunStage, harness: string, availability: OwnerAvailability, location: InboxLocation | null, undelivered: number, };
 
 export type InboxLocation = { workspace_id: string, workspace_label: string, tab_id: string, tab_label: string, pane_id: string, };
 
@@ -1078,7 +1092,7 @@ export type InboxQuestion = { run_id: string, question_message_id: string, asked
 
 export type InboxReceipt = { message_id: string, kind: MessageKind, to_run_id: string, attempt_run_id: string | null, stage: DeliveryStage, created_at: string, acked_at: string | null, stale: boolean, };
 
-export type InboxRun = { run_id: string, attempt: number, stage: RunStage, harness: string, presence: Presence, agent_status: string | null, location: InboxLocation | null, cleanup: Array<CleanupResourceSummary>, report_images: Array<MessageImage>, };
+export type InboxRun = { run_id: string, attempt: number, stage: RunStage, harness: string, session_id: string, attachment_id: string | null, attachment_epoch: number | null, presence: Presence, agent_status: string | null, location: InboxLocation | null, cleanup: Array<CleanupResourceSummary>, report_images: Array<MessageImage>, };
 
 export type InboxEntryKind = "request" | "follow_up" | "answer" | "question" | "update" | "result";
 

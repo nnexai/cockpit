@@ -177,6 +177,43 @@ export const wireWidgetSelectionFacts: WireDescriptor<V1.WidgetSelectionFacts> =
   "read_at_ms": req(nullable(u53), { fill: null }),
 });
 
+export const wireWidgetLiveBinding: WireDescriptor<V1.WidgetLiveBinding> = struct<V1.WidgetLiveBinding>("WidgetLiveBinding", {
+  "run_id": req(str),
+  "attempt": req(u53),
+  "session_id": req(str),
+  "attachment_id": req(str),
+  "attachment_epoch": req(u53),
+});
+
+export const wireWidgetLiveState: WireDescriptor<V1.WidgetLiveState> = struct<V1.WidgetLiveState>("WidgetLiveState", {
+  "version": req(u53),
+  "value_json": req(str),
+  "updated_at_ms": req(u53),
+});
+
+export const wireWidgetLiveStatus: WireDescriptor<V1.WidgetLiveStatus> = literal<V1.WidgetLiveStatus>("WidgetLiveStatus", ["live", "ended"]);
+
+export const wireWidgetLive: WireDescriptor<V1.WidgetLive> = struct<V1.WidgetLive>("WidgetLive", {
+  "binding": req(named(() => wireWidgetLiveBinding)),
+  "state": req(nullable(named(() => wireWidgetLiveState)), { fill: null }),
+  "status": req(named(() => wireWidgetLiveStatus)),
+});
+
+export const wireWidgetLiveAction: WireDescriptor<V1.WidgetLiveAction> = struct<V1.WidgetLiveAction>("WidgetLiveAction", {
+  "value_json": req(str),
+});
+
+export const wireWidgetLiveActionRequest: WireDescriptor<V1.WidgetLiveActionRequest> = struct<V1.WidgetLiveActionRequest>("WidgetLiveActionRequest", {
+  "key": req(named(() => wireWidgetKey)),
+  "revision": req(u53),
+  "binding": req(named(() => wireWidgetLiveBinding)),
+  "content_sha256": req(str),
+  "value_json": req(str),
+});
+
+export const wireWidgetLiveActionResponse: WireDescriptor<V1.WidgetLiveActionResponse> = struct<V1.WidgetLiveActionResponse>("WidgetLiveActionResponse", {
+});
+
 export const wireWidgetSummary: WireDescriptor<V1.WidgetSummary> = struct<V1.WidgetSummary>("WidgetSummary", {
   "key": req(named(() => wireWidgetKey)),
   "space_id": req(str),
@@ -194,6 +231,7 @@ export const wireWidgetSummary: WireDescriptor<V1.WidgetSummary> = struct<V1.Wid
   "created_at_ms": req(u53),
   "updated_at_ms": req(u53),
   "selection": req(nullable(named(() => wireWidgetSelectionFacts)), { fill: null }),
+  "live": opt(named(() => wireWidgetLive), OMIT, { fill: null, rustOmits: true }),
 });
 
 export const wireWidgetRemovalReason: WireDescriptor<V1.WidgetRemovalReason> = literal<V1.WidgetRemovalReason>("WidgetRemovalReason", ["user", "agent", "retired"]);

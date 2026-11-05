@@ -21,12 +21,13 @@ export function WidgetDock({ ctx, tab, width, selected, inputBlocked, live, loca
   const [removeError, setRemoveError] = useState<string | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
-  const preview = useRef<{ key: string; document: string; revision: number; selection: unknown; hasSelection: boolean; content: WidgetContent } | null>(null);
+  const preview = useRef<{ key: string; document: string; revision: number; generation: number; selection: unknown; hasSelection: boolean; content: WidgetContent } | null>(null);
   const key = current ? widgetKey(current.key) : null;
   const revision = current?.revision;
+  const generation = store.snapshotGeneration;
   const selectionOwner = useRef({ key, revision });
   selectionOwner.current = { key, revision };
-  useEffect(() => { if (current) store.fetchContent(current); }, [store, key, revision]);
+  useEffect(() => { if (current) store.fetchContent(current); }, [store, key, revision, generation]);
   useEffect(() => { setRemoveError(null); setSelectionError(null); }, [key, revision]);
   if (!current) return null;
   const agent = current.source?.agent_label ?? (current.source ? "pane" : "CLI");
@@ -38,10 +39,15 @@ export function WidgetDock({ ctx, tab, width, selected, inputBlocked, live, loca
     if (valueJson !== null && valueJson !== undefined) {
       try { selection = JSON.parse(valueJson); hasSelection = true; } catch { /* Invalid stored data is never interpreted. */ }
     }
-    preview.current = { key: widgetKey(current.key), document: state.content.body.document, revision: state.content.revision, selection, hasSelection, content: state.content };
+    preview.current = { key: widgetKey(current.key), document: state.content.body.document, revision: state.content.revision, generation, selection, hasSelection, content: state.content };
   }
-  else if (preview.current?.key !== widgetKey(current.key) || current.kind !== "html") preview.current = null;
+  else if (preview.current?.key !== widgetKey(current.key) || preview.current.generation !== generation || current.kind !== "html") preview.current = null;
   const html = preview.current;
+  let liveState: unknown = null;
+  if (current.live?.state) {
+    try { liveState = { version: current.live.state.version, value: JSON.parse(current.live.state.value_json), updated_at_ms: current.live.state.updated_at_ms, status: store.connected ? current.live.status : "reconnecting" }; }
+    catch { /* Invalid state is never interpreted. */ }
+  }
   const remove = () => {
     setRemoving(true); setRemoveError(null);
     void store.remove(current.key).catch(error => setRemoveError(error instanceof Error ? error.message : String(error))).finally(() => setRemoving(false));
@@ -58,11 +64,12 @@ export function WidgetDock({ ctx, tab, width, selected, inputBlocked, live, loca
       {state.error ? <div role="alert" className="widget-inline-error">{state.error}<button type="button" onClick={() => store.fetchContent(current)}>Retry loading</button></div> : null}
       {selectionError ? <div role="alert" className="widget-inline-error">{selectionError}</div> : null}
       {!state.content && !state.error && !html ? <div role="status" className="widget-loading">Loading widget…</div> : null}
-      {html ? <WidgetFrame key={key} widgetKey={key!} document={html.document} revision={html.revision} currentRevision={current.revision}
-        selection={html.selection} hasSelection={html.hasSelection} agent={agent} inputBlocked={inputBlocked}
+      {html ? <WidgetFrame key={`${key}:${html.generation}:${JSON.stringify(current.live?.binding ?? null)}`} widgetKey={key!} document={html.document} revision={html.revision} currentRevision={current.revision}
+        selection={html.selection} hasSelection={html.hasSelection} agent={agent} inputBlocked={inputBlocked || !store.connected}
+        liveState={liveState} onEmit={current.live ? async value_json => { await store.emitPage(current.key, html.revision, html.document, html.generation, current.live!.binding, html.content.sha256, value_json); } : undefined}
         onUserFocus={() => { if (!selected && !inputBlocked && !retiringFocus.current) onSelect(); }} onSelect={valueJson => {
           setSelectionError(null);
-          void store.selectPage(current.key, html.revision, html.document, valueJson).catch(error => {
+          void store.selectPage(current.key, html.revision, html.document, valueJson, false, html.generation).catch(error => {
             if (selectionOwner.current.key === key && selectionOwner.current.revision === html.revision) {
               setSelectionError(error instanceof Error ? error.message : "Could not store this selection.");
             }
@@ -72,9 +79,9 @@ export function WidgetDock({ ctx, tab, width, selected, inputBlocked, live, loca
         wrapper.current?.focus({ preventScroll: true });
         retiringFocus.current = false;
       }} /> : null}
-      {state.content?.body.type === "choices" ? <WidgetChoices key={key} client={ctx.client} widget={current} spec={state.content.body.spec} inputBlocked={inputBlocked} />
+      {state.content?.body.type === "choices" ? <WidgetChoices key={key} client={ctx.client} widget={current} spec={state.content.body.spec} inputBlocked={inputBlocked || !store.connected} />
         : state.content?.body.type === "html" && state.content.body.choices && state.content.revision === current.revision
-          ? <div className="widget-dock-choices"><WidgetChoices key={key} client={ctx.client} widget={current} spec={state.content.body.choices} inputBlocked={inputBlocked} /></div> : null}
+          ? <div className="widget-dock-choices"><WidgetChoices key={key} client={ctx.client} widget={current} spec={state.content.body.choices} inputBlocked={inputBlocked || !store.connected} /></div> : null}
     </div>
   </>;
 }

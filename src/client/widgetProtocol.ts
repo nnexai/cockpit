@@ -1,12 +1,14 @@
 import type {
   WidgetBody, WidgetChoicesSpec, WidgetContent, WidgetContentRequest, WidgetEvent, WidgetKey,
   WidgetRemoveRequest, WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse,
+  WidgetLiveActionRequest, WidgetLiveActionResponse,
   WidgetSelectionResponse, WidgetShelfListResponse, WidgetShelfReopenRequest, WidgetSummary, WidgetWindowReport,
 } from "../protocol/generated/v1";
 import {
   wireWidgetBody, wireWidgetChoicesSpec, wireWidgetContent, wireWidgetContentRequest,
   wireWidgetEvent, wireWidgetKey, wireWidgetRemoveRequest, wireWidgetRemoveResponse,
   wireWidgetSelectRequest, wireWidgetSelectResponse, wireWidgetSelectionResponse,
+  wireWidgetLiveActionRequest, wireWidgetLiveActionResponse,
   wireWidgetShelfListResponse, wireWidgetShelfReopenRequest, wireWidgetSummary, wireWidgetWindowReport, type TypedWirePolicy,
 } from "../protocol/generated/validate";
 import { CockpitClientError } from "./CockpitClient";
@@ -83,6 +85,9 @@ const WIDGET = definePolicy({
       "WidgetBody[html].document": (v) => boundedBytes(v, MAX_HTML_BYTES),
       "WidgetContent.sha256": hash, "WidgetSelectValue[choice].choice_id": slug,
       "WidgetSelectValue[page].value_json": (v) => parseSelectionJson(v) === v,
+      "WidgetLiveBinding.run_id": identity, "WidgetLiveBinding.session_id": identity,
+      "WidgetLiveBinding.attachment_id": identity, "WidgetLiveActionRequest.content_sha256": hash,
+      "WidgetLiveActionRequest.value_json": (v) => parseSelectionJson(v) === v,
       "WidgetWindowReport.session_id": (v) => v === null || identity(v),
       "WidgetWindowReport.displayed_tab_id": (v) => v === null || identity(v),
       "WidgetSelectionResponse.id": slug,
@@ -116,6 +121,8 @@ export function parseWidgetRemoveRequest(value: unknown): WidgetRemoveRequest { 
 export function parseWidgetRemoveResponse(value: unknown): WidgetRemoveResponse { return parseWire(value, wireWidgetRemoveResponse, WIDGET); }
 export function parseWidgetSelectRequest(value: unknown): WidgetSelectRequest { return parseWire(value, wireWidgetSelectRequest, WIDGET); }
 export function parseWidgetSelectResponse(value: unknown): WidgetSelectResponse { return parseWire(value, wireWidgetSelectResponse, WIDGET); }
+export function parseWidgetLiveActionRequest(value: unknown): WidgetLiveActionRequest { return parseWire(value, wireWidgetLiveActionRequest, WIDGET); }
+export function parseWidgetLiveActionResponse(value: unknown): WidgetLiveActionResponse { return parseWire(value, wireWidgetLiveActionResponse, WIDGET); }
 export function parseWidgetWindowReport(value: unknown): WidgetWindowReport { return parseWire(value, wireWidgetWindowReport, WIDGET); }
 export function parseWidgetSelectionResponse(value: unknown): WidgetSelectionResponse { return parseWire(value, wireWidgetSelectionResponse, WIDGET); }
 export function parseWidgetShelfListResponse(value: unknown): WidgetShelfListResponse { return parseWire(value, wireWidgetShelfListResponse, WIDGET); }

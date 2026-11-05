@@ -87,7 +87,7 @@ Files and Review are tab-local viewers opened from a real same-tab source termin
 
 Browser is one independent managed Chromium association per Herdr tab, not a Space sidecar. Hidden views release capture resources. Fresh opening, explicit closure, retirement and owner shutdown manage its disposable profile and association work through identity-proven cleanup. Current-run failures remain visible and retryable; this is not retained navigation, credentials or saved-work recovery.
 
-Widgets are trusted run-local HTML or declarative choices in an active opaque iframe dock, not Browser sessions or durable context. Publication does not select a terminal or grant execution authority. A narrow incarnation-bound bridge returns untrusted selection JSON to an agent pull/wait channel. Script execution and normal network access remain possible; the iframe is not CPU, memory, network or process isolation.
+Widgets are trusted run-local HTML or declarative choices in an active opaque iframe dock, not Browser sessions or durable context. A run-bound live feed can also place authored HTML in its matching Inbox timeline; JSON state changes do not replace the document, and explicit page actions are untrusted data for the producer, not terminal input or task authority. Publication does not select a terminal or grant execution authority. The incarnation-bound bridge also returns untrusted selection JSON to an agent pull/wait channel. Script execution and normal network access remain possible; the iframe is not CPU, memory, network or process isolation.
 
 Widget documents automatically include the reusable `.cw` component styles; Jira ticket and Confluence page examples are linked from [CODE_GUIDE](CODE_GUIDE.md). Styles do not change widget trust or lifecycle.
 

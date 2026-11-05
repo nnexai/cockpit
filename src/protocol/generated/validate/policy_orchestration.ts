@@ -141,7 +141,6 @@ export interface WireTypes {
   "CleanupReasonClass": V1.CleanupReasonClass;
   "CleanupReason": V1.CleanupReason;
   "CleanupEffectState": V1.CleanupEffectState;
-  "CleanupEffectReceipt": V1.CleanupEffectReceipt;
 }
 
 export interface WireOwners {
@@ -274,7 +273,6 @@ export interface WireOwners {
   "OwnedResourceIdentity[attempt_directory]": Extract<V1.OwnedResourceIdentity, { "kind": "attempt_directory" }>;
   "OwnedResourceIdentity[fixture_set]": Extract<V1.OwnedResourceIdentity, { "kind": "fixture_set" }>;
   "CleanupReason": V1.CleanupReason;
-  "CleanupEffectReceipt": V1.CleanupEffectReceipt;
 }
 
 export interface WireFields {
@@ -319,6 +317,11 @@ export interface WireFields {
   "InboxObservation[fresh].observed_at": (Extract<V1.InboxObservation, { "status": "fresh" }>)["observed_at"];
   "InboxObservation[unavailable].error": (Extract<V1.InboxObservation, { "status": "unavailable" }>)["error"];
   "InboxOwner.root_id": (V1.InboxOwner)["root_id"];
+  "InboxOwner.run_id": (V1.InboxOwner)["run_id"];
+  "InboxOwner.attempt": (V1.InboxOwner)["attempt"];
+  "InboxOwner.session_id": (V1.InboxOwner)["session_id"];
+  "InboxOwner.attachment_id": (V1.InboxOwner)["attachment_id"];
+  "InboxOwner.attachment_epoch": (V1.InboxOwner)["attachment_epoch"];
   "InboxOwner.label": (V1.InboxOwner)["label"];
   "InboxOwner.kind": (V1.InboxOwner)["kind"];
   "InboxOwner.stage": (V1.InboxOwner)["stage"];
@@ -365,6 +368,9 @@ export interface WireFields {
   "InboxRun.attempt": (V1.InboxRun)["attempt"];
   "InboxRun.stage": (V1.InboxRun)["stage"];
   "InboxRun.harness": (V1.InboxRun)["harness"];
+  "InboxRun.session_id": (V1.InboxRun)["session_id"];
+  "InboxRun.attachment_id": (V1.InboxRun)["attachment_id"];
+  "InboxRun.attachment_epoch": (V1.InboxRun)["attachment_epoch"];
   "InboxRun.presence": (V1.InboxRun)["presence"];
   "InboxRun.agent_status": (V1.InboxRun)["agent_status"];
   "InboxRun.location": (V1.InboxRun)["location"];
@@ -829,12 +835,6 @@ export interface WireFields {
   "CleanupReason.class": (V1.CleanupReason)["class"];
   "CleanupReason.code": (V1.CleanupReason)["code"];
   "CleanupReason.message": (V1.CleanupReason)["message"];
-  "CleanupEffectReceipt.effect_id": (V1.CleanupEffectReceipt)["effect_id"];
-  "CleanupEffectReceipt.kind": (V1.CleanupEffectReceipt)["kind"];
-  "CleanupEffectReceipt.identity_digest": (V1.CleanupEffectReceipt)["identity_digest"];
-  "CleanupEffectReceipt.state": (V1.CleanupEffectReceipt)["state"];
-  "CleanupEffectReceipt.evidence": (V1.CleanupEffectReceipt)["evidence"];
-  "CleanupEffectReceipt.updated_at": (V1.CleanupEffectReceipt)["updated_at"];
 }
 
 export interface WireFieldNames {
@@ -852,7 +852,7 @@ export interface WireFieldNames {
   "InboxObservation": never;
   "InboxObservation[fresh]": "observed_at";
   "InboxObservation[unavailable]": "error";
-  "InboxOwner": "root_id" | "label" | "kind" | "stage" | "harness" | "availability" | "location" | "undelivered";
+  "InboxOwner": "root_id" | "run_id" | "attempt" | "session_id" | "attachment_id" | "attachment_epoch" | "label" | "kind" | "stage" | "harness" | "availability" | "location" | "undelivered";
   "InboxLocation": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id";
   "InboxSource": never;
   "InboxSource[recorded]": never;
@@ -864,7 +864,7 @@ export interface WireFieldNames {
   "InboxRequestEcho": "message_id" | "text" | "created_at" | "to_run_id" | "handoff" | "images";
   "InboxQuestion": "run_id" | "question_message_id" | "asked_at" | "text" | "choices" | "receipt";
   "InboxReceipt": "message_id" | "kind" | "to_run_id" | "attempt_run_id" | "stage" | "created_at" | "acked_at" | "stale";
-  "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "presence" | "agent_status" | "location" | "cleanup" | "report_images";
+  "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "session_id" | "attachment_id" | "attachment_epoch" | "presence" | "agent_status" | "location" | "cleanup" | "report_images";
   "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to";
   "InboxArtifact": "path" | "name" | "kind" | "recorded";
   "InboxDecision": "question" | "answer" | "asked_at" | "answered_at" | "by";
@@ -967,7 +967,6 @@ export interface WireFieldNames {
   "OwnedResourceIdentity[attempt_directory]": "identity";
   "OwnedResourceIdentity[fixture_set]": "identity";
   "CleanupReason": "class" | "code" | "message";
-  "CleanupEffectReceipt": "effect_id" | "kind" | "identity_digest" | "state" | "evidence" | "updated_at";
 }
 
 export interface WireChildNames {
@@ -1111,7 +1110,7 @@ export interface WireCheckpointFieldNames {
   "InboxObservation": "error" | "observed_at" | "status";
   "InboxObservation[fresh]": "observed_at" | "status";
   "InboxObservation[unavailable]": "error" | "status";
-  "InboxOwner": "root_id" | "label" | "kind" | "stage" | "harness" | "availability" | "location" | "undelivered";
+  "InboxOwner": "root_id" | "run_id" | "attempt" | "session_id" | "attachment_id" | "attachment_epoch" | "label" | "kind" | "stage" | "harness" | "availability" | "location" | "undelivered";
   "InboxLocation": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id";
   "InboxSource": "harness" | "kind" | "run_id";
   "InboxSource[recorded]": "kind";
@@ -1123,7 +1122,7 @@ export interface WireCheckpointFieldNames {
   "InboxRequestEcho": "message_id" | "text" | "created_at" | "to_run_id" | "handoff" | "images";
   "InboxQuestion": "run_id" | "question_message_id" | "asked_at" | "text" | "choices" | "receipt";
   "InboxReceipt": "message_id" | "kind" | "to_run_id" | "attempt_run_id" | "stage" | "created_at" | "acked_at" | "stale";
-  "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "presence" | "agent_status" | "location" | "cleanup" | "report_images";
+  "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "session_id" | "attachment_id" | "attachment_epoch" | "presence" | "agent_status" | "location" | "cleanup" | "report_images";
   "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to";
   "InboxArtifact": "path" | "name" | "kind" | "recorded";
   "InboxDecision": "question" | "answer" | "asked_at" | "answered_at" | "by";
@@ -1226,17 +1225,20 @@ export interface WireCheckpointFieldNames {
   "OwnedResourceIdentity[attempt_directory]": "identity" | "kind";
   "OwnedResourceIdentity[fixture_set]": "identity" | "kind";
   "CleanupReason": "class" | "code" | "message";
-  "CleanupEffectReceipt": "effect_id" | "kind" | "identity_digest" | "state" | "evidence" | "updated_at";
 }
 
 export type WireOmittableField =
   | "OrchestrationSnapshotRequest.root_id"
   | "JobImage.thread_id"
+  | "InboxOwner.attachment_id"
+  | "InboxOwner.attachment_epoch"
   | "InboxOwner.location"
   | "InboxText.message_id"
   | "InboxText.at"
   | "InboxReceipt.attempt_run_id"
   | "InboxReceipt.acked_at"
+  | "InboxRun.attachment_id"
+  | "InboxRun.attachment_epoch"
   | "InboxRun.agent_status"
   | "InboxRun.location"
   | "InboxEntry.outcome"
@@ -1354,7 +1356,6 @@ export type WireOmittableField =
   | "IntegrationMapping.explanation"
   | "ResourceRequestRecord.blocked_reason"
   | "OwnedGitIdentity.branch_ref"
-  | "CleanupEffectReceipt.evidence"
   | never;
 
 export type WireOptionalField =

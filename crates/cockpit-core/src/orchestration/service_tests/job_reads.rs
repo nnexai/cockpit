@@ -158,6 +158,74 @@ fn credentialed_reads_reject_stale_or_forged_identity_without_writes() {
 }
 
 #[test]
+fn authenticated_run_identity_uses_current_durable_attachment_not_caller_location() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, worker, actor) = fixture.working(&root);
+    fixture.seed_run(&worker, |run| {
+        run.attempt = 7;
+        run.attachment.as_mut().unwrap().location = Some(RunLocation {
+            boot_id: None, peer_process: None, terminal_id: Some("recorded-terminal".into()),
+            native_session_id: None, endpoint_identity: "recorded-endpoint".into(),
+            session_id: SESSION.into(), workspace_id: "recorded-space".into(),
+            tab_id: "recorded-tab".into(), pane_id: "recorded-pane".into(), launch_tag: "launch".into(),
+        });
+    });
+    let mut caller = caller(&actor).clone();
+    caller.session_id = "forged-session".into();
+    caller.pane_id = "forged-pane".into();
+    caller.terminal_id = Some("forged-terminal".into());
+    let identity = fixture.service.authenticated_run_identity(&caller).unwrap();
+    assert_eq!(identity.run_id, worker);
+    assert_eq!(identity.attempt, 7);
+    assert_eq!(identity.session_id, SESSION);
+    assert_eq!(identity.attachment_id, caller.auth.attachment_id);
+    assert_eq!(identity.attachment_epoch, caller.auth.attachment_epoch);
+    let location = identity.location.unwrap();
+    assert_eq!(location.pane_id, "recorded-pane");
+    assert_eq!(location.terminal_id.as_deref(), Some("recorded-terminal"));
+    assert_eq!(location.session_id, SESSION);
+    let check = |attempt, session, epoch, credential: &str| fixture.service.validate_widget_binding(
+        &worker, attempt, session, &caller.auth.attachment_id, epoch, credential,
+    );
+    assert!(check(7, SESSION, caller.auth.attachment_epoch, &caller.auth.credential_id).is_ok());
+    assert!(check(8, SESSION, caller.auth.attachment_epoch, &caller.auth.credential_id).is_err());
+    assert!(check(7, "other", caller.auth.attachment_epoch, &caller.auth.credential_id).is_err());
+    assert!(check(7, SESSION, caller.auth.attachment_epoch + 1, &caller.auth.credential_id).is_err());
+    assert!(check(7, SESSION, caller.auth.attachment_epoch, &id()).is_err());
+
+    for fence in ["credential", "epoch", "generation", "conversation", "secret"] {
+        let mut forged = caller.clone();
+        match fence {
+            "credential" => forged.auth.credential_id = id(),
+            "epoch" => forged.auth.attachment_epoch += 1,
+            "generation" => forged.assignment_generation = Some(0),
+            "conversation" => forged.conversation.as_mut().unwrap().session_id = "other".into(),
+            "secret" => forged.auth.secret = SecretBytes::new([42; 32]),
+            _ => unreachable!(),
+        }
+        assert_eq!(fixture.service.authenticated_run_identity(&forged).unwrap_err().code, "job_unauthorized", "{fence}");
+    }
+    fixture.seed_run(&worker, |run| run.attachment.as_mut().unwrap().location = None);
+    assert!(fixture.service.authenticated_run_identity(&caller).unwrap().location.is_none());
+    fixture.seed_state(|state| {
+        let ownership = state.task_ownership.iter_mut().find(|record|
+            record.owner.as_ref().is_some_and(|owner| owner.run_id == worker)).unwrap();
+        ownership.generation += 1;
+    });
+    assert_eq!(fixture.service.authenticated_run_identity(&caller).unwrap_err().code, "job_unauthorized");
+    assert!(check(7, SESSION, caller.auth.attachment_epoch, &caller.auth.credential_id).is_err());
+    fixture.seed_state(|state| {
+        let ownership = state.task_ownership.iter_mut().find(|record|
+            record.owner.as_ref().is_some_and(|owner| owner.run_id == worker)).unwrap();
+        ownership.generation -= 1;
+        state.credentials.iter_mut().find(|record| record.credential_id == caller.auth.credential_id)
+            .unwrap().state = credentials::CredentialState::Revoked;
+    });
+    assert!(check(7, SESSION, caller.auth.attachment_epoch, &caller.auth.credential_id).is_err());
+}
+
+#[test]
 fn private_question_aliases_and_answers_are_hidden_but_public_run_reports_remain_visible() {
     let fixture = Fixture::new();
     let root = fixture.root();

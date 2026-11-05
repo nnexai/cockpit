@@ -2220,3 +2220,119 @@ async fn lagged_waiter_retains_selection_outcome_despite_later_replacement_event
         json!({"id":"errors","label":"Errors"})
     );
 }
+
+#[tokio::test]
+async fn live_feed_fences_binding_and_revision_and_does_not_resurrect() {
+    let f = Fixture::new();
+    f.show("feed", "Feed").await;
+    let key = key("feed");
+    let binding = WidgetLiveBinding {
+        run_id: "run".into(), attempt: 1, session_id: "daily".into(),
+        attachment_id: "attachment".into(), attachment_epoch: 1,
+    };
+    let mut stream = f.service.subscribe();
+    let content_sha256 = f.summaries()[0].content.sha256.clone();
+    f.service.attach_live(&key, 1, binding.clone(), "credential".into()).unwrap();
+    let other = WidgetLiveBinding { attachment_epoch: 2, ..binding.clone() };
+    let source = f.summaries()[0].source.clone().unwrap();
+    assert_eq!(f.service.resolve_live_key(&address(), "feed", &source, "endpoint-generation-1").await.unwrap(), key);
+    let wrong_source = WidgetSourceSummary { terminal_id: "other".into(), ..source };
+    assert!(f.service.resolve_live_key(&address(), "feed", &wrong_source, "endpoint-generation-1").await.is_err());
+    assert!(f.service.publish_live(&key, 1, &other, "credential", "null".into()).is_err());
+    f.service.publish_live(&key, 1, &binding, "credential", "{\"n\":1}".into()).unwrap();
+    assert!(matches!(stream.events.try_recv().unwrap(), WidgetEvent::Upserted { widget, .. } if widget.revision == 1 && widget.live.as_ref().unwrap().state.is_none()));
+    assert!(matches!(stream.events.try_recv().unwrap(), WidgetEvent::Upserted { widget, .. } if widget.live.as_ref().unwrap().state.as_ref().unwrap().version == 1));
+    assert!(f.service.bound_send_live_action(WidgetLiveActionRequest { key: key.clone(), revision: 2, binding: binding.clone(), content_sha256: content_sha256.clone(), value_json: "null".into() }, &binding, "credential").is_err());
+    for _ in 0..WIDGET_MAX_LIVE_ACTIONS {
+        f.service.bound_send_live_action(WidgetLiveActionRequest { key: key.clone(), revision: 1, binding: binding.clone(), content_sha256: content_sha256.clone(), value_json: "null".into() }, &binding, "credential").unwrap();
+    }
+    assert!(f.service.bound_send_live_action(WidgetLiveActionRequest { key: key.clone(), revision: 1, binding: binding.clone(), content_sha256, value_json: "null".into() }, &binding, "credential").is_err());
+    assert_eq!(f.service.poll_live_actions(&key, 1, &binding, "credential", Duration::ZERO).await.unwrap().len(), WIDGET_MAX_LIVE_ACTIONS);
+    f.remove("feed");
+    let reopened = f.service.shelf_reopen(WidgetShelfReopenRequest { key: key.clone() }).unwrap();
+    assert_eq!(reopened.live.unwrap().status, WidgetLiveStatus::Ended);
+    assert!(f.service.poll_live_actions(&key, 2, &binding, "credential", Duration::ZERO).await.is_err());
+}
+
+#[tokio::test]
+async fn live_actions_reject_stale_binding_and_content_for_same_revision() {
+    let f = Fixture::new();
+    f.show("feed", "Feed").await;
+    let key = key("feed");
+    let binding = WidgetLiveBinding {
+        run_id: "run".into(), attempt: 1, session_id: "daily".into(),
+        attachment_id: "attachment".into(), attachment_epoch: 1,
+    };
+    f.service.attach_live(&key, 1, binding.clone(), "credential".into()).unwrap();
+    let request = WidgetLiveActionRequest {
+        key: key.clone(),
+        revision: 1,
+        binding: binding.clone(),
+        content_sha256: f.summaries()[0].content.sha256.clone(),
+        value_json: r#"{"action":"refresh"}"#.into(),
+    };
+
+    let mut stale_binding = request.clone();
+    stale_binding.binding.attachment_epoch += 1;
+    assert!(f.service.bound_send_live_action(stale_binding, &binding, "credential").is_err());
+    let mut stale_content = request.clone();
+    stale_content.content_sha256 = if request.content_sha256 == "0".repeat(64) {
+        "1".repeat(64)
+    } else {
+        "0".repeat(64)
+    };
+    assert!(f.service.bound_send_live_action(stale_content, &binding, "credential").is_err());
+    assert!(f.service.poll_live_actions(&key, 1, &binding, "credential", Duration::ZERO).await.unwrap().is_empty());
+
+    f.service.bound_send_live_action(request.clone(), &binding, "credential").unwrap();
+    let actions = f.service.poll_live_actions(&key, 1, &binding, "credential", Duration::ZERO).await.unwrap();
+    assert_eq!(actions, vec![WidgetLiveAction { value_json: request.value_json }]);
+}
+
+#[tokio::test]
+async fn verified_source_loss_ends_live_feed_and_fences_queued_and_waiting_actions() {
+    for restart in [false, true] {
+        for queued in [false, true] {
+            let f = Fixture::new();
+            f.show("feed", "Feed").await;
+            let key = key("feed");
+            let binding = WidgetLiveBinding {
+                run_id: "run".into(), attempt: 1, session_id: "daily".into(),
+                attachment_id: "attachment".into(), attachment_epoch: 1,
+            };
+            f.service.attach_live(&key, 1, binding.clone(), "credential".into()).unwrap();
+            let request = WidgetLiveActionRequest {
+                key: key.clone(), revision: 1, binding: binding.clone(),
+                content_sha256: f.summaries()[0].content.sha256.clone(), value_json: "null".into(),
+            };
+            if queued {
+                f.service.bound_send_live_action(request.clone(), &binding, "credential").unwrap();
+            }
+            let poll = if queued { None } else {
+                let service = f.service.clone();
+                let key = key.clone();
+                let binding = binding.clone();
+                let poll = tokio::spawn(async move {
+                    service.poll_live_actions(&key, 1, &binding, "credential", Duration::from_secs(30)).await
+                });
+                tokio::task::yield_now().await;
+                Some(poll)
+            };
+            if restart {
+                f.browser.snapshot.lock().snapshot.panes[0].terminal_id = "new-terminal".into();
+            } else {
+                f.browser.snapshot.lock().snapshot.panes.retain(|pane| pane.id != "p1");
+            }
+            f.service.reconcile().await;
+            assert_eq!(f.summaries()[0].live.as_ref().unwrap().status, WidgetLiveStatus::Ended);
+            assert!(f.service.live_binding(&key, 1).is_err());
+            assert!(f.service.bound_send_live_action(request, &binding, "credential").is_err());
+            if let Some(poll) = poll {
+                assert!(tokio::time::timeout(Duration::from_secs(1), poll).await.unwrap().unwrap().is_err());
+            } else {
+                assert!(f.service.poll_live_actions(&key, 1, &binding, "credential", Duration::ZERO).await.is_err());
+            }
+            assert!(f.service.store.lock().tabs.values().flat_map(|tab| &tab.live).all(|widget| widget.live_actions.is_empty()));
+        }
+    }
+}

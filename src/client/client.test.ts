@@ -106,6 +106,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     widgetContent: vi.fn(async () => { throw new Error("Unexpected widget content in terminal fixture"); }),
     widgetRemove: vi.fn(async () => { throw new Error("Unexpected widget removal in terminal fixture"); }),
     widgetSelect: vi.fn(async () => { throw new Error("Unexpected widget selection in terminal fixture"); }),
+    widgetAction: vi.fn(async () => { throw new Error("Unexpected widget action in terminal fixture"); }),
     widgetShelfList: vi.fn(async () => ({ widgets: [] })),
     widgetShelfReopen: vi.fn(async () => { throw new Error("Unexpected widget reopen in terminal fixture"); }),
     browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this tab", cleanup: "none" as const, cleanup_reason: null })),

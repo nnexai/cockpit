@@ -95,6 +95,55 @@ it("retains the visible preview while fetching a replacement and swaps only once
   }
 });
 
+it("retires a live document on a same-revision owner snapshot before routing actions", async () => {
+  const binding = { run_id: "old", attempt: 1, session_id: "session", attachment_id: "attachment", attachment_epoch: 1 };
+  const old: WidgetSummary = { ...summary, live: { binding, state: null, status: "live" } };
+  const next: WidgetSummary = { ...old, live: { ...old.live!, binding: { ...binding, run_id: "new" } } };
+  const content: WidgetContent = { key: old.key, revision: old.revision, sha256: old.content.sha256,
+    body: { type: "html", document: "<p>Same bytes</p>", choices: null }, selection: null };
+  let finish!: (content: WidgetContent) => void;
+  const pending = new Promise<WidgetContent>(resolve => { finish = resolve; });
+  const widgetContent = vi.fn().mockResolvedValueOnce(content).mockReturnValueOnce(pending);
+  const widgetAction = vi.fn().mockResolvedValue({});
+  const client = { widgetContent, widgetAction } as unknown as CockpitClient;
+  const { ctx, store } = fixture(client);
+  store.accept({ type: "snapshot", sequence: 1, widgets: [old] });
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  const render = () => root.render(<WidgetDock ctx={ctx} tab={ctx.getState().tabs.tab} width={600}
+    selected={false} inputBlocked={false} live onSelect={() => {}} onZoom={() => {}} onGoToAgent={() => {}} />);
+  try {
+    await act(async () => render());
+    const original = host.querySelector<HTMLIFrameElement>("iframe")!;
+    const originalWindow = original.contentWindow;
+    const identity = dockFrameIdentity(original);
+    await act(async () => {
+      store.accept({ type: "snapshot", sequence: 0, widgets: [next] });
+      // The old bridge can still dispatch before React commits the new snapshot.
+      window.dispatchEvent(new MessageEvent("message", { source: originalWindow,
+        data: { ...identity, type: "cockpit.widget.emit", id: 1, value_json: "{}" } }));
+    });
+    expect(widgetAction).not.toHaveBeenCalled();
+    expect(host.querySelector("iframe")).toBeNull();
+    expect(widgetContent).toHaveBeenCalledTimes(2);
+    await act(async () => finish(content));
+    const replacement = host.querySelector<HTMLIFrameElement>("iframe")!;
+    expect(replacement).not.toBe(original);
+    expect(dockFrameIdentity(replacement).nonce).not.toBe(identity.nonce);
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", { source: originalWindow,
+        data: { ...identity, type: "cockpit.widget.emit", id: 2, value_json: "{}" } }));
+      window.dispatchEvent(new MessageEvent("message", { source: replacement.contentWindow,
+        data: { ...dockFrameIdentity(replacement), type: "cockpit.widget.emit", id: 3, value_json: "{}" } }));
+    });
+    expect(widgetAction).toHaveBeenCalledTimes(1);
+    expect(widgetAction).toHaveBeenCalledWith({ key: next.key, revision: next.revision, binding: next.live!.binding, content_sha256: content.sha256, value_json: "{}" });
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
 it("renders fetched declarative choices in the dock without mounting an agent iframe", async () => {
   const choices: WidgetSummary = { ...summary, kind: "choices", presentation: "choices" };
   const content: WidgetContent = { key: choices.key, revision: choices.revision, sha256: choices.content.sha256, selection: null,

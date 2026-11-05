@@ -224,6 +224,7 @@ class AppFixture {
     widgetContent: vi.fn(async request => ({ key: request.key, revision: request.revision, sha256: "a".repeat(64), body: { type: "html" as const, document: "<p>Widget statistics</p>", choices: null }, selection: null })),
     widgetRemove: vi.fn(async () => ({ result: "removed" as const })),
     widgetSelect: vi.fn(async () => ({ at_ms: 1 })),
+    widgetAction: vi.fn(async () => ({})),
     widgetShelfList: vi.fn(async () => ({ widgets: [] })),
     widgetShelfReopen: vi.fn(async () => { throw new Error("Unexpected widget shelf reopen in fixture"); }),
     browserAction: vi.fn(async () => ({ association: null, connection: "absent" as const, message: "No browser is associated with this tab", cleanup: "none" as const, cleanup_reason: null })),

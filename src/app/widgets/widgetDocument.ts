@@ -23,6 +23,7 @@ export function widgetDocument(html: string, bridge: {
   revision: number;
   selection: unknown | null;
   hasSelection?: boolean;
+  liveState?: unknown;
 }): string {
   const document = new DOMParser().parseFromString(html, "text/html");
   const charset = document.createElement("meta");
@@ -65,8 +66,39 @@ export function widgetDocument(html: string, bridge: {
       }
       post({type: 'cockpit.widget.select', nonce: state.nonce, revision: state.revision, value_json}, '*');
     });
+    const listeners = new Set();
+    let liveState = state.liveState ?? null;
+    let actionId = 0;
+    const actions = new Map();
+    const onState = freeze(function onState(callback) {
+      if (typeof callback !== 'function') throw new TypeError('State listener must be a function');
+      listeners.add(callback);
+      callback(liveState);
+      return () => listeners.delete(callback);
+    });
+    const emit = freeze(function emit(value) {
+      let value_json;
+      try {
+        value_json = stringify(value, (_key, item) => {
+          if (typeof item === 'undefined' || typeof item === 'function' || typeof item === 'symbol'
+            || typeof item === 'bigint' || (typeof item === 'number' && !finite(item))) {
+            throw new TypeError('Widget actions must contain only finite JSON values');
+          }
+          return item;
+        });
+        if (typeof value_json !== 'string') throw new TypeError('Widget action must be JSON');
+        if (encode(value_json).byteLength > ${MAX_SELECTION_BYTES}) throw new RangeError('Widget action exceeds 16 KiB');
+      } catch (error) { return Promise.reject(error); }
+      if (actions.size >= 16) return Promise.reject(new Error('Too many pending widget actions'));
+      const id = ++actionId;
+      const {promise, resolve, reject} = Promise.withResolvers();
+      const timer = setTimeout(() => { actions.delete(id); reject(new Error('Widget action timed out')); }, 30000);
+      actions.set(id, {resolve, reject, timer});
+      post({type: 'cockpit.widget.emit', nonce: state.nonce, revision: state.revision, id, value_json}, '*');
+      return promise;
+    });
     Object.defineProperty(window, 'cockpit', {
-      value: freeze({select, selection: state.selection, hasSelection: state.hasSelection}),
+      value: freeze({select, selection: state.selection, hasSelection: state.hasSelection, onState, emit}),
       writable: false, configurable: false, enumerable: true
     });
     // srcdoc inherits Cockpit's base URL, so bare fragments otherwise navigate
@@ -87,9 +119,22 @@ export function widgetDocument(html: string, bridge: {
       if (event.source !== parent) return;
       const message = event.data;
       if (!message || typeof message !== 'object' || isArray(message)
-        || message.type !== 'cockpit.widget.prefix' || message.nonce !== state.nonce
-        || message.revision !== state.revision || typeof message.active !== 'boolean') return;
-      prefixUntil = message.active ? clock() + 2000 : 0;
+        || message.nonce !== state.nonce || message.revision !== state.revision) return;
+      if (message.type === 'cockpit.widget.state') {
+        liveState = message.value;
+        for (const listener of listeners) {
+          try { listener(liveState); } catch (error) { console.error('Widget state listener failed', error); }
+        }
+      } else if (message.type === 'cockpit.widget.action-result') {
+        const action = actions.get(message.id);
+        if (!action) return;
+        actions.delete(message.id);
+        clearTimeout(action.timer);
+        if (message.error) action.reject(new Error(message.error));
+        else action.resolve();
+      } else if (message.type === 'cockpit.widget.prefix' && typeof message.active === 'boolean') {
+        prefixUntil = message.active ? clock() + 2000 : 0;
+      }
     });
     const namedKeys = Object.freeze({Dead: true, Escape: true, Tab: true, Enter: true,
       ArrowUp: true, ArrowDown: true, ArrowLeft: true, ArrowRight: true});

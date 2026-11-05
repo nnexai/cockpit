@@ -58,9 +58,30 @@ impl OrchestrationArgs {
 }
 
 pub(super) fn job_actor(args: &OrchestrationArgs) -> Result<Option<Actor>, CliError> {
+    if std::env::var_os("COCKPIT_JOB_CREDENTIAL_FILE").is_none() { return Ok(None); }
+    job_actor_with_conversation(args.conversation()?)
+}
+
+pub(crate) fn live_job_actor(auth: cockpit_core::orchestration::JobAuth) -> Result<Option<Actor>, CliError> {
+    fn inherited(name: &str) -> Result<Option<String>, CliError> {
+        std::env::var(name).map(Some).or_else(|error| match error {
+            std::env::VarError::NotPresent => Ok(None),
+            _ => Err(CliError::new("conversation_invalid", "Conversation environment must be UTF-8")),
+        })
+    }
+    let file = std::env::var_os("PI_SESSION_FILE").map(std::path::PathBuf::from);
+    let conversation = resolve_conversation(None, None, inherited("COCKPIT_HARNESS")?,
+        inherited("COCKPIT_SESSION_ID")?, file.as_deref())?;
+    make_job_actor(auth, conversation)
+}
+
+fn job_actor_with_conversation(conversation: Option<ConversationIdentity>) -> Result<Option<Actor>, CliError> {
     let Some(path) = std::env::var_os("COCKPIT_JOB_CREDENTIAL_FILE") else { return Ok(None); };
-    let conversation = args.conversation()?;
     let auth = read_job_auth(Path::new(&path))?;
+    make_job_actor(auth, conversation)
+}
+
+fn make_job_actor(auth: cockpit_core::orchestration::JobAuth, conversation: Option<ConversationIdentity>) -> Result<Option<Actor>, CliError> {
     let epoch = auth.attachment_epoch.to_string();
     for (name, expected) in [
         ("COCKPIT_ATTACHMENT_ID", auth.attachment_id.as_str()),

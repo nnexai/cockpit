@@ -345,6 +345,16 @@ macro_rules! cockpit_operations {
                   limit = $crate::transport::limits::WIDGET_SELECT_BYTES; origin = route;
                   guard = first(Widget); status = service
             }
+            { id: widget_action, ctx: browser, out: ::cockpit_protocol::widget::WidgetLiveActionResponse,
+              call: $crate::transport::operations::widgets::widget_action,
+              native: cockpit_widget_action(request: ::cockpit_protocol::widget::WidgetLiveActionRequest)
+                  => $crate::transport::native_input::widget(),
+              http: post "/api/v1/widgets/action"
+                  (body: ::std::result::Result<::axum::Json<::cockpit_protocol::widget::WidgetLiveActionRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::widget_body($crate::transport::http_input::Reject("widget_usage", "Malformed or oversized widget request"));
+                  limit = $crate::transport::limits::WIDGET_SELECT_BYTES; origin = route;
+                  guard = first(Widget); status = service
+            }
             { id: notes_execute, ctx: service, out: ::cockpit_protocol::notes::NotesResponse,
               call: $crate::transport::operations::notes::notes_execute,
               native: cockpit_notes_execute(request: ::serde_json::Value)

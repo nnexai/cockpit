@@ -23,6 +23,7 @@ fn main() {
             "cockpit_widget_content",
             "cockpit_widget_remove",
             "cockpit_widget_select",
+            "cockpit_widget_action",
             "cockpit_browser_action",
             "cockpit_browser_view_open",
             "cockpit_browser_draft_recovery",

@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBrowserClient, type BrowserWebSocket } from "./browser";
 import { createNativeClient, type NativeChannel, type NativeInvoke } from "./native";
-import type { WidgetEvent, WidgetWindowReport } from "../protocol/generated/v1";
+import type { WidgetEvent, WidgetLiveActionRequest, WidgetWindowReport } from "../protocol/generated/v1";
 
 const key = { session_id: "session-1", tab_id: "tab-1", id: "pick" };
+const binding = { run_id: "run-1", attempt: 1, session_id: "session-1", attachment_id: "attachment-1", attachment_epoch: 1 };
+const content_sha256 = "a".repeat(64);
 const report: WidgetWindowReport = { session_id: "session-1", displayed_tab_id: "tab-1", blocker: null };
 
 class WidgetSocket implements BrowserWebSocket {
@@ -92,6 +94,73 @@ describe("widget transport security and identity", () => {
       expect(invoke).toHaveBeenCalledWith("cockpit_widget_select", { request: projected });
       expect(fetch).not.toHaveBeenCalled();
     }
+  });
+
+  it.each(["browser", "native"])("sends a projected live action over %s", async (kind) => {
+    const fetch = vi.fn(async (_input: string, _init?: RequestInit) => new Response(JSON.stringify({})));
+    const invoke = vi.fn<NativeInvoke>(async () => ({}));
+    const client = kind === "browser" ? createBrowserClient(fetch) : createNativeClient(invoke);
+    const value_json = '{"filter":["errors"],"enabled":true}';
+    const request = { key: { ...key, extra: "ignored" }, revision: 3, binding: { ...binding, extra: "ignored" }, content_sha256, value_json, extra: "ignored" };
+    await expect(client.widgetAction(request)).resolves.toEqual({});
+    const projected = { key, revision: 3, binding, content_sha256, value_json };
+    if (kind === "browser") {
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch.mock.calls[0][0]).toBe("/api/v1/widgets/action");
+      expect(fetch.mock.calls[0][1]!.method).toBe("POST");
+      expect(JSON.parse(fetch.mock.calls[0][1]!.body as string)).toEqual(projected);
+      expect(invoke).not.toHaveBeenCalled();
+    } else {
+      expect(invoke).toHaveBeenCalledWith("cockpit_widget_action", { request: projected });
+      expect(fetch).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(["browser", "native"])("rejects invalid %s live actions before transport", async (kind) => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({})));
+    const invoke = vi.fn<NativeInvoke>(async () => ({}));
+    const client = kind === "browser" ? createBrowserClient(fetch) : createNativeClient(invoke);
+    for (const value_json of ["not-json", '{"deep":[1e999]}', JSON.stringify("é".repeat(8192))]) {
+      await expect(client.widgetAction({ key, revision: 3, binding, content_sha256, value_json }))
+        .rejects.toMatchObject({ code: "malformed_response" });
+    }
+    await expect(client.widgetAction({ key, revision: -1, binding, content_sha256, value_json: "null" }))
+      .rejects.toMatchObject({ code: "malformed_response" });
+    const valid = { key, revision: 3, binding, content_sha256, value_json: "null" };
+    for (const invalid of [
+      { ...valid, binding: undefined },
+      { ...valid, content_sha256: undefined },
+      ...["run_id", "session_id", "attachment_id"].flatMap((field) => [
+        { ...valid, binding: { ...binding, [field]: "" } },
+        { ...valid, binding: { ...binding, [field]: "x".repeat(513) } },
+      ]),
+      { ...valid, binding: { ...binding, attempt: -1 } },
+      { ...valid, binding: { ...binding, attachment_epoch: 1.5 } },
+      ...["", "a".repeat(63), "A".repeat(64), "g".repeat(64)].map((hash) => ({ ...valid, content_sha256: hash })),
+    ]) {
+      await expect(client.widgetAction(invalid as WidgetLiveActionRequest))
+        .rejects.toMatchObject({ code: "malformed_response" });
+    }
+    expect(fetch).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("preserves live action failures from both transports", async () => {
+    const browser = createBrowserClient(async () => new Response(
+      JSON.stringify({ code: "widget_stale", message: "Revision changed" }), { status: 409 },
+    ));
+    const native = createNativeClient(async () => { throw { code: "widget_stale", message: "Revision changed" }; });
+    const request = { key, revision: 3, binding, content_sha256, value_json: "null" };
+    await expect(browser.widgetAction(request)).rejects.toMatchObject({ code: "http_error", operationCode: "widget_stale" });
+    await expect(native.widgetAction(request)).rejects.toMatchObject({ code: "native_error", operationCode: "widget_stale" });
+  });
+
+  it.each(["browser", "native"])("rejects malformed %s live action acknowledgements", async (kind) => {
+    const client = kind === "browser"
+      ? createBrowserClient(async () => new Response(JSON.stringify(null)))
+      : createNativeClient(async () => null);
+    await expect(client.widgetAction({ key, revision: 3, binding, content_sha256, value_json: "null" }))
+      .rejects.toMatchObject({ code: "malformed_response" });
   });
 
   it.each(["browser", "native"])("rejects invalid %s page JSON before invoking its transport", async (kind) => {

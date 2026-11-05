@@ -13,6 +13,7 @@ use cockpit_protocol::orchestration::OrchestrationAction;
 pub(crate) use args::{AgentArgs, InboxArgs, ProtocolArgs, RouteArgs, RunArgs, TaskArgs, WhereArgs};
 use args::{AgentCommand, InboxCommand, OrchestrationArgs, RouteCommand, RunOperation, TaskCommand};
 use context::Context;
+pub(crate) use caller::live_job_actor;
 use output::{emit, emit_runs, emit_task_board};
 
 pub(crate) const WHERE_HELP: &str = "Live projects, Spaces, agents, tasks and repository catalog. Use --json for structured output.";

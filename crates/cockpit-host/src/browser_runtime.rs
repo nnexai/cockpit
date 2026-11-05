@@ -24,6 +24,28 @@ use cockpit_protocol::browser_view::{
     BrowserViewOpenRequest, BrowserDraftRecoveryRequest,
 };
 use cockpit_protocol::widget::*;
+use cockpit_protocol::orchestration::ConversationIdentity;
+
+/// Private owner-socket credential envelope; never expose through HTTP or logs.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct WidgetProducerAuth {
+    pub credential: Vec<u8>,
+    pub conversation: Option<ConversationIdentity>,
+}
+
+impl std::fmt::Debug for WidgetProducerAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WidgetProducerAuth([REDACTED])")
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WidgetProducerRequest {
+    address: WidgetAddress,
+    id: String,
+    revision: u64,
+    auth: WidgetProducerAuth,
+}
 
 use fs2::FileExt;
 use nix::unistd::Uid;
@@ -63,6 +85,8 @@ fn response_read_timeout(request: &WireRequest) -> Duration {
             Duration::from_secs(45),
         WireRequest::WidgetSelection(request) =>
             Duration::from_secs(request.wait_seconds.unwrap_or(0).min(WIDGET_MAX_WAIT_SECONDS) + 45),
+        WireRequest::WidgetLivePoll { timeout_seconds, .. } =>
+            Duration::from_secs((*timeout_seconds).min(30) + 45),
         _ => IO_TIMEOUT,
     }
 }
@@ -109,6 +133,11 @@ enum WireRequest {
     WidgetShelfList(WidgetShelfListRequest),
     WidgetShelfReopen(WidgetShelfReopenRequest),
     WidgetSelect(WidgetSelectRequest),
+    WidgetAction(WidgetLiveActionRequest),
+    WidgetLiveAttach(WidgetProducerRequest),
+    WidgetLivePublish { producer: WidgetProducerRequest, value_json: String },
+    WidgetLivePoll { producer: WidgetProducerRequest, timeout_seconds: u64 },
+    WidgetLiveEnd(WidgetProducerRequest),
     WidgetWindowReport { window_id: String, report: WidgetWindowReport },
     WidgetEvents,
 }
@@ -137,6 +166,9 @@ enum WireResponse {
     WidgetShelfListed(WidgetShelfListResponse),
     WidgetShelfReopened(WidgetSummary),
     WidgetSelected(WidgetSelectResponse),
+    WidgetActioned(WidgetLiveActionResponse),
+    WidgetLiveDone,
+    WidgetLiveActions(Vec<WidgetLiveAction>),
     WidgetReported,
     WidgetSubscribed { window_id: String },
     WidgetEvent(WidgetEvent),
@@ -174,6 +206,7 @@ enum RuntimeRole {
 /// clients forward requests to the owner over its private Unix socket.
 pub struct BrowserRuntime {
     role: Mutex<RuntimeRole>,
+    state_root: PathBuf,
     service: Arc<BrowserService>,
     widgets: Option<Arc<WidgetService>>,
     /// Present only in the local owner. Observers intentionally cannot attach
@@ -207,9 +240,9 @@ impl BrowserRuntime {
         state_root: PathBuf,
         service: Arc<BrowserService>,
     ) -> Result<Self, InspectionError> {
-        let state_root = state_root.join("browser");
-        let lock_path = state_root.join("owner.lock");
-        let socket = state_root.join("owner.sock");
+        let browser_root = state_root.join("browser");
+        let lock_path = browser_root.join("owner.lock");
+        let socket = browser_root.join("owner.sock");
         let deadline = Instant::now() + OWNER_READY_TIMEOUT;
         let lock = open_owner_lock(&lock_path, deadline).await?;
         verify_lock(&lock)?;
@@ -220,6 +253,7 @@ impl BrowserRuntime {
         wait_for_owner(&socket, &lock, expected_uid, deadline, false).await?;
         Ok(Self {
             role: Mutex::new(RuntimeRole::Observer { socket }),
+            state_root,
             service,
             helper: None,
             widgets: None,
@@ -284,6 +318,7 @@ impl BrowserRuntime {
                 let (widget_stop, _) = tokio::sync::watch::channel(false);
                 let owner_service = Arc::clone(&service);
                 let owner_widgets = Arc::clone(&widgets);
+                let peer_state_root = owner_state_root.clone();
                 let cleanup_socket = socket.clone();
                 let cleanup_device = socket_device;
                 let cleanup_inode = socket_inode;
@@ -320,7 +355,8 @@ impl BrowserRuntime {
                                 let helper = Arc::clone(&task_helper);
                                 let widgets = Arc::clone(&owner_widgets);
                                 let stopped = widget_stop.subscribe();
-                                tokio::spawn(async move { let _permit = permit; serve_peer(stream, service, helper, widgets, stopped).await; });
+                                let state_root = peer_state_root.clone();
+                                tokio::spawn(async move { let _permit = permit; serve_peer(stream, service, helper, widgets, state_root, stopped).await; });
                             }
                         }
                     }
@@ -343,6 +379,7 @@ impl BrowserRuntime {
                         stop: Some(stop_tx),
                         task: Some(task),
                     })),
+                    state_root: owner_state_root,
                     service,
                     widgets: Some(widgets),
                     helper: Some(helper),
@@ -357,6 +394,7 @@ impl BrowserRuntime {
                 wait_for_owner(&socket, &lock, expected_uid, deadline, true).await?;
                 Ok(Self {
                     role: Mutex::new(RuntimeRole::Observer { socket }),
+                    state_root: owner_state_root,
                     service,
                     widgets: None,
                     helper: None,
@@ -657,6 +695,39 @@ impl BrowserRuntime {
         }
     }
 
+    pub async fn widget_action(&self, request: WidgetLiveActionRequest) -> Result<WidgetLiveActionResponse, InspectionError> {
+        match self.request(WireRequest::WidgetAction(request)).await? {
+            WireResponse::WidgetActioned(response) => Ok(response),
+            _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_live_attach(&self, address: WidgetAddress, id: String, revision: u64, auth: WidgetProducerAuth) -> Result<(), InspectionError> {
+        match self.request(WireRequest::WidgetLiveAttach(WidgetProducerRequest { address, id, revision, auth })).await? {
+            WireResponse::WidgetLiveDone => Ok(()), _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_live_publish(&self, address: WidgetAddress, id: String, revision: u64, auth: WidgetProducerAuth, value_json: String) -> Result<(), InspectionError> {
+        let producer = WidgetProducerRequest { address, id, revision, auth };
+        match self.request(WireRequest::WidgetLivePublish { producer, value_json }).await? {
+            WireResponse::WidgetLiveDone => Ok(()), _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_live_poll(&self, address: WidgetAddress, id: String, revision: u64, auth: WidgetProducerAuth, timeout_seconds: u64) -> Result<Vec<WidgetLiveAction>, InspectionError> {
+        let producer = WidgetProducerRequest { address, id, revision, auth };
+        match self.request(WireRequest::WidgetLivePoll { producer, timeout_seconds }).await? {
+            WireResponse::WidgetLiveActions(actions) => Ok(actions), _ => Err(invalid_response()),
+        }
+    }
+
+    pub async fn widget_live_end(&self, address: WidgetAddress, id: String, revision: u64, auth: WidgetProducerAuth) -> Result<(), InspectionError> {
+        match self.request(WireRequest::WidgetLiveEnd(WidgetProducerRequest { address, id, revision, auth })).await? {
+            WireResponse::WidgetLiveDone => Ok(()), _ => Err(invalid_response()),
+        }
+    }
+
     pub async fn widget_report(&self, window_id: &str, report: WidgetWindowReport) -> Result<(), InspectionError> {
         match self.request(WireRequest::WidgetWindowReport { window_id: window_id.to_owned(), report }).await? {
             WireResponse::WidgetReported => Ok(()),
@@ -693,7 +764,7 @@ impl BrowserRuntime {
             }
         };
         match socket {
-            None => dispatch(&self.service, self.helper.as_ref(), self.widgets.as_deref(), request).await,
+            None => dispatch(&self.service, self.helper.as_ref(), self.widgets.as_deref(), &self.state_root, request).await,
             Some(socket) => forward(&socket, request).await,
         }
     }
@@ -801,10 +872,49 @@ fn invalid_response() -> InspectionError {
     )
 }
 
+async fn authenticate_widget_producer(
+    state_root: &Path, widgets: &WidgetService, producer: &WidgetProducerRequest,
+) -> Result<(WidgetKey, WidgetLiveBinding, String), InspectionError> {
+    use cockpit_core::orchestration::{AgentCaller, OrchestrationService, credentials::read_job_auth_bytes};
+    let auth = read_job_auth_bytes(&producer.auth.credential)?;
+    let caller = AgentCaller {
+        assignment_generation: auth.assignment_generation, auth,
+        conversation: producer.auth.conversation.clone(),
+        endpoint_identity: String::new(), session_id: String::new(), workspace_id: String::new(),
+        tab_id: String::new(), pane_id: String::new(), boot_id: None, terminal_id: None,
+        native_session_id: None, actual_agent_kind: None, process: None,
+    };
+    let orchestration = OrchestrationService::open_state_root(state_root)?;
+    let identity = orchestration.authenticated_run_identity(&caller)?;
+    let location = identity.location.ok_or_else(|| InspectionError::new("widget_live_unavailable", "authenticated run has no source location"))?;
+    let terminal_id = location.terminal_id.ok_or_else(|| InspectionError::new("widget_live_unavailable", "authenticated run has no terminal incarnation"))?;
+    if producer.address.session_id != location.session_id {
+        return Err(InspectionError::new("widget_live_unavailable", "widget source session differs from authenticated run"));
+    }
+    let source = WidgetSourceSummary {
+        pane_id: location.pane_id, tab_id: location.tab_id, space_id: location.workspace_id,
+        terminal_id, agent_label: None, fingerprint_prefix: None, status: WidgetSourceStatus::Present,
+    };
+    let key = widgets.resolve_live_key(&producer.address, &producer.id, &source, &location.endpoint_identity).await?;
+    let binding = WidgetLiveBinding {
+        run_id: identity.run_id, attempt: u64::from(identity.attempt), session_id: identity.session_id,
+        attachment_id: identity.attachment_id, attachment_epoch: identity.attachment_epoch,
+    };
+    orchestration.validate_widget_binding(&binding.run_id, identity.attempt, &binding.session_id, &binding.attachment_id, binding.attachment_epoch, &identity.credential_id)?;
+    Ok((key, binding, identity.credential_id))
+}
+
+fn validate_widget_live_binding(state_root: &Path, binding: &WidgetLiveBinding, credential_id: &str) -> Result<(), InspectionError> {
+    let attempt = u32::try_from(binding.attempt).map_err(|_| InspectionError::new("widget_live_unavailable", "invalid run attempt"))?;
+    cockpit_core::orchestration::OrchestrationService::open_state_root(state_root)?
+        .validate_widget_binding(&binding.run_id, attempt, &binding.session_id, &binding.attachment_id, binding.attachment_epoch, credential_id)
+}
+
 async fn dispatch(
     service: &BrowserService,
     helper: Option<&Arc<BrowserHelperSupervisor>>,
     widgets: Option<&WidgetService>,
+    state_root: &Path,
     request: WireRequest,
 ) -> Result<WireResponse, InspectionError> {
     match request {
@@ -817,6 +927,43 @@ async fn dispatch(
         WireRequest::WidgetShelfList(request) => widget_service(widgets)?.shelf_list(request).map(WireResponse::WidgetShelfListed),
         WireRequest::WidgetShelfReopen(request) => widget_service(widgets)?.shelf_reopen(request).map(WireResponse::WidgetShelfReopened),
         WireRequest::WidgetSelect(request) => widget_service(widgets)?.select(request).map(WireResponse::WidgetSelected),
+        WireRequest::WidgetAction(request) => {
+            let widgets = widget_service(widgets)?;
+            widgets.reconcile().await;
+            let (binding, credential_id) = widgets.live_binding(&request.key, request.revision)?;
+            validate_widget_live_binding(state_root, &binding, &credential_id)?;
+            widgets.bound_send_live_action(request, &binding, &credential_id).map(WireResponse::WidgetActioned)
+        }
+        WireRequest::WidgetLiveAttach(producer) => {
+            let widgets = widget_service(widgets)?;
+            let (key, binding, credential_id) = authenticate_widget_producer(state_root, widgets, &producer).await?;
+            widgets.attach_live(&key, producer.revision, binding, credential_id)?;
+            Ok(WireResponse::WidgetLiveDone)
+        }
+        WireRequest::WidgetLivePublish { producer, value_json } => {
+            let widgets = widget_service(widgets)?;
+            let (key, binding, credential_id) = authenticate_widget_producer(state_root, widgets, &producer).await?;
+            widgets.publish_live(&key, producer.revision, &binding, &credential_id, value_json)?;
+            Ok(WireResponse::WidgetLiveDone)
+        }
+        WireRequest::WidgetLivePoll { producer, timeout_seconds } => {
+            let widgets = widget_service(widgets)?;
+            let (key, binding, credential_id) = authenticate_widget_producer(state_root, widgets, &producer).await?;
+            let actions = widgets.poll_live_actions(&key, producer.revision, &binding, &credential_id, Duration::from_secs(timeout_seconds.min(30))).await?;
+            let (current_key, current_binding, current_credential) =
+                authenticate_widget_producer(state_root, widgets, &producer).await?;
+            if current_key != key || current_binding != binding || current_credential != credential_id
+                || widgets.live_binding(&key, producer.revision)? != (binding.clone(), credential_id.clone()) {
+                return Err(InspectionError::new("widget_live_unavailable", "widget live feed is unavailable"));
+            }
+            Ok(WireResponse::WidgetLiveActions(actions))
+        }
+        WireRequest::WidgetLiveEnd(producer) => {
+            let widgets = widget_service(widgets)?;
+            let (key, binding, credential_id) = authenticate_widget_producer(state_root, widgets, &producer).await?;
+            widgets.end_live(&key, producer.revision, &binding, &credential_id)?;
+            Ok(WireResponse::WidgetLiveDone)
+        }
         WireRequest::WidgetWindowReport { window_id, report } => {
             widget_service(widgets)?.report_window(&window_id, report)?;
             Ok(WireResponse::WidgetReported)
@@ -1005,6 +1152,7 @@ async fn serve_peer(
     service: Arc<BrowserService>,
     helper: Arc<BrowserHelperSupervisor>,
     widgets: Arc<WidgetService>,
+    state_root: PathBuf,
     mut owner_stopped: tokio::sync::watch::Receiver<bool>,
 ) {
     let (mut reader, mut writer) = stream.into_split();
@@ -1110,10 +1258,10 @@ async fn serve_peer(
                     }
                 }
             } => return,
-            response = dispatch(&service, Some(&helper), Some(&widgets), request) => response,
+            response = dispatch(&service, Some(&helper), Some(&widgets), &state_root, request) => response,
         }
     } else {
-        dispatch(&service, Some(&helper), Some(&widgets), request).await
+        dispatch(&service, Some(&helper), Some(&widgets), &state_root, request).await
     };
     let response = match dispatched {
         Ok(value) => value,
@@ -1862,7 +2010,7 @@ mod tests {
                     client.write_all(&frame).await.unwrap();
                     server.readable().await.unwrap();
                     let mut peer = Box::pin(serve_peer(
-                        server, service.clone(), helper.clone(), widgets.clone(), owner_stopped.clone(),
+                        server, service.clone(), helper.clone(), widgets.clone(), fixture.0.clone(), owner_stopped.clone(),
                     ));
                     // Drive the already-readable request. Registration is
                     // verified below through public capacity behavior, not

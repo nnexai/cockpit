@@ -17,12 +17,14 @@ export type WidgetFrameProps = {
   onSelect(valueJson: string): void;
   onFocusRetired(): void;
   onUserFocus?(): void;
+  liveState?: unknown;
+  onEmit?(valueJson: string): Promise<void>;
 };
 
-export function WidgetFrame({ document: html, revision, currentRevision, widgetKey, selection = null, hasSelection = false, agent, inputBlocked, onSelect, onFocusRetired, onUserFocus }: WidgetFrameProps) {
-  // Selection is a mount/replacement snapshot, not a reason to reload a running page.
-  const retained = useRef({ selection, hasSelection });
-  retained.current = { selection, hasSelection };
+export function WidgetFrame({ document: html, revision, currentRevision, widgetKey, selection = null, hasSelection = false, agent, inputBlocked, onSelect, onFocusRetired, onUserFocus, liveState, onEmit }: WidgetFrameProps) {
+  // Bridge snapshots do not reload a running page.
+  const retained = useRef({ selection, hasSelection, liveState });
+  retained.current = { selection, hasSelection, liveState };
   const next = useMemo(() => {
     const nonce = crypto.randomUUID();
     return { revision, widgetKey, document: html, nonce, srcDoc: widgetDocument(html, { nonce, revision, ...retained.current }) };
@@ -34,8 +36,8 @@ export function WidgetFrame({ document: html, revision, currentRevision, widgetK
   const pendingFrame = useRef<HTMLIFrameElement | null>(null);
   const replacing = displayed !== next;
   const frames = replacing ? [displayed, next] : [displayed];
-  const live = useRef({ displayed, next, currentRevision, widgetKey, inputBlocked, onSelect, onUserFocus });
-  live.current = { displayed, next, currentRevision, widgetKey, inputBlocked, onSelect, onUserFocus };
+  const live = useRef({ displayed, next, currentRevision, widgetKey, inputBlocked, onSelect, onUserFocus, onEmit, liveState });
+  live.current = { displayed, next, currentRevision, widgetKey, inputBlocked, onSelect, onUserFocus, onEmit, liveState };
   const selectionTimes = useRef<{ nonce: string; times: number[] }>({ nonce: next.nonce, times: [] });
   const queuedSelection = useRef<{ nonce: string; valueJson: string } | null>(null);
   const shortcutTimes = useRef<number[]>([]);
@@ -101,6 +103,13 @@ export function WidgetFrame({ document: html, revision, currentRevision, widgetK
     if (queued.nonce !== next.nonce || currentRevision !== next.revision || inputBlocked) { queuedSelection.current = null; return; }
     if (displayed === next) { queuedSelection.current = null; onSelect(queued.valueJson); }
   }, [displayed, next, currentRevision, inputBlocked, onSelect]);
+  useEffect(() => {
+    for (const [frame, incarnation] of [[displayedFrame.current, displayed], [pendingFrame.current, next]] as const) {
+      if (!frame || incarnation.revision !== currentRevision || incarnation.widgetKey !== widgetKey) continue;
+      frame.contentWindow?.postMessage({ type: "cockpit.widget.state", nonce: incarnation.nonce,
+        revision: incarnation.revision, value: liveState ?? null }, "*");
+    }
+  }, [liveState, displayed, next, currentRevision, widgetKey]);
   useLayoutEffect(() => {
     const message = (event: MessageEvent) => {
       const state = live.current, activeFrame = displayedFrame.current;
@@ -131,6 +140,18 @@ export function WidgetFrame({ document: html, revision, currentRevision, widgetK
         selectionTimes.current.times.push(now);
         if (isPending) queuedSelection.current = { nonce: incarnation.nonce, valueJson: payload.value_json };
         else state.onSelect(payload.value_json);
+      } else if (payload.type === "cockpit.widget.emit") {
+        if (isPending || !Number.isSafeInteger(payload.id) || typeof payload.value_json !== "string"
+          || payload.value_json.length > MAX_SELECTION_BYTES
+          || new TextEncoder().encode(payload.value_json).byteLength > MAX_SELECTION_BYTES) return;
+        const id = payload.id, target = frame.contentWindow, nonce = incarnation.nonce, revision = incarnation.revision;
+        const respond = (error?: string) => {
+          const latest = live.current;
+          if (latest.displayed.nonce !== nonce || latest.currentRevision !== revision || displayedFrame.current?.contentWindow !== target) return;
+          target?.postMessage({ type: "cockpit.widget.action-result", nonce, revision, id, error }, "*");
+        };
+        if (!state.onEmit) respond("Live actions are unavailable");
+        else void state.onEmit(payload.value_json).then(() => respond(), error => respond(error instanceof Error ? error.message : String(error)));
       } else if (payload.type === "cockpit.widget.shortcut") {
         if (isPending || window.document.activeElement !== frame || typeof payload.key !== "string" || payload.key.length > 10 || !SHORTCUT_KEYS.test(payload.key)
           || typeof payload.code !== "string" || payload.code.length > 12 || (payload.code !== "" && !SHORTCUT_CODES.test(payload.code))
@@ -181,6 +202,11 @@ export function WidgetFrame({ document: html, revision, currentRevision, widgetK
         aria-hidden={pending || undefined} tabIndex={pending || inputBlocked ? -1 : 0}
         title={`Widget content from ${agent}`} sandbox="allow-scripts" allow="" referrerPolicy="no-referrer"
         srcDoc={frame.srcDoc} onLoad={() => {
+          if (frame === live.current.next && frame.revision === live.current.currentRevision) {
+            (pending ? pendingFrame.current : displayedFrame.current)?.contentWindow?.postMessage({
+              type: "cockpit.widget.state", nonce: frame.nonce, revision: frame.revision, value: live.current.liveState ?? null,
+            }, "*");
+          }
           if (!pending || current.current !== frame) return;
           if (window.document.activeElement === displayedFrame.current) onFocusRetired();
           setDisplayed(frame);

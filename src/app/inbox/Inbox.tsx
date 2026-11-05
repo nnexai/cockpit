@@ -9,6 +9,7 @@ import { UiIcon, type UiIconName } from "../UiIcon";
 import { InboxFeedback } from "./InboxFeedback";
 import { InboxImages } from "./InboxImages";
 import { InboxTimeline } from "./InboxTimeline";
+import { InboxLiveWidgets } from "./InboxLiveWidgets";
 import { InboxWork } from "./InboxWork";
 import { useInboxImages } from "./useInboxImages";
 import "./inbox.css";
@@ -437,7 +438,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
           </div>}
         </section>}
         <span className="inbox-sr" role="status">{announcement}</span>
-        <div className="inbox-timeline" ref={timelineRef}><InboxTimeline thread={thread} view={view} client={client} sessionId={sessionId} ownerLabel={id => ownerLabel(view, id)} /></div>
+        <div className="inbox-timeline" ref={timelineRef}><InboxTimeline thread={thread} view={view} client={client} sessionId={sessionId} ownerLabel={id => ownerLabel(view, id)} /><InboxLiveWidgets client={client} sessionId={sessionId} thread={thread} view={view} visible={visible && current} /></div>
         {composer}
       </section><InboxWork thread={thread} view={view} client={client} sessionId={sessionId} open={open} liveOpen={view?.observation.status === "fresh"} diagnostics={<Evidence thread={thread} view={view} displayed={displayed} />} />
       </div></> : direct ? <div className="inbox-content"><div className="inbox-head" data-tone="unknown"><span className="inbox-kic is-lg"><UiIcon name="user" /></span><div><h2>{direct.agent_name}</h2><p className="inbox-facts"><span>{direct.workspace_label} · {direct.tab_label}</span><span>Direct agent · {liveDirect?.agent.status || "status unavailable"}</span></p></div></div>{(directContext?.title || directContext?.activity) && <section aria-label="Session context">{directContext.title && <div className="inbox-update inbox-session-context" dir="auto"><small>{directContext.titleLabel}</small>{directContext.title}</div>}{directContext.activity && <div className="inbox-update inbox-session-context" dir="auto"><small>{directContext.activityLabel} · OMP session</small>{directContext.activity}</div>}</section>}<div className="inbox-actions"><button type="button" className="inbox-btn" onClick={() => open({ workspace_id: direct.workspace_id, workspace_label: direct.workspace_label, tab_id: direct.tab_id, tab_label: direct.tab_label, pane_id: direct.pane_id })}>Open session</button></div></div> : <div className="inbox-content is-new"><div className="inbox-head" data-tone="review"><span className="inbox-kic is-lg"><UiIcon name="plus" /></span><div><h2>New work</h2><p className="inbox-facts">Send a request to a liaison.</p></div></div></div>}

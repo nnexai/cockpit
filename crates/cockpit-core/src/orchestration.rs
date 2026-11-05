@@ -41,7 +41,7 @@ pub use resource_queue::ResourceSourceFacts;
 pub use cleanup::ResourceRegistrationFacts;
 pub use messages::{latest_progress_sequences, inbox_counts, inbox_meaningful, InboxCounts, InboxKindCount, InboxMessageContext};
 pub use images::{MAX_IMAGE_BYTES, MAX_MESSAGE_IMAGES};
-pub use credentials::{JobAuth, JobRole, SecretBytes, read_job_auth};
+pub use credentials::{JobAuth, JobRole, SecretBytes, read_job_auth, read_job_auth_bytes, read_job_auth_envelope};
 pub use claims::{RootMainRecoveryProof, WriterExitProof};
 use mutate::{Applied, MutationCtx};
 use crate::{
@@ -84,6 +84,31 @@ pub struct AgentCaller {
     /// Optional trusted physical observations, not semantic authority.
     pub actual_agent_kind: Option<NativeAgentKind>,
     pub process: Option<NativeProcessIdentity>,
+}
+
+/// Identity authenticated against the current credential and assignment.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedRunIdentity {
+    /// Private binding to the credential that authenticated this identity.
+    pub credential_id: String,
+    pub run_id: String,
+    pub attempt: u32,
+    pub session_id: String,
+    pub attachment_id: String,
+    pub attachment_epoch: u64,
+    /// Durable launch location, if recorded; pane placement may subsequently change.
+    pub location: Option<AuthenticatedRunLocation>,
+}
+
+/// Source location recorded for the authenticated attachment, not caller-supplied metadata.
+#[derive(Debug, Clone)]
+pub struct AuthenticatedRunLocation {
+    pub endpoint_identity: String,
+    pub session_id: String,
+    pub workspace_id: String,
+    pub tab_id: String,
+    pub pane_id: String,
+    pub terminal_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -245,10 +270,19 @@ pub(crate) enum DispatchUpdate {
 
 impl OrchestrationService {
     pub fn open(configuration: &ProjectConfiguration) -> Result<Self, InspectionError> {
-        let store = OrchestrationStore::open(Path::new(&configuration.state_root))?;
+        Self::open_with_launch_config(Path::new(&configuration.state_root), configuration.orchestration.clone())
+    }
+
+    /// Open the state root for operations that do not depend on launch configuration.
+    pub fn open_state_root(state_root: &Path) -> Result<Self, InspectionError> {
+        Self::open_with_launch_config(state_root, Default::default())
+    }
+
+    fn open_with_launch_config(state_root: &Path, launch_config: cockpit_protocol::projects::OrchestrationConfiguration) -> Result<Self, InspectionError> {
+        let store = OrchestrationStore::open(state_root)?;
         let initial = store.lock()?.read_shared()?.revision;
         let (revision, _) = watch::channel(initial);
-        Ok(Self { store, revision, notifications: std::sync::Mutex::new(None), launch_config: configuration.orchestration.clone() })
+        Ok(Self { store, revision, notifications: std::sync::Mutex::new(None), launch_config })
     }
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.revision.subscribe()
@@ -685,6 +719,43 @@ impl OrchestrationService {
         let state = self.store.lock()?.read_shared()?;
         let authorized = credentials::validate_caller(&state, caller)?;
         Ok((state.runs[authorized.run_index].clone(), authorized.role))
+    }
+
+    /// Authenticate the current job and return only its server-recorded run identity.
+    pub fn authenticated_run_identity(&self, caller: &AgentCaller) -> Result<AuthenticatedRunIdentity, InspectionError> {
+        let state = self.store.lock()?.read_shared()?;
+        let authorized = credentials::validate_caller(&state, caller)?;
+        let run = &state.runs[authorized.run_index];
+        let location = run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref())
+            .map(|location| AuthenticatedRunLocation {
+                endpoint_identity: location.endpoint_identity.clone(),
+                session_id: location.session_id.clone(),
+                workspace_id: location.workspace_id.clone(),
+                tab_id: location.tab_id.clone(),
+                pane_id: location.pane_id.clone(),
+                terminal_id: location.terminal_id.clone(),
+            });
+        Ok(AuthenticatedRunIdentity {
+            credential_id: caller.auth.credential_id.clone(),
+            run_id: run.run_id.clone(),
+            attempt: run.attempt,
+            session_id: run.session_id.clone(),
+            attachment_id: authorized.attachment_id,
+            attachment_epoch: authorized.attachment_epoch,
+            location,
+        })
+    }
+
+    /// Recheck a previously authenticated private widget binding. This does not
+    /// authenticate a caller and must not be used with browser-supplied identity.
+    pub fn validate_widget_binding(
+        &self, run_id: &str, attempt: u32, session_id: &str, attachment_id: &str,
+        attachment_epoch: u64, credential_id: &str,
+    ) -> Result<(), InspectionError> {
+        let state = self.store.lock()?.read_shared()?;
+        credentials::validate_widget_binding(
+            &state, credential_id, run_id, attempt, session_id, attachment_id, attachment_epoch,
+        )
     }
 
     pub fn committed_report_job_run(&self, caller: &AgentCaller, message_id: &str) -> Result<Run, InspectionError> {

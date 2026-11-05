@@ -9,7 +9,7 @@ import type { AttentionRow } from "../sidebar/agentAttentionModel";
 import { Inbox } from "./Inbox";
 
 const attention = { availability: "ready", response: null } as AgentAttentionState;
-const view = (session_id: string): InboxView => ({ session_id, state_store_id: `store-${session_id}`, revision: 1, tasks_token: "token", observation: { status: "fresh", observed_at: "now" }, owners: [{ root_id: "owner", label: "Liaison", kind: "supervisor", stage: "active", harness: "omp", availability: "available", location: null, undelivered: 0 }], threads: [], image_limits: { max_bytes: 1024 * 1024, max_count: 4, mime_types: ["image/png", "image/jpeg"] }, unmanaged_agents: [] });
+const view = (session_id: string): InboxView => ({ session_id, state_store_id: `store-${session_id}`, revision: 1, tasks_token: "token", observation: { status: "fresh", observed_at: "now" }, owners: [{ root_id: "owner", run_id: "owner", attempt: 1, session_id, attachment_id: null, attachment_epoch: null, label: "Liaison", kind: "supervisor", stage: "active", harness: "omp", availability: "available", location: null, undelivered: 0 }], threads: [], image_limits: { max_bytes: 1024 * 1024, max_count: 4, mime_types: ["image/png", "image/jpeg"] }, unmanaged_agents: [] });
 let root: Root | null = null, host: HTMLDivElement;
 afterEach(() => { if (root) act(() => root!.unmount()); root = null; host?.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 async function flush(fn: () => void = () => {}) { await act(async () => { fn(); for (let i = 0; i < 8; i++) await Promise.resolve(); }); }

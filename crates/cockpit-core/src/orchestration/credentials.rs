@@ -202,6 +202,25 @@ pub fn read_job_auth(path: &Path) -> Result<JobAuth, InspectionError> {
     })
 }
 
+/// Return validated secret-bearing envelope bytes for a private local transport.
+/// Callers must never log or expose these bytes.
+pub fn read_job_auth_envelope(path: &Path) -> Result<Vec<u8>, InspectionError> {
+    let (bytes, _) = read_envelope_file(path)?;
+    Ok(bytes)
+}
+
+/// Parse transported envelope bytes; authenticate the result against durable state.
+pub fn read_job_auth_bytes(bytes: &[u8]) -> Result<JobAuth, InspectionError> {
+    let (envelope, secret) = parse_envelope(bytes)?;
+    Ok(JobAuth {
+        credential_id: envelope.credential_id,
+        secret,
+        attachment_id: envelope.attachment_id,
+        attachment_epoch: envelope.attachment_epoch,
+        assignment_generation: envelope.assignment_generation,
+    })
+}
+
 /// Rediscover only the exact immutable file whose digest is already published.
 /// Restart must never rotate the secret or deliver a different attachment file.
 pub(crate) fn credential_path(
@@ -230,6 +249,11 @@ pub(crate) fn credential_path(
 }
 
 fn read_envelope(path: &Path) -> Result<(CredentialEnvelope, SecretBytes), InspectionError> {
+    let (_, parsed) = read_envelope_file(path)?;
+    Ok(parsed)
+}
+
+fn read_envelope_file(path: &Path) -> Result<(Vec<u8>, (CredentialEnvelope, SecretBytes)), InspectionError> {
     if !path.is_absolute() {
         return Err(unsafe_file());
     }
@@ -250,10 +274,18 @@ fn read_envelope(path: &Path) -> Result<(CredentialEnvelope, SecretBytes), Inspe
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     (&mut file).take(MAX_CREDENTIAL_BYTES + 1).read_to_end(&mut bytes)
         .map_err(|_| invalid_file())?;
+    let parsed = parse_envelope(&bytes)?;
+    if name != credential_name(&parsed.0.attachment_id, parsed.0.attachment_epoch, &parsed.0.credential_id) {
+        return Err(invalid_file());
+    }
+    Ok((bytes, parsed))
+}
+
+fn parse_envelope(bytes: &[u8]) -> Result<(CredentialEnvelope, SecretBytes), InspectionError> {
     if bytes.len() as u64 > MAX_CREDENTIAL_BYTES {
         return Err(invalid_file());
     }
-    let envelope: CredentialEnvelope = serde_json::from_slice(&bytes).map_err(|_| invalid_file())?;
+    let envelope: CredentialEnvelope = serde_json::from_slice(bytes).map_err(|_| invalid_file())?;
     if envelope.schema != ENVELOPE_SCHEMA {
         return Err(invalid_file());
     }
@@ -264,7 +296,6 @@ fn read_envelope(path: &Path) -> Result<(CredentialEnvelope, SecretBytes), Inspe
     valid_epoch(envelope.attachment_epoch).map_err(|_| invalid_file())?;
     validate_generation(envelope.role, envelope.assignment_generation).map_err(|_| invalid_file())?;
     if (envelope.role == JobRole::Root) != (envelope.run_id == envelope.root_id)
-        || name != credential_name(&envelope.attachment_id, envelope.attachment_epoch, &envelope.credential_id)
         || envelope.secret.len() != 44
     {
         return Err(invalid_file());
@@ -407,6 +438,37 @@ pub(crate) fn validate_committed_result_auth(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AuthPurpose { Ordinary, Registration, CommittedResult, Cleanup }
 
+/// Recheck a previously authenticated binding; this is not credential admission.
+pub(crate) fn validate_widget_binding(
+    state: &OrchestrationState, credential_id: &str, run_id: &str, attempt: u32,
+    session_id: &str, attachment_id: &str, attachment_epoch: u64,
+) -> Result<(), InspectionError> {
+    let mut records = state.credentials.iter().filter(|record| record.credential_id == credential_id);
+    let record = records.next().ok_or_else(unauthorized)?;
+    if records.next().is_some() || record.state != CredentialState::Active
+        || record.run_id != run_id || record.attachment_id != attachment_id
+        || record.attachment_epoch != attachment_epoch {
+        return Err(unauthorized());
+    }
+    let auth = JobAuth {
+        credential_id: record.credential_id.clone(), secret: SecretBytes([0; 32]),
+        attachment_id: record.attachment_id.clone(), attachment_epoch: record.attachment_epoch,
+        assignment_generation: record.assignment_generation,
+    };
+    let job = validate_record(state, record, &auth, AuthPurpose::Ordinary)?;
+    let run = &state.runs[job.run_index];
+    if !matches!(run.stage, RunStage::Active | RunStage::Working) || run.attempt != attempt || run.session_id != session_id {
+        return Err(unauthorized());
+    }
+    let caller = super::AgentCaller {
+        auth, conversation: record.conversation.clone(), assignment_generation: record.assignment_generation,
+        endpoint_identity: String::new(), session_id: String::new(), workspace_id: String::new(),
+        tab_id: String::new(), pane_id: String::new(), boot_id: None, terminal_id: None,
+        native_session_id: None, actual_agent_kind: None, process: None,
+    };
+    validate_current_assignment(state, &caller, &job)
+}
+
 fn validate_auth(
     state: &OrchestrationState,
     auth: &JobAuth,
@@ -429,6 +491,12 @@ fn validate_auth(
     {
         return Err(unauthorized());
     }
+    validate_record(state, record, auth, purpose)
+}
+
+fn validate_record(
+    state: &OrchestrationState, record: &JobCredentialRecord, auth: &JobAuth, purpose: AuthPurpose,
+) -> Result<AuthorizedJob, InspectionError> {
     let mut matching_runs = state.runs.iter().enumerate().filter(|(_, run)| run.run_id == record.run_id);
     let (run_index, run) = matching_runs.next().ok_or_else(unauthorized)?;
     if matching_runs.next().is_some() || run.root_id != record.root_id

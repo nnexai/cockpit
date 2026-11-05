@@ -48,6 +48,24 @@ function frameMessage(frame: HTMLIFrameElement, payload: Record<string, unknown>
   const { nonce, revision } = frameBridge(frame);
   window.dispatchEvent(new MessageEvent("message", { source: frame.contentWindow, data: { nonce, revision, ...payload } }));
 }
+it("updates live state without remounting and rejects messages from other frames", async () => {
+  const emit = vi.fn().mockResolvedValue(undefined);
+  const render = async (value: number) => act(async () => root.render(<WidgetFrame document="<p>live</p>" revision={1}
+    currentRevision={1} widgetKey="live" agent="omp" inputBlocked={false} onSelect={() => {}} onFocusRetired={() => {}}
+    liveState={{ version: value, value }} onEmit={emit} />));
+  await render(1);
+  const frame = host.querySelector("iframe")!;
+  const send = vi.spyOn(frame.contentWindow!, "postMessage");
+  await render(2);
+  expect(host.querySelector("iframe")).toBe(frame);
+  expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: "cockpit.widget.state", value: { version: 2, value: 2 } }), "*");
+  const { nonce, revision } = frameBridge(frame);
+  window.dispatchEvent(new MessageEvent("message", { source: window, data: { nonce, revision, type: "cockpit.widget.emit", id: 1, value_json: "{}" } }));
+  expect(emit).not.toHaveBeenCalled();
+  await act(async () => frameMessage(frame, { type: "cockpit.widget.emit", id: 1, value_json: '{"a":1}' }));
+  expect(emit).toHaveBeenCalledWith('{"a":1}');
+  expect(send).toHaveBeenCalledWith(expect.objectContaining({ type: "cockpit.widget.action-result", id: 1 }), "*");
+});
 
 it("keeps the old opaque scripted frame until the replacement loads, then retires its focus", async () => {
   const retire = vi.fn(() => host.querySelector<HTMLElement>("[data-wrapper]")!.focus());

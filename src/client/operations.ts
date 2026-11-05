@@ -9,6 +9,7 @@ import {
 import {
   matchWidgetContent, parseWidgetContentRequest, parseWidgetRemoveRequest, parseWidgetRemoveResponse, 
   parseWidgetSelectRequest, parseWidgetSelectResponse, parseWidgetShelfListResponse, parseWidgetShelfReopenRequest, parseWidgetSummary,
+  parseWidgetLiveActionRequest, parseWidgetLiveActionResponse,
 } from "./widgetProtocol";
 import { parseContextMediaRequest, parseContextMedia, matchContextMedia } from "./contextMediaProtocol";
 import {
@@ -1219,6 +1220,17 @@ const operations: OperationTable = {
         http: { method: "POST", route: () => "/api/v1/widgets/select", json: () => parsed, signal: () => signal },
         tauri: { command: "cockpit_widget_select", args: () => ({ request: parsed }) },
         parse: parseWidgetSelectResponse,
+      };
+    },
+  },
+  widgetAction: { nativeAbort: "widget",
+    encode(_backend, value, signal) {
+      const parsed = parseWidgetLiveActionRequest(value);
+      return {
+        operation: "widget action",
+        http: { method: "POST", route: () => "/api/v1/widgets/action", json: () => parsed, signal: () => signal },
+        tauri: { command: "cockpit_widget_action", args: () => ({ request: parsed }) },
+        parse: parseWidgetLiveActionResponse,
       };
     },
   },

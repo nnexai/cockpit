@@ -197,6 +197,9 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             else { match o.map(|o| o.presence) { Some(Presence::Present) => OwnerAvailability::Available,
                 _ => OwnerAvailability::Unknown } };
         InboxOwner { root_id: r.run_id.clone(), label: r.label.clone(), kind: r.kind, stage: r.stage,
+            run_id: r.run_id.clone(), attempt: r.attempt, session_id: r.session_id.clone(),
+            attachment_id: r.attachment.as_ref().map(|a| a.attachment_id.clone()),
+            attachment_epoch: r.attachment.as_ref().map(|a| a.epoch),
             harness: r.launch_config.harness_kind.clone(), availability, location: location(o),
             undelivered: state.messages.iter().filter(|m| m.to_run_id == r.run_id && matches!(m.from, ActorRef::Operator) && m.stage == DeliveryStage::Stored).count() as u32 }
     }).collect();
@@ -238,7 +241,7 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
                 let report_images = state.messages.iter().filter(|m| !m.stale && m.kind == MessageKind::Report && !m.images.is_empty()
                     && matches!(&m.from, ActorRef::Run { run_id } if run_id == &r.run_id))
                     .max_by(|a, b| message_order(a).cmp(&message_order(b))).map(|m| m.images.clone()).unwrap_or_default();
-                InboxRun { run_id: r.run_id.clone(), attempt: r.attempt, stage: r.stage, harness: r.launch_config.harness_kind.clone(), presence: o.map_or(Presence::Unobserved, |o| o.presence), agent_status: o.and_then(|o| o.agent_status.clone()), location: location(o), cleanup: cleanups.iter().find(|c| c.run_id == r.run_id).map(|c| c.items.clone()).unwrap_or_default(), report_images }
+                InboxRun { run_id: r.run_id.clone(), attempt: r.attempt, stage: r.stage, harness: r.launch_config.harness_kind.clone(), session_id: r.session_id.clone(), attachment_id: r.attachment.as_ref().map(|a| a.attachment_id.clone()), attachment_epoch: r.attachment.as_ref().map(|a| a.epoch), presence: o.map_or(Presence::Unobserved, |o| o.presence), agent_status: o.and_then(|o| o.agent_status.clone()), location: location(o), cleanup: cleanups.iter().find(|c| c.run_id == r.run_id).map(|c| c.items.clone()).unwrap_or_default(), report_images }
             });
             tasks.push(InboxTaskLink { root_id: root_id.into(), task_id: task_id.into(), title: view.task.title.clone(), project: task_projects.get(&(root_id, task_id)).cloned().flatten(), lane, run, evidence: task_evidence(state, root_id, task_id, current) });
         }
@@ -377,6 +380,11 @@ mod tests {
         worker.parent_run_id = Some("r".into());
         worker.task_id = Some("task".into());
         worker.assignment_generation = Some(1);
+        worker.attachment = Some(ExecutionAttachment {
+            attachment_id: "worker-attachment".into(), epoch: 3, state: AttachmentState::Connected,
+            launch_mode: None, location: None, conversation: None, process: None, shell: None,
+            machine_id: None, process_scope: None, launch_attempt: 1, updated_at: NOW.into(),
+        });
         let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
         state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, schedule: None,
             owner: Some(TaskOwner { run_id: "worker".into(), conversation: None, claim_operation_id: "claim".into() }) });
@@ -392,6 +400,14 @@ mod tests {
         stale.images = vec![image("stale")];
         state.messages.extend([stale, newest, old, empty]);
         let result = view(&state, vec![board("r", "task")]);
+        let owner = &result.owners[0];
+        assert_eq!((&*owner.run_id, owner.attempt, &*owner.session_id), ("r", 1, "session"));
+        assert!(owner.attachment_id.is_none());
+        assert!(owner.attachment_epoch.is_none());
+        let run = result.threads[0].tasks[0].run.as_ref().unwrap();
+        assert_eq!((&*run.run_id, run.attempt, &*run.session_id), ("worker", 1, "session"));
+        assert_eq!(run.attachment_id.as_deref(), Some("worker-attachment"));
+        assert_eq!(run.attachment_epoch, Some(3));
         assert_eq!(result.threads[0].tasks[0].run.as_ref().unwrap().report_images, vec![image("newest")]);
     }
     fn view(state: &OrchestrationState, boards: Vec<TaskBoard>) -> InboxView {

@@ -11,6 +11,9 @@ pub const WIDGET_MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 pub const WIDGET_MAX_ARRIVALS_PER_MINUTE: usize = 6;
 pub const WIDGET_MAX_SELECTION_WAITERS: usize = 8;
 pub const WIDGET_MAX_WAIT_SECONDS: u64 = 3600;
+pub const WIDGET_MAX_LIVE_STATE_BYTES: usize = 64 * 1024;
+pub const WIDGET_MAX_LIVE_ACTION_BYTES: usize = 16 * 1024;
+pub const WIDGET_MAX_LIVE_ACTIONS: usize = 64;
 pub const WIDGET_DEFAULT_WAIT_SECONDS: u64 = 300;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
@@ -290,6 +293,58 @@ pub struct WidgetSelectionFacts {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WidgetLiveBinding {
+    pub run_id: String,
+    #[ts(type = "number")]
+    pub attempt: u64,
+    pub session_id: String,
+    pub attachment_id: String,
+    #[ts(type = "number")]
+    pub attachment_epoch: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WidgetLiveState {
+    #[ts(type = "number")]
+    pub version: u64,
+    pub value_json: String,
+    #[ts(type = "number")]
+    pub updated_at_ms: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WidgetLiveStatus {
+    Live,
+    Ended,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WidgetLive {
+    pub binding: WidgetLiveBinding,
+    pub state: Option<WidgetLiveState>,
+    pub status: WidgetLiveStatus,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WidgetLiveAction {
+    pub value_json: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WidgetLiveActionRequest {
+    pub key: WidgetKey,
+    #[ts(type = "number")]
+    pub revision: u64,
+    pub binding: WidgetLiveBinding,
+    pub content_sha256: String,
+    pub value_json: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct WidgetLiveActionResponse {}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 pub struct WidgetSummary {
     pub key: WidgetKey,
     pub space_id: String,
@@ -311,6 +366,9 @@ pub struct WidgetSummary {
     #[ts(type = "number")]
     pub updated_at_ms: u64,
     pub selection: Option<WidgetSelectionFacts>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub live: Option<WidgetLive>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]

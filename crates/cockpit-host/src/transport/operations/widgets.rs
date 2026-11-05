@@ -36,3 +36,11 @@ pub async fn widget_select(
 ) -> Result<WidgetSelectResponse, OperationError> {
     runtime.widget_select(request).await.map_err(Into::into)
 }
+
+pub async fn widget_action(
+    runtime: &BrowserRuntime,
+    _transport: Transport,
+    request: WidgetLiveActionRequest,
+) -> Result<WidgetLiveActionResponse, OperationError> {
+    runtime.widget_action(request).await.map_err(Into::into)
+}

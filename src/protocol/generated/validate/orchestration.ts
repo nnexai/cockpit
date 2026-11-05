@@ -89,6 +89,11 @@ export const wireOwnerAvailability: WireDescriptor<V1.OwnerAvailability> = liter
 
 export const wireInboxOwner: WireDescriptor<V1.InboxOwner> = struct<V1.InboxOwner>("InboxOwner", {
   "root_id": req(str),
+  "run_id": req(str),
+  "attempt": req(u32),
+  "session_id": req(str),
+  "attachment_id": req(nullable(str), { fill: null }),
+  "attachment_epoch": req(nullable(u53), { fill: null }),
   "label": req(str),
   "kind": req(named(() => wireRunKind)),
   "stage": req(named(() => wireRunStage)),
@@ -170,6 +175,9 @@ export const wireInboxRun: WireDescriptor<V1.InboxRun> = struct<V1.InboxRun>("In
   "attempt": req(u32),
   "stage": req(named(() => wireRunStage)),
   "harness": req(str),
+  "session_id": req(str),
+  "attachment_id": req(nullable(str), { fill: null }),
+  "attachment_epoch": req(nullable(u53), { fill: null }),
   "presence": req(named(() => wirePresence)),
   "agent_status": req(nullable(str), { fill: null }),
   "location": req(nullable(named(() => wireInboxLocation)), { fill: null }),

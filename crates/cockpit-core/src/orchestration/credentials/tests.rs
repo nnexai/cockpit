@@ -169,6 +169,42 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+fn widget_binding_accepts_working_worker_and_fences_stale_authority() {
+    let fixture = Fixture::new();
+    let run = &fixture.state.runs[1];
+    let attachment = run.attachment.as_ref().unwrap();
+    let check = |state: &OrchestrationState, attempt, session: &str, epoch| {
+        validate_widget_binding(state, &fixture.worker_auth.credential_id, &run.run_id,
+            attempt, session, &attachment.attachment_id, epoch)
+    };
+    assert!(check(&fixture.state, run.attempt, &run.session_id, attachment.epoch).is_ok());
+    assert!(check(&fixture.state, run.attempt + 1, &run.session_id, attachment.epoch).is_err());
+    assert!(check(&fixture.state, run.attempt, "another-session", attachment.epoch).is_err());
+    assert!(check(&fixture.state, run.attempt, &run.session_id, attachment.epoch + 1).is_err());
+    for stage in [RunStage::Queued, RunStage::Starting, RunStage::Reported, RunStage::Closed] {
+        let mut state = fixture.state.clone();
+        state.runs[1].stage = stage;
+        assert!(check(&state, run.attempt, &run.session_id, attachment.epoch).is_err());
+    }
+    let mut state = fixture.state.clone();
+    state.task_ownership[0].generation += 1;
+    assert!(check(&state, run.attempt, &run.session_id, attachment.epoch).is_err());
+    state = fixture.state.clone();
+    state.task_ownership[0].owner = None;
+    assert!(check(&state, run.attempt, &run.session_id, attachment.epoch).is_err());
+    state = fixture.state.clone();
+    state.credentials[1].state = CredentialState::Revoked;
+    assert!(check(&state, run.attempt, &run.session_id, attachment.epoch).is_err());
+    state = fixture.state.clone();
+    state.checkout_claims[0].state = ClaimState::Released;
+    assert!(check(&state, run.attempt, &run.session_id, attachment.epoch).is_err());
+    let root = &fixture.state.runs[0];
+    let root_attachment = root.attachment.as_ref().unwrap();
+    assert!(validate_widget_binding(&fixture.state, &fixture.root_auth.credential_id, &root.run_id,
+        root.attempt, &root.session_id, &root_attachment.attachment_id, root_attachment.epoch).is_ok());
+}
+
 fn denied(state: &OrchestrationState, auth: &JobAuth) {
     assert!(matches!(validate_job_auth(state, auth), Err(error) if error.code == "job_unauthorized"));
 }
@@ -355,6 +391,21 @@ fn restart_and_physical_relocation_preserve_capability_but_replacement_revokes_o
     reopened.runs[1].attachment.as_mut().unwrap().attachment_id = Uuid::new_v4().to_string();
     denied(&reopened, &auth);
     assert_eq!(read_job_auth(&path).unwrap().attachment_epoch, 1);
+}
+
+#[test]
+fn transported_envelope_is_bounded_and_reauthenticated() {
+    let fixture = Fixture::new();
+    let bytes = read_job_auth_envelope(&fixture.worker_path).unwrap();
+    let auth = read_job_auth_bytes(&bytes).unwrap();
+    assert!(validate_job_auth(&fixture.state, &auth).is_ok());
+    assert!(read_job_auth_bytes(&vec![b' '; MAX_CREDENTIAL_BYTES as usize + 1]).is_err());
+    let mut invalid = fixture.envelope();
+    invalid["schema"] = serde_json::json!(0);
+    assert!(read_job_auth_bytes(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    let mut revoked = fixture.state.clone();
+    revoked.credentials[1].state = CredentialState::Revoked;
+    assert!(validate_job_auth(&revoked, &auth).is_err());
 }
 
 #[test]

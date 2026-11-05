@@ -253,7 +253,8 @@ mod tests {
     }
 
     fn owner(id: &str, availability: OwnerAvailability, stage: RunStage) -> InboxOwner {
-        InboxOwner { root_id: id.into(), label: id.into(), kind: RunKind::Supervisor, stage,
+        InboxOwner { root_id: id.into(), run_id: id.into(), attempt: 1, session_id: "session".into(),
+            attachment_id: None, attachment_epoch: None, label: id.into(), kind: RunKind::Supervisor, stage,
             harness: String::new(), availability, location: None, undelivered: 0 }
     }
 

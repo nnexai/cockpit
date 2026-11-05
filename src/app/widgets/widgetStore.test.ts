@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { WidgetSummary, WidgetEvent, WidgetContentRequest } from "../../protocol/generated/v1";
+import type { WidgetSummary, WidgetEvent, WidgetContent, WidgetContentRequest } from "../../protocol/generated/v1";
 import { createSessionLayoutState, layoutReducer, type LeafCtx, type LayoutAction } from "../layout/tabLayoutStore";
 import { WidgetStore, widgetKey } from "./widgetStore";
 
@@ -90,6 +90,30 @@ describe("widget window state", () => {
     f.events[0]({ type: "removed", sequence: 99, key: widget("a").key, reason: "user" });
     expect(f.store.widgets("session").map(w => w.key.id)).toEqual(["a", "b"]);
     release();
+  });
+  it("invalidates cached content and in-flight requests on a same-revision owner snapshot", async () => {
+    const f = fixture(), first = widget();
+    const oldContent: WidgetContent = { key: first.key, revision: 1, sha256: "a".repeat(64),
+      body: { type: "html", document: "<p>old</p>", choices: null }, selection: null };
+    const newContent: WidgetContent = { ...oldContent, sha256: "b".repeat(64),
+      body: { type: "html", document: "<p>new</p>", choices: null } };
+    let resolveOld!: (content: WidgetContent) => void;
+    const pending = new Promise<WidgetContent>(resolve => { resolveOld = resolve; });
+    vi.mocked(f.client.widgetContent).mockReturnValueOnce(pending).mockResolvedValueOnce(newContent);
+    f.store.accept({ type: "snapshot", sequence: 1, widgets: [first] });
+    f.store.fetchContent(first);
+    const oldSignal = vi.mocked(f.client.widgetContent).mock.calls[0][1]!;
+    const generation = f.store.snapshotGeneration;
+    f.store.accept({ type: "snapshot", sequence: 0, widgets: [{ ...first, content: { ...first.content, sha256: "b".repeat(64) } }] });
+    expect(oldSignal.aborted).toBe(true);
+    expect(f.store.snapshotGeneration).not.toBe(generation);
+    f.store.fetchContent(first);
+    await Promise.resolve(); await Promise.resolve();
+    resolveOld(oldContent);
+    await Promise.resolve(); await Promise.resolve();
+    expect(f.store.contentState(first).content).toEqual(newContent);
+    f.store.accept({ type: "snapshot", sequence: 0, widgets: [first] });
+    expect(f.store.contentState(first).content).toBeNull();
   });
   it("ignores duplicate events and does not apply an event after a sequence gap", async () => {
     const f = fixture();

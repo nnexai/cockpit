@@ -27,11 +27,13 @@ export type {
 import type {
   WidgetEvent, WidgetWindowReport, WidgetContentRequest, WidgetContent, WidgetSummary,
   WidgetRemoveRequest, WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse,
+  WidgetLiveActionRequest, WidgetLiveActionResponse,
   WidgetShelfListRequest, WidgetShelfListResponse, WidgetShelfReopenRequest,
 } from "../protocol/generated/v1";
 export type {
   WidgetKey, WidgetSummary, WidgetEvent, WidgetWindowReport, WidgetContentRequest, WidgetContent,
   WidgetRemoveRequest, WidgetRemoveResponse, WidgetSelectRequest, WidgetSelectResponse,
+  WidgetLiveActionRequest, WidgetLiveActionResponse,
   WidgetShelfEntry, WidgetShelfListRequest, WidgetShelfListResponse, WidgetShelfReopenRequest,
 } from "../protocol/generated/v1";
 import type { NotesRequest, NotesResponse } from "../protocol/generated/v1";
@@ -450,6 +452,7 @@ export interface CockpitClient {
   widgetContent(request: WidgetContentRequest, signal?: AbortSignal): Promise<WidgetContent>;
   widgetRemove(request: WidgetRemoveRequest, signal?: AbortSignal): Promise<WidgetRemoveResponse>;
   widgetSelect(request: WidgetSelectRequest, signal?: AbortSignal): Promise<WidgetSelectResponse>;
+  widgetAction(request: WidgetLiveActionRequest, signal?: AbortSignal): Promise<WidgetLiveActionResponse>;
   widgetShelfList(request: WidgetShelfListRequest, signal?: AbortSignal): Promise<WidgetShelfListResponse>;
   widgetShelfReopen(request: WidgetShelfReopenRequest, signal?: AbortSignal): Promise<WidgetSummary>;
 }

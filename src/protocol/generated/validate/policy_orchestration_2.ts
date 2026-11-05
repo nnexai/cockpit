@@ -2,6 +2,7 @@
 import type * as V1 from "../v1";
 
 export interface WireTypes {
+  "CleanupEffectReceipt": V1.CleanupEffectReceipt;
   "CleanupItem": V1.CleanupItem;
   "OwnedResourceRecord": V1.OwnedResourceRecord;
   "ResourceRegister": V1.ResourceRegister;
@@ -46,6 +47,7 @@ export interface WireTypes {
 }
 
 export interface WireOwners {
+  "CleanupEffectReceipt": V1.CleanupEffectReceipt;
   "CleanupItem": V1.CleanupItem;
   "OwnedResourceRecord": V1.OwnedResourceRecord;
   "ResourceRegister": V1.ResourceRegister;
@@ -153,6 +155,12 @@ export interface WireOwners {
 }
 
 export interface WireFields {
+  "CleanupEffectReceipt.effect_id": (V1.CleanupEffectReceipt)["effect_id"];
+  "CleanupEffectReceipt.kind": (V1.CleanupEffectReceipt)["kind"];
+  "CleanupEffectReceipt.identity_digest": (V1.CleanupEffectReceipt)["identity_digest"];
+  "CleanupEffectReceipt.state": (V1.CleanupEffectReceipt)["state"];
+  "CleanupEffectReceipt.evidence": (V1.CleanupEffectReceipt)["evidence"];
+  "CleanupEffectReceipt.updated_at": (V1.CleanupEffectReceipt)["updated_at"];
   "CleanupItem.operation_id": (V1.CleanupItem)["operation_id"];
   "CleanupItem.state": (V1.CleanupItem)["state"];
   "CleanupItem.reason": (V1.CleanupItem)["reason"];
@@ -569,6 +577,7 @@ export interface WireFields {
 }
 
 export interface WireFieldNames {
+  "CleanupEffectReceipt": "effect_id" | "kind" | "identity_digest" | "state" | "evidence" | "updated_at";
   "CleanupItem": "operation_id" | "state" | "reason" | "effects" | "updated_at";
   "OwnedResourceRecord": "resource_id" | "root_id" | "run_id" | "kind" | "ownership" | "creation_operation_id" | "identity" | "authority" | "consumers" | "integration_result_id" | "cleanup";
   "ResourceRegister": "operation_id" | "run_id" | "resource";
@@ -856,6 +865,7 @@ export interface WireTagNames {
 }
 
 export interface WireCheckpointFieldNames {
+  "CleanupEffectReceipt": "effect_id" | "kind" | "identity_digest" | "state" | "evidence" | "updated_at";
   "CleanupItem": "operation_id" | "state" | "reason" | "effects" | "updated_at";
   "OwnedResourceRecord": "resource_id" | "root_id" | "run_id" | "kind" | "ownership" | "creation_operation_id" | "identity" | "authority" | "consumers" | "integration_result_id" | "cleanup";
   "ResourceRegister": "operation_id" | "run_id" | "resource";
@@ -963,6 +973,7 @@ export interface WireCheckpointFieldNames {
 }
 
 export type WireOmittableField =
+  | "CleanupEffectReceipt.evidence"
   | "CleanupItem.operation_id"
   | "CleanupItem.reason"
   | "OwnedResourceRecord.creation_operation_id"

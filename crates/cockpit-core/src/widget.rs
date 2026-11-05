@@ -15,6 +15,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 
 mod choices;
+mod live;
 mod preflight;
 mod store;
 mod target;
@@ -33,6 +34,7 @@ pub struct WidgetService {
     // Sequence fresh snapshot phases without blocking synchronous window operations.
     operation: tokio::sync::Mutex<()>,
     events: broadcast::Sender<WidgetEvent>,
+    live_actions: broadcast::Sender<()>,
     clock: Arc<dyn Fn() -> u64 + Send + Sync>,
 }
 
@@ -64,12 +66,14 @@ impl Drop for WaitGuard {
 impl WidgetService {
     pub fn new(adapter: Arc<dyn BrowserHerdrAdapter>, paste: Arc<dyn CommentPasteAdapter>) -> Self {
         let (events, _) = broadcast::channel(256);
+        let (live_actions, _) = broadcast::channel(256);
         Self {
             adapter,
             paste,
             store: Arc::new(Mutex::new(Store::default())),
             operation: tokio::sync::Mutex::new(()),
             events,
+            live_actions,
             clock: Arc::new(|| {
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
@@ -292,6 +296,7 @@ impl WidgetService {
             created_at_ms: created_at,
             updated_at_ms: now,
             selection: selection_facts,
+            live: None,
         };
         let snapshot_bytes = summary_snapshot_bytes(&summary)? + prepared.choices_bytes;
         if store.snapshot_bytes - old_snapshot_bytes + snapshot_bytes + SNAPSHOT_ENVELOPE_BYTES
@@ -333,6 +338,9 @@ impl WidgetService {
             source_key: resolved.source_key,
             fingerprint: resolved.source.and_then(|source| source.fingerprint),
             selection,
+            live_actions: Default::default(),
+            live_credential_id: None,
+            live_lease_at_ms: 0,
             snapshot_bytes,
         };
         if tomb_index.is_some() {
@@ -588,6 +596,7 @@ impl WidgetService {
 
     pub fn subscribe(&self) -> WidgetSubscription {
         let mut store = self.store.lock();
+        self.expire_live_locked(&mut store);
         let id = Uuid::new_v4().to_string();
         if !store.shutdown {
             store.windows.insert(
@@ -682,7 +691,7 @@ impl WidgetService {
             .iter()
             .position(|widget| widget.summary.key == request.key)
             .expect("located widget");
-        let widget = tab.live.remove(index);
+        let mut widget = tab.live.remove(index);
         let now = (self.clock)();
         tab.tombstones.push_back(Tombstone {
             id: request.key.id.clone(),
@@ -699,6 +708,11 @@ impl WidgetService {
                 store.shelf_bytes -= item.bytes;
             }
         }
+        if let Some(live) = &mut widget.summary.live {
+            live.status = WidgetLiveStatus::Ended;
+        }
+        widget.live_actions.clear();
+        widget.live_credential_id = None;
         let snapshot_bytes = widget.snapshot_bytes;
         let bytes = retained_body_bytes(&widget.body) + widget.snapshot_bytes;
         let revision = widget.summary.revision;
@@ -896,6 +910,7 @@ impl WidgetService {
 
     pub async fn reconcile(&self) {
         let _operation = self.operation.lock().await;
+        self.expire_live_locked(&mut self.store.lock());
         let sessions: std::collections::HashSet<_> = self
             .store
             .lock()
@@ -951,6 +966,15 @@ impl WidgetService {
                     } else {
                         continue;
                     };
+                    if status != WidgetSourceStatus::Present {
+                        if let Some(live) = &mut widget.summary.live {
+                            if live.status == WidgetLiveStatus::Live {
+                                live.status = WidgetLiveStatus::Ended;
+                                widget.live_credential_id = None;
+                                widget.live_actions.clear();
+                            }
+                        }
+                    }
                     if source.status != status {
                         source.status = status;
                         widget.summary.change = WidgetChange::Updated;

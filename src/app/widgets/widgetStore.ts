@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { CockpitClient, WidgetStream } from "../../client/CockpitClient";
-import type { WidgetContent, WidgetEvent, WidgetKey, WidgetSummary, WidgetWindowReport } from "../../protocol/generated/v1";
+import type { WidgetContent, WidgetEvent, WidgetKey, WidgetLiveBinding, WidgetSummary, WidgetWindowReport } from "../../protocol/generated/v1";
 import type { LeafCtx } from "../layout/tabLayoutStore";
 import { decideArrival } from "./arrival";
 
@@ -18,9 +18,13 @@ export class WidgetStore {
   private userRemovals = new Set<string>();
   private userRemovalFocus = new Map<string, Element>();
   private content = new Map<string, WidgetContentState>();
+  private contentUsers = new Map<string, number>();
+  connected = false;
   private contentRequests = new Map<string, AbortController>();
   private listeners = new Set<() => void>();
   private revision = 0;
+  // A snapshot may come from a restarted owner whose numeric revisions were reused.
+  snapshotGeneration = 0;
   private sequence = -1;
   private ctx: LeafCtx | null = null;
   private report: WidgetWindowReport = { session_id: null, displayed_tab_id: null, blocker: null };
@@ -54,7 +58,7 @@ export class WidgetStore {
     let failed = false;
     const fail = () => {
       if (failed || generation !== this.generation || !this.users) return;
-      failed = true; this.stream?.close(); this.stream = null; this.abort?.abort();
+      failed = true; this.stream?.close(); this.stream = null; this.abort?.abort(); this.connected = false; this.notify();
       this.reconnect = window.setTimeout(() => { this.reconnect = undefined; if (this.users) this.connect(); }, 1000);
     };
     void this.client.subscribeWidgets(event => { if (!failed && generation === this.generation) this.accept(event); }, fail, this.abort.signal).then(stream => {
@@ -65,6 +69,7 @@ export class WidgetStore {
   accept(event: WidgetEvent): void {
     if (event.type !== "snapshot" && event.sequence <= this.sequence) return;
     if (event.type !== "snapshot" && this.sequence >= 0 && event.sequence !== this.sequence + 1) {
+      this.connected = false; this.notify();
       this.stream?.close(); this.abort?.abort(); this.stream = null;
       this.generation++;
       if (this.users && !this.reconnect) this.reconnect = window.setTimeout(() => { this.reconnect = undefined; this.connect(); }, 1000);
@@ -72,6 +77,10 @@ export class WidgetStore {
     }
     this.sequence = event.sequence;
     if (event.type === "snapshot") {
+      this.snapshotGeneration++;
+      for (const key of this.content.keys()) this.dropContent(key);
+      for (const key of this.contentRequests.keys()) this.dropContent(key);
+      this.connected = true;
       this.userRemovals.clear(); this.userRemovalFocus.clear();
       const live = new Set(event.widgets.map(w => widgetKey(w.key)));
       for (const old of [...this.byKey.values()]) if (!live.has(widgetKey(old.key))) this.removeLocal(old.key, false);
@@ -85,6 +94,8 @@ export class WidgetStore {
     const key = widgetKey(widget.key), previous = this.byKey.get(key);
     if (previous && previous.revision !== widget.revision) this.dropContent(key);
     this.byKey.set(key, widget);
+    // Live state upserts do not constitute a new arrival or content replacement.
+    if (!snapshot && previous && previous.revision === widget.revision) return;
     if (snapshotArrival || (!snapshot && (widget.change === "opened" || widget.change === "reopened"))) {
       this.pending.add(key); this.applyArrival(widget, snapshot);
     } else {
@@ -211,17 +222,17 @@ export class WidgetStore {
       if (this.contentRequests.get(key) === abort) { this.contentRequests.delete(key); this.trimContent(); this.notify(); }
     });
   }
-  async selectPage(key: WidgetKey, revision: number, document: string, valueJson: string): Promise<void> {
+  async selectPage(key: WidgetKey, revision: number, document: string, valueJson: string, inline = false, generation = this.snapshotGeneration): Promise<void> {
     const encoded = widgetKey(key), widget = this.byKey.get(encoded), state = this.content.get(encoded);
     const content = state?.content;
     const tab = this.ctx?.sessionId === key.session_id ? this.ctx.getState().tabs[key.tab_id] : null;
-    if (!widget || widget.revision !== revision || tab?.viewers.widget?.currentId !== key.id
+    if (!this.connected || generation !== this.snapshotGeneration || !widget || widget.revision !== revision || (!inline && tab?.viewers.widget?.currentId !== key.id)
       || !content || content.revision !== revision || widgetKey(content.key) !== encoded
       || content.body.type !== "html" || content.body.document !== document) return;
     const response = await this.client.widgetSelect({ key, revision, value: { type: "page", value_json: valueJson } });
     // A late response never installs selection state into superseded content.
     const latest = this.content.get(encoded)?.content;
-    if (this.byKey.get(encoded)?.revision !== revision || !latest || latest.revision !== revision
+    if (generation !== this.snapshotGeneration || this.byKey.get(encoded)?.revision !== revision || !latest || latest.revision !== revision
       || latest.body.type !== "html" || latest.body.document !== document
       || (latest.selection?.at_ms !== null && latest.selection?.at_ms !== undefined && latest.selection.at_ms > response.at_ms)) return;
     this.content.set(encoded, { error: null, loading: false, content: { ...latest, selection: {
@@ -229,13 +240,31 @@ export class WidgetStore {
     } } });
     this.notify();
   }
+  async emitPage(key: WidgetKey, revision: number, document: string, generation: number, binding: WidgetLiveBinding, contentSha256: string, valueJson: string): Promise<void> {
+    const encoded = widgetKey(key), widget = this.byKey.get(encoded), content = this.content.get(encoded)?.content;
+    if (!this.connected || generation !== this.snapshotGeneration || !widget?.live || widget.revision !== revision
+      || JSON.stringify(widget.live.binding) !== JSON.stringify(binding) || widget.content.sha256 !== contentSha256
+      || !content || content.revision !== revision || content.sha256 !== contentSha256 || content.body.type !== "html" || content.body.document !== document) {
+      throw new Error("This live view is no longer current.");
+    }
+    await this.client.widgetAction({ key, revision, binding, content_sha256: contentSha256, value_json: valueJson });
+  }
+  retainContent(key: WidgetKey): () => void {
+    const encoded = widgetKey(key);
+    this.contentUsers.set(encoded, (this.contentUsers.get(encoded) ?? 0) + 1);
+    return () => {
+      const count = (this.contentUsers.get(encoded) ?? 1) - 1;
+      if (count) this.contentUsers.set(encoded, count); else this.contentUsers.delete(encoded);
+      this.trimContent();
+    };
+  }
   private dropContent(key: string): void { this.contentRequests.get(key)?.abort(); this.contentRequests.delete(key); this.content.delete(key); }
   private trimContent(): void {
     // Cache only the current content of each existing dock, never hidden revisions.
     for (const key of this.content.keys()) {
       const widget = this.byKey.get(key), ctx = this.ctx;
       const tab = widget && ctx?.sessionId === widget.key.session_id ? ctx.getState().tabs[widget.key.tab_id] : null;
-      if (!widget || tab?.viewers.widget?.currentId !== widget.key.id) this.dropContent(key);
+      if (!widget || (!this.contentUsers.has(key) && tab?.viewers.widget?.currentId !== widget.key.id)) this.dropContent(key);
     }
     while (this.content.size > MAX_CACHED_WIDGETS) this.dropContent(this.content.keys().next().value!);
   }

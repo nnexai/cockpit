@@ -1,0 +1,7 @@
+.inbox-live-widgets { display: grid; gap: 12px; margin: 12px 0; min-width: 0; }
+.inbox-live-widget { min-width: 0; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface-raised); }
+.inbox-live-widget > header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; padding: 9px 12px; }
+.inbox-live-widget > header strong { overflow-wrap: anywhere; }
+.inbox-live-widget > header span { color: var(--text-muted); font-size: var(--font-size-xs); }
+.inbox-live-widget > p { padding: 0 12px; }
+.inbox-live-widget-frame { display: flex; height: clamp(220px, 40vh, 440px); min-width: 0; }

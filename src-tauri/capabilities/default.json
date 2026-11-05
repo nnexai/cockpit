@@ -24,6 +24,7 @@
     "allow-cockpit-widget-content",
     "allow-cockpit-widget-remove",
     "allow-cockpit-widget-select",
+    "allow-cockpit-widget-action",
     "allow-cockpit-sessions",
     "allow-cockpit-project-configuration",
     "allow-cockpit-repositories",

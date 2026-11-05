@@ -1514,6 +1514,12 @@ pub enum OwnerAvailability { Available, Starting, Absent, Unknown }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct InboxOwner {
     pub root_id: String,
+    pub run_id: String,
+    pub attempt: u32,
+    pub session_id: String,
+    pub attachment_id: Option<String>,
+    #[ts(type = "number | null")]
+    pub attachment_epoch: Option<u64>,
     pub label: String,
     pub kind: RunKind,
     pub stage: RunStage,
@@ -1578,6 +1584,10 @@ pub struct InboxReceipt {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct InboxRun {
     pub run_id: String, pub attempt: u32, pub stage: RunStage, pub harness: String,
+    pub session_id: String,
+    pub attachment_id: Option<String>,
+    #[ts(type = "number | null")]
+    pub attachment_epoch: Option<u64>,
     pub presence: Presence, pub agent_status: Option<String>,
     pub location: Option<InboxLocation>,
     pub cleanup: Vec<CleanupResourceSummary>,

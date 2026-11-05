@@ -37,6 +37,9 @@ pub(super) struct Widget {
     pub source_key: String,
     pub fingerprint: Option<String>,
     pub selection: Option<WidgetSelectionResponse>,
+    pub live_actions: VecDeque<WidgetLiveAction>,
+    pub live_credential_id: Option<String>,
+    pub live_lease_at_ms: u64,
     // Includes comma and headroom for future selection facts, numeric widths,
     // source status and change updates, so reads/selects never grow the budget.
     pub snapshot_bytes: usize,

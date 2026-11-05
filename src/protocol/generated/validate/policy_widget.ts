@@ -33,6 +33,13 @@ export interface WireTypes {
   "WidgetSourceStatus": V1.WidgetSourceStatus;
   "WidgetSourceSummary": V1.WidgetSourceSummary;
   "WidgetSelectionFacts": V1.WidgetSelectionFacts;
+  "WidgetLiveBinding": V1.WidgetLiveBinding;
+  "WidgetLiveState": V1.WidgetLiveState;
+  "WidgetLiveStatus": V1.WidgetLiveStatus;
+  "WidgetLive": V1.WidgetLive;
+  "WidgetLiveAction": V1.WidgetLiveAction;
+  "WidgetLiveActionRequest": V1.WidgetLiveActionRequest;
+  "WidgetLiveActionResponse": V1.WidgetLiveActionResponse;
   "WidgetSummary": V1.WidgetSummary;
   "WidgetRemovalReason": V1.WidgetRemovalReason;
   "WidgetEvent": V1.WidgetEvent;
@@ -81,6 +88,12 @@ export interface WireOwners {
   "WidgetKey": V1.WidgetKey;
   "WidgetSourceSummary": V1.WidgetSourceSummary;
   "WidgetSelectionFacts": V1.WidgetSelectionFacts;
+  "WidgetLiveBinding": V1.WidgetLiveBinding;
+  "WidgetLiveState": V1.WidgetLiveState;
+  "WidgetLive": V1.WidgetLive;
+  "WidgetLiveAction": V1.WidgetLiveAction;
+  "WidgetLiveActionRequest": V1.WidgetLiveActionRequest;
+  "WidgetLiveActionResponse": V1.WidgetLiveActionResponse;
   "WidgetSummary": V1.WidgetSummary;
   "WidgetEvent": V1.WidgetEvent;
   "WidgetEvent[snapshot]": Extract<V1.WidgetEvent, { "type": "snapshot" }>;
@@ -193,6 +206,23 @@ export interface WireFields {
   "WidgetSelectionFacts.revision": (V1.WidgetSelectionFacts)["revision"];
   "WidgetSelectionFacts.at_ms": (V1.WidgetSelectionFacts)["at_ms"];
   "WidgetSelectionFacts.read_at_ms": (V1.WidgetSelectionFacts)["read_at_ms"];
+  "WidgetLiveBinding.run_id": (V1.WidgetLiveBinding)["run_id"];
+  "WidgetLiveBinding.attempt": (V1.WidgetLiveBinding)["attempt"];
+  "WidgetLiveBinding.session_id": (V1.WidgetLiveBinding)["session_id"];
+  "WidgetLiveBinding.attachment_id": (V1.WidgetLiveBinding)["attachment_id"];
+  "WidgetLiveBinding.attachment_epoch": (V1.WidgetLiveBinding)["attachment_epoch"];
+  "WidgetLiveState.version": (V1.WidgetLiveState)["version"];
+  "WidgetLiveState.value_json": (V1.WidgetLiveState)["value_json"];
+  "WidgetLiveState.updated_at_ms": (V1.WidgetLiveState)["updated_at_ms"];
+  "WidgetLive.binding": (V1.WidgetLive)["binding"];
+  "WidgetLive.state": (V1.WidgetLive)["state"];
+  "WidgetLive.status": (V1.WidgetLive)["status"];
+  "WidgetLiveAction.value_json": (V1.WidgetLiveAction)["value_json"];
+  "WidgetLiveActionRequest.key": (V1.WidgetLiveActionRequest)["key"];
+  "WidgetLiveActionRequest.revision": (V1.WidgetLiveActionRequest)["revision"];
+  "WidgetLiveActionRequest.binding": (V1.WidgetLiveActionRequest)["binding"];
+  "WidgetLiveActionRequest.content_sha256": (V1.WidgetLiveActionRequest)["content_sha256"];
+  "WidgetLiveActionRequest.value_json": (V1.WidgetLiveActionRequest)["value_json"];
   "WidgetSummary.key": (V1.WidgetSummary)["key"];
   "WidgetSummary.space_id": (V1.WidgetSummary)["space_id"];
   "WidgetSummary.title": (V1.WidgetSummary)["title"];
@@ -209,6 +239,7 @@ export interface WireFields {
   "WidgetSummary.created_at_ms": (V1.WidgetSummary)["created_at_ms"];
   "WidgetSummary.updated_at_ms": (V1.WidgetSummary)["updated_at_ms"];
   "WidgetSummary.selection": (V1.WidgetSummary)["selection"];
+  "WidgetSummary.live": (V1.WidgetSummary)["live"];
   "WidgetEvent.sequence": (V1.WidgetEvent)["sequence"];
   "WidgetEvent[snapshot].sequence": (Extract<V1.WidgetEvent, { "type": "snapshot" }>)["sequence"];
   "WidgetEvent[snapshot].widgets": (Extract<V1.WidgetEvent, { "type": "snapshot" }>)["widgets"];
@@ -275,7 +306,13 @@ export interface WireFieldNames {
   "WidgetKey": "session_id" | "tab_id" | "id";
   "WidgetSourceSummary": "pane_id" | "tab_id" | "space_id" | "terminal_id" | "agent_label" | "fingerprint_prefix" | "status";
   "WidgetSelectionFacts": "revision" | "at_ms" | "read_at_ms";
-  "WidgetSummary": "key" | "space_id" | "title" | "revision" | "created_seq" | "kind" | "presentation" | "content" | "warnings" | "source" | "arrival" | "resolved_from" | "change" | "created_at_ms" | "updated_at_ms" | "selection";
+  "WidgetLiveBinding": "run_id" | "attempt" | "session_id" | "attachment_id" | "attachment_epoch";
+  "WidgetLiveState": "version" | "value_json" | "updated_at_ms";
+  "WidgetLive": "binding" | "state" | "status";
+  "WidgetLiveAction": "value_json";
+  "WidgetLiveActionRequest": "key" | "revision" | "binding" | "content_sha256" | "value_json";
+  "WidgetLiveActionResponse": never;
+  "WidgetSummary": "key" | "space_id" | "title" | "revision" | "created_seq" | "kind" | "presentation" | "content" | "warnings" | "source" | "arrival" | "resolved_from" | "change" | "created_at_ms" | "updated_at_ms" | "selection" | "live";
   "WidgetEvent": "sequence";
   "WidgetEvent[snapshot]": "sequence" | "widgets";
   "WidgetEvent[upserted]": "sequence" | "widget";
@@ -313,10 +350,15 @@ export interface WireChildNames {
   "WidgetCloseRequest.address": "WidgetAddress";
   "WidgetListRequest.address": "WidgetAddress";
   "WidgetSelectionRequest.address": "WidgetAddress";
+  "WidgetLive.binding": "WidgetLiveBinding";
+  "WidgetLive.state": "WidgetLiveState";
+  "WidgetLiveActionRequest.key": "WidgetKey";
+  "WidgetLiveActionRequest.binding": "WidgetLiveBinding";
   "WidgetSummary.key": "WidgetKey";
   "WidgetSummary.content": "WidgetContentFacts";
   "WidgetSummary.source": "WidgetSourceSummary";
   "WidgetSummary.selection": "WidgetSelectionFacts";
+  "WidgetSummary.live": "WidgetLive";
   "WidgetEvent.key": "WidgetKey";
   "WidgetEvent.widget": "WidgetSummary";
   "WidgetEvent[upserted].widget": "WidgetSummary";
@@ -383,7 +425,13 @@ export interface WireCheckpointFieldNames {
   "WidgetKey": "session_id" | "tab_id" | "id";
   "WidgetSourceSummary": "pane_id" | "tab_id" | "space_id" | "terminal_id" | "agent_label" | "fingerprint_prefix" | "status";
   "WidgetSelectionFacts": "revision" | "at_ms" | "read_at_ms";
-  "WidgetSummary": "key" | "space_id" | "title" | "revision" | "created_seq" | "kind" | "presentation" | "content" | "warnings" | "source" | "arrival" | "resolved_from" | "change" | "created_at_ms" | "updated_at_ms" | "selection";
+  "WidgetLiveBinding": "run_id" | "attempt" | "session_id" | "attachment_id" | "attachment_epoch";
+  "WidgetLiveState": "version" | "value_json" | "updated_at_ms";
+  "WidgetLive": "binding" | "state" | "status";
+  "WidgetLiveAction": "value_json";
+  "WidgetLiveActionRequest": "key" | "revision" | "binding" | "content_sha256" | "value_json";
+  "WidgetLiveActionResponse": never;
+  "WidgetSummary": "key" | "space_id" | "title" | "revision" | "created_seq" | "kind" | "presentation" | "content" | "warnings" | "source" | "arrival" | "resolved_from" | "change" | "created_at_ms" | "updated_at_ms" | "selection" | "live";
   "WidgetEvent": "key" | "reason" | "sequence" | "type" | "widget" | "widgets";
   "WidgetEvent[snapshot]": "sequence" | "widgets" | "type";
   "WidgetEvent[upserted]": "sequence" | "widget" | "type";
@@ -432,8 +480,10 @@ export type WireOmittableField =
   | "WidgetSourceSummary.agent_label"
   | "WidgetSourceSummary.fingerprint_prefix"
   | "WidgetSelectionFacts.read_at_ms"
+  | "WidgetLive.state"
   | "WidgetSummary.source"
   | "WidgetSummary.selection"
+  | "WidgetSummary.live"
   | "WidgetWindowReport.session_id"
   | "WidgetWindowReport.displayed_tab_id"
   | "WidgetWindowReport.blocker"
@@ -444,6 +494,7 @@ export type WireOmittableField =
   | never;
 
 export type WireOptionalField =
+  | "WidgetSummary.live"
   | never;
 
 export type WireListField =
