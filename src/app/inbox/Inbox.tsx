@@ -85,6 +85,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const [base, setBase] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
+  const [acknowledging, setAcknowledging] = useState<{ threadId: string; resultId: string } | null>(null);
   const [readError, setReadError] = useState("");
   const acknowledgementDescription = useId();
   const [followupOpen, setFollowupOpen] = useState(false);
@@ -355,13 +356,13 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     if (!thread?.unread_result_message_id || thread.reply?.message_id !== thread.unread_result_message_id || !view || !current || view.observation.status !== "fresh" || snapshot?.session_id !== sessionId || busy || lock.current) return;
     const attempt = selectionVersion.current;
     const resultId = thread.unread_result_message_id;
-    lock.current = true; setBusy(true); setReadError("");
+    lock.current = true; setBusy(true); setAcknowledging({ threadId: thread.thread_id, resultId }); setReadError("");
     try {
       await client.orchestrationMutate({ session_id: sessionId, expected_revision: null, action: { action: "thread_mark_read", thread_id: thread.thread_id, through_message_id: resultId } });
       if (mounted.current && selectionVersion.current === attempt) { focusAfterRead.current = resultId; setAnnouncement("Acknowledged. You can still follow up."); }
       refreshVersion.current++; wake.current?.();
     } catch (e) { if (mounted.current && selectionVersion.current === attempt) setReadError(`Couldn't acknowledge: ${e instanceof Error ? e.message : "Please try again."}`); }
-    finally { lock.current = false; if (mounted.current) setBusy(false); }
+    finally { lock.current = false; if (mounted.current) { setBusy(false); setAcknowledging(null); } }
   };
   const startFollowup = () => { setSelectedQuestion(""); setFollowupOpen(true); requestAnimationFrame(() => composerRef.current?.focus()); };
   const questions = thread?.questions.filter(q => q.receipt.status === "unresolved") ?? [];
@@ -432,7 +433,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
           {thread.unread_result_message_id && <div ref={resultActionsRef} className="inbox-result-actions" role="group" aria-label="Result actions" onFocusCapture={() => { resultActionsFocused.current = true; }} onBlurCapture={e => { if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget as Node)) resultActionsFocused.current = false; }}>
             {readError ? <p role="alert">{readError}</p> : thread.reply?.message_id !== thread.unread_result_message_id && <p>The unread result is not available in this view. Refresh before acknowledging it.</p>}
             <span id={acknowledgementDescription} className="inbox-sr">Marks this result as read. It does not answer questions, accept the work, or notify the owner.</span>
-            <div className="inbox-now-bar inbox-now-actions"><span className="inbox-kic" data-tone="review"><UiIcon name="eye" /></span><strong>New result</strong>{resultOutcome && <span>· {resultOutcome === "succeeded" ? "Succeeded" : "Failed"}</span>}<Time value={thread.reply?.at} /><span className="inbox-sp" /><button ref={followupRef} type="button" className="inbox-btn" onClick={startFollowup}>Follow up</button><button type="button" className="inbox-btn is-primary" aria-describedby={acknowledgementDescription} title="Marks this result as read. It does not answer questions, accept the work, or notify the owner." disabled={thread.reply?.message_id !== thread.unread_result_message_id || busy || !current || view?.observation.status !== "fresh" || snapshot?.session_id !== sessionId} onClick={() => void markRead()}><UiIcon name="check" />{busy ? "Acknowledging…" : "Acknowledge"}</button></div>
+            <div className="inbox-now-bar inbox-now-actions"><span className="inbox-kic" data-tone="review"><UiIcon name="eye" /></span><strong>New result</strong>{resultOutcome && <span>· {resultOutcome === "succeeded" ? "Succeeded" : "Failed"}</span>}<Time value={thread.reply?.at} /><span className="inbox-sp" /><button ref={followupRef} type="button" className="inbox-btn" onClick={startFollowup}>Follow up</button><button type="button" className="inbox-btn is-primary" aria-describedby={acknowledgementDescription} title="Marks this result as read. It does not answer questions, accept the work, or notify the owner." disabled={thread.reply?.message_id !== thread.unread_result_message_id || busy || !current || view?.observation.status !== "fresh" || snapshot?.session_id !== sessionId} onClick={() => void markRead()}><UiIcon name="check" />{acknowledging?.threadId === thread.thread_id && acknowledging.resultId === thread.unread_result_message_id ? "Acknowledging…" : "Acknowledge"}</button></div>
             {view?.observation.status !== "fresh" && <small>Live sessions are unavailable; actions are paused.</small>}
           </div>}
         </section>}
