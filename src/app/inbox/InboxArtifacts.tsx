@@ -9,28 +9,30 @@ type Props = { client: CockpitClient; sessionId: string; runId: string; artifact
 type Content = { kind: "image"; url: string } | { kind: "html" | "markdown"; text: string };
 type LoadState = { key: string; status: "loading" } | { key: string; status: "ready"; content: Content } | { key: string; status: "error"; message: string };
 
-const htmlPolicy = "default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; form-action 'none'; base-uri 'none'; frame-src 'none'";
+// Keep the document in an opaque-origin frame; never add allow-same-origin.
+// The initial document's CSP limits native schemes and nested contexts; the sandbox survives navigation.
+const htmlPolicy = "default-src 'none'; script-src http: https: data: blob: 'unsafe-inline' 'unsafe-eval'; style-src http: https: data: blob: 'unsafe-inline'; img-src http: https: data: blob:; font-src http: https: data: blob:; media-src http: https: data: blob:; connect-src http: https: ws: wss:; frame-src 'none'; child-src 'none'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'";
 
 function sandboxedHtml(html: string): string {
   const doc = new DOMParser().parseFromString(html, "text/html");
-  doc.querySelectorAll("base, script, iframe, frame, object, embed, form").forEach(element => element.remove());
-  doc.querySelectorAll("meta[http-equiv]").forEach(element => {
-    if (element.getAttribute("http-equiv")?.trim().toLowerCase() === "refresh") element.remove();
-  });
-  doc.querySelectorAll("*").forEach(element => {
-    for (const attribute of Array.from(element.attributes)) {
-      const name = attribute.name.toLowerCase();
-      if (name === "href" || name === "xlink:href" || name === "action" || name === "formaction" || name === "src") {
-        if (element.localName.toLowerCase() === "a" || !attribute.value.trim().toLowerCase().startsWith("data:")) {
-          element.removeAttributeNode(attribute);
-        }
-      }
-    }
-  });
   const policy = doc.createElement("meta");
   policy.setAttribute("http-equiv", "Content-Security-Policy");
   policy.setAttribute("content", htmlPolicy);
-  doc.head.prepend(policy);
+  // srcdoc inherits the host base URL. Rewrite only ordinary same-frame
+  // fragment clicks, leaving the browser's default navigation and cancellation intact.
+  const fragments = doc.createElement("script");
+  fragments.textContent = `window.addEventListener('click', event => {
+    if (event.defaultPrevented || event.button !== 0 || event.ctrlKey
+      || event.altKey || event.shiftKey || event.metaKey) return;
+    const element = event.target instanceof Element ? event.target : event.target?.parentElement;
+    const anchor = element?.closest('a[href], area[href]');
+    if (!anchor || anchor.hasAttribute('download')) return;
+    const target = (anchor.getAttribute('target') || '').toLowerCase();
+    if (target && target !== '_self') return;
+    const href = anchor.getAttribute('href').trim();
+    if (href.startsWith('#')) anchor.setAttribute('href', 'about:srcdoc' + href);
+  }, true);`;
+  doc.head.prepend(policy, fragments);
   return "<!doctype html>" + doc.documentElement.outerHTML;
 }
 
@@ -50,7 +52,7 @@ function ArtifactDialog({ name, content, close, opener }: { name: string; conten
       <header><strong>{name}</strong><button ref={closeButton} type="button" onClick={close}>Close</button></header>
       <div className="inbox-image-full inbox-artifact-view">
         {content.kind === "image" ? <img src={content.url} alt={name} draggable={false} />
-          : content.kind === "html" ? <iframe sandbox="" referrerPolicy="no-referrer" title={name} srcDoc={sandboxedHtml(content.text)} />
+          : content.kind === "html" ? <iframe sandbox="allow-scripts" referrerPolicy="no-referrer" title={name} srcDoc={sandboxedHtml(content.text)} />
           : <InboxFeedback text={content.text} />}
       </div>
     </div>
