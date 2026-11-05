@@ -21,7 +21,7 @@ const source = (value: InboxText) => value.source.kind === "owner_card" ? `AI sy
 const questionKey = (question: InboxQuestion) => JSON.stringify([question.run_id, question.question_message_id]);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const threadHeadline = (thread: InboxThread) => thread.title.text.replace(/\s+/g, " ").trim();
-const deliveryLabel = (stage: InboxThread["receipts"][number]["stage"]) => stage === "stored" ? "waiting to be picked up" : stage === "read" ? "picked up" : "received";
+const deliveryLabel = (stage: InboxThread["receipts"][number]["stage"]) => stage === "stored" ? "waiting to be picked up" : stage === "read" ? "picked up" : "captured, processing not confirmed";
 function outcomeLine(thread: InboxThread) {
   const question = thread.questions.find(q => q.receipt.status === "unresolved");
   const text = question?.text.text || thread.reply?.text || thread.next?.text;
