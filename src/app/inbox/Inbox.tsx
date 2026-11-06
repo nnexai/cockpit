@@ -578,6 +578,12 @@ function CopyValue({ value, label }: { value: string; label?: string }) {
   return <div className="inbox-copy"><span title={value}>{value}</span><button type="button" aria-label={label ? `Copy ${label} ${value}` : undefined} onClick={() => { if (!navigator.clipboard) { setStatus("Copy unavailable; select the text"); return; } void navigator.clipboard.writeText(value).then(() => setStatus("Copied"), () => setStatus("Copy unavailable; select the text")); }}>Copy</button><span className="inbox-sr" role="status">{status}</span></div>;
 }
 
+function claimPreview(text: string) {
+  const line = text.split(/\r?\n/).find(part => part.trim())?.trim() ?? "";
+  if (/^(?:`{3,}|~{3,}|\||!\[)/.test(line)) return "Worker-reported evidence";
+  return line.replace(/^(?:(?:#{1,6}|[-*>+]|\d+[.)])\s+)+/, "").replace(/^`+|`+$/g, "").trim() || "Worker-reported evidence";
+}
+
 function Evidence({ thread, view, displayed }: { thread: InboxThread; view: InboxView | null; displayed: InboxText[] }) {
   const binding = thread.request?.handoff.binding?.requested;
   const fields: Array<[string, string | null | undefined]> = [["Repository", binding?.repository_id], ["Space", binding?.workspace_id], ["Branch", binding?.branch], ["Base ref", binding?.base_ref]];
@@ -603,7 +609,8 @@ function Evidence({ thread, view, displayed }: { thread: InboxThread; view: Inbo
       if (fact.source.kind !== "worker") return null;
       const runId = fact.source.run_id;
       const task = thread.tasks.find(task => task.evidence?.run_id === runId && task.evidence.result?.summary === fact.text);
-      return <details className="inbox-claim" key={i}><summary><span className="inbox-claim-chevron" aria-hidden="true">▸</span><span className="inbox-tag" data-kind="worker">{task ? "Worker claim" : "Worker-reported evidence"}</span><span>{task && <><strong>{task.title}</strong><br /></>}Run <code>{runId}</code></span></summary><div className="inbox-claim-body inbox-md" dir="auto"><InboxFeedback text={fact.text} /></div></details>;
+      const title = task?.title ?? claimPreview(fact.text);
+      return <details className="inbox-task inbox-claim" key={i}><summary><span className="inbox-claim-marker" aria-hidden="true" /><span className="inbox-task-title" title={title} dir="auto">{task ? <strong>{title}</strong> : title}</span><span className="inbox-chev" aria-hidden="true"><UiIcon name="right" /></span><span className="inbox-task-status"><b>{task ? "Worker claim" : "Worker-reported evidence"}</b><span aria-hidden="true"> · Run <code>{runId.slice(0, 8)}</code></span><span className="inbox-sr"> Run {runId}</span></span></summary><div className="inbox-task-body inbox-claim-body"><CopyValue value={runId} label="run ID" /><div className="inbox-md" dir="auto"><InboxFeedback text={fact.text} /></div></div></details>;
     })}</>}
     {facts.size > 0 && <><h3 className="inbox-ev-h">Recorded steps</h3><ul className="inbox-evidence-list">{Array.from(facts.values()).map(({ fact, count }, i) => <li className="inbox-fact" key={i}>{srcKind(fact) !== "recorded" && <span className="inbox-tag" data-kind={srcKind(fact)} title={source(fact)}>{srcLabel(fact)}</span>}<InboxFeedback text={fact.text} />{count > 1 && <span>×{count}</span>}</li>)}</ul></>}
     {thread.receipts.length > 0 && <><h3 className="inbox-ev-h">Delivery</h3><ul className="inbox-evidence-list">{thread.receipts.map(r => <li className="inbox-evidence-row" key={r.message_id}><strong>{r.kind === "answer" ? "Answer" : "Request"} to {ownerLabel(view, r.to_run_id)}</strong><span>{deliveryLabel(r.stage)}{r.stale ? " · stale" : ""} · <Time value={r.acked_at || r.created_at} /></span></li>)}</ul></>}

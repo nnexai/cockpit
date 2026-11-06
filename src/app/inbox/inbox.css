@@ -98,13 +98,16 @@
 .inbox-evidence-row strong{font-weight:600;color:var(--text-primary)}
 .inbox-evidence-row>span{font-size:var(--font-size-control);color:var(--text-muted)}
 .inbox-evidence-list .inbox-feedback{min-width:0}
-.inbox-claim{min-width:0;margin:6px 0;border:1px solid var(--border);border-radius:var(--radius-control);color:var(--text-secondary)}
-.inbox-claim>summary{display:flex;align-items:center;gap:8px;min-width:0;padding:8px;cursor:pointer;font-size:var(--font-size-control);overflow-wrap:anywhere}
+.inbox-claim{min-width:0;margin:6px 0}
 .inbox-claim>summary::-webkit-details-marker{display:none}
-.inbox-claim-chevron{flex:none;color:var(--text-muted)}
-.inbox-claim[open] .inbox-claim-chevron{transform:rotate(90deg)}
-.inbox-claim>summary>span:last-child{min-width:0}
-.inbox-claim-body{min-width:0;padding:0 8px 10px;overflow-wrap:anywhere}
+.inbox-claim>summary{scroll-margin-top:44px}
+.inbox-claim-marker{width:8px;height:8px;border:1.5px solid var(--text-muted);border-radius:50%}
+.inbox-claim .inbox-task-title strong{font-weight:inherit}
+.inbox-claim .inbox-task-status b{font-weight:500;color:var(--text-secondary)}
+.inbox-claim-body{min-width:0;overflow-wrap:anywhere}
+.inbox-claim-body .inbox-copy>span:first-child{font-family:var(--font-mono)}
+.inbox-claim-body .inbox-copy>span:first-child::before{content:"Run ";font-family:var(--font-ui, sans-serif);color:var(--text-muted)}
+.inbox-claim-body .inbox-copy button{min-height:36px}
 .inbox-claim-body .inbox-feedback :is(h1,h2,h3,h4,h5,h6){font-size:1em;line-height:1.35}
 @media (max-width:700px){.inbox-claim>summary,.inbox-diag>summary{min-height:44px}}
 .inbox-tag{flex:none;margin-top:1px;padding:0 7px;border:1px solid currentColor;border-radius:var(--radius-pill);font-size:var(--font-size-control);font-weight:600;line-height:1.5;white-space:nowrap}

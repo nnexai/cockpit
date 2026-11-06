@@ -151,6 +151,9 @@ describe("Inbox", () => {
     expect(claims[1].querySelector("summary strong")).toBeNull();
     expect(claims[1].querySelector("summary")?.textContent).toContain("Worker-reported evidence");
     expect(claims[2].querySelector("summary")?.textContent).toContain("Worker-reported evidence");
+    expect(claims[1].querySelector(".inbox-task-title")?.textContent).toBe("Result");
+    expect(claims[2].querySelector(".inbox-task-title")?.textContent).toBe("Check passed");
+    expect(claims[0].querySelector('button[aria-label="Copy run ID worker-one"]')).not.toBeNull();
     expect(claims[0].open).toBe(false);
     await flush(() => claims[0].querySelector("summary")!.click());
     expect(claims[0].open).toBe(true);
