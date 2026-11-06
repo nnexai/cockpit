@@ -302,7 +302,7 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
                 if let Some(worker) = state.runs.iter().find(|r| r.run_id == run.run_id) {
                     let integration = match &worker.integration { Integration::Pending => "Pending", Integration::NotApplicable { .. } => "Not applicable", Integration::Integrated { .. } => "Integrated" };
                     facts.push(text(format!("Integration: {integration}"), InboxSource::Recorded, None));
-                    if let Some(result) = &worker.result { facts.push(text(first_line(&result.summary), InboxSource::Worker { run_id: worker.run_id.clone() }, None)); }
+                    if let Some(result) = &worker.result { facts.push(text(result.summary.clone(), InboxSource::Worker { run_id: worker.run_id.clone() }, None)); }
                     if let Some(output) = &worker.source_output {
                         let checks = match output { SourceOutput::Code { focused_checks, .. } | SourceOutput::NonCode { focused_checks, .. } => focused_checks };
                         for check in checks { facts.push(text(format!("{}: {:?}", check.command_or_scenario, check.outcome), InboxSource::Worker { run_id: worker.run_id.clone() }, None)); }
@@ -310,7 +310,6 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
                 }
             }
         }
-        facts.truncate(8);
         let updated_at = messages.iter().map(|m| m.created_at.as_str())
             .chain(state.widget_publications.iter().filter(|p| p.thread_id == id && root_map.contains_key(p.root_id.as_str())).map(|p| p.at.as_str()))
             .max().unwrap_or(now).to_owned();
@@ -431,6 +430,42 @@ mod tests {
         assert_eq!(run.attachment_id.as_deref(), Some("worker-attachment"));
         assert_eq!(run.attachment_epoch, Some(3));
         assert_eq!(result.threads[0].tasks[0].run.as_ref().unwrap().report_images, vec![image("newest")]);
+    }
+    #[test]
+    fn worker_claim_facts_keep_full_markdown_after_many_receipts() {
+        let summary = format!("{}\n\n- **Evidence:** `cargo test`\n- [artifact](https://example.invalid/result)\n", "Long result ".repeat(12));
+        let mut worker = root("worker");
+        worker.kind = RunKind::Worker;
+        worker.root_id = "r".into();
+        worker.parent_run_id = Some("r".into());
+        worker.task_id = Some("task".into());
+        worker.assignment_generation = Some(1);
+        worker.result = report("worker-result", "worker", 1, None, ReportKind::Result).report;
+        worker.result.as_mut().unwrap().summary = summary.clone();
+        let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, schedule: None,
+            owner: Some(TaskOwner { run_id: "worker".into(), conversation: None, claim_operation_id: "claim".into() }) });
+        state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
+        for seq in 1..=10 {
+            state.messages.push(message(&format!("receipt-{seq}"), "r", seq, Some("t"), MessageKind::Instruction));
+        }
+        let projected = view(&state, vec![board("r", "task")]);
+        let facts = &projected.threads[0].facts;
+        assert!(facts.len() > 8);
+        let claim = facts.iter().find(|fact| matches!(&fact.source, InboxSource::Worker { run_id } if run_id == "worker")).unwrap();
+        assert_eq!(claim.text, summary);
+        assert!(claim.message_id.is_none());
+        assert!(claim.at.is_none());
+        assert!(matches!(&facts[0].source, InboxSource::Recorded));
+    }
+    #[test]
+    fn owner_report_title_remains_first_line_and_utf8_bounded() {
+        let mut state = OrchestrationState { runs: vec![root("r")], ..Default::default() };
+        let mut owner_report = report("progress", "r", 1, Some("t"), ReportKind::Progress);
+        owner_report.report.as_mut().unwrap().summary = format!("{}é\nMore details", "a".repeat(79));
+        state.messages.push(owner_report);
+        let projected = view(&state, vec![]);
+        assert_eq!(projected.threads[0].title.text, "a".repeat(79));
     }
     fn view(state: &OrchestrationState, boards: Vec<TaskBoard>) -> InboxView {
         project(&InboxRequest { session_id: "session".into() }, state, boards,

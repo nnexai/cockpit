@@ -132,6 +132,35 @@ describe("Inbox", () => {
     expect(labels).not.toContain("Copy message ID question-id");
     expect(labels).toContain("Copy attempt run ID attempt-id");
   });
+  it("keeps complete worker claims separate by run and renders safe expandable Markdown", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    const report = "# Result\n\nFirst paragraph.\n\n- One\n- Two\n\n```text\nlong code evidence\n```\n\n| Check | Evidence |\n| --- | --- |\n| Last | final detail |\n\n<script>unsafe</script>\n\n![image label](https://example.test/image.png)";
+    const fact = (run_id: string) => ({ text: report, source: { kind: "worker" as const, run_id }, message_id: null, at: null, images: [] });
+    inbox.threads = [{ thread_id: "claims", state: "handled", need: null, owner_root_ids: ["owner"], title: { text: "Claims work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_result_message_id: null, receipts: [], facts: [fact("worker-one"), fact("worker-two"), { ...fact("worker-one"), text: "Check passed" }], updated_at: "now", timeline_omitted: 0, timeline: [], tasks: [{ root_id: "owner", task_id: "task", title: "Task", project: null, lane: "accepted", run: null, evidence: { run_id: "worker-one", attempt: 1, attempts: 1, result: { summary: report, outcome: null, at: "now" }, checks: [], commits: [], head_commit: null, integration: null, artifacts: [], images: [], decisions: [] } }] }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    await flush(() => app.render());
+    await flush(() => host.querySelector<HTMLButtonElement>(".inbox-row")!.click());
+    const diagnostics = host.querySelector<HTMLDetailsElement>(".inbox-diag")!;
+    await flush(() => diagnostics.querySelector("summary")!.click());
+    const claims = Array.from(diagnostics.querySelectorAll<HTMLDetailsElement>(".inbox-claim"));
+    expect(claims).toHaveLength(3);
+    expect(claims[0].querySelector("summary")?.textContent).toContain("worker-one");
+    expect(claims[1].querySelector("summary")?.textContent).toContain("worker-two");
+    expect(claims[0].querySelector("summary")?.textContent).toContain("Worker claim");
+    expect(claims[0].querySelector("summary strong")?.textContent).toBe("Task");
+    expect(claims[1].querySelector("summary strong")).toBeNull();
+    expect(claims[1].querySelector("summary")?.textContent).toContain("Worker-reported evidence");
+    expect(claims[2].querySelector("summary")?.textContent).toContain("Worker-reported evidence");
+    expect(claims[0].open).toBe(false);
+    await flush(() => claims[0].querySelector("summary")!.click());
+    expect(claims[0].open).toBe(true);
+    expect(claims[0].querySelector("h1")?.textContent).toBe("Result");
+    expect(claims[0].textContent).toContain("final detail");
+    expect(claims[0].querySelector("pre")?.tabIndex).toBe(0);
+    expect(claims[0].querySelector("table")?.tabIndex).toBe(0);
+    expect(claims[0].querySelector("script, img")).toBeNull();
+    expect(claims[0].textContent).toContain("image label");
+  });
   it("acknowledges the selected completion without opening the terminal and keeps its detail when it leaves attention", async () => {
     const completion = completionAttention();
     const options = { attention: completion.state, onOpenLocation: vi.fn(async () => {}) };

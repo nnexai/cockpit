@@ -13,6 +13,8 @@ const components: Components = {
     return <span>{children}</span>;
   },
   img: ({ alt }) => <span>{alt || "image"}</span>,
+  pre: ({ children }) => <pre tabIndex={0}>{children}</pre>,
+  table: ({ children }) => <table tabIndex={0}>{children}</table>,
 };
 const plugins = [remarkGfm];
 

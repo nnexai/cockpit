@@ -590,6 +590,7 @@ function Evidence({ thread, view, displayed }: { thread: InboxThread; view: Inbo
   ].filter((id): id is string => !!id && !labelledMessageIds.has(id))));
   const facts = new Map<string, { fact: InboxText; count: number }>();
   for (const fact of thread.facts) {
+    if (fact.source.kind === "worker") continue;
     const text = fact.text.replace(/^Cleanup Removed:\s*$/, "Cleanup removed");
     const key = `${fact.source.kind}:${text}`;
     const existing = facts.get(key);
@@ -598,9 +599,15 @@ function Evidence({ thread, view, displayed }: { thread: InboxThread; view: Inbo
   }
   return <div className="inbox-evidence">
     {thread.next && thread.next.source.kind === "owner_card" && !displayed.includes(thread.next) && <><h3 className="inbox-ev-h">Next move</h3><InboxFeedback text={thread.next.text} /></>}
-    {facts.size > 0 && <><h3 className="inbox-ev-h">Recorded steps</h3>{Array.from(facts.values()).map(({ fact, count }, i) => <div className="inbox-fact" key={i}>{srcKind(fact) !== "recorded" && <span className="inbox-tag" data-kind={srcKind(fact)} title={source(fact)}>{srcLabel(fact)}</span>}<InboxFeedback text={fact.text} />{count > 1 && <span>×{count}</span>}</div>)}</>}
-    {thread.receipts.length > 0 && <><h3 className="inbox-ev-h">Delivery</h3>{thread.receipts.map(r => <p className="inbox-ev-p" key={r.message_id}>{r.kind === "answer" ? "Answer" : "Request"} to {ownerLabel(view, r.to_run_id)} · {deliveryLabel(r.stage)}{r.stale ? " · stale" : ""} · <Time value={r.acked_at || r.created_at} /></p>)}</>}
-    {thread.tasks.length > 0 && <><h3 className="inbox-ev-h">Tasks</h3>{thread.tasks.map(t => <p className="inbox-ev-p" key={t.task_id}>{[t.title, t.lane, ...(t.run ? [t.run.stage !== t.lane ? t.run.stage : null, t.run.presence] : [])].filter(Boolean).join(" · ")}</p>)}</>}
+    {thread.facts.some(fact => fact.source.kind === "worker") && <><h3 className="inbox-ev-h">Worker-reported evidence</h3>{thread.facts.map((fact, i) => {
+      if (fact.source.kind !== "worker") return null;
+      const runId = fact.source.run_id;
+      const task = thread.tasks.find(task => task.evidence?.run_id === runId && task.evidence.result?.summary === fact.text);
+      return <details className="inbox-claim" key={i}><summary><span className="inbox-claim-chevron" aria-hidden="true">▸</span><span className="inbox-tag" data-kind="worker">{task ? "Worker claim" : "Worker-reported evidence"}</span><span>{task && <><strong>{task.title}</strong><br /></>}Run <code>{runId}</code></span></summary><div className="inbox-claim-body inbox-md" dir="auto"><InboxFeedback text={fact.text} /></div></details>;
+    })}</>}
+    {facts.size > 0 && <><h3 className="inbox-ev-h">Recorded steps</h3><ul className="inbox-evidence-list">{Array.from(facts.values()).map(({ fact, count }, i) => <li className="inbox-fact" key={i}>{srcKind(fact) !== "recorded" && <span className="inbox-tag" data-kind={srcKind(fact)} title={source(fact)}>{srcLabel(fact)}</span>}<InboxFeedback text={fact.text} />{count > 1 && <span>×{count}</span>}</li>)}</ul></>}
+    {thread.receipts.length > 0 && <><h3 className="inbox-ev-h">Delivery</h3><ul className="inbox-evidence-list">{thread.receipts.map(r => <li className="inbox-evidence-row" key={r.message_id}><strong>{r.kind === "answer" ? "Answer" : "Request"} to {ownerLabel(view, r.to_run_id)}</strong><span>{deliveryLabel(r.stage)}{r.stale ? " · stale" : ""} · <Time value={r.acked_at || r.created_at} /></span></li>)}</ul></>}
+    {thread.tasks.length > 0 && <><h3 className="inbox-ev-h">Tasks</h3><ul className="inbox-evidence-list">{thread.tasks.map(t => <li className="inbox-evidence-row" key={`${t.root_id}:${t.task_id}`}><strong>{t.title}</strong><span>{[t.lane, ...(t.run ? [t.run.stage !== t.lane ? t.run.stage : null, t.run.presence] : [])].filter(Boolean).join(" · ")}</span></li>)}</ul></>}
     {aiFields.length > 0 && <><h3 className="inbox-ev-h">Source</h3><p className="inbox-ev-p">AI summary for {Array.from(new Set(aiFields.map(([name]) => name))).join(", ")} from {Array.from(new Set(aiFields.map(([, v]) => v?.source.kind === "owner_card" ? v.source.harness : ""))).join(", ")}.</p></>}
     <h3 className="inbox-ev-h">IDs</h3><dl className="inbox-kv"><dt>Thread</dt><dd><CopyValue value={thread.thread_id} label="thread ID" /></dd>{fields.map(([label, value]) => value && uuid.test(value) && <div key={label}><dt>{label}</dt><dd><CopyValue value={value} label={`${label.toLowerCase()} ID`} /></dd></div>)}{thread.owner_root_ids.map((id, i) => <div key={`owner-${i}`}><dt>Owner</dt><dd><CopyValue value={id} label="owner ID" /></dd></div>)}{thread.questions.map((q, i) => <div key={`question-${i}`}><dt>Question</dt><dd><CopyValue value={q.question_message_id} label="question ID" /></dd></div>)}{thread.request && <div><dt>Request</dt><dd><CopyValue value={thread.request.message_id} label="request ID" /></dd></div>}{messageIds.map(id => <div key={`message-${id}`}><dt>Message</dt><dd><CopyValue value={id} label="message ID" /></dd></div>)}{thread.receipts.map((r, i) => r.attempt_run_id && <div key={`receipt-${i}`}><dt>Attempt run</dt><dd><CopyValue value={r.attempt_run_id} label="attempt run ID" /></dd></div>)}{thread.tasks.filter(t => t.run).map(t => <div key={t.task_id}><dt>Attempt run</dt><dd><CopyValue value={t.run!.run_id} label="attempt run ID" /></dd></div>)}</dl>
   </div>;
