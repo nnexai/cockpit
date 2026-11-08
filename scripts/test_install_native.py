@@ -556,46 +556,7 @@ class NativeInstallTests(unittest.TestCase):
         with self.assertRaisesRegex(installer.InstallError, "private regular file"):
             installer.install(self.paths, self.binary, self.cli_binary, self.icon)
 
-    def write_probe(self, name: str, script: str) -> None:
-        executable = self.root / name
-        executable.write_text("#!/bin/sh\n" + script, encoding="utf-8")
-        executable.chmod(0o755)
-
-    def test_voice_preflight_reports_missing_build_metadata_before_plugin_checks(self) -> None:
-        self.write_probe("pkg-config", 'case "$2" in gstreamer-webrtc-1.0) exit 1;; esac\nexit 0\n')
-        self.write_probe("gst-inspect-1.0", 'echo invoked > "$PROBE_LOG"\n')
-        with mock.patch.dict(os.environ, {"PATH": str(self.root), "PROBE_LOG": str(self.root / "log")}):
-            with self.assertRaisesRegex(installer.InstallError, "gstreamer-webrtc-1.0"):
-                installer.preflight_voice(True, "linux")
-        self.assertFalse((self.root / "log").exists())
-
-    def test_voice_preflight_reports_ice_aec_and_platform_audio(self) -> None:
-        self.write_probe("pkg-config", "exit 0\n")
-        self.write_probe(
-            "gst-inspect-1.0",
-            'case "$1" in nicesrc|webrtcdsp|osxaudiosink) exit 1;; esac\nexit 0\n',
-        )
-        with mock.patch.dict(os.environ, {"PATH": str(self.root)}):
-            with self.assertRaises(installer.InstallError) as error:
-                installer.preflight_voice(True, "darwin")
-        for text in ("nicesrc", "webrtcdsp", "osxaudiosink", "not fall back", "Finder"):
-            self.assertIn(text, str(error.exception))
-        self.assertNotIn("pulsesink", str(error.exception))
-
-    def test_build_preflight_stops_main_before_build_or_install(self) -> None:
-        self.write_probe("pkg-config", "exit 1\n")
-        stderr = io.StringIO()
-        prefix = self.root / "uninstalled"
-        with mock.patch.object(installer.sys, "platform", "linux"), \
-             mock.patch.dict(os.environ, {"PATH": str(self.root)}), \
-             contextlib.redirect_stderr(stderr):
-            result = installer.main(["--prefix", str(prefix)])
-        self.assertEqual(result, 2)
-        self.assertIn("gstreamer-webrtc-1.0", stderr.getvalue())
-        self.assertIn("libnice-gstreamer1", stderr.getvalue())
-        self.assertFalse(prefix.exists())
-
-    def test_reuse_requires_inspectable_plugins_but_not_build_metadata(self) -> None:
+    def test_reuse_does_not_require_voice_plugin_probes(self) -> None:
         root = self.root / "checkout"
         target = root / "target" / "release"
         target.mkdir(parents=True)
@@ -607,31 +568,12 @@ class NativeInstallTests(unittest.TestCase):
         icon.parent.mkdir(parents=True)
         icon.write_bytes(b"icon")
         prefix = self.root / "installed"
-        stderr = io.StringIO()
         with mock.patch.object(installer, "PROJECT_ROOT", root), \
              mock.patch.object(installer.sys, "platform", "linux"), \
              mock.patch.dict(os.environ, {"PATH": str(self.root)}), \
-             contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(installer.main(["--reuse", "--prefix", str(prefix)]), 2)
-            self.assertIn("cannot check Native Voice runtime plugins", stderr.getvalue())
-            self.assertFalse(prefix.exists())
-            self.write_probe("gst-inspect-1.0", 'case "$1" in nicesrc) exit 1;; esac\nexit 0\n')
-            stderr.seek(0)
-            stderr.truncate()
-            self.assertEqual(installer.main(["--reuse", "--prefix", str(prefix)]), 2)
-            self.assertIn("nicesrc", stderr.getvalue())
-            self.assertFalse(prefix.exists())
-            self.write_probe("gst-inspect-1.0", "exit 0\n")
+             contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(installer.main(["--reuse", "--prefix", str(prefix)]), 0)
         self.assertTrue((prefix / "bin" / "cockpit").is_symlink())
-
-    def test_voice_preflight_is_quiet_when_all_probes_pass(self) -> None:
-        self.write_probe("pkg-config", "exit 0\n")
-        self.write_probe("gst-inspect-1.0", "exit 0\n")
-        stderr = io.StringIO()
-        with mock.patch.dict(os.environ, {"PATH": str(self.root)}), contextlib.redirect_stderr(stderr):
-            installer.preflight_voice(True, "linux")
-        self.assertEqual(stderr.getvalue(), "")
 
     def test_build_embeds_frontend_in_host_on_both_platforms(self) -> None:
         for platform in ("linux", "darwin"):

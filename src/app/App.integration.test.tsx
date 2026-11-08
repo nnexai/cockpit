@@ -4,6 +4,7 @@ import "./input/viewerTestLayout";
 import { act, useEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type * as TauriCore from "@tauri-apps/api/core";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import { CockpitClientError } from "../client/CockpitClient";
 import type { TerminalPaneProps } from "./TerminalPane";
@@ -32,6 +33,16 @@ import type {
 import { App } from "./App";
 import { orchestrationFixture, runFixture, taskFixture } from "./supervisor/testFixtures";
 import { FILE_NAVIGATION_EVENT } from "./input/fileNavigation";
+
+const nativeVoice = vi.hoisted(() => ({ tauri: false, invoke: vi.fn(), returnTo: null as ((event: { payload: string }) => void) | null }));
+vi.mock("@tauri-apps/api/core", async importOriginal => {
+  const actual = await importOriginal<typeof TauriCore>();
+  return { ...actual, isTauri: () => nativeVoice.tauri, invoke: nativeVoice.invoke };
+});
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (_name: string, callback: (event: { payload: string }) => void) => {
+  nativeVoice.returnTo = callback;
+  return () => { nativeVoice.returnTo = null; };
+}) }));
 
 const terminalReadyCallbacks = vi.hoisted(() => new Map<string, () => void>());
 vi.mock("./TerminalPane", () => ({
@@ -380,6 +391,10 @@ afterEach(() => {
   }
   terminalReadyCallbacks.clear();
   container.remove();
+  nativeVoice.tauri = false;
+  nativeVoice.invoke.mockReset();
+  nativeVoice.returnTo = null;
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -2183,6 +2198,60 @@ describe("tab-local viewers, focus and placement", () => {
     expect(created.style.width).toBe(viewer.style.width);
     expect(Number.parseFloat(created.style.top)).toBeGreaterThan(Number.parseFloat(viewer.style.top));
     expect(Number.parseFloat(leaf("pane-5").style.left)).toBeGreaterThan(Number.parseFloat(created.style.left));
+  });
+
+  it.each([false, true])("hides Voice without WebRTC and keeps navigation usable (Tauri: %s)", async tauri => {
+    nativeVoice.tauri = tauri;
+    vi.stubGlobal("RTCPeerConnection", undefined);
+    const fixture = new AppFixture();
+    await mount(fixture);
+    expect([...container.querySelectorAll(".view-bar button")].some(candidate => candidate.textContent?.trim() === "Voice")).toBe(false);
+    click(button("Inbox"));
+    await settle();
+    expect(button("Inbox").getAttribute("aria-current")).toBe("page");
+    click(button("Workbench"));
+    await settle();
+    expect(button("Workbench").getAttribute("aria-current")).toBe("page");
+    expect(nativeVoice.invoke).not.toHaveBeenCalledWith("cockpit_voice_view_open", expect.anything());
+  });
+
+  it("opens Voice in the browser and returns through Inbox and Workbench when WebRTC is available", async () => {
+    vi.stubGlobal("RTCPeerConnection", class {});
+    const fixture = new AppFixture();
+    vi.mocked(fixture.client.orchestrationLiaisonLookup).mockResolvedValue({ status: "resolved", lookup_revision: 1, preferred_root_id: null, roots: [] });
+    vi.mocked(fixture.client.repositories).mockResolvedValue({ repositories: [], diagnostics: [] });
+    await mount(fixture);
+    click(button("Voice"));
+    await settle();
+    expect(button("Voice").getAttribute("aria-current")).toBe("page");
+    expect(container.querySelector('section[aria-label="Voice"]')).not.toBeNull();
+    click(button("Inbox"));
+    await settle();
+    expect(button("Inbox").getAttribute("aria-current")).toBe("page");
+    expect(container.querySelector('section[aria-label="Voice"]')).toBeNull();
+    click(button("Voice"));
+    await settle();
+    expect(button("Voice").getAttribute("aria-current")).toBe("page");
+    expect(container.querySelector('section[aria-label="Voice"]')).not.toBeNull();
+    click(button("Workbench"));
+    await settle();
+    expect(button("Workbench").getAttribute("aria-current")).toBe("page");
+  });
+
+  it("opens the native Voice view when WebRTC is available", async () => {
+    nativeVoice.tauri = true;
+    nativeVoice.invoke.mockResolvedValue(undefined);
+    vi.stubGlobal("RTCPeerConnection", class {});
+    await mount(new AppFixture());
+    click(button("Voice"));
+    expect(nativeVoice.invoke).toHaveBeenCalledWith("cockpit_voice_view_open", { sessionId: "session-1" });
+    expect(nativeVoice.returnTo).not.toBeNull();
+    act(() => nativeVoice.returnTo?.({ payload: "inbox" }));
+    await settle();
+    expect(button("Inbox").getAttribute("aria-current")).toBe("page");
+    click(button("Workbench"));
+    await settle();
+    expect(button("Workbench").getAttribute("aria-current")).toBe("page");
   });
 
   it("detaches terminal control while the Inbox is visible without resizing it", async () => {

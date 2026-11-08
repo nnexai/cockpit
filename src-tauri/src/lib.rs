@@ -1,6 +1,5 @@
 mod clipboard;
 mod commands;
-mod native_voice;
 mod power;
 mod startup;
 mod streams;
@@ -43,7 +42,6 @@ pub fn run() {
         Some(browser_runtime.clone()),
     );
     let shutdown = Arc::new(update::NativeShutdown::new(shutdown));
-    let native_voice = native_voice::controller::NativeVoiceController::new(backend_context.clone());
     tauri::Builder::default()
         .plugin(
             tauri_plugin_opener::Builder::new()
@@ -59,7 +57,6 @@ pub fn run() {
         .manage(power::PowerState::default())
         .manage(StreamRegistry::new())
         .manage(voice_child::VoiceViewState::<tauri::Wry>::default())
-        .manage(native_voice.clone())
         .on_permission_request(|_, kind| match kind {
             tauri::webview::PermissionKind::Microphone
             | tauri::webview::PermissionKind::Camera
@@ -69,32 +66,9 @@ pub fn run() {
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 webview.state::<StreamRegistry>().page_started(webview.label());
-                if webview.label() == voice_child::VOICE_CHILD_LABEL {
-                    webview.state::<Arc<native_voice::controller::NativeVoiceController>>().stop();
-                }
-            }
-        })
-        .on_window_event(|window, event| {
-            if window.label() == "main"
-                && (matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed)
-                    || window.is_minimized().unwrap_or(true)
-                    || !window.is_visible().unwrap_or(false))
-            {
-                window.state::<Arc<native_voice::controller::NativeVoiceController>>().stop();
             }
         })
         .setup(move |app| {
-            {
-                use tauri::Emitter;
-                let app = app.handle().clone();
-                let mut updates = native_voice.subscribe();
-                tauri::async_runtime::spawn(async move {
-                    while updates.changed().await.is_ok() {
-                        let snapshot = updates.borrow_and_update().clone();
-                        let _ = app.emit_to(tauri::EventTarget::webview(voice_child::VOICE_CHILD_LABEL), "cockpit-native-voice-presentation", snapshot);
-                    }
-                });
-            }
             let main_window = app
                 .get_webview_window("main")
                 .expect("main window is missing from the Tauri configuration");
@@ -139,7 +113,6 @@ pub fn run() {
         .expect("error while building Cockpit Tauri application")
         .run(move |app, event| {
             if matches!(&event, tauri::RunEvent::Exit) {
-                app.state::<Arc<native_voice::controller::NativeVoiceController>>().stop();
                 app.state::<clipboard::TerminalFilesState>().close();
             }
             if let tauri::RunEvent::ExitRequested {
@@ -147,7 +120,6 @@ pub fn run() {
             } = event
             {
                 api.prevent_exit();
-                app.state::<Arc<native_voice::controller::NativeVoiceController>>().stop();
                 let shutdown = shutdown.clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {

@@ -43,6 +43,7 @@ export function Workbench(props: WorkbenchProps) {
   const [sendAgentsOpen, setSendAgentsOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [voiceAvailable] = useState(() => typeof RTCPeerConnection === "function");
   const [voiceChoices, setVoiceChoices] = useState<{ roots: VoiceChoice[]; projects: VoiceChoice[]; error: string | null }>({ roots: [], projects: [], error: null });
   const voiceApi = useMemo<VoiceTransportApi>(() => ({
     connect: request => props.client.voiceConnect(request),
@@ -257,8 +258,8 @@ export function Workbench(props: WorkbenchProps) {
   const currentSpace = byId(runtime.spaces, runtime.confirmedSpaceId);
   return <><nav className="view-bar" aria-label="Application views" inert={Boolean(quickTerminal)}>
     <button type="button" aria-current={!inboxOpen && !voiceOpen ? "page" : undefined} onClick={() => { setInboxOpen(false); setVoiceOpen(false); }}><UiIcon name="grid" /> <span className="view-bar-label">Workbench</span></button>
-    <button type="button" aria-current={inboxOpen ? "page" : undefined} aria-label={inboxAttention.count > 0 ? `Inbox, ${inboxAttention.count} ${inboxAttention.count === 1 ? "item" : "items"} needing attention` : undefined} disabled={!inboxOpen && runtime.modalOpen} onClick={() => { setVoiceOpen(false); setInboxOpen(true); }}><UiIcon name="comment" /> <span className="view-bar-label">Inbox</span>{inboxAttention.count > 0 && <span className="view-bar-count" aria-hidden="true">{inboxAttention.count}</span>}</button>
-    <button type="button" aria-current={voiceOpen ? "page" : undefined} disabled={runtime.modalOpen || !props.state.sessionId} onClick={openVoice}><UiIcon name="comment" /> <span className="view-bar-label">Voice</span></button>
+    <button type="button" aria-current={inboxOpen ? "page" : undefined} aria-label={inboxAttention.count > 0 ? `Inbox, ${inboxAttention.count} ${inboxAttention.count === 1 ? "item" : "items"} needing attention` : undefined} disabled={!inboxOpen && runtime.statusBarSuspended} onClick={() => { setVoiceOpen(false); setInboxOpen(true); }}><UiIcon name="comment" /> <span className="view-bar-label">Inbox</span>{inboxAttention.count > 0 && <span className="view-bar-count" aria-hidden="true">{inboxAttention.count}</span>}</button>
+    {voiceAvailable && <button type="button" aria-current={voiceOpen ? "page" : undefined} disabled={runtime.statusBarSuspended || !props.state.sessionId} onClick={openVoice}><UiIcon name="comment" /> <span className="view-bar-label">Voice</span></button>}
     {!inboxOpen && inboxAttention.preview && <span className="view-bar-preview" title={inboxAttention.preview}>{inboxAttention.preview}</span>}
   </nav>
     <Inbox client={props.client} sessionId={props.state.sessionId} active={inboxOpen} inert={Boolean(quickTerminal)} currentSpace={currentSpace ? { id: currentSpace.id, label: currentSpace.label } : null} attention={runtime.attention} snapshot={props.state.sync === "live" ? runtime.snapshot : null} onOpenLocation={openInboxLocation} onAttentionChange={setInboxAttention} />

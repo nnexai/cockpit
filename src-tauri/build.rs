@@ -101,7 +101,6 @@ fn main() {
             "cockpit_comments_paste_send",
             "cockpit_comments_paste_mark_pasted",
             "cockpit_sessions",
-            "cockpit_native_voice_snapshot",
             "cockpit_session_snapshot",
             "cockpit_space_git_status",
             "cockpit_space_service_status",

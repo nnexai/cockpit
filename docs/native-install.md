@@ -14,35 +14,6 @@ On macOS, the installer uses one `bunx tauri build --bundles app --config <bundl
 
 The macOS packaging and lifecycle path is pending verification on a real Mac; Linux results do not establish macOS parity.
 
-### Native Voice prerequisites
-
-Native Voice uses real GStreamer WebRTC, ICE, DTLS, SCTP, Opus, audio conversion, platform audio input/output and WebRTC echo processing; there is no simulated-audio fallback. It needs a working microphone and audio server/devices as well as the plugins. Browser Voice is separate from this native media path.
-
-On Fedora 44, the distribution package path for native Voice is:
-
-```sh
-# Build metadata (not needed to install an existing binary with --reuse):
-sudo dnf install pkgconf-pkg-config gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-bad-free-devel
-# Runtime elements and inspection tool:
-sudo dnf install gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free libnice-gstreamer1
-```
-
-`libnice-gstreamer1` is separate from the libnice library and provides the ICE `nicesrc` element. PulseAudio-compatible input and output are required (including PipeWire's PulseAudio compatibility service). Fedora's [bad-free package](https://packages.fedoraproject.org/pkgs/gstreamer1-plugins-bad-free/gstreamer1-plugins-bad-free/fedora-44-updates.html) supplies WebRTC and echo processing; its [development package](https://packages.fedoraproject.org/pkgs/gstreamer1-plugins-bad-free/gstreamer1-plugins-bad-free-devel/fedora-44.html) supplies WebRTC pkg-config metadata.
-
-On Debian/Ubuntu, the corresponding packages are `pkg-config`, `libgstreamer1.0-dev`, `libgstreamer-plugins-base1.0-dev`, `libgstreamer-plugins-bad1.0-dev`, `gstreamer1.0-tools`, `gstreamer1.0-plugins-base`, `gstreamer1.0-plugins-good`, `gstreamer1.0-plugins-bad` and `gstreamer1.0-nice`; install distribution versions providing GStreamer 1.18 or later. Package availability and plugin contents vary with distribution and release.
-
-The installer checks the core, SDP and WebRTC pkg-config modules for GStreamer 1.18 or later before a build. It reports missing metadata and stops before building. For builds and `--reuse`, it also probes the required elements with `gst-inspect-1.0`; missing or uninspectable elements or a missing inspection tool stop installation before publication with package guidance. `--reuse` does not require development metadata; `--uninstall` runs neither check. Probe success reflects the installer's environment only, not successful device access or a Voice call. In particular an existing binary might link a different GStreamer installation. Voice reports missing required elements rather than falling back.
-
-On macOS, the intended SDK path is the matching architecture's official [GStreamer runtime and development framework packages](https://gstreamer.freedesktop.org/download/). For a shell build, the [GStreamer macOS instructions](https://gstreamer.freedesktop.org/documentation/installing/on-mac-osx.html) use the framework tools and metadata:
-
-```sh
-export GST_ROOT=/Library/Frameworks/GStreamer.framework/Versions/1.0
-export PATH="$GST_ROOT/bin:$PATH"
-export PKG_CONFIG_PATH="$GST_ROOT/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-```
-
-Inspect at least `webrtcbin`, `nicesrc`, `webrtcdsp`, `webrtcechoprobe`, `osxaudiosrc` and `osxaudiosink` with that framework's `gst-inspect-1.0`; the installer probes the full set. Do not assume the framework includes every element or mix framework and Homebrew installations. **macOS native Voice remains unverified**: the installer does not bundle the GStreamer framework or plugins, and shell `PATH`/`PKG_CONFIG_PATH` do not establish library and plugin discovery in a Finder-launched app. A real Mac must establish the linked framework/library paths and plugin discovery for the installed bundle, plus device permissions and an actual call; a bundle/discovery change may be required. The installer cannot establish those facts.
-
 ## Installation behavior
 
 Both platforms install `cockpit` and `cockpit-cli` launchers under `$XDG_BIN_HOME`, or `~/.local/bin` by default. Updates stage artifacts on their destination filesystems and journal publication and rollback. Publication, recovery and uninstall take the persistent `$XDG_DATA_HOME/cockpit/update.lock` flock, also used by the service restart helper; a prefix install uses its own `PREFIX/share/cockpit/update.lock`. Individual replacements are atomic; a multi-artifact update is not one atomic filesystem operation. The installer waits up to 120 seconds for the lock and never unlinks it. Existing processes are not stopped or restarted.

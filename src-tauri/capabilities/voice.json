@@ -6,7 +6,14 @@
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "allow-cockpit-native-voice-snapshot",
-    "allow-cockpit-voice-view-close"
+    "allow-cockpit-voice-view-context",
+    "allow-cockpit-voice-view-close",
+    "allow-cockpit-voice-connect",
+    "allow-cockpit-voice-events",
+    "allow-cockpit-voice-control",
+    "allow-orchestration-liaison-lookup",
+    "allow-cockpit-repositories",
+    "allow-cockpit-sessions",
+    "allow-cockpit-session-snapshot"
   ]
 }

@@ -35,79 +35,6 @@ RECEIPT_NAME = "install.json"
 PENDING_NAME = ".cockpit-install.pending.json"
 DESKTOP_MARKER = "X-Cockpit-Installer=1"
 
-VOICE_GST_MODULES = ("gstreamer-1.0", "gstreamer-sdp-1.0", "gstreamer-webrtc-1.0")
-VOICE_GST_ELEMENTS = (
-    "webrtcbin", "nicesrc", "dtlsenc", "dtlsdec", "sctpenc", "sctpdec",
-    "opusenc", "opusdec", "rtpopuspay", "rtpopusdepay", "webrtcdsp",
-    "webrtcechoprobe", "audioconvert", "audioresample", "volume",
-)
-
-
-def voice_package_help(platform: str) -> str:
-    if platform == "darwin":
-        return (
-            "Install the matching official GStreamer macOS runtime and development "
-            "framework packages: https://gstreamer.freedesktop.org/download/ . "
-            "For shell builds set PATH and PKG_CONFIG_PATH to the framework's bin "
-            "and lib/pkgconfig directories; see docs/native-install.md. Finder plugin "
-            "and library discovery is not verified and the installer does not bundle GStreamer."
-        )
-    return (
-        "Fedora: install gstreamer1-devel, gstreamer1-plugins-base-devel, "
-        "gstreamer1-plugins-bad-free-devel, gstreamer1, "
-        "gstreamer1-plugins-base, gstreamer1-plugins-good, "
-        "gstreamer1-plugins-bad-free and libnice-gstreamer1. "
-        "Debian/Ubuntu: install libgstreamer1.0-dev, "
-        "libgstreamer-plugins-base1.0-dev, libgstreamer-plugins-bad1.0-dev, "
-        "gstreamer1.0-tools, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, "
-        "gstreamer1.0-plugins-bad and gstreamer1.0-nice. "
-        "For runtime-only installs the development packages are not required."
-    )
-
-
-def _probe_command(command: list[str]) -> bool:
-    try:
-        return subprocess.run(
-            command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            check=False, timeout=15,
-        ).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def preflight_voice(build: bool, platform: str) -> None:
-    """Require build metadata and inspect runtime elements without changing the host."""
-    if platform not in ("linux", "darwin"):
-        return
-    help_text = voice_package_help(platform)
-    if build:
-        missing_modules = [
-            module for module in VOICE_GST_MODULES
-            if not _probe_command(["pkg-config", "--atleast-version=1.18", module])
-        ]
-        if missing_modules:
-            raise InstallError(
-                "Native Voice build needs pkg-config and GStreamer >= 1.18 development "
-                f"metadata for: {', '.join(missing_modules)}. {help_text}"
-            )
-
-    audio = ("osxaudiosrc", "osxaudiosink") if platform == "darwin" else ("pulsesrc", "pulsesink")
-    if shutil.which("gst-inspect-1.0") is None:
-        raise InstallError(
-            "cannot check Native Voice runtime plugins: gst-inspect-1.0 "
-            f"is not on PATH. Native Voice will not fall back to simulated audio. {help_text}"
-        )
-    missing = [
-        element for element in (*VOICE_GST_ELEMENTS, *audio)
-        if not _probe_command(["gst-inspect-1.0", element])
-    ]
-    if missing:
-        raise InstallError(
-            "Native Voice runtime elements could not be inspected or are unavailable: "
-            f"{', '.join(missing)}. Voice will not fall back to simulated audio; "
-            f"plugin discovery may differ in the installed application. {help_text}"
-        )
-
 
 class InstallError(RuntimeError):
     """Raised when an install would overwrite an unowned path or cannot continue."""
@@ -1167,7 +1094,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print(f"kept modified or foreign Cockpit files; receipt remains at {paths.receipt}", file=sys.stderr)
             return 0 if complete else 1
-        preflight_voice(build=not args.reuse, platform=sys.platform)
         build_commit = None
         if not args.reuse:
             before_build = source_commit(PROJECT_ROOT)
