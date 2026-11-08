@@ -44,7 +44,7 @@ export function Workbench(props: WorkbenchProps) {
   const [inboxOpen, setInboxOpen] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [voiceAvailable] = useState(() => typeof RTCPeerConnection === "function");
-  const [voiceChoices, setVoiceChoices] = useState<{ roots: VoiceChoice[]; projects: VoiceChoice[]; error: string | null }>({ roots: [], projects: [], error: null });
+  const [voiceChoices, setVoiceChoices] = useState<{ sessionId: string; roots: VoiceChoice[]; projects: VoiceChoice[]; error: string | null } | null>(null);
   const voiceApi = useMemo<VoiceTransportApi>(() => ({
     connect: request => props.client.voiceConnect(request),
     events: (request, signal) => props.client.voiceEvents(request, signal),
@@ -52,14 +52,15 @@ export function Workbench(props: WorkbenchProps) {
   }), [props.client]);
   useEffect(() => {
     if (!voiceOpen || !props.state.sessionId) return;
+    const sessionId = props.state.sessionId;
     let current = true;
-    setVoiceChoices({ roots: [], projects: [], error: null });
-    void Promise.all([props.client.orchestrationLiaisonLookup({ session_id: props.state.sessionId, selected_root_id: null }), props.client.repositories()])
+    setVoiceChoices(null);
+    void Promise.all([props.client.orchestrationLiaisonLookup({ session_id: sessionId, selected_root_id: null }), props.client.repositories()])
       .then(([lookup, repositories]) => {
         if (!current) return;
         if (lookup.status !== "resolved") throw new Error(lookup.message);
-        setVoiceChoices({ roots: lookup.roots.map(root => ({ id: root.root_id, label: root.root_id })), projects: repositories.repositories.map(repo => ({ id: repo.repository_id, label: repo.name })), error: null });
-      }).catch(error => { if (current) setVoiceChoices({ roots: [], projects: [], error: String(error) }); });
+        setVoiceChoices({ sessionId, roots: lookup.roots.map(root => ({ id: root.root_id, label: root.root_id })), projects: repositories.repositories.map(repo => ({ id: repo.repository_id, label: repo.name })), error: null });
+      }).catch(error => { if (current) setVoiceChoices({ sessionId, roots: [], projects: [], error: String(error) }); });
     return () => { current = false; };
   }, [voiceOpen, props.state.sessionId, props.client]);
   useEffect(() => {
@@ -77,7 +78,7 @@ export function Workbench(props: WorkbenchProps) {
   const openVoice = () => {
     if (isTauri()) {
       if (props.state.sessionId) void invoke("cockpit_voice_view_open", { sessionId: props.state.sessionId }).catch(error => runtime.setPrefixHint(`Could not open Voice: ${String(error)}`));
-    } else { setInboxOpen(false); setVoiceOpen(true); }
+    } else { if (!voiceOpen) setVoiceChoices(null); setInboxOpen(false); setVoiceOpen(true); }
   };
   const [inboxAttention, setInboxAttention] = useState<{ count: number; preview: string | null }>({ count: 0, preview: null });
   useEffect(() => { setSendAgentsOpen(false); }, [props.state.sessionId]);
@@ -263,7 +264,7 @@ export function Workbench(props: WorkbenchProps) {
     {!inboxOpen && inboxAttention.preview && <span className="view-bar-preview" title={inboxAttention.preview}>{inboxAttention.preview}</span>}
   </nav>
     <Inbox client={props.client} sessionId={props.state.sessionId} active={inboxOpen} inert={Boolean(quickTerminal)} currentSpace={currentSpace ? { id: currentSpace.id, label: currentSpace.label } : null} attention={runtime.attention} snapshot={props.state.sync === "live" ? runtime.snapshot : null} onOpenLocation={openInboxLocation} onAttentionChange={setInboxAttention} />
-    {voiceOpen && (voiceChoices.error ? <section role="alert">Could not load voice choices: {voiceChoices.error}</section> : <VoiceContainer key={props.state.sessionId} sessionId={props.state.sessionId} roots={voiceChoices.roots} projects={voiceChoices.projects} workspaces={props.state.sync === "live" && runtime.snapshot?.session_id === props.state.sessionId ? runtime.snapshot.spaces.map(space => ({ id: space.id, label: space.label })) : []} api={voiceApi} />)}
+    {voiceOpen && (!props.state.sessionId ? <section aria-label="Voice">Select a session before starting voice.</section> : !voiceChoices || voiceChoices.sessionId !== props.state.sessionId ? <section aria-label="Voice" role="status">Loading voice choices…</section> : voiceChoices.error ? <section role="alert">Could not load voice choices: {voiceChoices.error}</section> : <VoiceContainer key={props.state.sessionId} sessionId={props.state.sessionId} roots={voiceChoices.roots} projects={voiceChoices.projects} workspaces={props.state.sync === "live" && runtime.snapshot?.session_id === props.state.sessionId ? runtime.snapshot.spaces.map(space => ({ id: space.id, label: space.label })) : []} api={voiceApi} />)}
     <div className="inbox-workbench" hidden={inboxOpen || voiceOpen}><WorkbenchContent {...props} {...runtime} {...actions} inboxActive={inboxOpen || voiceOpen} onUpdate={installUpdate} closedWidgets={closedWidgets} liaisonAction={{ label: liaisonLabel, reason: liaisonReason, running, inPane: inLiaisonPane, toggle: toggleLiaison }} ask={ask} quickTerminalOpen={Boolean(quickTerminal)} commandActions={commandActions} commandFailureMessage={commandFailureMessage} commandStatus={commandStatus} />
     {sendAgentsOpen && props.state.sessionId ? <SendAgentDialog key={props.state.sessionId} targets={(props.state.sync === "live" ? runtime.snapshot?.agents ?? [] : []).filter(agent => stateClass(agent.status) === "idle").map(agent => ({
       paneId: agent.pane_id, label: agent.title || agent.name, space: `${spaces.find(space => space.id === agent.space_id)?.label ?? "Space"} · ${allTabs.find(tab => tab.id === agent.tab_id)?.label ?? "tab"}`,

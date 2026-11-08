@@ -100,49 +100,56 @@ function VoiceConversation({ transport, sessionId, supervisorName, roots, projec
   const statusText = status === "starting" ? "Connecting · waiting for microphone permission if requested"
     : status === "active" ? muted ? "Microphone muted" : "Microphone on"
     : status === "error" ? "Call ended with an error"
-    : status === "stopped" ? "Call ended" : roots.length === 0 ? "Supervisor unavailable" : "Ready to start";
+    : status === "stopped" ? "Call ended" : !sessionId ? "Session unavailable" : roots.length === 0 ? "Supervisor unavailable" : invalidSelection ? "Context unavailable" : "Ready to start";
+  const choiceLabel = (choices: VoiceChoice[], selectedId: string | null, empty: string) =>
+    selectedId ? choices.find((choice) => choice.id === selectedId)?.label ?? "Unavailable" : empty;
 
   return <section className="voice-root" aria-label="Voice">
     <aside className="voice-context" aria-label="Call context">
       <h1>Voice</h1>
       <div className="voice-context-section">
-        <h2>Talking to</h2>
-        <p>{supervisorName || "Supervisor"}</p>
-        <p className="voice-secondary">Session: {sessionId || "No session selected"}</p>
-        <label className="voice-select">Supervisor root
-          <select value={selectedRootId ?? ""} disabled={active} onChange={(event) => onRootChange(event.target.value || null)}>
-            <option value="">No root selected</option>
-            {selectedRootId && !roots.some((choice) => choice.id === selectedRootId) && <option value={selectedRootId}>Selected root unavailable</option>}
-            {roots.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
-          </select>
-        </label>
-        <label className="voice-select">Project context
-          <select value={selectedProjectId ?? ""} disabled={active} onChange={(event) => onProjectChange(event.target.value || null)}>
-            <option value="">No project selected</option>
-            {selectedProjectId && !projects.some((choice) => choice.id === selectedProjectId) && <option value={selectedProjectId}>Selected project unavailable</option>}
-            {projects.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
-          </select>
-        </label>
-        <label className="voice-select">Space context
-          <select value={selectedWorkspaceId ?? ""} disabled={active} onChange={(event) => onWorkspaceChange(event.target.value || null)}>
-            <option value="">No Space selected</option>
-            {selectedWorkspaceId && !workspaces.some((choice) => choice.id === selectedWorkspaceId) && <option value={selectedWorkspaceId}>Selected Space unavailable</option>}
-            {workspaces.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
-          </select>
-        </label>
-        {active && <p className="voice-secondary">Selection is fixed for this call.</p>}
+        <details className="voice-context-details">
+          <summary>
+            <span>Call context{active ? " · fixed for this call" : ""}</span>
+            <span className="voice-context-summary">Root: {choiceLabel(roots, selectedRootId, "preferred")} · Project: {choiceLabel(projects, selectedProjectId, "none")} · Space: {choiceLabel(workspaces, selectedWorkspaceId, "none")}</span>
+          </summary>
+          <div className="voice-selectors">
+            <label className="voice-select">Supervisor root
+              <select value={selectedRootId ?? ""} disabled={active} onChange={(event) => onRootChange(event.target.value || null)}>
+                <option value="">Preferred supervisor</option>
+                {selectedRootId && !roots.some((choice) => choice.id === selectedRootId) && <option value={selectedRootId}>Selected root unavailable</option>}
+                {roots.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+              </select>
+            </label>
+            <label className="voice-select">Project context
+              <select value={selectedProjectId ?? ""} disabled={active} onChange={(event) => onProjectChange(event.target.value || null)}>
+                <option value="">No project selected</option>
+                {selectedProjectId && !projects.some((choice) => choice.id === selectedProjectId) && <option value={selectedProjectId}>Selected project unavailable</option>}
+                {projects.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+              </select>
+            </label>
+            <label className="voice-select">Space context
+              <select value={selectedWorkspaceId ?? ""} disabled={active} onChange={(event) => onWorkspaceChange(event.target.value || null)}>
+                <option value="">No Space selected</option>
+                {selectedWorkspaceId && !workspaces.some((choice) => choice.id === selectedWorkspaceId) && <option value={selectedWorkspaceId}>Selected Space unavailable</option>}
+                {workspaces.map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+              </select>
+            </label>
+          </div>
+        </details>
       </div>
       <div className="voice-context-section voice-privacy">
-        <h2>Privacy</h2>
-        <p>Starting a call asks for microphone access. Your browser or app may request permission.</p>
-        <p>Audio is sent to OpenAI. Cockpit receives conversation text and handoff requests. OpenAI audio retention is not known to Cockpit.</p>
-        <p>The transcript is kept on this screen while it remains open. Ending a call does not cancel work already handed off.</p>
+        <p>Audio is sent to OpenAI.</p>
+        <details>
+          <summary>Privacy details</summary>
+          <p>Starting a call requests microphone access. Cockpit receives conversation text and handoff requests; OpenAI audio retention is not known to Cockpit.</p>
+          <p>The transcript stays on this screen while it is open. Ending a call does not cancel work already handed off.</p>
+        </details>
       </div>
     </aside>
     <div className="voice-conversation">
       <header className="voice-header">
         <div><strong>{supervisorName || "Supervisor"}</strong><span className="voice-header-session">{sessionId ? `Session: ${sessionId}` : "Select a session to start"}</span></div>
-        <span className="voice-header-status" role="status">{statusText}</span>
       </header>
       <div className="voice-transcript-wrap">
         <div className="voice-transcript" role="region" aria-label="Conversation transcript" tabIndex={0} ref={transcriptRef} onScroll={(event) => {
@@ -150,7 +157,7 @@ function VoiceConversation({ transport, sessionId, supervisorName, roots, projec
           followRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
           if (followRef.current) setHasNewer(false);
         }}>
-          {transcript.length === 0 && handoffs.length === 0 ? <p className="voice-empty">Your conversation and handoff receipts will appear here after you start.</p> : null}
+          {transcript.length === 0 && handoffs.length === 0 ? <p className="voice-empty">Conversation and handoffs appear here.</p> : null}
           {transcript.map((entry) => <div className="voice-transcript-row" key={`${entry.generation}:${entry.role}:${entry.turn}`}>
             <div className="voice-speaker">{entry.role === "user" ? "You" : "Voice agent"}{entry.role === "assistant" && <span className="voice-ai">AI</span>}</div>
             <div className={entry.final ? "voice-utterance" : "voice-utterance voice-partial"}>{entry.text}{!entry.final && <span className="voice-partial-label"> (partial)</span>}</div>
@@ -185,7 +192,7 @@ function VoiceConversation({ transport, sessionId, supervisorName, roots, projec
         {error && <p className="voice-notice voice-error" role="alert">{error}</p>}
         {endReason && <p className="voice-notice" role="status">{endReason}</p>}
         {playbackBlocked && remoteStream && <p className="voice-notice" role="alert">Audio playback was blocked. <button type="button" onClick={retryPlayback}>Play audio</button></p>}
-        <div className="voice-dock-status"><span className="voice-state-dot" data-live={status === "active" && !muted} aria-hidden="true" /><span>{statusText}{status === "active" && phase ? ` · ${phase}` : ""}</span></div>
+        <div className="voice-dock-status" role="status"><span className="voice-state-dot" data-live={status === "active" && !muted} aria-hidden="true" /><span>{statusText}{status === "active" && phase ? ` · ${phase}` : ""}</span></div>
         {status === "active" && muted && <p className="voice-hint">The microphone remains reserved until the call ends.</p>}
         {!sessionId && <p className="voice-hint">Select a session before starting voice.</p>}
         {!active && roots.length === 0 && <p className="voice-hint">Start a supervisor in Workbench first.</p>}
