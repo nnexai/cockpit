@@ -62,7 +62,9 @@ fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, 
     let mut entries = messages.to_vec();
     // Answers can predate thread attribution. Match both recipient and question ID:
     // message IDs are not globally unique across owner inboxes.
-    for answer in all.iter().filter(|m| !m.stale && m.kind == MessageKind::Answer && matches!(m.from, ActorRef::Operator)) {
+    for answer in all.iter().filter(|m| !m.stale && m.kind == MessageKind::Answer
+        && (matches!(m.from, ActorRef::Operator) || matches!(&m.from, ActorRef::Run { run_id }
+            if run_id == &m.to_run_id && roots.contains_key(run_id.as_str())))) {
         if messages.iter().any(|question| report_owner(question, roots).is_some_and(|root|
             root.run_id == answer.to_run_id && question.report.as_ref().is_some_and(|r|
                 r.kind == ReportKind::NeedsInput && answer.in_reply_to.as_deref() == Some(question.message_id.as_str()))))
@@ -83,6 +85,9 @@ fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, 
             else if m.kind == MessageKind::UserDirective { InboxEntryKind::Directive }
             else { continue };
             (kind, m.text.clone(), InboxSource::User, None)
+        } else if m.kind == MessageKind::Answer && matches!(&m.from, ActorRef::Run { run_id }
+            if run_id == &m.to_run_id && roots.contains_key(run_id.as_str())) {
+            (InboxEntryKind::Answer, m.text.clone(), owner_source(roots[m.to_run_id.as_str()], false), None)
         } else if let Some(root) = report_owner(m, roots) {
             let report = m.report.as_ref().unwrap();
             let kind = match report.kind {
@@ -149,12 +154,13 @@ fn task_evidence(state: &OrchestrationState, root_id: &str, task_id: &str, curre
     let mut seen = HashSet::new();
     let images = reports.iter().rev().flat_map(|m| m.images.iter())
         .filter(|image| seen.insert(image.image_id.as_str())).take(12).cloned().collect();
-    let decisions = reports.iter().filter_map(|question| {
+    let mut decisions: Vec<_> = state.messages.iter().rev().filter(|m| !m.stale && m.kind == MessageKind::Report
+        && matches!(&m.from, ActorRef::Run { run_id } if run_ids.contains(run_id.as_str()))).filter_map(|question| {
         let report = question.report.as_ref().filter(|r| r.kind == ReportKind::NeedsInput)?;
         let ActorRef::Run { run_id } = &question.from else { return None };
         let answer = state.messages.iter().filter(|m| !m.stale && m.kind == MessageKind::Answer
-            && m.to_run_id == *run_id && m.in_reply_to.as_deref() == Some(question.message_id.as_str()))
-            .min_by(|a, b| message_order(a).cmp(&message_order(b)));
+            && m.to_run_id == *run_id && m.in_reply_to.as_deref() == Some(report.message_id.as_str()))
+            .max_by_key(|m| m.seq);
         let by = answer.map(|m| match &m.from {
             ActorRef::Operator => InboxDecisionBy::You,
             ActorRef::Dispatcher => InboxDecisionBy::Cockpit,
@@ -164,6 +170,7 @@ fn task_evidence(state: &OrchestrationState, root_id: &str, task_id: &str, curre
         Some(InboxDecision { question: report.summary.clone(), answer: answer.map(|m| m.text.clone()),
             asked_at: question.created_at.clone(), answered_at: answer.map(|m| m.created_at.clone()), by })
     }).take(20).collect();
+    decisions.reverse();
     Some(InboxTaskEvidence { run_id: run.run_id.clone(), attempt: run.attempt, attempts: runs.len() as u32,
         result: run.result.as_ref().map(|r| InboxTaskResult { summary: r.summary.clone(), outcome: r.outcome, at: r.at.clone() }),
         checks, commits, head_commit, integration, artifacts: super::artifacts::artifacts_for_run(run), images, decisions })
@@ -188,6 +195,8 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
     let roots: Vec<&Run> = state.runs.iter().filter(|r| r.session_id == request.session_id
         && r.run_id == r.root_id && r.parent_run_id.is_none()).collect();
     let root_map: HashMap<&str, &Run> = roots.iter().map(|r| (r.run_id.as_str(), *r)).collect();
+    let message_positions: HashMap<*const Message, usize> = state.messages.iter().enumerate()
+        .map(|(index, message)| (message as *const Message, index)).collect();
     let runs: Vec<&Run> = state.runs.iter().filter(|r| r.session_id == request.session_id && root_map.contains_key(r.root_id.as_str())).collect();
     let intents: HashSet<&str> = state.task_intents.iter().filter(|i| root_map.contains_key(i.root_id.as_str())).map(|i| i.run_id.as_str()).collect();
     let mut questions: BTreeMap<&str, Vec<QuestionStatus>> = BTreeMap::new();
@@ -270,10 +279,14 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
         let mut projected_questions = Vec::new();
         if let Some(statuses) = questions.get(id) { for q in statuses {
             if let (Some(m), Some(root)) = (question_message(&state.messages, q), root_map.get(q.run_id.as_str())) {
-                if let Some(report) = &m.report { projected_questions.push(InboxQuestion { run_id: q.run_id.clone(), question_message_id: q.question_message_id.clone(), asked_at: q.asked_at.clone(), text: message_text(report.summary.clone(), owner_source(root, false), m), choices: report.card.as_ref().map(|c| c.choices.clone()).unwrap_or_default(), receipt: q.receipt.clone() }); }
+                if let Some(report) = &m.report { projected_questions.push((message_positions.get(&(m as *const Message)).copied(), InboxQuestion { run_id: q.run_id.clone(), question_message_id: q.question_message_id.clone(), asked_at: q.asked_at.clone(), text: message_text(report.summary.clone(), owner_source(root, false), m), choices: report.card.as_ref().map(|c| c.choices.clone()).unwrap_or_default(), receipt: q.receipt.clone() })); }
             }
         }}
-        projected_questions.sort_by(|a,b| (&a.asked_at, &a.run_id, &a.question_message_id).cmp(&(&b.asked_at, &b.run_id, &b.question_message_id)));
+        // Missing legacy positions sort last, with identity as a deterministic fallback.
+        projected_questions.sort_by(|(a_pos, a), (b_pos, b)|
+            (a_pos.unwrap_or(usize::MAX), &a.run_id, &a.question_message_id)
+                .cmp(&(b_pos.unwrap_or(usize::MAX), &b.run_id, &b.question_message_id)));
+        let projected_questions: Vec<_> = projected_questions.into_iter().map(|(_, question)| question).collect();
         let receipts: Vec<InboxReceipt> = messages.iter().filter(|m| matches!(m.from, ActorRef::Operator)).map(|m| InboxReceipt { message_id: m.message_id.clone(), kind: m.kind, to_run_id: m.to_run_id.clone(), attempt_run_id: m.handoff.as_ref().and_then(|h| h.attempt_run_id.clone()), stage: m.stage, created_at: m.created_at.clone(), acked_at: m.acked_at.clone(), stale: m.stale }).collect();
         let mut links = BTreeSet::new();
         for link in &state.thread_links { if link.thread_id == id && root_map.contains_key(link.root_id.as_str()) { links.insert((link.root_id.as_str(), link.task_id.as_str())); } }
@@ -441,6 +454,125 @@ mod tests {
     }
     fn image(id: &str) -> MessageImage {
         MessageImage { image_id: id.into(), mime_type: "image/png".into(), width: 1, height: 1, bytes: 42 }
+    }
+
+    #[test]
+    fn timeline_includes_root_self_answer_for_legacy_question_with_owner_source() {
+        let mut state = OrchestrationState { runs: vec![root("r"), root("other")], ..Default::default() };
+        let mut question = report("question", "r", 10, None, ReportKind::NeedsInput);
+        question.created_at = "2026-10-06T12:00:00Z".into();
+        let mut answer = message("self-answer", "r", 1, Some("question"), MessageKind::Answer);
+        answer.from = ActorRef::Run { run_id: "r".into() };
+        answer.in_reply_to = Some("question".into());
+        answer.created_at = "2026-10-04T12:00:00Z".into();
+        let mut other = message("other-answer", "other", 2, Some("question"), MessageKind::Answer);
+        other.from = ActorRef::Run { run_id: "other".into() };
+        other.in_reply_to = Some("question".into());
+        let mut wrong_id = message("wrong-id", "r", 3, Some("question"), MessageKind::Answer);
+        wrong_id.from = ActorRef::Run { run_id: "r".into() };
+        wrong_id.in_reply_to = Some("another-question".into());
+        let mut stale = message("stale", "r", 4, Some("question"), MessageKind::Answer);
+        stale.from = ActorRef::Run { run_id: "r".into() };
+        stale.in_reply_to = Some("question".into());
+        stale.stale = true;
+        state.messages.extend([question, answer, other, wrong_id, stale]);
+
+        let projected = view(&state, vec![]);
+        let thread = projected.threads.iter().find(|thread| thread.thread_id == "question").unwrap();
+        assert_eq!(thread.timeline.iter().map(|entry| entry.message_id.as_str()).collect::<Vec<_>>(),
+            vec!["question", "self-answer"]);
+        let answer = &thread.timeline[1];
+        assert_eq!(answer.kind, InboxEntryKind::Answer);
+        assert!(matches!(&answer.source, InboxSource::Owner { run_id, .. } if run_id == "r"));
+        assert_eq!(answer.in_reply_to.as_deref(), Some("question"));
+    }
+
+    #[test]
+    fn projected_questions_follow_timeline_order_across_owners() {
+        let mut state = OrchestrationState { runs: vec![root("a"), root("b")], ..Default::default() };
+        let mut first = report("shared", "b", 90, Some("t"), ReportKind::NeedsInput);
+        first.created_at = "2026-10-06T12:00:00Z".into();
+        first.report.as_mut().unwrap().at = first.created_at.clone();
+        let mut second = report("shared", "a", 1, Some("t"), ReportKind::NeedsInput);
+        second.created_at = "2026-10-04T12:00:00Z".into();
+        second.report.as_mut().unwrap().at = second.created_at.clone();
+        state.messages.extend([first, second]);
+
+        let projected = view(&state, vec![]);
+        let thread = &projected.threads[0];
+        assert_eq!(thread.questions.iter().map(|q| q.run_id.as_str()).collect::<Vec<_>>(), vec!["b", "a"]);
+        assert_eq!(thread.timeline.iter().map(|entry| match &entry.source {
+            InboxSource::Owner { run_id, .. } => run_id.as_str(),
+            _ => panic!("expected owner question"),
+        }).collect::<Vec<_>>(), vec!["b", "a"]);
+    }
+
+    #[test]
+    fn task_decisions_follow_persisted_order_and_latest_matching_answer() {
+        let mut worker = root("worker");
+        worker.kind = RunKind::Worker;
+        worker.root_id = "r".into();
+        worker.task_id = Some("task".into());
+        let mut other = worker.clone();
+        other.run_id = "other".into();
+        let mut state = OrchestrationState { runs: vec![root("r"), worker, other], ..Default::default() };
+        let mut first = report("q1", "worker", 90, None, ReportKind::NeedsInput);
+        first.created_at = "2026-10-06T12:00:00Z".into();
+        first.report.as_mut().unwrap().message_id = "report-q1".into();
+        let mut second = report("q2", "other", 1, None, ReportKind::NeedsInput);
+        second.created_at = "2026-10-04T12:00:00Z".into();
+        let mut original = message("original", "worker", 1, None, MessageKind::Answer);
+        original.in_reply_to = Some("report-q1".into());
+        original.created_at = "2026-10-07T12:00:00Z".into();
+        let mut correction = message("correction", "worker", 100, None, MessageKind::Answer);
+        correction.in_reply_to = Some("report-q1".into());
+        correction.created_at = "2026-10-03T12:00:00Z".into();
+        correction.from = ActorRef::Run { run_id: "r".into() };
+        let mut later_lower_seq = message("later-lower-seq", "worker", 2, None, MessageKind::Answer);
+        later_lower_seq.in_reply_to = Some("report-q1".into());
+        let mut wrong_recipient = message("wrong", "other", 200, None, MessageKind::Answer);
+        wrong_recipient.in_reply_to = Some("report-q1".into());
+        let mut wrong_id = message("wrong-id", "worker", 300, None, MessageKind::Answer);
+        wrong_id.in_reply_to = Some("q1".into());
+        let mut stale = message("stale", "worker", 400, None, MessageKind::Answer);
+        stale.in_reply_to = Some("report-q1".into());
+        stale.stale = true;
+        state.messages.extend([first, original, second, correction, later_lower_seq, wrong_recipient, wrong_id, stale]);
+
+        let decisions = task_evidence(&state, "r", "task", Some(&state.runs[1])).unwrap().decisions;
+        assert_eq!(decisions.len(), 2);
+        assert_eq!(decisions.iter().map(|d| d.question.as_str()).collect::<Vec<_>>(), vec!["summary q1", "summary q2"]);
+        assert_eq!(decisions[0].answer.as_deref(), Some("correction"));
+        assert_eq!(decisions[0].answered_at.as_deref(), Some("2026-10-03T12:00:00Z"));
+        assert!(matches!(decisions[0].by, Some(InboxDecisionBy::Owner)));
+        assert!(decisions[1].answer.is_none());
+        assert!(decisions[1].answered_at.is_none());
+        assert!(decisions[1].by.is_none());
+    }
+
+    #[test]
+    fn task_decisions_keep_latest_twenty_in_persisted_order() {
+        let mut worker = root("worker");
+        worker.kind = RunKind::Worker;
+        worker.root_id = "r".into();
+        worker.task_id = Some("task".into());
+        let mut other = worker.clone();
+        other.run_id = "other".into();
+        let mut state = OrchestrationState { runs: vec![root("r"), worker, other], ..Default::default() };
+        for i in 0..24 {
+            let mut question = report(&format!("q{i}"), if i % 2 == 0 { "worker" } else { "other" },
+                (24 - i) as u64, None, ReportKind::NeedsInput);
+            question.created_at = format!("2026-10-{:02}T12:00:00Z", 25 - i);
+            state.messages.push(question);
+        }
+        let mut stale = report("stale", "worker", 1, None, ReportKind::NeedsInput);
+        stale.stale = true;
+        state.messages.push(stale);
+        state.messages.push(report("outside", "r", 1, None, ReportKind::NeedsInput));
+
+        let decisions = task_evidence(&state, "r", "task", Some(&state.runs[1])).unwrap().decisions;
+        assert_eq!(decisions.iter().map(|d| d.question.clone()).collect::<Vec<_>>(),
+            (4..24).map(|i| format!("summary q{i}")).collect::<Vec<_>>());
     }
     #[test]
     fn worker_directive_is_a_user_timeline_entry_with_task_title() {
