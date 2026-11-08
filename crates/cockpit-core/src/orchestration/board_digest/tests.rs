@@ -121,6 +121,65 @@ fn maps_task_and_runtime_states() {
 }
 
 #[test]
+fn worker_wait_claim_is_independent_of_runtime_and_questions() {
+    let mut s = snapshot();
+    let rt = runtime();
+    active(&mut s, RunStage::Working);
+    s.board.as_mut().unwrap().tasks[0].worker_waiting = Some(TaskWait {
+        cause: TaskWaitCause::WorkerWaiting, since: Some(NOW.into()), held_by: vec![],
+        code: None, detail: Some("Waiting for external review".into()), next_automatic: false,
+    });
+    for (status, expected) in [("idle", WorkerState::Waiting), ("done", WorkerState::Waiting),
+        ("working", WorkerState::Working), ("blocked", WorkerState::Blocked)] {
+        observe(&mut s, Presence::Present, Some(status));
+        let digest = digest_at(&s, Some(&rt), NOW);
+        let row = &digest.tasks[0];
+        assert_eq!(row.worker, expected, "{status}");
+        assert_eq!(row.observed_status.as_deref(), Some(status));
+        assert_eq!(row.worker_waiting.as_ref().unwrap().detail.as_deref(), Some("Waiting for external review"));
+        assert!(row.counts_as_open);
+        assert_eq!(digest.open_work, 1);
+        assert!(digest.text.contains(&format!("observed status: {status}")));
+        assert!(digest.text.contains("worker-stated wait: Waiting for external review"));
+    }
+    observe(&mut s, Presence::Missing, Some("idle"));
+    assert_eq!(digest_at(&s, Some(&rt), NOW).tasks[0].worker, WorkerState::Gone);
+    observe(&mut s, Presence::Present, Some("working"));
+    s.questions.push(question("worker", "q1", None));
+    let pending = digest_at(&s, Some(&rt), NOW);
+    assert_eq!(pending.tasks[0].worker, WorkerState::QuestionPending);
+    assert_eq!(pending.tasks[0].observed_status.as_deref(), Some("working"));
+    assert!(pending.text.contains("worker-stated wait: Waiting for external review"));
+    assert_eq!(pending.open_work, 1);
+    s.thread_links.push(ThreadLink { root_id: "root".into(), task_id: "task".into(), thread_id: "thread".into() });
+    s.questions.push(question("root", "q2", Some("thread")));
+    let user_question = digest_at(&s, Some(&rt), NOW);
+    assert_eq!(user_question.tasks[0].worker, WorkerState::WaitingOnUser);
+    assert_eq!(user_question.open_work, 0);
+    assert!(user_question.text.contains("worker-stated wait: Waiting for external review"));
+}
+
+#[test]
+fn wait_claim_and_resume_change_digest_key_even_when_question_has_priority() {
+    let mut s = snapshot();
+    active(&mut s, RunStage::Working);
+    s.questions.push(question("worker", "q1", None));
+    let before = digest_at(&s, None, NOW);
+    s.board.as_mut().unwrap().tasks[0].worker_waiting = Some(TaskWait {
+        cause: TaskWaitCause::WorkerWaiting, since: Some(NOW.into()), held_by: vec![],
+        code: None, detail: Some("First claim".into()), next_automatic: false,
+    });
+    let waiting = digest_at(&s, None, NOW);
+    assert_eq!(waiting.tasks[0].worker, WorkerState::QuestionPending);
+    assert_ne!(before.key, waiting.key);
+    s.board.as_mut().unwrap().tasks[0].worker_waiting.as_mut().unwrap().detail = Some("Changed claim".into());
+    let changed = digest_at(&s, None, NOW);
+    assert_ne!(waiting.key, changed.key);
+    s.board.as_mut().unwrap().tasks[0].worker_waiting = None;
+    assert_eq!(before.key, digest_at(&s, None, NOW).key);
+}
+
+#[test]
 fn key_ignores_time_and_revision_but_tracks_board_changes() {
     let mut s = snapshot();
     active(&mut s, RunStage::Working);

@@ -181,7 +181,7 @@ pub(crate) fn snapshot(
         RuntimeObservation::Unavailable { .. } => HashMap::new(),
     };
     let (attention, questions) = project_attention(
-        &runs, &inboxes, &observations, &intents, &run_by_id, &state.messages,
+        &runs, &inboxes, &observations, &intents, &run_by_id, state,
         AttentionClock { at: clock, text: now },
     );
     let unreflected_inputs = unreflected_inputs(&runs, &messages);
@@ -274,18 +274,19 @@ fn project_attention(
     observations: &HashMap<&str, &RunObservation>,
     intents: &[&TaskIntent],
     run_by_id: &HashMap<&str, &Run>,
-    events: &[Message],
+    state: &OrchestrationState,
     clock: AttentionClock<'_>,
 ) -> (Vec<Attention>, Vec<QuestionStatus>) {
     let mut attention = Vec::new();
     let mut questions = Vec::new();
     for run in runs {
         let inbox: &[&Message] = inboxes.get(run.run_id.as_str()).map_or(&[], Vec::as_slice);
-        let run_questions = question_statuses(run, inbox, events);
+        let run_questions = question_statuses(run, inbox, &state.messages);
         derive_attention(
             run,
             inbox,
             &run_questions,
+            current_worker_waiting(state, run),
             observations.get(run.run_id.as_str()).copied(),
             clock.at,
             clock.text,
@@ -400,6 +401,11 @@ pub(super) fn worker_waiting(state: &OrchestrationState, run: &Run) -> Option<Ta
     let (report, Some(WorkerCheckpointKind::Waiting)) = latest? else { return None };
     Some(TaskWait { cause: TaskWaitCause::WorkerWaiting, since: Some(report.at.clone()),
         held_by: vec![], code: None, detail: Some(report.summary.clone()), next_automatic: false })
+}
+
+pub(super) fn current_worker_waiting(state: &OrchestrationState, run: &Run) -> bool {
+    run.task_id.as_deref().and_then(|task_id| current_task_run(state, &run.root_id, task_id))
+        .is_some_and(|current| current.run_id == run.run_id) && worker_waiting(state, run).is_some()
 }
 
 fn task_wait(
@@ -745,6 +751,7 @@ fn derive_attention(
     run: &Run,
     inbox: &[&Message],
     questions: &[QuestionStatus],
+    worker_waiting: bool,
     observation: Option<&RunObservation>,
     clock: OffsetDateTime,
     now: &str,
@@ -824,6 +831,7 @@ fn derive_attention(
             if run.stage == RunStage::Working
                 && run.result.is_none()
                 && needs_input.is_none()
+                && !worker_waiting
                 && matches!(observation.agent_status.as_deref(), Some("idle" | "done"))
                 && let Some(brief) = work {
                     let mut since = brief.created_at.as_str();
@@ -1829,6 +1837,25 @@ mod tests {
         let observed = runs.iter().find(|run| run.run_id == WORKER).unwrap();
         assert_eq!(observed.workspace_id.as_deref(), Some("live-space"));
         assert_eq!(observed.tab_id.as_deref(), Some("live-tab"));
+    }
+
+    #[test]
+    fn stated_wait_suppresses_only_idle_without_report_attention() {
+        let mut durable = state(worker(RunStage::Working));
+        durable.messages.push(brief(MessageKind::WorkBrief, DeliveryStage::Acked));
+        let checkpoint = |id: &str, kind| Report { message_id: id.into(), kind: ReportKind::Progress,
+            outcome: None, summary: "Explicit state".into(),
+            plan: Some(WorkerCheckpoint { kind, artifacts: vec![] }.encode()),
+            source_output: None, card: None, at: START.into() };
+        durable.runs[1].last_report = Some(checkpoint("wait", WorkerCheckpointKind::Waiting));
+        record_main_report(&mut durable, 1);
+        let snapshot = project(&durable, Ok(runtime("done")));
+        assert!(!has(&snapshot, AttentionKind::IdleWithoutReport));
+        let RuntimeObservation::Fresh { runs, .. } = &snapshot.runtime else { panic!("fresh observation") };
+        assert_eq!(runs.iter().find(|run| run.run_id == WORKER).unwrap().agent_status.as_deref(), Some("done"));
+        durable.runs[1].last_report = Some(checkpoint("resume", WorkerCheckpointKind::Resumed));
+        record_main_report(&mut durable, 1);
+        assert!(has(&project(&durable, Ok(runtime("done"))), AttentionKind::IdleWithoutReport));
     }
 
     #[test]
