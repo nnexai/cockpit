@@ -110,10 +110,33 @@ fn digest_argv(argv: &[u8]) -> io::Result<String> {
     Ok(format!("{:x}", Sha256::digest(argv)))
 }
 
+/// Read the local kernel's boot UUID; unavailable or malformed evidence is not an identity.
 #[cfg(target_os = "linux")]
 pub fn kernel_boot_id() -> Option<String> {
-    let value = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
-    let value = value.trim();
+    let value = std::fs::read("/proc/sys/kernel/random/boot_id").ok()?;
+    parse_kernel_boot_id(&value)
+}
+
+/// Read the local kernel's boot UUID; unavailable or malformed evidence is not an identity.
+#[cfg(target_os = "macos")]
+pub fn kernel_boot_id() -> Option<String> {
+    static BOOT_ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    if let Some(value) = BOOT_ID.get() {
+        return Some(value.clone());
+    }
+    // Cache successful observations only; transient failures must be retryable.
+    let output = std::process::Command::new("/usr/sbin/sysctl")
+        .args(["-n", "kern.bootsessionuuid"])
+        .output().ok()?;
+    if !output.status.success() { return None; }
+    let value = parse_kernel_boot_id(&output.stdout)?;
+    let _ = BOOT_ID.set(value.clone());
+    Some(value)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos", test))]
+fn parse_kernel_boot_id(value: &[u8]) -> Option<String> {
+    let value = std::str::from_utf8(value).ok()?.trim();
     // The kernel exposes a UUID; malformed evidence must not fence an incarnation.
     if value.len() != 36
         || !value.bytes().enumerate().all(|(index, byte)| {
@@ -129,7 +152,7 @@ pub fn kernel_boot_id() -> Option<String> {
     Some(value.to_owned())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub fn kernel_boot_id() -> Option<String> {
     None
 }
@@ -489,6 +512,28 @@ fn read_process(pid: i32) -> io::Result<ProcessStatus> {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    #[test]
+    fn macos_boot_session_uuid_output_requires_kernel_uuid_format() {
+        let uuid = "01234567-89AB-CDEF-0123-456789ABCDEF";
+        assert_eq!(parse_kernel_boot_id(format!("{uuid}\n").as_bytes()).as_deref(), Some(uuid));
+        for invalid in [
+            b"".as_slice(),
+            b"\xff",
+            b"0123456789AB-CDEF-0123-456789ABCDEF\n",
+            b"01234567-89AB-CDEF-0123-456789ABCDEG\n",
+            b"01234567-89AB-CDEF-0123-456789ABCDEF\nextra\n",
+        ] {
+            assert!(parse_kernel_boot_id(invalid).is_none());
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_boot_session_uuid_is_available_and_stable() {
+        let first = kernel_boot_id().expect("sysctl must provide a valid boot session UUID");
+        assert_eq!(kernel_boot_id().as_deref(), Some(first.as_str()));
+    }
 
     #[test]
     fn macos_platform_uuid_requires_exact_nonzero_evidence_and_normalizes_case() {

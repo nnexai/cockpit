@@ -6,11 +6,13 @@ use cockpit_core::{
         Actor, OrchestrationService, ResolvedMutationInput, effect_free_reserved_resume_launch,
         is_liaison_candidate, preferred_liaison,
         dispatch::{Dispatcher, DispatcherSettings, resume_supported},
-        herdr::{OrchestrationHerdr, RuntimeView, RuntimeWorkspace},
+        herdr::{WorkspaceDirectoryEvidence, WorkspaceDirectorySource, OrchestrationHerdr, RuntimeView, RuntimeWorkspace},
         project_identity::{self, replacement_consumers_preflight, resolve_directory},
     },
     process_identity::{same_machine_process_running, verified_machine_id},
     projects::ProjectService,
+    project_adapter::ProjectSnapshot,
+    ProjectHerdrAdapter,
 };
 use cockpit_herdr::HerdrCliAdapter;
 use cockpit_protocol::{
@@ -30,6 +32,33 @@ use tokio_util::sync::CancellationToken;
 pub enum CliProcessRole {
     Host,
     Native,
+}
+
+/// Explicit caller selection; at least a repository or Space is required.
+/// Session is bound by the configured adapter selection and socket, not by a
+/// Herdr-reported session field. No field is filled from current focus.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceScopeRequest {
+    pub session_id: String,
+    pub workspace_id: Option<String>,
+    pub repository_id: Option<String>,
+    pub branch: Option<String>,
+    pub base: Option<String>,
+}
+
+/// Host-observed identity suitable for comparing with a fresh resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceScopeEvidence {
+    pub request: VoiceScopeRequest,
+    pub endpoint_identity: String,
+    /// Cockpit's endpoint-derived server instance, not a Herdr-issued identifier.
+    pub endpoint_derived_server_instance: String,
+    pub boot_id: Option<String>,
+    pub peer_process: Option<NativeProcessIdentity>,
+    pub workspace_directory: Option<String>,
+    pub workspace_directory_source: Option<WorkspaceDirectorySource>,
+    pub project: ProjectIdentity,
+    pub checkout: CheckoutIdentity,
 }
 
 pub struct OrchestrationRuntime {
@@ -110,6 +139,13 @@ impl OrchestrationRuntime {
     ) -> Result<OrchestrationSnapshot, InspectionError> {
         self.service.snapshot(self.herdr.as_ref(), request).await
     }
+    /// Resolve explicit Voice scope from fresh, independently bound Herdr observations.
+    pub async fn resolve_voice_scope(
+        &self, request: &VoiceScopeRequest,
+    ) -> Result<VoiceScopeEvidence, InspectionError> {
+        let adapter = self.agent_send_adapter.as_ref().ok_or_else(|| scope_error("Herdr adapter is unavailable"))?;
+        resolve_voice_scope(self.projects.as_ref(), adapter.as_ref(), self.herdr.as_ref(), request).await
+    }
     pub async fn inbox(&self, request: &InboxRequest) -> Result<InboxView, InspectionError> {
         self.service.inbox(self.herdr.as_ref(), request).await
     }
@@ -166,6 +202,148 @@ impl OrchestrationRuntime {
                 let _ = task.await;
             }
     }
+}
+
+fn verify_voice_repository(
+    expected_id: &str, actual_id: &str, common_dir: &str,
+    project: &ProjectIdentity, checkout: &CheckoutIdentity,
+) -> Result<(), InspectionError> {
+    if expected_id != actual_id
+        || !matches!(&project.source, ProjectSource::Git { common_dir: actual } if actual == common_dir)
+        || checkout.git.as_ref().is_none_or(|git| git.common_dir != common_dir)
+    {
+        return Err(scope_error("Requested repository does not match the Space checkout"));
+    }
+    Ok(())
+}
+
+fn scope_error(message: impl Into<String>) -> InspectionError {
+    InspectionError::new("voice_scope_unavailable", message.into())
+}
+
+fn valid_scope_value(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control)
+}
+
+fn validate_voice_observation(
+    request: &VoiceScopeRequest, endpoint: &str, snapshot: &ProjectSnapshot,
+    explicit: &WorkspaceDirectoryEvidence, runtime: &RuntimeView,
+) -> Result<(), InspectionError> {
+    let snap = &snapshot.snapshot;
+    if !valid_scope_value(endpoint) || !valid_scope_value(&snap.server_instance)
+        || snapshot.endpoint_identity != endpoint || explicit.endpoint_identity != endpoint
+        || runtime.endpoint_identity != endpoint || snap.session_id != request.session_id
+        || explicit.session_id != request.session_id || explicit.server_instance != snap.server_instance
+        || explicit.workspace_id != request.workspace_id
+        || snapshot.boot_id != explicit.boot_id || snapshot.boot_id != runtime.boot_id
+        || snapshot.peer_process != explicit.peer_process || snapshot.peer_process != runtime.peer_process
+        || snapshot.peer_process.is_none()
+        || snapshot.boot_id.as_deref().is_some_and(|id| !valid_scope_value(id))
+    {
+        return Err(scope_error("Herdr scope provenance is missing or changed"));
+    }
+    if let Some(workspace_id) = request.workspace_id.as_deref() {
+        if snap.spaces.iter().filter(|space| space.id == workspace_id).count() != 1 {
+            return Err(scope_error("Requested Space is missing or ambiguous in the attested snapshot"));
+        }
+        let workspace = authoritative_workspace(runtime, workspace_id)?;
+        let directory = explicit.directory.as_deref().ok_or_else(|| scope_error("Space directory evidence is missing"))?;
+        let source = explicit.directory_source.ok_or_else(|| scope_error("Space directory source is missing"))?;
+        if !Path::new(directory).is_absolute() || workspace.cwd != directory {
+            return Err(scope_error("Space directory differs from the runtime observation"));
+        }
+        if source == WorkspaceDirectorySource::WorktreeCheckout
+            && snap.spaces.iter().find(|space| space.id == workspace_id)
+                .and_then(|space| space.git.as_ref()).is_none_or(|git| git.checkout_path != directory)
+        {
+            return Err(scope_error("Space worktree checkout differs from the attested snapshot"));
+        }
+    } else if explicit.directory.is_some() || explicit.directory_source.is_some() {
+        return Err(scope_error("Unexpected Space directory without a requested Space"));
+    }
+    Ok(())
+}
+
+async fn observe_voice_scope(
+    adapter: &dyn ProjectHerdrAdapter, herdr: &dyn OrchestrationHerdr, request: &VoiceScopeRequest,
+) -> Result<(ProjectSnapshot, WorkspaceDirectoryEvidence), InspectionError> {
+    let endpoint = adapter.project_endpoint_identity(&request.session_id).await?;
+    let snapshot = adapter.project_snapshot_at_endpoint(&request.session_id, &endpoint).await?;
+    let explicit = herdr.workspace_directory_evidence(&request.session_id, request.workspace_id.as_deref(), &endpoint).await?;
+    let runtime = herdr.runtime(&request.session_id).await?;
+    validate_voice_observation(request, &endpoint, &snapshot, &explicit, &runtime)?;
+    if adapter.project_endpoint_identity(&request.session_id).await? != endpoint {
+        return Err(scope_error("Herdr endpoint changed while resolving scope"));
+    }
+    Ok((snapshot, explicit))
+}
+
+async fn find_voice_repository(
+    projects: &ProjectService, id: Option<&str>,
+) -> Result<Option<cockpit_protocol::projects::RepositoryCandidate>, InspectionError> {
+    let Some(id) = id else { return Ok(None) };
+    let listed = projects.repositories().await?;
+    let mut matching = listed.repositories.into_iter().filter(|repo|
+        repo.repository_id == id && !repo.is_linked_worktree);
+    let repository = matching.next().ok_or_else(|| scope_error("Requested configured repository is missing"))?;
+    if matching.next().is_some() {
+        return Err(scope_error("Requested configured repository is ambiguous"));
+    }
+    Ok(Some(repository))
+}
+
+async fn resolve_voice_scope(
+    projects: &ProjectService, adapter: &dyn ProjectHerdrAdapter, herdr: &dyn OrchestrationHerdr,
+    request: &VoiceScopeRequest,
+) -> Result<VoiceScopeEvidence, InspectionError> {
+    if !valid_scope_value(&request.session_id)
+        || (request.workspace_id.is_none() && request.repository_id.is_none())
+        || request.workspace_id.as_deref().is_some_and(|id| !valid_scope_value(id))
+        || request.repository_id.as_deref().is_some_and(|id| !valid_scope_value(id))
+        || request.branch.as_deref().is_some_and(|v| !valid_scope_value(v))
+        || request.base.as_deref().is_some_and(|v| !valid_scope_value(v))
+    {
+        return Err(scope_error("Explicit scope contains an empty or invalid selection"));
+    }
+    let (snapshot, explicit) = observe_voice_scope(adapter, herdr, request).await?;
+    let repository = find_voice_repository(projects, request.repository_id.as_deref()).await?;
+    let directory = explicit.directory.as_deref().or_else(|| repository.as_ref().map(|r| r.checkout_path.as_str()))
+        .ok_or_else(|| scope_error("Scope has no checkout directory"))?;
+    let (project, checkout) = resolve_directory(
+        Path::new(directory), request.repository_id.clone(), request.workspace_id.clone(),
+    ).await?;
+    if let Some(repository) = &repository {
+        verify_voice_repository(
+            request.repository_id.as_deref().expect("repository is present only when requested"),
+            &repository.repository_id, &repository.common_dir, &project, &checkout,
+        )?;
+    }
+    let (fresh_snapshot, fresh_explicit) = observe_voice_scope(adapter, herdr, request).await?;
+    let fresh_repository = find_voice_repository(projects, request.repository_id.as_deref()).await?;
+    if repository.as_ref().map(|r| (&r.repository_id, &r.checkout_path, &r.common_dir))
+        != fresh_repository.as_ref().map(|r| (&r.repository_id, &r.checkout_path, &r.common_dir))
+    {
+        return Err(scope_error("Configured repository changed while resolving scope"));
+    }
+    let fresh_directory = fresh_explicit.directory.as_deref()
+        .or_else(|| fresh_repository.as_ref().map(|r| r.checkout_path.as_str()))
+        .ok_or_else(|| scope_error("Scope has no checkout directory"))?;
+    let (fresh_project, fresh_checkout) = resolve_directory(
+        Path::new(fresh_directory), request.repository_id.clone(), request.workspace_id.clone(),
+    ).await?;
+    if snapshot.endpoint_identity != fresh_snapshot.endpoint_identity
+        || snapshot.snapshot.server_instance != fresh_snapshot.snapshot.server_instance
+        || snapshot.boot_id != fresh_snapshot.boot_id || snapshot.peer_process != fresh_snapshot.peer_process
+        || explicit != fresh_explicit || project != fresh_project || checkout != fresh_checkout
+    {
+        return Err(scope_error("Space identity changed while resolving scope"));
+    }
+    Ok(VoiceScopeEvidence {
+        request: request.clone(), endpoint_identity: snapshot.endpoint_identity,
+        endpoint_derived_server_instance: snapshot.snapshot.server_instance, boot_id: snapshot.boot_id,
+        peer_process: snapshot.peer_process, workspace_directory: explicit.directory,
+        workspace_directory_source: explicit.directory_source, project, checkout,
+    })
 }
 
 /// Fresh physical observations shared by the GUI owner and CLI. Ordinary job

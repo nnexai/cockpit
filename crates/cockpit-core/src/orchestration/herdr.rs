@@ -6,6 +6,13 @@ use std::collections::BTreeMap;
 #[async_trait]
 pub trait OrchestrationHerdr: Send + Sync {
     async fn runtime(&self, session_id: &str) -> Result<RuntimeView, InspectionError>;
+    /// Observe a Space's explicit cwd or Herdr-reported worktree checkout.
+    /// Without a Space this observes only the configured session endpoint.
+    async fn workspace_directory_evidence(
+        &self, _session_id: &str, _workspace_id: Option<&str>, _endpoint_identity: &str,
+    ) -> Result<WorkspaceDirectoryEvidence, InspectionError> {
+        Err(InspectionError::new("workspace_cwd_unavailable", "Explicit workspace cwd observation is unsupported"))
+    }
     /// Live pane/status events, registered before the owner's reconciliation read.
     /// Adapters must invalidate after gaps/reconnects rather than polling snapshots.
     async fn session_changes(&self, _session_id: &str) -> Result<crate::SessionSubscription, InspectionError> {
@@ -98,6 +105,26 @@ pub struct PaneProcessInfo {
     /// Fresh local OS evidence, never inferred from Herdr's shell PID/name.
     pub shell_identity: Option<NativeShellIdentity>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceDirectorySource {
+    ExplicitCwd,
+    WorktreeCheckout,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceDirectoryEvidence {
+    pub endpoint_identity: String,
+    pub boot_id: Option<String>,
+    pub peer_process: Option<NativeProcessIdentity>,
+    /// Adapter-selected session, not an independently reported Herdr identity.
+    pub session_id: String,
+    /// Adapter-derived endpoint identifier, not an independently reported server ID.
+    pub server_instance: String,
+    pub workspace_id: Option<String>,
+    pub directory: Option<String>,
+    pub directory_source: Option<WorkspaceDirectorySource>,
+}
+
 #[derive(Debug, Clone)]
 pub struct RuntimeView {
     pub endpoint_identity: String,

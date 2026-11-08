@@ -8,7 +8,7 @@ use cockpit_core::{
     InspectionError,
     orchestration::herdr::{
         AgentPromptRequest, AgentTabRequest, DirectAgentTabRequest, OrchestrationHerdr,
-        PaneProcessInfo, RuntimePane, RuntimeView, RuntimeWorkspace,
+        WorkspaceDirectoryEvidence, WorkspaceDirectorySource, PaneProcessInfo, RuntimePane, RuntimeView, RuntimeWorkspace,
     },
 };
 use cockpit_core::orchestration::session_identity::read_omp_session_file;
@@ -16,6 +16,27 @@ use cockpit_protocol::orchestration::RunLocation;
 use serde_json::{Value, json};
 
 use super::{EventRelevance, HerdrCliAdapter, object, parse_snapshot, required_string};
+
+fn workspace_directory<'a>(raw: &'a Value, workspace_id: &str) -> Result<(&'a str, WorkspaceDirectorySource), InspectionError> {
+    let workspaces = raw.get("workspaces").and_then(Value::as_array).ok_or_else(|| InspectionError::new(
+        "workspace_cwd_unavailable", "Snapshot has no explicit workspaces",
+    ))?;
+    let mut matching = workspaces.iter().filter(|item|
+        item.get("workspace_id").and_then(Value::as_str) == Some(workspace_id));
+    let workspace = matching.next().ok_or_else(|| InspectionError::new(
+        "workspace_cwd_unavailable", "Explicit Space is missing",
+    ))?;
+    if matching.next().is_some() {
+        return Err(InspectionError::new("workspace_cwd_unavailable", "Explicit Space is ambiguous"));
+    }
+    if let Some(cwd) = workspace.get("cwd").and_then(Value::as_str).filter(|cwd| Path::new(cwd).is_absolute()) {
+        return Ok((cwd, WorkspaceDirectorySource::ExplicitCwd));
+    }
+    let checkout = workspace.get("worktree").and_then(|value| value.get("checkout_path"))
+        .and_then(Value::as_str).filter(|path| Path::new(path).is_absolute())
+        .ok_or_else(|| InspectionError::new("workspace_cwd_unavailable", "Space has neither an explicit cwd nor a reported worktree checkout"))?;
+    Ok((checkout, WorkspaceDirectorySource::WorktreeCheckout))
+}
 
 fn unknown(error: InspectionError) -> InspectionError {
     if matches!(
@@ -511,6 +532,26 @@ impl OrchestrationHerdr for HerdrCliAdapter {
         }
         Ok(())
     }
+    async fn workspace_directory_evidence(
+        &self, session_id: &str, workspace_id: Option<&str>, expected_endpoint: &str,
+    ) -> Result<WorkspaceDirectoryEvidence, InspectionError> {
+        let (result, endpoint_identity, peer_process) = self.socket_request_with_peer_process(
+            session_id, "session.snapshot", json!({}), Some(expected_endpoint),
+        ).await?;
+        let parsed = parse_snapshot(json!({"result": &result}), session_id, &endpoint_identity)?;
+        let raw = result.get("snapshot").ok_or_else(|| InspectionError::new(
+            "workspace_cwd_unavailable", "Snapshot is missing",
+        ))?;
+        let directory = workspace_id.map(|id| workspace_directory(raw, id)).transpose()?;
+        Ok(WorkspaceDirectoryEvidence {
+            endpoint_identity, peer_process,
+            boot_id: raw.get("boot_id").and_then(Value::as_str).map(str::to_owned),
+            session_id: parsed.session_id, server_instance: parsed.server_instance,
+            workspace_id: workspace_id.map(str::to_owned),
+            directory: directory.map(|(path, _)| path.to_owned()),
+            directory_source: directory.map(|(_, source)| source),
+        })
+    }
     async fn runtime(&self, session_id: &str) -> Result<RuntimeView, InspectionError> {
         let (result, endpoint_identity, peer_process) = self
             .socket_request_with_peer_process(session_id, "session.snapshot", json!({}), None)
@@ -771,6 +812,22 @@ impl OrchestrationHerdr for HerdrCliAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_directory_uses_only_reported_workspace_paths() {
+        let raw = json!({"workspaces": [{"workspace_id":"s", "cwd":"/actual"}]});
+        assert_eq!(workspace_directory(&raw, "s").unwrap(), ("/actual", WorkspaceDirectorySource::ExplicitCwd));
+        let worktree = json!({"workspaces": [{"workspace_id":"s", "worktree":{"checkout_path":"/repo"}}]});
+        assert_eq!(workspace_directory(&worktree, "s").unwrap(), ("/repo", WorkspaceDirectorySource::WorktreeCheckout));
+        for raw in [
+            json!({"workspaces": [{"workspace_id":"s"}], "panes":[{"workspace_id":"s","cwd":"/pane"}]}),
+            json!({"workspaces": [{"workspace_id":"s", "cwd":"relative"}]}),
+            json!({"workspaces": [{"workspace_id":"s", "cwd":"/a"},{"workspace_id":"s", "cwd":"/b"}]}),
+            json!({"workspaces": []}),
+        ] {
+            assert!(workspace_directory(&raw, "s").is_err());
+        }
+    }
 
     #[cfg(unix)]
     async fn reply_to_event_test_request(
