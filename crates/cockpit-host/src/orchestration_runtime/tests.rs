@@ -1667,10 +1667,16 @@ fn installed_native_cockpit_uses_sibling_cli_never_gui_self() {
     assert_eq!(resolve_cli_path(&native, CliProcessRole::Native), sibling);
     assert_eq!(resolve_cli_path(&native, CliProcessRole::Host), native);
     fs::remove_file(&sibling).unwrap();
-    assert_eq!(
-        resolve_cli_path(&native, CliProcessRole::Native),
+    let expected = if cfg!(target_os = "macos") {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join("Library/Application Support/cockpit/bin/cockpit-cli"))
+            .filter(|path| cli_executable_file(path))
+            .unwrap_or_else(|| PathBuf::from("cockpit-cli"))
+    } else {
         PathBuf::from("cockpit-cli")
-    );
+    };
+    assert_eq!(resolve_cli_path(&native, CliProcessRole::Native), expected);
     // Cargo's explicitly named native GUI can use the separate host
     // sibling, while the installed native GUI never resolves to itself.
     assert_eq!(

@@ -236,6 +236,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Browser binary frame/relay | `crates/cockpit-host/src/transport/browser_frame.rs`; `crates/cockpit-host/src/transport/browser_relay.rs`; `crates/cockpit-host/src/browser_view.rs` |
 | Native command/startup facade | `src-tauri/src/lib.rs`; `src-tauri/src/commands.rs`; `src-tauri/src/startup.rs` |
 | Native streams/clipboard/window lifecycle | `src-tauri/src/streams.rs`; `src-tauri/src/clipboard.rs`; `src-tauri/src/main.rs` |
+| Background-service lifecycle and installed identity | `crates/cockpit-host/src/backend.rs`; `crates/cockpit-host/src/lifecycle.rs`; `crates/cockpit-host/src/installation.rs` |
 | Browser owner/helper process | `crates/cockpit-host/src/browser_runtime.rs`; `crates/cockpit-host/src/browser_helper.rs` |
 | Chromium capture and page UA policy | `browser-runtime/browser-helper.mjs`; `browser-runtime/browser-user-agent.cjs` |
 | Herdr adapters and terminal/shell wire | `crates/cockpit-herdr/src/cli/`; `crates/cockpit-herdr/src/terminal_wire.rs`; `crates/cockpit-herdr/src/shell_wire.rs` |

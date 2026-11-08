@@ -2,6 +2,10 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "cockpit_status",
+            "cockpit_backend_status",
+            "cockpit_backend_start",
+            "cockpit_backend_restart",
+            "cockpit_update_and_relaunch",
             "cockpit_update_status",
             "cockpit_update_install",
             "cockpit_power_status",

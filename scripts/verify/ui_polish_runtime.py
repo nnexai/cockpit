@@ -2,6 +2,7 @@
 """Create an isolated Herdr/Cockpit fixture for the UI polish scenarios."""
 
 import argparse
+import hashlib
 import http.client
 import json
 import os
@@ -12,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 
 try:
     from . import fixture_resources
@@ -205,6 +207,75 @@ def configure_action_launcher(root):
         'description = "Fixture direct binding"\n')
 
 
+def service_command(root, endpoint, *args):
+    command = [str(REPO / "target/debug/cockpit"), "service",
+               "--config", str(root / "cockpit.toml"),
+               "--herdr", endpoint["executable"],
+               "--herdr-session", endpoint["session"],
+               "--herdr-socket", endpoint["socket"], *args]
+    return subprocess.run(command, cwd=REPO, env=environment(root), capture_output=True,
+                          text=True, check=True, timeout=40)
+
+
+def backend_status(root, endpoint):
+    return json.loads(service_command(root, endpoint, "status", "--json").stdout)
+
+
+def running_backend(status, endpoint):
+    if status.get("state") != "running":
+        raise ValueError(f"backend status is {status.get('state', 'unknown')}")
+    instance = status["instance"]
+    instance_id = instance["instance_id"]
+    if not isinstance(instance_id, str) or str(uuid.UUID(instance_id)) != instance_id:
+        raise ValueError("backend instance is not a canonical UUID")
+    if instance["herdr"] != endpoint:
+        raise ValueError("backend Herdr endpoint differs from the fixture")
+    return instance_id
+
+
+def record_backend(root, ledger, herdr_executable):
+    endpoint = {"executable": str(Path(herdr_executable).resolve()),
+                "session": ledger["session"], "socket": ledger["socket"]}
+    with fixture_resources.locked(root):
+        manifest = fixture_resources.load(root)
+        for name in ("gateway", "herdr"):
+            entries = [item for item in manifest["processes"] if item["name"] == name]
+            if len(entries) != 1 or fixture_resources.inspect_process(entries[0]["identity"], manifest)[0] != "live":
+                raise ValueError(f"fixture {name} ownership is unproven")
+        instance_id = running_backend(backend_status(root, endpoint), endpoint)
+        ledger["backend"] = {
+            "creation_id": manifest["creation_id"], "root": manifest["root"],
+            "instance_id": instance_id, "herdr": endpoint,
+            "config_sha256": hashlib.sha256((root / "cockpit.toml").read_bytes()).hexdigest(),
+        }
+        fixture_resources.atomic_json(root / "runtime.json", ledger)
+
+
+def stop_backend(root):
+    with fixture_resources.locked(root):
+        manifest = fixture_resources.load(root)
+        ledger = json.loads((root / "runtime.json").read_text())
+        backend = ledger.get("backend")
+        if not isinstance(backend, dict):
+            raise ValueError("no backend creation receipt (pre-feature or incomplete fixture)")
+        endpoint = backend["herdr"]
+        expected_socket = str(root / f"config/herdr/sessions/{manifest['session']}/herdr.sock")
+        if (manifest["boot_id"] != fixture_resources.boot_id()
+                or backend["creation_id"] != manifest["creation_id"]
+                or backend["root"] != manifest["root"]
+                or endpoint["session"] != manifest["session"]
+                or endpoint["socket"] != expected_socket
+                or ledger["socket"] != expected_socket
+                or not isinstance(endpoint["executable"], str)
+                or not Path(endpoint["executable"]).is_absolute()
+                or backend["config_sha256"] != hashlib.sha256((root / "cockpit.toml").read_bytes()).hexdigest()):
+            raise ValueError("backend creation receipt does not match fixture identity")
+        instance_id = running_backend(backend_status(root, endpoint), endpoint)
+        if instance_id != backend["instance_id"]:
+            raise ValueError("backend instance changed")
+        service_command(root, endpoint, "stop", "--operator", "--expected-instance", instance_id)
+
+
 def start(with_plugins=False, with_action_launcher=False, inherit_omp_auth=False, quiet_period_seconds=None):
     inherited_agent_dir = inherited_omp_agent_dir() if inherit_omp_auth else None
     root = Path(tempfile.mkdtemp(prefix="cpol-", dir="/tmp"))
@@ -266,19 +337,23 @@ def start(with_plugins=False, with_action_launcher=False, inherit_omp_auth=False
                           FIXTURE_PORT_SECONDS, fixture_port)
         ledger["fixture_url"] = f"http://127.0.0.1:{port}/"
         fixture_resources.atomic_json(root / "runtime.json", ledger)
-        herdr = launch(root, "herdr", [shutil.which("herdr"), "--session", session, "server"], env)
+        herdr_executable = shutil.which("herdr")
+        if not herdr_executable:
+            raise ValueError("Herdr executable not found")
+        herdr = launch(root, "herdr", [herdr_executable, "--session", session, "server"], env)
         wait_ready(herdr, root / "herdr.log", "Herdr socket", HERDR_SOCKET_SECONDS,
                    lambda: Path(ledger["socket"]).exists())
         result = rpc(root, "workspace.create", {"cwd": str(fixture), "label": "Polish sample", "focus": True})
         (root / "workspace.json").write_text(json.dumps(result, indent=2))
-        gateway = launch(root, "gateway", [str(REPO / "target/debug/cockpit"), "serve", "--herdr-session", session,
-            "--herdr-socket", ledger["socket"], "--config", str(root / "cockpit.toml"), "--static-dir", str(REPO / "dist")], env)
+        gateway = launch(root, "gateway", [str(REPO / "target/debug/cockpit"), "serve",
+            "--herdr", herdr_executable, "--herdr-session", session, "--herdr-socket", ledger["socket"],
+            "--config", str(root / "cockpit.toml"), "--static-dir", str(REPO / "dist")], env)
         def gateway_ready():
             origin = gateway_origin((root / "gateway.log").read_text(errors="replace"))
             return origin if origin and http_ok(origin) else None
         ledger["gateway_url"] = wait_ready(
             gateway, root / "gateway.log", "Cockpit gateway", GATEWAY_READY_SECONDS, gateway_ready)
-        fixture_resources.atomic_json(root / "runtime.json", ledger)
+        record_backend(root, ledger, herdr_executable)
     except BaseException:
         print(f"fixture start failed; evidence retained at {root}; stop recorded processes with: "
               f"python3 {Path(__file__).resolve()} stop {root}", file=sys.stderr)
@@ -288,9 +363,15 @@ def start(with_plugins=False, with_action_launcher=False, inherit_omp_auth=False
 
 def stop(root):
     try:
-        result = fixture_resources.shutdown(root)
-    except (OSError, ValueError, KeyError) as error:
-        result = {"state": "unknown", "evidence": f"ownership unproven: {error}", "effects": []}
+        stop_backend(root)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as error:
+        result = {"state": "unknown", "evidence": f"backend ownership or stop unproven: {error}",
+                  "effects": []}
+    else:
+        try:
+            result = fixture_resources.shutdown(root)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            result = {"state": "unknown", "evidence": f"ownership unproven: {error}", "effects": []}
     print(json.dumps(result, indent=2))
     print(f"Normal fixture shutdown observed {result['state']}; evidence retained at {root}")
 

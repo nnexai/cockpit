@@ -5,7 +5,10 @@
 //! consume the same status operation.
 
 pub mod agent_send;
+pub mod backend;
 pub mod browser_runtime;
+pub mod installation;
+pub mod lifecycle;
 pub mod orchestration_runtime;
 pub mod server;
 pub mod transport;

@@ -19,6 +19,36 @@ macro_rules! cockpit_operations {
                   limit = none; origin = none;
                   guard = none; status = service
             }
+            { id: backend_status, ctx: backend, out: $crate::transport::operations::backend::BackendSurfaceStatus,
+              call: $crate::transport::operations::backend::status,
+              native: cockpit_backend_status()
+                  => $crate::transport::native_input::none(),
+              http: get "/api/v1/backend/status"
+                  ()
+                  => $crate::transport::http_input::none();
+                  limit = none; origin = none;
+                  guard = none; status = service
+            }
+            { id: backend_start, ctx: backend, out: $crate::transport::operations::backend::BackendSurfaceStatus,
+              call: $crate::transport::operations::backend::start,
+              native: cockpit_backend_start()
+                  => $crate::transport::native_input::none(),
+              http: post "/api/v1/backend/start"
+                  ()
+                  => $crate::transport::http_input::none();
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = method;
+                  guard = none; status = service
+            }
+            { id: backend_restart, ctx: backend, out: $crate::backend::RestartTicket,
+              call: $crate::transport::operations::backend::restart,
+              native: cockpit_backend_restart(expected_instance: ::std::string::String)
+                  => |(expected_instance,)| $crate::transport::operations::backend::native_restart_input(expected_instance),
+              http: post "/api/v1/backend/restart"
+                  (request: ::axum::Json<$crate::transport::operations::backend::BackendRestartRequest>)
+                  => $crate::transport::http_input::json();
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = method;
+                  guard = none; status = service
+            }
             { id: update_status, ctx: service, out: $crate::transport::operations::session::UpdateStatus,
               call: $crate::transport::operations::session::update_status,
               native: cockpit_update_status()

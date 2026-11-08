@@ -41,6 +41,18 @@ macro_rules! native_command {
                 .map_err(ErrorResponse::from)
         }
     };
+    (backend, $command:ident, ($($arg:ident: $ty:ty),*), $out:ty, $call:path, $input:expr) => {
+        #[tauri::command]
+        pub async fn $command(
+            $($arg: $ty,)*
+            runtime: State<'_, Arc<cockpit_host::transport::operations::backend::BackendContext>>,
+        ) -> Result<$out, ErrorResponse> {
+            let input = ($input)(($($arg,)* )).map_err(ErrorResponse::from)?;
+            $call(runtime.inner(), Transport::Native, input)
+                .await
+                .map_err(ErrorResponse::from)
+        }
+    };
 }
 
 macro_rules! native_commands {
@@ -56,6 +68,7 @@ macro_rules! native_commands {
         {
             tauri::generate_handler![
                 $($command,)*
+                crate::update::cockpit_update_and_relaunch,
                 crate::power::cockpit_power_status,
                 crate::power::cockpit_power_set_stay_awake,
                 crate::power::cockpit_power_screen_off,

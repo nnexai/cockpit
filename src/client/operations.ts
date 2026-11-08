@@ -52,6 +52,7 @@ import {
 } from "./credentialProtocol";
 import { parseQuotaStatusResponse } from "./quotaProtocol";
 import { parseQuickAskAvailability, parseQuickAskLocation, parseQuickAskRequest } from "./quickAskProtocol";
+import { parseRestartTicket, parseBackendSurfaceStatus } from "./backendProtocol";
 import {
   matchProjectSession, parseProjectConfiguration, parseRepositoryList, parseWorkspaceDefaults, 
   parseWorkspaceDefaultsRequest, parseWorkspaceOperation, parseWorkspaceOperationRequest, 
@@ -78,7 +79,7 @@ import type { FocusRequest, ResourceMutationRequest, SpaceGitActionRequest, Spac
 import { widgetAbortable } from "./widgetTransport";
 
 type Backend = "browser" | "native";
-type StreamOperation = "subscribeWidgets" | "subscribeSession" | "openTerminal" | "openBrowserView";
+type StreamOperation = "subscribeWidgets" | "subscribeSession" | "openTerminal" | "openBrowserView" | "updateAndRelaunch";
 type OperationName = Exclude<keyof CockpitClient, StreamOperation>;
 export type RequestOperations = Pick<CockpitClient, OperationName>;
 
@@ -105,6 +106,22 @@ type OperationTable = { [K in OperationName]: OperationRow<K> };
 // Encoding, parser normalization, and identity matching are separate phases:
 // matches outside a transport parser must not acquire its normalization/status.
 const operations: OperationTable = {
+  backendStatus: {
+    encode() {
+      return { operation: "background service status", http: { method: "GET", route: () => "/api/v1/backend/status" }, tauri: { command: "cockpit_backend_status", args: () => undefined }, parse: parseBackendSurfaceStatus };
+    },
+  },
+  backendStart: {
+    encode() {
+      return { operation: "start background service", http: { method: "POST", route: () => "/api/v1/backend/start" }, tauri: { command: "cockpit_backend_start", args: () => undefined }, parse: parseBackendSurfaceStatus };
+    },
+  },
+  backendRestart: {
+    encode(_backend, expectedInstance) {
+      validateResourceId(expectedInstance);
+      return { operation: "restart background service", http: { method: "POST", route: () => "/api/v1/backend/restart", json: () => ({ expected_instance: expectedInstance, confirm: "restart" }) }, tauri: { command: "cockpit_backend_restart", args: () => ({ expectedInstance }) }, parse: parseRestartTicket };
+    },
+  },
   updateStatus: {
     encode() {
       return {

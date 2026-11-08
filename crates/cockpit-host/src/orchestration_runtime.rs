@@ -746,7 +746,7 @@ fn root_candidate(run: &Run, modern_binding: bool) -> LiaisonCandidate {
 }
 
 
-fn cli_path(role: CliProcessRole) -> Result<PathBuf, InspectionError> {
+pub fn cli_path(role: CliProcessRole) -> Result<PathBuf, InspectionError> {
     let selected = if let Some(path) = std::env::var_os("COCKPIT_CLI_EXECUTABLE") {
         PathBuf::from(path)
     } else {
@@ -785,7 +785,7 @@ fn cli_executable_file(path: &Path) -> bool {
     })
 }
 
-fn resolve_cli_path(executable: &Path, role: CliProcessRole) -> PathBuf {
+pub fn resolve_cli_path(executable: &Path, role: CliProcessRole) -> PathBuf {
     match role {
         // The browser gateway is the actual host/CLI process, regardless of
         // its filename. Installed native GUI binaries are also named cockpit.
@@ -804,6 +804,14 @@ fn resolve_cli_path(executable: &Path, role: CliProcessRole) -> PathBuf {
                 let host = executable.with_file_name("cockpit");
                 if host != executable && host.is_file() {
                     return host;
+                }
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(home) = std::env::var_os("HOME") {
+                let installed = PathBuf::from(home)
+                    .join("Library/Application Support/cockpit/bin/cockpit-cli");
+                if cli_executable_file(&installed) {
+                    return installed;
                 }
             }
             PathBuf::from("cockpit-cli")

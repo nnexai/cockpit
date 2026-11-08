@@ -59,6 +59,12 @@ macro_rules! gateway_handler {
             $id, (State: State<CockpitService>), context; $($row)*
         }
     };
+    ({ id: $id:ident, ctx: backend, $($row:tt)* }) => {
+        gateway_handler_impl! {
+            $id, (Extension: Extension<Arc<crate::transport::operations::backend::BackendContext>>), context;
+            $($row)*
+        }
+    };
     ({ id: $id:ident, ctx: browser, $($row:tt)* }) => {
         gateway_handler_impl! {
             $id, (Extension: Extension<Option<Arc<BrowserRuntime>>>), context;

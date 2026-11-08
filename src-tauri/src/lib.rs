@@ -3,14 +3,12 @@ mod commands;
 mod power;
 mod startup;
 mod streams;
+mod update;
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use cockpit_core::HerdrAdapter;
-use cockpit_host::transport::shutdown::{HostShutdown, ShutdownPolicy};
+use cockpit_host::transport::{Transport, operations::backend::BackendContext, shutdown::HostShutdown};
 use tauri::Manager;
 
 use startup::NativeServices;
@@ -23,18 +21,26 @@ pub fn run() {
         browser_runtime,
         orchestration_runtime,
         shutdown_projects,
-        library,
-        library_sync_config,
+        library: _,
         window_config,
         startup_inspector,
+        backend_state_root,
+        backend_cli,
+        herdr_endpoint,
     } = startup::compose();
-    let mut library_sync_runtime = Some(startup::start_library_sync(&library, library_sync_config));
-    let shutdown_started = Arc::new(AtomicBool::new(false));
+    let backend_context = Arc::new(BackendContext::new(
+        backend_state_root,
+        backend_cli.clone().unwrap_or_else(|| "cockpit-cli".into()),
+        herdr_endpoint,
+        Transport::Native,
+        None,
+    ));
     let shutdown = HostShutdown::new(
         Some(orchestration_runtime.clone()),
         Some(shutdown_projects),
         Some(browser_runtime.clone()),
     );
+    let shutdown = Arc::new(update::NativeShutdown::new(shutdown));
     tauri::Builder::default()
         .plugin(
             tauri_plugin_opener::Builder::new()
@@ -44,6 +50,8 @@ pub fn run() {
         .manage(service)
         .manage(browser_runtime)
         .manage(orchestration_runtime)
+        .manage(backend_context.clone())
+        .manage(shutdown.clone())
         .manage(clipboard::TerminalFilesState::default())
         .manage(power::PowerState::default())
         .manage(StreamRegistry::new())
@@ -75,6 +83,16 @@ pub fn run() {
             main_window
                 .show()
                 .expect("failed to show the configured native window");
+            let backend_context = backend_context.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(cli) = backend_cli {
+                    if let Err(error) = cockpit_host::backend::ensure(
+                        &backend_context.state_root, &cli, &backend_context.herdr,
+                    ).await {
+                        eprintln!("Cockpit background service unavailable: {error}");
+                    }
+                }
+            });
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = startup_inspector.inspect().await {
                     eprintln!("failed to initialize Herdr: {error}");
@@ -89,25 +107,15 @@ pub fn run() {
             if matches!(&event, tauri::RunEvent::Exit) {
                 app.state::<clipboard::TerminalFilesState>().close();
             }
-            if matches!(
-                &event,
-                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-            ) {
-                drop(library_sync_runtime.take());
-            }
             if let tauri::RunEvent::ExitRequested {
                 api, code: None, ..
             } = event
             {
                 api.prevent_exit();
-                if shutdown_started.swap(true, Ordering::AcqRel) {
-                    return;
-                }
                 let shutdown = shutdown.clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    shutdown.run(ShutdownPolicy::Native).await;
-                    app.exit(0);
+                    shutdown.exit(app).await;
                 });
             }
         });

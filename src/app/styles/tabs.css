@@ -243,6 +243,11 @@
 .tab-strip-actions .tab-strip-action[aria-pressed="true"]:not(:disabled) { background: var(--select-fill); color: var(--accent); border-color: var(--border-strong); box-shadow: inset 0 var(--select-edge-size) 0 var(--select-edge); }
 
 .tab-strip-actions .update-chip { color: var(--accent); border-color: var(--accent); white-space: nowrap; }
+.tab-strip-actions .update-chip.is-error { color: var(--blocked); border-color: var(--blocked); }
+.update-command-dot { display: none; }
+.application-update-dialog { width: min(560px, 100%); }
+.application-update-dialog .is-error { color: var(--blocked); }
+
 
 @media (max-width: 800px) {
   .tab-toolbar { flex: 0 0 auto; flex-wrap: wrap; }
@@ -262,9 +267,11 @@
   .tab-space-context { max-width: 72px; margin: 0; padding-right: 6px; border: 0; }
   .tab-space-branch { display: none; }
   .tab-toolbar .tab-update-group, .tab-toolbar .tab-strip-separator { display: none; }
+  .update-command-dot { display: block; }
+  .application-update-dialog .task-setup-footer button { min-height: 44px; }
   .tab-strip-actions { height: 44px; gap: 0; padding: 0; }
-  .tab-strip-actions:has([aria-label="Commands"]) { flex: 1 1 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
-  .tab-strip-actions:has([aria-label="Commands"])::-webkit-scrollbar { display: none; }
+  .tab-strip-actions:has([aria-label^="Commands"]) { flex: 1 1 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+  .tab-strip-actions:has([aria-label^="Commands"])::-webkit-scrollbar { display: none; }
   .tab-strip-actions .tab-icon-button { width: 44px; min-width: 44px; flex-basis: 44px; }
   .tab-strip-actions .tab-strip-action { height: 44px; margin: 0; white-space: nowrap; }
   .tab-strip-actions .library-problems-pill { min-height: 44px; white-space: nowrap; }

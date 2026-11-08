@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import plistlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -105,7 +106,9 @@ class NativeInstallTests(unittest.TestCase):
         self.assertNotIn("omp_extension", receipt["artifact_sha256"])
         self.assertFalse((self.paths.app_root / "omp").exists())
         self.assertTrue(installer.uninstall(self.paths))
-        self.assertFalse(self.paths.app_root.exists())
+        self.assertEqual(self.paths.update_lock.stat().st_mode & 0o777, 0o600)
+        self.assertTrue(self.paths.update_lock.is_file())
+        self.assertFalse(self.paths.receipt.exists())
 
     def test_install_and_uninstall_leave_foreign_omp_paths_untouched(self) -> None:
         for kind in ("empty_directory", "extension_directory", "file"):
@@ -509,6 +512,62 @@ class NativeInstallTests(unittest.TestCase):
         self.assertFalse(installer.uninstall(self.paths))
         self.assertTrue(self.paths.receipt.exists())
         self.assertEqual(configuration.read_text(encoding="utf-8"), '{"keep": true}\n')
+
+    def test_publication_lock_contends_with_another_process_and_survives_uninstall(self) -> None:
+        self.paths.app_root.mkdir(parents=True)
+        self.paths.update_lock.touch(mode=0o600)
+        child = subprocess.Popen(
+            [sys.executable, "-c",
+             "import fcntl,sys; f=open(sys.argv[1], 'a+'); "
+             "fcntl.flock(f, fcntl.LOCK_EX); print('ready', flush=True); sys.stdin.read()",
+             str(self.paths.update_lock)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        )
+        try:
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            with self.assertRaisesRegex(installer.InstallError, "update_busy"):
+                with installer.update_lock(self.paths, timeout=0.01):
+                    self.fail("lock acquired while held by another process")
+        finally:
+            child.stdin.close()
+            child.wait(timeout=5)
+            child.stdout.close()
+        installer.install(self.paths, self.binary, self.cli_binary, self.icon, build_commit="abc123")
+        self.assertEqual(json.loads(self.paths.receipt.read_text())["build_commit"], "abc123")
+        inode = self.paths.update_lock.stat().st_ino
+        self.assertTrue(installer.uninstall(self.paths))
+        self.assertEqual(self.paths.update_lock.stat().st_ino, inode)
+
+    def test_update_lock_refuses_symlink(self) -> None:
+        self.paths.app_root.mkdir(parents=True)
+        target = self.root / "foreign"
+        target.write_text("unchanged")
+        self.paths.update_lock.symlink_to(target)
+        with self.assertRaises(installer.InstallError):
+            installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+        self.assertEqual(target.read_text(), "unchanged")
+
+    def test_update_lock_refuses_nonprivate_file(self) -> None:
+        self.paths.app_root.mkdir(parents=True)
+        self.paths.update_lock.touch()
+        self.paths.update_lock.chmod(0o644)
+        with self.assertRaisesRegex(installer.InstallError, "private regular file"):
+            installer.install(self.paths, self.binary, self.cli_binary, self.icon)
+
+    def test_build_embeds_frontend_in_host_on_both_platforms(self) -> None:
+        for platform in ("linux", "darwin"):
+            with self.subTest(platform=platform), mock.patch.object(installer.sys, "platform", platform), mock.patch.object(installer.subprocess, "run") as run:
+                installer.run_build(self.root, False)
+                self.assertEqual(run.call_args_list[0].args[0], ["bun", "run", "build"])
+                command = run.call_args_list[1].args[0]
+                options = run.call_args_list[1].kwargs
+                self.assertEqual(options["env"]["COCKPIT_EMBED_WEB_DIST"], str(self.root / "dist"))
+                config = json.loads(command[command.index("--config") + 1])
+                self.assertIsNone(config["build"]["beforeBuildCommand"])
+                if platform == "darwin":
+                    self.assertIn("MacOS/cockpit-cli", config["bundle"]["macOS"]["files"])
+                else:
+                    self.assertIn("--no-bundle", command)
 
     def test_xdg_paths_respect_disposable_environment(self) -> None:
         paths = installer.install_paths(None, {"HOME": str(self.root / "home"), "XDG_DATA_HOME": str(self.root / "data"), "XDG_BIN_HOME": str(self.root / "bin")})

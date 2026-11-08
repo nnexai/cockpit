@@ -3,45 +3,51 @@
 use std::{ffi::OsString, process::ExitCode};
 
 fn main() -> ExitCode {
-    // A compatibility probe must never initialize the GUI or contact Herdr.
-    // Only the separate host CLI implements the orchestration command contract.
-    if is_orchestration_cli_request(std::env::args_os().skip(1)) {
-        eprintln!("Cockpit is the graphical client; use cockpit-cli for orchestration commands");
-        return ExitCode::from(2);
+    match classify_gui_args(std::env::args_os().skip(1)) {
+        GuiArgs::Run => cockpit_tauri::run(),
+        GuiArgs::Help => println!("Cockpit graphical app\n\nUsage: cockpit [--help | --version]\n\nFor commands use cockpit-cli, for example cockpit-cli service start or cockpit-cli serve."),
+        GuiArgs::Version => println!("cockpit {}", env!("CARGO_PKG_VERSION")),
+        GuiArgs::Reject => {
+            eprintln!("cockpit is the graphical app; use cockpit-cli <command> (for example cockpit-cli service start or cockpit-cli serve)");
+            return ExitCode::from(2);
+        }
     }
-    cockpit_tauri::run();
     ExitCode::SUCCESS
 }
 
-fn is_orchestration_cli_request(mut args: impl Iterator<Item = OsString>) -> bool {
-    args.next().is_some_and(|arg| arg == "orchestration")
+#[derive(Debug, PartialEq, Eq)]
+enum GuiArgs { Run, Help, Version, Reject }
+
+fn classify_gui_args(mut args: impl Iterator<Item = OsString>) -> GuiArgs {
+    let Some(first) = args.next() else { return GuiArgs::Run };
+    if args.next().is_some() { return GuiArgs::Reject; }
+    if first == "--help" || first == "-h" { GuiArgs::Help }
+    else if first == "--version" || first == "-V" { GuiArgs::Version }
+    else { GuiArgs::Reject }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::is_orchestration_cli_request;
+    use super::{classify_gui_args, GuiArgs};
 
     #[test]
-    fn protocol_probe_is_rejected_before_gui_startup() {
-        assert!(is_orchestration_cli_request(
-            ["orchestration", "protocol", "--json"]
-                .into_iter()
-                .map(Into::into)
-        ));
+    fn cli_requests_never_start_gui() {
+        for args in [
+            vec!["orchestration", "protocol", "--json"],
+            vec!["orchestration"],
+            vec!["orchestration", "unknown"],
+            vec!["serve"],
+            vec!["--bogus"],
+            vec!["--help", "extra"],
+        ] {
+            assert_eq!(classify_gui_args(args.into_iter().map(Into::into)), GuiArgs::Reject);
+        }
     }
 
     #[test]
-    fn malformed_orchestration_commands_do_not_launch_the_gui() {
-        assert!(is_orchestration_cli_request(
-            ["orchestration"].into_iter().map(Into::into)
-        ));
-        assert!(is_orchestration_cli_request(
-            ["orchestration", "unknown"].into_iter().map(Into::into)
-        ));
-    }
-
-    #[test]
-    fn normal_gui_startup_does_not_claim_cli_support() {
-        assert!(!is_orchestration_cli_request(std::iter::empty()));
+    fn gui_args_classify_without_starting_gui() {
+        assert_eq!(classify_gui_args(std::iter::empty()), GuiArgs::Run);
+        assert_eq!(classify_gui_args(["--help"].into_iter().map(Into::into)), GuiArgs::Help);
+        assert_eq!(classify_gui_args(["--version"].into_iter().map(Into::into)), GuiArgs::Version);
     }
 }

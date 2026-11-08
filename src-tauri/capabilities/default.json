@@ -7,6 +7,10 @@
   ],
   "permissions": [
     "allow-cockpit-status",
+    "allow-cockpit-backend-status",
+    "allow-cockpit-backend-start",
+    "allow-cockpit-backend-restart",
+    "allow-cockpit-update-and-relaunch",
     "allow-cockpit-quota-status",
     "allow-cockpit-update-status",
     "allow-cockpit-update-install",

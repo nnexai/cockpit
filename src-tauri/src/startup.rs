@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use cockpit_core::{
     CockpitService,
-    config::{BrowserSection, ConfigurationFile, LibrarySyncConfiguration, WindowConfiguration},
+    config::{BrowserSection, ConfigurationFile, WindowConfiguration},
     credentials::ProviderCredentials,
-    library::{LibraryService, LibrarySyncRuntime},
+    library::LibraryService,
     projects::ProjectService,
     quota::QuotaService,
     sources::SourceService,
@@ -19,17 +19,20 @@ pub struct NativeServices {
     pub orchestration_runtime: Arc<OrchestrationRuntime>,
     pub shutdown_projects: Arc<ProjectService>,
     pub library: Arc<LibraryService>,
-    pub library_sync_config: LibrarySyncConfiguration,
     pub window_config: WindowConfiguration,
     pub startup_inspector: Arc<HerdrCliAdapter>,
+    pub backend_state_root: std::path::PathBuf,
+    pub backend_cli: Option<std::path::PathBuf>,
+    pub herdr_endpoint: cockpit_host::lifecycle::HerdrEndpoint,
 }
 
 struct CoreServices {
     inspector: Arc<HerdrCliAdapter>,
     startup_inspector: Arc<HerdrCliAdapter>,
     project_config: ProjectConfiguration,
-    library_sync_config: LibrarySyncConfiguration,
     window_config: WindowConfiguration,
+    backend_cli: Option<std::path::PathBuf>,
+    herdr_endpoint: cockpit_host::lifecycle::HerdrEndpoint,
     quota: Arc<QuotaService>,
     credentials: Arc<ProviderCredentials>,
     sources: Arc<SourceService>,
@@ -56,16 +59,19 @@ fn compose_core() -> CoreServices {
         .unwrap_or_else(|error| panic!("failed to load native window configuration: {error}"));
     let config =
         HerdrCliConfig::from_options(None, None, None).expect("failed to load Herdr configuration");
+    let herdr_endpoint = cockpit_host::lifecycle::HerdrEndpoint::from_config(
+        &config,
+        std::env::var_os("PATH").as_deref(),
+    );
     let inspector = Arc::new(HerdrCliAdapter::new(config).with_server_autostart());
     let startup_inspector = Arc::clone(&inspector);
     let project_config = configuration
         .project
         .resolve(None)
         .expect("failed to load project configuration");
-    let library_sync_config = configuration
-        .library_sync
-        .resolve()
-        .expect("failed to load Library synchronization configuration");
+    let backend_cli = cockpit_host::orchestration_runtime::cli_path(
+        cockpit_host::orchestration_runtime::CliProcessRole::Native,
+    ).map_err(|error| eprintln!("Cockpit CLI unavailable: {error}")).ok();
     let quota_config = configuration
         .quota
         .resolve()
@@ -94,7 +100,8 @@ fn compose_core() -> CoreServices {
         inspector,
         startup_inspector,
         project_config,
-        library_sync_config,
+        backend_cli,
+        herdr_endpoint,
         window_config,
         quota,
         credentials,
@@ -109,7 +116,8 @@ fn compose_runtimes(core: CoreServices) -> RuntimeServices {
         inspector,
         startup_inspector,
         project_config,
-        library_sync_config,
+        backend_cli,
+        herdr_endpoint,
         window_config,
         quota,
         credentials,
@@ -120,7 +128,6 @@ fn compose_runtimes(core: CoreServices) -> RuntimeServices {
     let browser_config = browser_config
         .resolve()
         .expect("failed to load browser configuration");
-    let paste_adapter = inspector.paste_adapter();
     let browser_service = Arc::new(
         cockpit_core::browser::BrowserService::new(
             browser_config,
@@ -128,20 +135,12 @@ fn compose_runtimes(core: CoreServices) -> RuntimeServices {
             inspector.clone(),
         )
         .expect("failed to initialize browser service")
-        .with_paste_adapter(paste_adapter.clone()),
+        .with_paste_adapter(inspector.paste_adapter()),
     );
-    let widgets = Arc::new(cockpit_core::widget::WidgetService::new(
-        inspector.clone(),
-        paste_adapter,
+    let browser_runtime = Arc::new(BrowserRuntime::observer(
+        std::path::PathBuf::from(&project_config.state_root),
+        browser_service,
     ));
-    let browser_runtime = Arc::new(
-        tauri::async_runtime::block_on(BrowserRuntime::start(
-            std::path::PathBuf::from(&project_config.state_root),
-            browser_service,
-            widgets,
-        ))
-        .expect("failed to initialize browser runtime"),
-    );
     let service = CockpitService::new(CockpitMode::Normal, inspector.clone())
         .with_projects(project_service)
         .with_quick_ask(cockpit_core::quick_ask::QuickAskService::new(inspector.quick_ask_adapter()))
@@ -172,11 +171,6 @@ fn compose_runtimes(core: CoreServices) -> RuntimeServices {
         )
         .expect("failed to initialize orchestration"),
     );
-    tauri::async_runtime::block_on(async {
-        orchestration_runtime
-            .start_owner(browser_runtime.is_owner().await)
-            .await;
-    });
     let service = service.with_orchestration(orchestration_runtime.service.clone());
     RuntimeServices {
         native: NativeServices {
@@ -185,9 +179,11 @@ fn compose_runtimes(core: CoreServices) -> RuntimeServices {
             orchestration_runtime,
             shutdown_projects,
             library,
-            library_sync_config,
             window_config,
             startup_inspector,
+            backend_state_root: std::path::PathBuf::from(&project_config.state_root),
+            backend_cli,
+            herdr_endpoint,
         },
         project_config,
         inspector,
@@ -256,16 +252,3 @@ fn compose_views(runtimes: RuntimeServices) -> NativeServices {
     native
 }
 
-pub fn start_library_sync(
-    library: &LibraryService,
-    configuration: LibrarySyncConfiguration,
-) -> LibrarySyncRuntime {
-    // Enter the same Tokio runtime as other native services before spawning.
-    // The event callback retains this guard until exit and cancels it before
-    // shutting down services that background synchronization can use.
-    tauri::async_runtime::block_on(async {
-        library
-            .start_sync(configuration)
-            .expect("failed to initialize Library synchronization")
-    })
-}

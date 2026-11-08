@@ -26,8 +26,8 @@ use axum::{
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     },
     http::{
-        HeaderMap, Request, StatusCode, Uri,
-        header::{HOST, ORIGIN},
+        HeaderMap, Method, Request, StatusCode, Uri,
+        header::{CONTENT_LENGTH, CONTENT_TYPE, HOST, ORIGIN},
     },
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -50,11 +50,63 @@ mod widgets;
 
 use session_socket::session_events;
 
-/// Configuration for the foreground HTTP gateway.
+include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
+
 #[derive(Clone)]
+enum WebAssets {
+    Directory(PathBuf),
+    Embedded,
+}
+
+impl WebAssets {
+    fn resolve(root: Option<&Path>) -> Result<Self, ServerError> {
+        match root {
+            Some(root) => Ok(Self::Directory(validate_static_root(root)?)),
+            None if !EMBEDDED_WEB_ASSETS.is_empty() => Ok(Self::Embedded),
+            None => Err(ServerError::WebAssetsUnavailable),
+        }
+    }
+
+    fn index(&self) -> Option<Vec<u8>> {
+        match self {
+            Self::Directory(root) => std::fs::read(root.join("index.html")).ok(),
+            Self::Embedded => embedded_asset("index.html").map(<[u8]>::to_vec),
+        }
+    }
+}
+
+
+fn frontend_entry(assets: &WebAssets) -> Option<String> {
+    let bytes = assets.index()?;
+    let html = std::str::from_utf8(&bytes).ok()?;
+    module_entry(html)
+}
+
+fn module_entry(html: &str) -> Option<String> {
+    for tag in html.split('<').filter_map(|part| part.strip_prefix("script ")) {
+        let tag = tag.split('>').next()?;
+        if !tag.contains("type=\"module\"") && !tag.contains("type='module'") {
+            continue;
+        }
+        for quote in ['"', '\''] {
+            let prefix = format!("src={quote}");
+            if let Some(src) = tag.split_once(&prefix).and_then(|(_, rest)| rest.split_once(quote)) {
+                return Some(src.0.to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn embedded_asset(path: &str) -> Option<&'static [u8]> {
+    EMBEDDED_WEB_ASSETS.iter().find_map(|(name, bytes)| (*name == path).then_some(*bytes))
+}
+
+/// Configuration for the foreground HTTP gateway.
 pub struct ServerConfig {
     pub bind: SocketAddr,
-    pub static_dir: PathBuf,
+    pub static_dir: Option<PathBuf>,
+    pub backend_context: Option<crate::transport::operations::backend::BackendContext>,
     pub service: CockpitService,
     pub browser_runtime: Option<Arc<BrowserRuntime>>,
     pub orchestration_runtime: Option<Arc<OrchestrationRuntime>>,
@@ -62,6 +114,8 @@ pub struct ServerConfig {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
+    #[error("web_assets_unavailable: no embedded web assets; provide --static-dir")]
+    WebAssetsUnavailable,
     #[error("bind address must be loopback: {0}")]
     NonLoopback(SocketAddr),
     #[error("static root `{path}` is missing or unreadable: {source}")]
@@ -130,11 +184,12 @@ pub fn build_router(
     expected_authority: SocketAddr,
 ) -> Result<Router, ServerError> {
     validate_bind(expected_authority)?;
-    let static_dir = validate_static_root(static_dir)?;
+    let assets = WebAssets::resolve(Some(static_dir.as_ref()))?;
     Ok(build_router_with_validated_root(
         service,
-        static_dir,
+        assets,
         expected_authority,
+        None,
         None,
         None,
     ))
@@ -142,22 +197,36 @@ pub fn build_router(
 
 fn build_router_with_validated_root(
     service: CockpitService,
-    static_dir: PathBuf,
+    assets: WebAssets,
     expected_authority: SocketAddr,
     browser_runtime: Option<Arc<BrowserRuntime>>,
     orchestration_runtime: Option<Arc<OrchestrationRuntime>>,
+    backend_context: Option<Arc<crate::transport::operations::backend::BackendContext>>,
 ) -> Router {
     let expected_authority = expected_authority.to_string();
     let expected_origin = format!("http://{expected_authority}");
-    let index = static_dir.join("index.html");
-    let static_service = ServeDir::new(static_dir)
-        .append_index_html_on_directories(true)
-        .fallback(tower::service_fn(move |request: Request<Body>| {
-            let index = index.clone();
-            async move { Ok::<_, Infallible>(static_not_found(request.uri(), index).await) }
-        }));
+    let static_service = tower::service_fn(move |request: Request<Body>| {
+        let assets = assets.clone();
+        async move {
+            let response = match assets {
+                WebAssets::Directory(root) => {
+                    use tower::ServiceExt;
+                    let index = root.join("index.html");
+                    ServeDir::new(root)
+                        .append_index_html_on_directories(true)
+                        .fallback(tower::service_fn(move |request: Request<Body>| {
+                            let index = index.clone();
+                            async move { Ok::<_, Infallible>(static_not_found(request.uri(), index).await) }
+                        }))
+                        .oneshot(request).await.unwrap().into_response()
+                }
+                WebAssets::Embedded => embedded_response(request),
+            };
+            Ok::<_, Infallible>(response)
+        }
+    });
 
-    operations::operation_routes()
+    let router = operations::operation_routes()
         .route("/api/v1/sessions/{session_id}/events", get(session_events))
         .route(
             "/api/v1/sessions/{session_id}/panes/{pane_id}/terminal",
@@ -170,8 +239,12 @@ fn build_router_with_validated_root(
         .fallback_service(static_service)
         .with_state(service)
         .layer(Extension(browser_runtime))
-        .layer(Extension(orchestration_runtime))
-        .layer(middleware::from_fn(
+        .layer(Extension(orchestration_runtime));
+    let router = match backend_context {
+        Some(context) => router.layer(Extension(context)),
+        None => router,
+    };
+    router.layer(middleware::from_fn(
             move |request: Request<Body>, next: Next| {
                 let allowed = authority_headers_match(
                     request.headers(),
@@ -277,6 +350,44 @@ fn valid_dimensions(cols: u16, rows: u16) -> bool {
 async fn api_not_found() -> Response {
     OperationError::with_rejection(Rejection::NotFound, "not_found", "API route not found")
         .into_response(StatusPolicy::Service)
+}
+
+fn embedded_response(request: Request<Body>) -> Response {
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    }
+    let path = match percent_decode_str(request.uri().path().trim_start_matches('/')).decode_utf8() {
+        Ok(path) if !path.as_bytes().contains(&0) => path,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    if path == "api" || path.starts_with("api/")
+        || path.split('/').any(|component| component == ".." || component == ".")
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let name = if path.is_empty() { "index.html" } else { path.as_ref() };
+    let directory_index = name.ends_with('/').then(|| format!("{name}index.html"));
+    let (name, bytes) = if let Some(bytes) = embedded_asset(name) {
+        (name, bytes)
+    } else if let Some((name, bytes)) = directory_index.as_deref()
+        .and_then(|name| embedded_asset(name).map(|bytes| (name, bytes)))
+    {
+        (name, bytes)
+    } else if Path::new(name).extension().is_none() {
+        match embedded_asset("index.html") {
+            Some(index) => ("index.html", index),
+            None => return StatusCode::NOT_FOUND.into_response(),
+        }
+    } else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let body = if request.method() == Method::HEAD { Body::empty() } else { Body::from(bytes) };
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, mime_guess::from_path(name).first_or_octet_stream().as_ref())
+        .header(CONTENT_LENGTH, bytes.len())
+        .body(body)
+        .expect("valid embedded asset response")
 }
 
 async fn static_not_found(uri: &Uri, index: PathBuf) -> Response {
@@ -448,8 +559,37 @@ async fn send_terminal_error(
 
 /// Bind and run the gateway in the foreground. The listening line is emitted only
 pub async fn serve(config: ServerConfig) -> Result<(), ServerError> {
+    serve_until(config, shutdown_signal()).await
+}
+
+/// Run the gateway until the supplied shutdown future resolves.
+pub async fn serve_until(
+    config: ServerConfig,
+    stop: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), ServerError> {
+    serve_inner(config, stop, None).await
+}
+
+/// Run a managed gateway, reporting the bound address once startup succeeds.
+pub async fn serve_managed(
+    config: ServerConfig,
+    stop: impl Future<Output = ()> + Send + 'static,
+    ready: tokio::sync::oneshot::Sender<SocketAddr>,
+) -> Result<(), ServerError> {
+    serve_inner(config, stop, Some(ready)).await
+}
+
+async fn serve_inner(
+    config: ServerConfig,
+    stop: impl Future<Output = ()> + Send + 'static,
+    ready: Option<tokio::sync::oneshot::Sender<SocketAddr>>,
+) -> Result<(), ServerError> {
     validate_bind(config.bind)?;
-    let static_dir = validate_static_root(&config.static_dir)?;
+    let assets = WebAssets::resolve(config.static_dir.as_deref())?;
+    let backend_context = config.backend_context.map(|mut context| {
+        context.set_frontend_entry(frontend_entry(&assets));
+        Arc::new(context)
+    });
     let listener = TcpListener::bind(config.bind)
         .await
         .map_err(ServerError::Serve)?;
@@ -457,30 +597,28 @@ pub async fn serve(config: ServerConfig) -> Result<(), ServerError> {
     let projects = config.service.projects().ok().cloned();
     let browser_runtime = config.browser_runtime.clone();
     let orchestration_runtime = config.orchestration_runtime.clone();
-    if let (Some(orchestration), Some(browser)) = (&orchestration_runtime, &browser_runtime) {
-        orchestration
-            .start_owner(browser.is_owner().await)
-            .await;
-    }
     let router = build_router_with_validated_root(
         config.service,
-        static_dir,
+        assets,
         actual,
         browser_runtime.clone(),
         orchestration_runtime.clone(),
+        backend_context,
     );
     println!("listening http://{actual}");
     std::io::stdout().flush().map_err(ServerError::Serve)?;
-    let shutdown = HostShutdown::new(orchestration_runtime, projects, browser_runtime);
+    if let Some(ready) = ready {
+        let _ = ready.send(actual);
+    }
+    let shutdown = HostShutdown::new(None, projects, browser_runtime);
     let graceful_shutdown = shutdown.clone();
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
-            shutdown_signal().await;
+            stop.await;
             graceful_shutdown.run(ShutdownPolicy::Gateway).await;
         })
         .await
         .map_err(ServerError::Serve);
-    shutdown.orchestration().await;
     result
 }
 
@@ -499,7 +637,41 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::{valid_resource_id, valid_session_id};
+    use super::{embedded_response, module_entry, valid_resource_id, valid_session_id};
+    use axum::{body::Body, http::{Request, StatusCode}};
+
+    #[test]
+    fn module_entry_is_taken_from_module_script() {
+        assert_eq!(
+            module_entry(r#"<script src="/other.js"></script><script type="module" crossorigin src="/assets/main-123.js"></script>"#),
+            Some("/assets/main-123.js".to_owned())
+        );
+        assert_eq!(module_entry("<script type='module' src='/assets/main.js'></script>"), Some("/assets/main.js".to_owned()));
+        assert_eq!(module_entry("<script src='/other.js'></script>"), None);
+    }
+
+    #[test]
+    fn embedded_paths_reject_traversal_and_non_get_methods() {
+        let traversal = Request::builder().uri("/%2e%2e/secret").body(Body::empty()).unwrap();
+        assert_eq!(embedded_response(traversal).status(), StatusCode::NOT_FOUND);
+        let post = Request::builder().method("POST").uri("/").body(Body::empty()).unwrap();
+        assert_eq!(embedded_response(post).status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[test]
+    fn embedded_index_and_spa_fallback_follow_asset_availability() {
+        let request = || Request::builder().uri("/some/client/route").body(Body::empty()).unwrap();
+        let response = embedded_response(request());
+        if super::EMBEDDED_WEB_ASSETS.is_empty() {
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert!(matches!(super::WebAssets::resolve(None), Err(super::ServerError::WebAssetsUnavailable)));
+        } else {
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["content-type"], "text/html");
+            let missing = Request::builder().uri("/assets/missing.js").body(Body::empty()).unwrap();
+            assert_eq!(embedded_response(missing).status(), StatusCode::NOT_FOUND);
+        }
+    }
 
     #[test]
     fn resource_ids_accept_herdr_qualified_panes() {
