@@ -34,7 +34,7 @@ fn denied(message: &'static str) -> io::Error { io::Error::new(io::ErrorKind::Pe
 
 pub(crate) fn socket_path(root: &Path) -> PathBuf { root.join("voice").join("owner.sock") }
 
-fn verify_dir(path: &Path, private: bool) -> io::Result<()> {
+pub(crate) fn verify_dir(path: &Path, private: bool) -> io::Result<()> {
     let m = std::fs::symlink_metadata(path)?;
     if !m.is_dir() || m.uid() != nix::unistd::geteuid().as_raw()
         || (private && m.mode() & 0o7777 != 0o700)

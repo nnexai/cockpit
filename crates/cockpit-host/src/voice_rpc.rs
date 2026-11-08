@@ -32,13 +32,15 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// HOME, PATH, LANG, TMPDIR and an optional OMP agent directory are supplied
 /// explicitly by the trusted owner; other ambient variables are not inherited.
-/// OMP's native-cache and session-directory overrides are rooted in `cwd`.
+/// The owner supplies a persistent private native cache; the session-directory
+/// override is rooted in `cwd`.
 /// `cwd` must be a private, isolated directory managed by the owner, not a
 /// supervisor checkout. The shared agent DB may receive normal authentication
 /// refresh and bookkeeping writes, and other agent-directory state may change.
 pub struct VoiceRpcConfig {
     pub executable: PathBuf,
     pub cwd: PathBuf,
+    pub natives_dir: PathBuf,
     pub home: OsString,
     pub agent_dir: Option<OsString>,
     pub path: Option<OsString>,
@@ -100,7 +102,7 @@ impl VoiceRpc {
     /// initial ready frame, and return an owned bridge. The caller is responsible
     /// for ensuring executable and directory provenance and directory isolation.
     pub async fn spawn(config: VoiceRpcConfig) -> Result<Self, VoiceRpcError> {
-        if !config.executable.is_absolute() || !config.cwd.is_absolute()
+        if !config.executable.is_absolute() || !config.cwd.is_absolute() || !config.natives_dir.is_absolute()
             || config.home.is_empty() || config.startup_timeout.is_zero()
             || config.command_timeout.is_zero()
         {
@@ -112,8 +114,8 @@ impl VoiceRpc {
             "--no-skills", "--no-rules", "--no-context-files",
         ]).current_dir(&config.cwd)
             .env_clear().env("HOME", &config.home)
-            // Isolate writable native and session state without redirecting auth.
-            .env("PI_NATIVES_DIR", config.cwd.join("natives"))
+            // Keep native and session state isolated without redirecting auth.
+            .env("PI_NATIVES_DIR", &config.natives_dir)
             .env("PI_CODING_AGENT_SESSION_DIR", config.cwd.join("sessions"))
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null())
             .kill_on_drop(true);

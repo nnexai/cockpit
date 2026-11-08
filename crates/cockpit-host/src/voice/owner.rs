@@ -1,11 +1,11 @@
 //! Singleton owner of the isolated voice RPC process and its supervisor bridge.
-use std::{collections::{HashSet, VecDeque}, ffi::OsString, future::Future, os::unix::fs::DirBuilderExt, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::{HashSet, VecDeque}, ffi::OsString, future::Future, io, os::unix::fs::DirBuilderExt, path::{Path, PathBuf}, pin::Pin, sync::Arc, time::Duration};
 use cockpit_protocol::{orchestration::{HandoffBinding, HandoffBindingRecord, HandoffRecipient, InboxEntryKind, InboxRequest, InboxSource, LiaisonLookupRequest, LiaisonLookupResponse, NativeProcessIdentity, OperatorOrigin, OrchestrationAction, OrchestrationMutationRequest, OrchestrationSnapshotRequest, OrchestrationWaitRequest}, voice::{VoiceConnectRequest, VoiceConnectResponse, VoiceControl, VoiceControlRequest, VoiceEvent, VoiceEventKind, VoiceEventsRequest, VoiceEventsResponse, VoiceTranscriptRole}};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 use uuid::Uuid;
 use crate::{orchestration_runtime::OrchestrationRuntime, voice_rpc::{VoiceRpc, VoiceRpcConfig}};
-use super::socket::{Operation, Origin, Request};
+use super::socket::{self, Operation, Origin, Request};
 
 /// Fresh, typed endpoint and optional explicit project identity from the owner service.
 #[derive(Clone)]
@@ -54,6 +54,27 @@ const MAX_WAIT_MS: u32 = 25_000;
 struct PrivateCwd(PathBuf);
 impl Drop for PrivateCwd { fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); } }
 
+// Validate each directory before creating anything inside it. In particular,
+// an existing symlink must not redirect creation into an unrelated directory.
+fn prepare_natives_dir(cache_root: &Path) -> io::Result<PathBuf> {
+    if !cache_root.is_absolute() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "voice cache root must be absolute"));
+    }
+    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(cache_root)?;
+    socket::verify_dir(cache_root, false)?;
+    let voice = cache_root.join("voice");
+    let natives = voice.join("omp-natives");
+    for path in [&voice, &natives] {
+        match std::fs::DirBuilder::new().mode(0o700).create(path) {
+            Ok(()) => {},
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {},
+            Err(e) => return Err(e),
+        }
+        socket::verify_dir(path, true)?;
+    }
+    Ok(natives)
+}
+
 struct Journal { call_id: String, generation: u64, events: VecDeque<VoiceEvent>, next: u64, ended: bool }
 impl Journal {
     fn push(&mut self, event: VoiceEventKind) {
@@ -70,12 +91,12 @@ enum Command { Stop(oneshot::Sender<Result<(), String>>), Mute(bool, oneshot::Se
 struct State { generation: u64, active: Option<Active>, shutdown: bool }
 
 pub struct VoiceOwner {
-    runtime: Arc<OrchestrationRuntime>, executable: PathBuf, agent_dir: Option<OsString>, validate_session: SessionValidator,
+    runtime: Arc<OrchestrationRuntime>, executable: PathBuf, agent_dir: Option<OsString>, cache_root: PathBuf, validate_session: SessionValidator,
     state: Mutex<State>,
 }
 impl VoiceOwner {
-    pub fn new(runtime: Arc<OrchestrationRuntime>, executable: PathBuf, agent_dir: Option<OsString>, validate_session: SessionValidator) -> Self {
-        Self { runtime, executable, agent_dir, validate_session, state: Mutex::new(State { generation: 0, active: None, shutdown: false }) }
+    pub fn new(runtime: Arc<OrchestrationRuntime>, executable: PathBuf, agent_dir: Option<OsString>, cache_root: PathBuf, validate_session: SessionValidator) -> Self {
+        Self { runtime, executable, agent_dir, cache_root, validate_session, state: Mutex::new(State { generation: 0, active: None, shutdown: false }) }
     }
     pub async fn handle(self: &Arc<Self>, request: Request) -> Result<Value, String> {
         let origin = match request.origin { Origin::Native => OperatorOrigin::Native, Origin::Web => OperatorOrigin::Browser };
@@ -129,10 +150,11 @@ impl VoiceOwner {
         let instance = (self.validate_session)(request.session_id.clone(), root.clone(), request.project_scope.clone(), origin).await?;
         if !instance.matches_selection(&request.session_id, &request.project_scope) { return Err("session scope identity unavailable or mismatched".into()); }
         let home = std::env::var_os("HOME").filter(|v| !v.is_empty()).ok_or("HOME unavailable")?;
+        let natives_dir = prepare_natives_dir(&self.cache_root).map_err(|e| format!("voice native cache preparation failed: {e}"))?;
         let cwd = std::env::temp_dir().join(format!("cockpit-voice-{}", Uuid::new_v4()));
         std::fs::DirBuilder::new().mode(0o700).create(&cwd).map_err(|e| e.to_string())?;
         let cwd_guard = PrivateCwd(cwd.clone());
-        let config = VoiceRpcConfig { executable: self.executable.clone(), cwd: cwd.clone(), home, agent_dir: self.agent_dir.clone(), path: std::env::var_os("PATH"), lang: std::env::var_os("LANG"), tmpdir: None::<OsString>, startup_timeout: Duration::from_secs(30), command_timeout: Duration::from_secs(60) };
+        let config = VoiceRpcConfig { executable: self.executable.clone(), cwd: cwd.clone(), natives_dir, home, agent_dir: self.agent_dir.clone(), path: std::env::var_os("PATH"), lang: std::env::var_os("LANG"), tmpdir: None::<OsString>, startup_timeout: Duration::from_secs(30), command_timeout: Duration::from_secs(60) };
         let mut rpc = match VoiceRpc::spawn(config).await { Ok(rpc) => rpc, Err(e) => { let _ = std::fs::remove_dir_all(&cwd); return Err(e.to_string()); } };
         let mut events = rpc.take_events().ok_or("voice events unavailable")?;
         let tools = vec![json!({"name":"supervisor_handoff","description":"Send a complete contextual user request or explicitly requested message to the current authoritative supervisor. Do not call for ordinary conversation or each transcript frame.","parameters":{"type":"object","properties":{"text":{"type":"string","description":"The user's request with the relevant conversation context and any explicitly stated project scope"}},"required":["text"],"additionalProperties":false}})];
@@ -464,6 +486,59 @@ async fn handoff(runtime: &OrchestrationRuntime, validate: &SessionValidator, se
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    fn cache_fixture() -> PrivateCwd {
+        let path = std::env::temp_dir().join(format!("voice-cache-test-{}", Uuid::new_v4()));
+        std::fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        PrivateCwd(path)
+    }
+
+    #[test]
+    fn native_cache_is_private_persistent_and_concurrent() {
+        let fixture = cache_fixture();
+        let root = fixture.0.join("cache");
+        let threads: Vec<_> = (0..8).map(|_| {
+            let root = root.clone();
+            std::thread::spawn(move || prepare_natives_dir(&root).unwrap())
+        }).collect();
+        let leaf = root.join("voice/omp-natives");
+        for thread in threads { assert_eq!(thread.join().unwrap(), leaf); }
+        std::fs::write(leaf.join("existing-addon"), b"preserve").unwrap();
+        assert_eq!(prepare_natives_dir(&root).unwrap(), leaf);
+        assert_eq!(std::fs::read(leaf.join("existing-addon")).unwrap(), b"preserve");
+        for path in [root.join("voice"), leaf] {
+            assert_eq!(std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777, 0o700);
+        }
+    }
+
+    #[test]
+    fn native_cache_rejects_unsafe_directories_without_following_symlinks() {
+        let fixture = cache_fixture();
+        let root = fixture.0.join("cache");
+        let outside = fixture.0.join("outside");
+        std::fs::DirBuilder::new().mode(0o700).create(&outside).unwrap();
+        symlink(&outside, &root).unwrap();
+        assert!(prepare_natives_dir(&root).is_err());
+        assert!(!outside.join("voice").exists());
+        std::fs::remove_file(&root).unwrap();
+        std::fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+        symlink(&outside, root.join("voice")).unwrap();
+        assert!(prepare_natives_dir(&root).is_err());
+        assert!(!outside.join("omp-natives").exists());
+        std::fs::remove_file(root.join("voice")).unwrap();
+        std::fs::DirBuilder::new().mode(0o700).create(root.join("voice")).unwrap();
+        symlink(&outside, root.join("voice/omp-natives")).unwrap();
+        assert!(prepare_natives_dir(&root).is_err());
+        std::fs::remove_file(root.join("voice/omp-natives")).unwrap();
+        std::fs::DirBuilder::new().mode(0o700).create(root.join("voice/omp-natives")).unwrap();
+        std::fs::set_permissions(root.join("voice/omp-natives"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(prepare_natives_dir(&root).is_err());
+        std::fs::set_permissions(root.join("voice/omp-natives"), std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::set_permissions(root.join("voice"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(prepare_natives_dir(&root).is_err());
+        assert!(prepare_natives_dir(Path::new("relative")).is_err());
+    }
 
     fn identity() -> ScopeIdentity {
         ScopeIdentity {

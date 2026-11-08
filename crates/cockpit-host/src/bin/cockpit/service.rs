@@ -467,6 +467,7 @@ async fn run_owner(
             orchestration.clone(),
             omp_executable,
             std::env::var_os("PI_CODING_AGENT_DIR"),
+            PathBuf::from(&projects.cache_root),
             voice_validator(orchestration.clone(), adapter),
         ));
         let sync = service

@@ -18,6 +18,8 @@ Each root environment variable overrides the corresponding top-level TOML key; o
 
 Repository discovery uses invocation roots, then the platform path-list `COCKPIT_REPOSITORY_ROOTS`, then TOML `repository_roots`, then the current directory. It enumerates supported repositories under those roots, not a hard-coded project path. `branch_template` defaults to `cockpit/{repo}/{task_id}` and `checkout_template` to `{repo}-{task_id}`. Issue metadata can supply task type/identifier; review artifacts can supply a source branch. Explicit user branch/location values override derivation.
 
+Voice stores its OMP native cache under `cache_root/voice/omp-natives`, separately from the user's OMP cache. The `voice` and `omp-natives` directories must be owned by the current user and private (mode 0700); Voice refuses unsafe existing directories.
+
 File-picker cache entries are persisted path-only hints under `cache_root`; opens still re-enumerate the authorized root. [file_index_cache.rs](../crates/cockpit-core/src/file_index_cache.rs) owns this cache, not file content or authorization. Library limits are bounded in [limits.rs](../crates/cockpit-core/src/config/limits.rs), separately from synchronization settings:
 
 ```toml
