@@ -251,7 +251,8 @@ pub fn latest_progress_sequences(messages: &[Message], run_id: &str) -> HashSet<
     let mut latest = HashMap::new();
     for message in messages.iter().filter(|message| {
         message.to_run_id == run_id
-            && message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Progress)
+            && message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Progress
+                && WorkerCheckpoint::decode(report.plan.as_deref()).is_none())
     }) {
         let sender = match &message.from {
             ActorRef::Run { run_id } => Some(run_id.as_str()),
@@ -263,7 +264,8 @@ pub fn latest_progress_sequences(messages: &[Message], run_id: &str) -> HashSet<
 }
 
 fn deliverable(message: &Message, latest_progress: &HashSet<u64>) -> bool {
-    !message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Progress)
+    !message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Progress
+        && WorkerCheckpoint::decode(report.plan.as_deref()).is_none())
         || latest_progress.contains(&message.seq)
 }
 

@@ -181,7 +181,7 @@ pub(crate) fn snapshot(
         RuntimeObservation::Unavailable { .. } => HashMap::new(),
     };
     let (attention, questions) = project_attention(
-        &runs, &inboxes, &observations, &intents, &run_by_id, &state.messages,
+        &runs, &inboxes, &observations, &intents, &run_by_id, state,
         AttentionClock { at: clock, text: now },
     );
     let unreflected_inputs = unreflected_inputs(&runs, &messages);
@@ -274,18 +274,19 @@ fn project_attention(
     observations: &HashMap<&str, &RunObservation>,
     intents: &[&TaskIntent],
     run_by_id: &HashMap<&str, &Run>,
-    events: &[Message],
+    state: &OrchestrationState,
     clock: AttentionClock<'_>,
 ) -> (Vec<Attention>, Vec<QuestionStatus>) {
     let mut attention = Vec::new();
     let mut questions = Vec::new();
     for run in runs {
         let inbox: &[&Message] = inboxes.get(run.run_id.as_str()).map_or(&[], Vec::as_slice);
-        let run_questions = question_statuses(run, inbox, events);
+        let run_questions = question_statuses(run, inbox, &state.messages);
         derive_attention(
             run,
             inbox,
             &run_questions,
+            current_worker_waiting(state, run),
             observations.get(run.run_id.as_str()).copied(),
             clock.at,
             clock.text,
@@ -350,6 +351,7 @@ fn project_board(
                 view.lane = lane(&view.task, &view.dependencies, current, &intent_runs);
                 view.scheduled = state.task_ownership.iter().any(|record|
                     record.root_id == root_id && record.task_id == view.task.task_id && record.schedule.is_some());
+                view.worker_waiting = (!view.task.checked).then(|| current.and_then(|run| worker_waiting(state, run))).flatten();
                 view.waiting = task_wait(state, root_id, view, current, &titles);
                 view.project = task_project(state, root_id, &view.task.task_id, runtime);
                 view.attempt = current.filter(|run| run.stage != RunStage::Closed).map(|run| AttemptBadge {
@@ -378,6 +380,32 @@ fn project_board(
         }
     };
     Ok(board)
+}
+
+pub(super) fn worker_waiting(state: &OrchestrationState, run: &Run) -> Option<TaskWait> {
+    if run.stage != RunStage::Working { return None; }
+    // Only an explicit resume checkpoint ends a stated wait. Interim
+    // reports, ordinary progress, questions and receipts are independent.
+    let latest = state.messages.iter().rev().filter(|message|
+        !message.stale && matches!(&message.from, ActorRef::Run { run_id } if run_id == &run.run_id))
+        .filter_map(|message| {
+            let report = message.report.as_ref()?;
+            if report.kind == ReportKind::Result { return Some((report, None)); }
+            if report.kind != ReportKind::Progress { return None; }
+            let checkpoint = WorkerCheckpoint::decode(report.plan.as_deref())?;
+            match checkpoint.kind {
+                WorkerCheckpointKind::Waiting | WorkerCheckpointKind::Resumed => Some((report, Some(checkpoint.kind))),
+                WorkerCheckpointKind::Interim => None,
+            }
+        }).next();
+    let (report, Some(WorkerCheckpointKind::Waiting)) = latest? else { return None };
+    Some(TaskWait { cause: TaskWaitCause::WorkerWaiting, since: Some(report.at.clone()),
+        held_by: vec![], code: None, detail: Some(report.summary.clone()), next_automatic: false })
+}
+
+pub(super) fn current_worker_waiting(state: &OrchestrationState, run: &Run) -> bool {
+    run.task_id.as_deref().and_then(|task_id| current_task_run(state, &run.root_id, task_id))
+        .is_some_and(|current| current.run_id == run.run_id) && worker_waiting(state, run).is_some()
 }
 
 fn task_wait(
@@ -411,6 +439,9 @@ fn task_wait(
         if let Some(question) = question_statuses(run, &inbox, &state.messages).into_iter()
             .find(|question| matches!(question.receipt, QuestionReceipt::Unresolved)) {
             return make(TaskWaitCause::Question, Some(question.asked_at), vec![], None, None);
+        }
+        if view.worker_waiting.is_some() {
+            return view.worker_waiting.clone();
         }
         if run.stage == RunStage::Reported {
             return make(TaskWaitCause::Review, run.result.as_ref().map(|report| report.at.clone()), vec![], None, None);
@@ -720,6 +751,7 @@ fn derive_attention(
     run: &Run,
     inbox: &[&Message],
     questions: &[QuestionStatus],
+    worker_waiting: bool,
     observation: Option<&RunObservation>,
     clock: OffsetDateTime,
     now: &str,
@@ -799,6 +831,7 @@ fn derive_attention(
             if run.stage == RunStage::Working
                 && run.result.is_none()
                 && needs_input.is_none()
+                && !worker_waiting
                 && matches!(observation.agent_status.as_deref(), Some("idle" | "done"))
                 && let Some(brief) = work {
                     let mut since = brief.created_at.as_str();
@@ -1002,6 +1035,7 @@ mod tests {
                 scheduled: false,
                 attempt: None,
                 waiting: None,
+                worker_waiting: None,
                 project: None,
                 dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: Vec::new(), problems: Vec::new() },
             }],
@@ -1315,6 +1349,56 @@ mod tests {
         assert_eq!(wait(&durable).cause, TaskWaitCause::Prerequisites);
         durable.runs[1].stage = RunStage::Reported;
         assert_eq!(wait(&durable).cause, TaskWaitCause::Review);
+    }
+
+    #[test]
+    fn declared_wait_survives_interim_and_question_until_explicit_resume() {
+        let mut durable = state(worker(RunStage::Working));
+        let view = board().tasks.remove(0);
+        let titles = HashMap::new();
+        let wait = |state: &OrchestrationState| {
+            let mut view = view.clone();
+            view.worker_waiting = worker_waiting(state, &state.runs[1]);
+            task_wait(state, ROOT, &view, Some(&state.runs[1]), &titles)
+        };
+        let report = |id: &str, kind, summary: &str| Report {
+            message_id: id.into(), kind, outcome: None, summary: summary.into(),
+            plan: None, source_output: None, card: None, at: START.into(),
+        };
+        let checkpoint = |kind| Some(WorkerCheckpoint { kind, artifacts: vec![] }.encode());
+        let mut stated_report = report("wait", ReportKind::Progress, "Waiting for external review");
+        stated_report.plan = checkpoint(WorkerCheckpointKind::Waiting);
+        durable.runs[1].last_report = Some(stated_report);
+        record_main_report(&mut durable, 1);
+        let mut partial = report("partial", ReportKind::Progress, "Evidence: /tmp/report");
+        partial.plan = checkpoint(WorkerCheckpointKind::Interim);
+        durable.runs[1].last_report = Some(partial);
+        record_main_report(&mut durable, 1);
+        let stated = wait(&durable).unwrap();
+        assert_eq!(stated.cause, TaskWaitCause::WorkerWaiting);
+        assert_eq!(stated.detail.as_deref(), Some("Waiting for external review"));
+        assert!(!stated.next_automatic);
+        durable.runs[1].last_report = Some(report("ask", ReportKind::NeedsInput, "Choose"));
+        record_main_report(&mut durable, 1);
+        assert_eq!(wait(&durable).unwrap().cause, TaskWaitCause::Question);
+        let independent = worker_waiting(&durable, &durable.runs[1]).unwrap();
+        assert_eq!(independent.cause, TaskWaitCause::WorkerWaiting);
+        assert_eq!(independent.detail.as_deref(), Some("Waiting for external review"));
+        durable.messages.push(answer(DeliveryStage::Stored));
+        assert_eq!(wait(&durable).unwrap().cause, TaskWaitCause::WorkerWaiting);
+        durable.runs[1].last_report = Some(report("ordinary-progress", ReportKind::Progress, "Still working"));
+        record_main_report(&mut durable, 1);
+        assert_eq!(wait(&durable).unwrap().cause, TaskWaitCause::WorkerWaiting);
+        let mut resumed = report("resumed", ReportKind::Progress, "Resumed");
+        resumed.plan = checkpoint(WorkerCheckpointKind::Resumed);
+        durable.runs[1].last_report = Some(resumed);
+        record_main_report(&mut durable, 1);
+        assert!(wait(&durable).is_none());
+        assert!(worker_waiting(&durable, &durable.runs[1]).is_none());
+        durable.messages.last_mut().unwrap().stale = true;
+        assert_eq!(wait(&durable).unwrap().cause, TaskWaitCause::WorkerWaiting);
+        durable.runs[1].stage = RunStage::Reported;
+        assert_eq!(wait(&durable).unwrap().cause, TaskWaitCause::Review);
     }
 
     #[test]
@@ -1753,6 +1837,25 @@ mod tests {
         let observed = runs.iter().find(|run| run.run_id == WORKER).unwrap();
         assert_eq!(observed.workspace_id.as_deref(), Some("live-space"));
         assert_eq!(observed.tab_id.as_deref(), Some("live-tab"));
+    }
+
+    #[test]
+    fn stated_wait_suppresses_only_idle_without_report_attention() {
+        let mut durable = state(worker(RunStage::Working));
+        durable.messages.push(brief(MessageKind::WorkBrief, DeliveryStage::Acked));
+        let checkpoint = |id: &str, kind| Report { message_id: id.into(), kind: ReportKind::Progress,
+            outcome: None, summary: "Explicit state".into(),
+            plan: Some(WorkerCheckpoint { kind, artifacts: vec![] }.encode()),
+            source_output: None, card: None, at: START.into() };
+        durable.runs[1].last_report = Some(checkpoint("wait", WorkerCheckpointKind::Waiting));
+        record_main_report(&mut durable, 1);
+        let snapshot = project(&durable, Ok(runtime("done")));
+        assert!(!has(&snapshot, AttentionKind::IdleWithoutReport));
+        let RuntimeObservation::Fresh { runs, .. } = &snapshot.runtime else { panic!("fresh observation") };
+        assert_eq!(runs.iter().find(|run| run.run_id == WORKER).unwrap().agent_status.as_deref(), Some("done"));
+        durable.runs[1].last_report = Some(checkpoint("resume", WorkerCheckpointKind::Resumed));
+        record_main_report(&mut durable, 1);
+        assert!(has(&project(&durable, Ok(runtime("done"))), AttentionKind::IdleWithoutReport));
     }
 
     #[test]

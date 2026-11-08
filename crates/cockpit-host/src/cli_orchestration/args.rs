@@ -4,7 +4,7 @@ use clap::{Args, Subcommand, ValueEnum};
 use cockpit_protocol::{
     orchestration::{
         DispatchTarget, HandoffBinding, HandoffRecipient, MessageKind, OrchestrationAction, ReportKind, ReportOutcome,
-        TaskStepScope, ThreadCard, WorkerCleanupPolicy,
+        TaskStepScope, ThreadCard, WorkerCheckpoint, WorkerCheckpointKind, WorkerCleanupPolicy,
     },
     projects::{WorkspaceRecoveryAction, WorkspaceSetupRequest},
 };
@@ -900,6 +900,29 @@ operation's outcome is uncertain; never repeat it blindly."
         #[arg(long, value_enum)]
         recovery: Option<RecoveryArg>,
     },
+    /// Publish an interim deliverable, waiting reason, or explicit resumption.
+    #[command(group(clap::ArgGroup::new("checkpoint_kind").required(true).multiple(false).args(["interim", "waiting", "resume"])))]
+    Checkpoint {
+        /// Describe the deliverable, wait reason, or resumed work.
+        #[arg(long)]
+        summary: String,
+        #[arg(long)]
+        interim: bool,
+        #[arg(long)]
+        waiting: bool,
+        #[arg(long)]
+        resume: bool,
+        /// Absolute artifact path; repeat for multiple artifacts.
+        #[arg(long = "artifact")]
+        artifacts: Vec<String>,
+        /// Stable message ID; generated and printed when omitted.
+        #[arg(long)]
+        message_id: Option<String>,
+        #[arg(long = "image")]
+        images: Vec<PathBuf>,
+        #[arg(long = "image-id")]
+        image_ids: Vec<String>,
+    },
     /// Report upward with a required sender-chosen deduplication ID.
     #[command(after_long_help = REPORT_HELP)]
     Report {
@@ -1181,7 +1204,7 @@ pub(super) enum RunOperation {
 impl RunCommand {
     pub(super) fn take_image_paths(&mut self) -> Vec<PathBuf> {
         match self {
-            Self::Handoff { images, .. } | Self::Report { images, .. }
+            Self::Handoff { images, .. } | Self::Report { images, .. } | Self::Checkpoint { images, .. }
             | Self::Done { images, .. } | Self::Message { images, .. } => std::mem::take(images),
             _ => Vec::new(),
         }
@@ -1270,6 +1293,28 @@ impl RunCommand {
                 recovery: recovery.map(|RecoveryArg::AcceptExistingWorktree| {
                     WorkspaceRecoveryAction::AcceptExistingWorktree
                 }),
+            },
+            Self::Checkpoint { summary, interim, waiting, resume, artifacts, message_id, image_ids, .. } => {
+                let kind = match (interim, waiting, resume) {
+                    (true, false, false) => WorkerCheckpointKind::Interim,
+                    (false, true, false) => WorkerCheckpointKind::Waiting,
+                    (false, false, true) => WorkerCheckpointKind::Resumed,
+                    _ => return Err(CliError::usage("checkpoint requires exactly one of --interim, --waiting, or --resume")),
+                };
+                OrchestrationAction::Report {
+                    message_id: submission_id(message_id, "Message")?,
+                    kind: ReportKind::Progress,
+                    outcome: None,
+                    summary: bounded(summary)?,
+                    plan: Some(bounded(WorkerCheckpoint { kind, artifacts }.encode())?),
+                    thread_id: None,
+                    card: None,
+                    to_run_id: None,
+                    source_output: None,
+                    original_task_revision: None,
+                    original_claim_id: None,
+                    images: image_ids,
+                }
             },
             Self::Report {
                 kind,
@@ -1381,7 +1426,7 @@ impl RunCommand {
             return Err(CliError::new("actor_forbidden", "handoff requires --operator"));
         }
         if matches!(self, Self::Register { .. } | Self::Context | Self::Brief | Self::ProgressHistory { .. }
-            | Self::Answer { .. } | Self::Notify { .. } | Self::Done { .. } | Self::Report { .. }
+            | Self::Answer { .. } | Self::Notify { .. } | Self::Done { .. } | Self::Report { .. } | Self::Checkpoint { .. }
             | Self::Show { self_run: true, .. }
             | Self::ResourceRequest { .. } | Self::ResourceBuildRegister { .. }) {
             super::context::require_job(common)?;

@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
-import type { InboxLocation, InboxQuestion, InboxText, InboxThread, InboxView, OrchestrationAction, SessionSnapshotResponse, UnmanagedAgent } from "../../protocol/generated/v1";
+import type { InboxEntry, InboxLocation, InboxQuestion, InboxText, InboxThread, InboxView, OrchestrationAction, SessionSnapshotResponse, UnmanagedAgent } from "../../protocol/generated/v1";
 import type { AgentAttentionState } from "../session/agentAttention";
 import { agentContext, type AgentContext } from "../session/agentContext";
 import { deriveAgentQueue } from "../sidebar/agentAttentionModel";
@@ -11,7 +11,7 @@ import { deliveryLabel } from "./inboxDelivery";
 import { addBelow, answerDraftKey, carryAnswerDrafts, choiceOutcome, draftBadge, questionKey, strandedAnswerDrafts, threadDraftCount, plainQuestion, type StrandedDraft } from "./inboxDrafts";
 import { UiIcon, type UiIconName } from "../UiIcon";
 import { InboxFeedback } from "./InboxFeedback";
-import { InboxTimeline } from "./InboxTimeline";
+import { InboxTimeline, unreadInterim } from "./InboxTimeline";
 import { InboxWork } from "./InboxWork";
 import { useInboxImages } from "./useInboxImages";
 import "./inbox.css";
@@ -26,7 +26,7 @@ const threadHeadline = (thread: InboxThread) => thread.title.text.replace(/\s+/g
 
 function outcomeLine(thread: InboxThread) {
   const question = thread.questions.find(q => q.receipt.status === "unresolved");
-  const text = question?.text.text || thread.reply?.text || thread.next?.text;
+  const text = question?.text.text || thread.reply?.text || thread.timeline.find(entry => unreadInterim(thread, entry))?.text || thread.next?.text;
   const lines = text?.split(/\r?\n/).map(line => line.replace(/<[^>]*>|[*_`#>\[\]]/g, "").trim()).filter(Boolean) ?? [];
   return lines.find(line => line !== threadHeadline(thread)) || (thread.state === "handled" ? "Handled" : thread.state === "needs_you" ? "Awaiting your response" : "Waiting for an update");
 }
@@ -52,14 +52,18 @@ function questionLabels(view: InboxView | null, questions: InboxQuestion[]) {
 }
 /** State word, icon and tone of a thread; an unread result names its outcome in words as well as colour. */
 function tone(thread: InboxThread): { kind: string; icon: UiIconName; label: string } {
+  const open = thread.questions.filter(q => q.receipt.status === "unresolved").length;
+  const extra = thread.unread_interims.length ? ` · +${thread.unread_interims.length} interim` : "";
+  if (open) return { kind: "decision", icon: "help", label: `${open > 1 ? `${open} questions` : "Question"}${extra}` };
+  if (thread.unread_result_message_id) {
+    const outcome = thread.timeline.find(entry => entry.message_id === thread.unread_result_message_id)?.outcome;
+    const label = outcome === "failed" ? "Result · Failed" : outcome === "succeeded" ? "Result · Succeeded" : "Result ready";
+    return { kind: outcome === "failed" ? "blocked" : outcome === "succeeded" ? "done" : "review", icon: outcome === "failed" ? "alert" : outcome === "succeeded" ? "check-circle" : "eye", label: `${label}${extra}` };
+  }
+  if (thread.unread_interims.length) return { kind: "review", icon: "eye", label: "Interim update" };
   if (thread.state === "underway") return { kind: "work", icon: "work", label: "Working" };
   if (thread.state === "handled") return { kind: "done", icon: "check-circle", label: "Handled" };
-  if (thread.need === "answer") {
-    const outcome = thread.timeline.find(entry => entry.message_id === thread.unread_result_message_id)?.outcome;
-    return outcome === "failed" ? { kind: "blocked", icon: "alert", label: "Result · Failed" } : outcome === "succeeded" ? { kind: "done", icon: "check-circle", label: "Result · Succeeded" } : { kind: "review", icon: "eye", label: "Result ready" };
-  }
-  const open = thread.questions.filter(q => q.receipt.status === "unresolved").length;
-  return { kind: "decision", icon: "help", label: open > 1 ? `${open} questions` : thread.need === "decision" ? "Question" : "Needs you" };
+  return { kind: "decision", icon: "help", label: "Needs you" };
 }
 const srcKind = (value: InboxText) => value.source.kind === "owner_card" ? "ai" : value.source.kind;
 const srcLabel = (value: InboxText) => ({ ai: "AI summary", owner: "Owner", worker: "Worker claim", user: "Your request", recorded: "Recorded" })[srcKind(value)];
@@ -94,6 +98,10 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const [busy, setBusy] = useState(false);
   const [acknowledging, setAcknowledging] = useState<{ threadId: string; resultId: string } | null>(null);
   const [readError, setReadError] = useState("");
+  const [interimReadError, setInterimReadError] = useState("");
+  const [readingInterim, setReadingInterim] = useState<string | null>(null);
+  const interimActionsFocused = useRef(false);
+  const focusAfterInterimRead = useRef<string | null>(null);
   const acknowledgementDescription = useId();
   const [followupOpen, setFollowupOpen] = useState(false);
   const [announcement, setAnnouncement] = useState("");
@@ -219,6 +227,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   useEffect(() => {
     const trackFocus = (event: Event) => {
       resultActionsFocused.current = !!resultActionsRef.current?.contains(event.target as Node);
+      interimActionsFocused.current = event.target instanceof Element && !!event.target.closest("[data-interim-actions]");
     };
     document.addEventListener("focusin", trackFocus, true);
     document.addEventListener("pointerdown", trackFocus, true);
@@ -237,6 +246,13 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     }
     resultActionsFocused.current = false;
   }, [thread, announcement]);
+  useLayoutEffect(() => {
+    const readId = focusAfterInterimRead.current;
+    if (!readId || !thread || thread.unread_interims.some(item => JSON.stringify([item.run_id, item.message_id]) === readId)) return;
+    focusAfterInterimRead.current = null;
+    if (interimActionsFocused.current && (document.activeElement === document.body || (document.activeElement instanceof Element && !!document.activeElement.closest("[data-interim-actions]")))) timelineRef.current?.focus();
+    interimActionsFocused.current = false;
+  }, [thread]);
   const direct = selectedAgent?.agent;
   const matchedDirect = direct ? matchingAgent(direct) : undefined;
   const liveDirect = matchedDirect?.terminalId === selectedAgent?.terminalId ? matchedDirect : undefined;
@@ -411,6 +427,18 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     } catch (e) { if (mounted.current && selectionVersion.current === attempt) setReadError(`Couldn't acknowledge: ${e instanceof Error ? e.message : "Please try again."}`); }
     finally { lock.current = false; if (mounted.current) { setBusy(false); setAcknowledging(null); } }
   };
+  const markInterimRead = async (entry: InboxEntry) => {
+    const ref = thread && unreadInterim(thread, entry);
+    if (!ref || !thread || !view || !current || view.observation.status !== "fresh" || snapshot?.session_id !== sessionId || busy || lock.current) return;
+    const attempt = selectionVersion.current, key = JSON.stringify([ref.run_id, ref.message_id]);
+    lock.current = true; setBusy(true); setReadingInterim(key); setInterimReadError("");
+    try {
+      await client.orchestrationMutate({ session_id: sessionId, expected_revision: null, action: { action: "thread_mark_read", thread_id: thread.thread_id, through_message_id: ref.message_id, run_id: ref.run_id } });
+      if (mounted.current && selectionVersion.current === attempt) { focusAfterInterimRead.current = key; setAnnouncement("Interim acknowledged. Work continues."); }
+      refreshVersion.current++; wake.current?.();
+    } catch (e) { if (mounted.current && selectionVersion.current === attempt) setInterimReadError(`Couldn't acknowledge: ${e instanceof Error ? e.message : "Please try again."}`); }
+    finally { lock.current = false; if (mounted.current) { setBusy(false); setReadingInterim(null); } }
+  };
   const startFollowup = () => { setSelectedQuestion(""); setChoiceConfirm(null); setFollowupOpen(true); requestAnimationFrame(() => composerRef.current?.focus()); };
   const leaveDetail = () => { setMobileDetail(false); requestAnimationFrame(() => (originRef.current?.isConnected && originRef.current.offsetParent !== null ? originRef.current : newRef.current)?.focus()); };
   const recommendationIsChoice = !!thread?.recommendation && questions.some(q => q.choices.some(c => c.trim().toLowerCase() === thread.recommendation!.text.trim().toLowerCase()));
@@ -477,6 +505,17 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     <small className="inbox-result-help" aria-hidden="true">Acknowledging does not accept the work or notify the owner.</small>
     {view?.observation.status !== "fresh" && <small>Live sessions are unavailable; actions are paused.</small>}
   </div> : null;
+  const interimActions = (entry: InboxEntry) => {
+    const ref = thread && unreadInterim(thread, entry);
+    if (!ref) return null;
+    const key = JSON.stringify([ref.run_id, ref.message_id]);
+    return <div data-interim-actions className="inbox-result-actions" role="group" aria-label={`Interim actions for ${entry.task_title ?? "task"}, attempt ${ref.attempt}`}>
+      {interimReadError && <p role="alert">{interimReadError}</p>}
+      <div className="inbox-result-buttons"><button type="button" className="inbox-btn" onClick={startFollowup}>Follow up</button><button type="button" className="inbox-btn is-primary" title="Marks this update read. It does not answer questions, accept the work, or notify the worker." disabled={busy || !current || view?.observation.status !== "fresh" || snapshot?.session_id !== sessionId} onClick={() => void markInterimRead(entry)}>{readingInterim === key ? "Acknowledging…" : "Acknowledge interim"}</button></div>
+      <small className="inbox-result-help">Marks this update read. It does not answer questions, accept the work, or notify the worker.</small>
+      {view?.observation.status !== "fresh" && <small>Live sessions are unavailable; actions are paused.</small>}
+    </div>;
+  };
   const recommendationNote = thread?.recommendation && !recommendationIsChoice ? <div className="inbox-recommendation" role="note"><UiIcon name="spark" /><InboxFeedback text={thread.recommendation.text} /></div> : null;
   const sendControl = pending ? <button type="button" className="inbox-send is-retry" disabled={busy || snapshot?.session_id !== sessionId} onClick={() => void execute(pending)}>Retry original request</button> : <button type="submit" className="inbox-send" disabled={!view || snapshot?.session_id !== sessionId || mode === "choose" || (!text.trim() && ((mode !== "new" && mode !== "followup") || images.ids.length === 0)) || ((mode === "new" || mode === "followup") && !images.ready) || busy || view.observation.status !== "fresh" || (!!direct && (!directReady || !!visibleOutcome))}><UiIcon name="send" />{mode === "answer" ? "Answer" : mode === "new" ? "Start" : mode === "direct" ? "Send direct" : "Send"}</button>;
   const composer = (
@@ -547,7 +586,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
         {(["thread", "work"] as const).map(name => <button key={name} type="button" role="tab" id={`${viewId}-${name}`} aria-selected={detailView === name} aria-controls={`${viewId}-${name === "thread" ? "main" : "work"}`} tabIndex={detailView === name ? 0 : -1} onClick={() => setDetailView(name)}>{name === "thread" ? "Thread" : <>Work{" "}<span className="inbox-tab-count">{thread.tasks.length}</span></>}</button>)}
       </div><div className="inbox-body" data-view={detailView}><section className="inbox-main" id={`${viewId}-main`}>
         <span className="inbox-sr" role="status">{announcement}</span>
-        <div className="inbox-timeline" ref={timelineRef} role="region" aria-label="Thread timeline" tabIndex={0}><InboxTimeline thread={thread} view={view} client={client} sessionId={sessionId} ownerLabel={id => ownerLabel(view, id)} visible={visible && current} questionCard={question => { const index = questions.indexOf(question), key = answerDraftKey(thread.thread_id, question); return <InboxQuestionCard question={question} label={labels[index]!} imagesLabel={`Attached by ${source(question.text)}`} index={index} total={questions.length} selected={picked === question} updated={!!carried[key] && !!(drafts[key] ?? "").trim()} client={client} sessionId={sessionId} onSelect={pointer => pickTarget(questionKey(question), pointer)} />; }} resultActions={resultActions} acknowledged={acknowledged} recommendation={recommendationNote} /></div>
+        <div className="inbox-timeline" ref={timelineRef} role="region" aria-label="Thread timeline" tabIndex={0}><InboxTimeline thread={thread} view={view} client={client} sessionId={sessionId} ownerLabel={id => ownerLabel(view, id)} visible={visible && current} questionCard={question => { const index = questions.indexOf(question), key = answerDraftKey(thread.thread_id, question); return <InboxQuestionCard question={question} label={labels[index]!} imagesLabel={`Attached by ${source(question.text)}`} index={index} total={questions.length} selected={picked === question} updated={!!carried[key] && !!(drafts[key] ?? "").trim()} client={client} sessionId={sessionId} onSelect={pointer => pickTarget(questionKey(question), pointer)} />; }} resultActions={resultActions} interimActions={interimActions} acknowledged={acknowledged} recommendation={recommendationNote} /></div>
         {composer}
       </section><InboxWork id={`${viewId}-work`} thread={thread} view={view} client={client} sessionId={sessionId} open={open} liveOpen={view?.observation.status === "fresh"} diagnostics={<Evidence thread={thread} view={view} displayed={displayed} />} />
       </div></> : direct ? <><DetailHeader backRef={backRef} onBack={leaveDetail} tone="unknown" icon="user" title={direct.agent_name} facts={<p className="inbox-facts"><span>{direct.workspace_label} · {direct.tab_label}</span><span>Direct agent · {liveDirect?.agent.status || "status unavailable"}</span></p>}>

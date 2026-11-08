@@ -40,6 +40,97 @@ fn message_in_thread(message: &Message, thread_id: &str) -> bool {
     message.thread_id.as_deref() == Some(thread_id)
         || (message.thread_id.is_none() && message.message_id == thread_id)
 }
+/// A worker report is projected only through a durable link to that worker's
+/// own task and root. The report itself normally has no thread id.
+pub(super) fn linked_worker_interim(state: &OrchestrationState, session: &str, thread_id: &str, message: &Message) -> bool {
+    if message.kind != MessageKind::Report
+        || !message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Progress
+            && WorkerCheckpoint::decode(report.plan.as_deref()).is_some_and(|checkpoint| checkpoint.kind == WorkerCheckpointKind::Interim))
+        || message.thread_id.as_deref().is_some_and(|id| id != thread_id) {
+        return false;
+    }
+    let ActorRef::Run { run_id } = &message.from else { return false };
+    let Some(run) = state.runs.iter().find(|run| run.run_id == *run_id && run.session_id == session
+        && run.kind == RunKind::Worker && run.root_id != run.run_id) else { return false };
+    let Some(task_id) = run.task_id.as_deref() else { return false };
+    if !state.runs.iter().any(|root| root.run_id == run.root_id && root.root_id == root.run_id
+        && root.parent_run_id.is_none() && root.session_id == session)
+        || !state.thread_links.iter().any(|link| link.thread_id == thread_id
+            && link.root_id == run.root_id && link.task_id == task_id) { return false; }
+    let mut parent = run.parent_run_id.as_deref();
+    for _ in 0..state.runs.len() {
+        let Some(id) = parent else { return false };
+        let Some(ancestor) = state.runs.iter().find(|ancestor| ancestor.run_id == id
+            && ancestor.root_id == run.root_id && ancestor.session_id == session) else { return false };
+        if id == message.to_run_id { return true; }
+        parent = ancestor.parent_run_id.as_deref();
+    }
+    false
+}
+
+pub(super) fn current_worker_interim(state: &OrchestrationState, session: &str, thread_id: &str, message: &Message) -> bool {
+    if message.stale || !linked_worker_interim(state, session, thread_id, message) { return false; }
+    let ActorRef::Run { run_id } = &message.from else { return false };
+    let Some(run) = state.runs.iter().find(|run| run.run_id == *run_id && run.session_id == session) else { return false };
+    run.stage != RunStage::Closed && run.task_id.as_deref().and_then(|task_id|
+        projection::current_task_run(state, &run.root_id, task_id)).is_some_and(|current| current.run_id == *run_id)
+}
+
+fn attention_candidate(state: &OrchestrationState, session: &str, thread_id: &str, message: &Message) -> bool {
+    if message.kind != MessageKind::Report { return false; }
+    if linked_worker_interim(state, session, thread_id, message) { return true; }
+    message_in_thread(message, thread_id)
+        && message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Result)
+        && matches!(&message.from, ActorRef::Run { run_id } if state.runs.iter().any(|run|
+            run.run_id == *run_id && run.session_id == session && run.root_id == run.run_id
+            && run.parent_run_id.is_none() && matches!(run.kind, RunKind::Supervisor | RunKind::Adopted)))
+}
+
+/// Resolve the ID in this thread, never selecting an arbitrary sender when
+/// two reports reuse an ID.
+pub(super) fn read_target<'a>(state: &'a OrchestrationState, session: &str, thread_id: &str, id: &str, sender: Option<&str>) -> Option<&'a Message> {
+    let mut matches = state.messages.iter().filter(|message| message.message_id == id
+        && attention_candidate(state, session, thread_id, message)
+        && match (&message.from, sender) {
+            (ActorRef::Run { run_id }, Some(sender)) => run_id == sender && linked_worker_interim(state, session, thread_id, message),
+            (_, None) => !linked_worker_interim(state, session, thread_id, message),
+            _ => false,
+        });
+    let target = matches.next()?;
+    matches.next().is_none().then_some(target)
+}
+
+fn root_result_id_exists(state: &OrchestrationState, session: &str, thread_id: &str, id: &str) -> bool {
+    state.messages.iter().any(|message| message.message_id == id
+        && attention_candidate(state, session, thread_id, message)
+        && !linked_worker_interim(state, session, thread_id, message))
+}
+
+/// The marker is opaque to old readers and encodes the complete worker event
+/// identity without changing the persisted thread-read schema.
+pub(super) fn interim_read_key(state: &OrchestrationState, message: &Message) -> Option<String> {
+    let ActorRef::Run { run_id } = &message.from else { return None };
+    let run = state.runs.iter().find(|run| run.run_id == *run_id)?;
+    let task_id = run.task_id.as_deref()?;
+    let identity = serde_json::to_string(&(run_id, &message.to_run_id, &message.message_id, task_id, run.attempt)).ok()?;
+    Some(format!("cockpit-interim-read-v1:{identity}"))
+}
+
+pub(super) fn is_read(state: &OrchestrationState, session: &str, thread_id: &str, message: &Message) -> bool {
+    if linked_worker_interim(state, session, thread_id, message) {
+        let Some(key) = interim_read_key(state, message) else { return false };
+        return !root_result_id_exists(state, session, thread_id, &key)
+            && state.thread_reads.iter().any(|read| read.thread_id == thread_id && read.through_message_id == key);
+    }
+    state.thread_reads.iter().filter(|read| read.thread_id == thread_id).any(|read| {
+        !state.messages.iter().any(|candidate| linked_worker_interim(state, session, thread_id, candidate)
+            && interim_read_key(state, candidate).as_deref() == Some(read.through_message_id.as_str()))
+            && read_target(state, session, thread_id, &read.through_message_id, None)
+                .is_some_and(|mark| matches!((&mark.from, &message.from),
+                    (ActorRef::Run { run_id: left }, ActorRef::Run { run_id: right }) if left == right)
+                    && mark.to_run_id == message.to_run_id && mark.seq >= message.seq)
+    })
+}
 /// A report may start a thread, but cannot turn correlation with another
 /// owner's thread into authority. Explicit handoffs may name multiple owners.
 pub(super) fn check_report_authority(
@@ -123,6 +214,30 @@ fn insert_link(state: &mut OrchestrationState, thread_id: &str, root_id: &str, t
     true
 }
 
+/// Publish a task-only thread for an authorized worker's first interim when
+/// no existing thread links its task. Never attach it to another conversation.
+pub(super) fn link_interim_task(state: &mut OrchestrationState, run_index: usize) {
+    let run = &state.runs[run_index];
+    let Some(task_id) = run.task_id.clone() else { return };
+    let root_id = run.root_id.clone();
+    let run_id = run.run_id.clone();
+    if state.thread_links.iter().any(|link| link.root_id == root_id && link.task_id == task_id) {
+        return;
+    }
+    let thread_id = loop {
+        let candidate = id();
+        if !state.thread_links.iter().any(|link| link.thread_id == candidate)
+            && !state.thread_reads.iter().any(|read| read.thread_id == candidate)
+            && !state.widget_publications.iter().any(|publication| publication.thread_id == candidate)
+            && !state.messages.iter().any(|message| message.thread_id.as_deref() == Some(candidate.as_str())
+                || (message.thread_id.is_none() && message.message_id == candidate))
+        {
+            break candidate;
+        }
+    };
+    insert_link(state, &thread_id, &root_id, &task_id, ActorRef::Run { run_id });
+}
+
 /// Journal the link before the caller publishes the task document.
 pub(super) fn journal_task_link(ctx: &mut MutationCtx<'_>, root_id: &str, task_id: &str, thread_id: &str) -> Result<(), InspectionError> {
     check_link_authority(ctx, root_id, thread_id)?;
@@ -149,28 +264,35 @@ pub(super) fn link(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Re
 
 pub(super) fn mark_read(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
     operator(ctx.actor)?;
-    let OrchestrationAction::ThreadMarkRead { thread_id, through_message_id } = action else { unreachable!() };
+    let OrchestrationAction::ThreadMarkRead { thread_id, through_message_id, run_id: sender } = action else { unreachable!() };
     validate_thread_id(&thread_id)?;
-    let valid = ctx.state.messages.iter().enumerate().any(|(index, message)| {
-        message.message_id == through_message_id && message_in_thread(message, &thread_id)
-            && !message.stale && message.kind == MessageKind::Report
-            && message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Result)
-            && matches!(&message.from, ActorRef::Run { run_id } if ctx.state.runs.iter().any(|run|
-                run.run_id == *run_id && run.session_id == ctx.session_id && run.root_id == run.run_id
-                && run.parent_run_id.is_none() && matches!(run.kind, RunKind::Supervisor | RunKind::Adopted))
-                && !ctx.state.messages[index + 1..].iter().any(|later|
-                    !later.stale && message_in_thread(later, &thread_id)
-                    && matches!(&later.from, ActorRef::Run { run_id: sender } if sender == run_id)
-                    && later.report.as_ref().is_some_and(|report| matches!(report.kind, ReportKind::NeedsInput | ReportKind::Result))))
-    });
+    let Some(message) = read_target(ctx.state, ctx.session_id, &thread_id, &through_message_id, sender.as_deref()) else {
+        return Err(error("thread_result_invalid", "Read mark must identify an unambiguous attention report in this thread"));
+    };
+    let ActorRef::Run { run_id } = &message.from else { unreachable!() };
+    let is_interim = sender.is_some();
+    let valid = if is_interim {
+        current_worker_interim(ctx.state, ctx.session_id, &thread_id, message)
+    } else {
+        !message.stale && !ctx.state.messages.iter().skip_while(|candidate| !std::ptr::eq(*candidate, message)).skip(1).any(|later|
+            !later.stale && message_in_thread(later, &thread_id)
+                && matches!(&later.from, ActorRef::Run { run_id: sender } if sender == run_id)
+                && later.report.as_ref().is_some_and(|report| matches!(report.kind, ReportKind::NeedsInput | ReportKind::Result)))
+    };
     if !valid {
-        return Err(error("thread_result_invalid", "Read mark must identify a root Result in this thread"));
+        return Err(error("thread_result_invalid", "Read mark must identify a current attention report in this thread"));
     }
-    if ctx.state.thread_reads.iter().any(|read| read.thread_id == thread_id && read.through_message_id == through_message_id) {
+    if is_read(ctx.state, ctx.session_id, &thread_id, message) {
         return Ok(Applied::Document(OrchestrationActionResult::Done));
     }
-    ctx.state.thread_reads.retain(|read| read.thread_id != thread_id);
-    ctx.state.thread_reads.push(ThreadReadRecord { thread_id, through_message_id, origin: ActorRef::Operator, at: now() });
+    let read_id = if is_interim {
+        let key = interim_read_key(ctx.state, message).ok_or_else(|| error("thread_result_invalid", "Interim identity is unavailable"))?;
+        if root_result_id_exists(ctx.state, ctx.session_id, &thread_id, &key) {
+            return Err(error("thread_result_invalid", "Interim read identity is ambiguous"));
+        }
+        key
+    } else { through_message_id };
+    ctx.state.thread_reads.push(ThreadReadRecord { thread_id, through_message_id: read_id, origin: ActorRef::Operator, at: now() });
     Ok(Applied::Machine(OrchestrationActionResult::Done))
 }
 

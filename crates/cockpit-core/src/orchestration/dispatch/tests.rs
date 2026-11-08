@@ -281,6 +281,85 @@ fn idle_worker_notice_waits_for_deadline_and_survives_state_timestamp_changes() 
 }
 
 #[test]
+fn idle_notice_respects_worker_wait_and_can_recur_after_explicit_resume() {
+    use cockpit_protocol::orchestration::{ActorRef, MessageKind, Report, ReportKind, TaskOwner, WorkerCheckpoint, WorkerCheckpointKind};
+    let mut fixture = ReviewFixture::new(RunStage::Working);
+    fixture.worker_task(None);
+    let run = fixture.current().1;
+    let mut observed = runtime();
+    observed.panes[0].state_changed_at = Some("2000-01-01T00:00:00Z".into());
+    let publish = |kind, message_id: &str| {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let owner = &mut state.task_ownership[0];
+        owner.generation = 1;
+        owner.owner = Some(TaskOwner { run_id: run.run_id.clone(), conversation: None, claim_operation_id: "claim".into() });
+        let report = Report { message_id: message_id.into(), kind: ReportKind::Progress, outcome: None,
+            summary: "Explicit state".into(), plan: Some(WorkerCheckpoint { kind, artifacts: vec![] }.encode()),
+            source_output: None, card: None, at: "2000-01-01T00:00:00Z".into() };
+        super::super::messages::append(&mut state, super::super::messages::AppendMessage {
+            images: vec![], thread_id: None, handoff: None, from: ActorRef::Run { run_id: run.run_id.clone() },
+            to_run_id: &run.root_id, message_id, kind: MessageKind::Report, text: "Explicit state",
+            in_reply_to: None, report: Some(report), stale: false, escalated_from: None,
+        }).unwrap();
+        locked.save(&mut state).unwrap();
+    };
+    publish(WorkerCheckpointKind::Waiting, "wait");
+    fixture.service.record_observation(&observed, "test-session").unwrap();
+    let notices = |fixture: &ReviewFixture| fixture.service.store.lock().unwrap().read().unwrap().messages.iter()
+        .filter(|message| message.message_id.contains(":idle_without_report:")).count();
+    assert_eq!(notices(&fixture), 0);
+    publish(WorkerCheckpointKind::Resumed, "resume");
+    fixture.service.record_observation(&observed, "test-session").unwrap();
+    assert_eq!(notices(&fixture), 1);
+    publish(WorkerCheckpointKind::Waiting, "wait-again");
+    fixture.service.record_observation(&observed, "test-session").unwrap();
+    assert_eq!(notices(&fixture), 1);
+    publish(WorkerCheckpointKind::Resumed, "resume-again");
+    fixture.service.record_observation(&observed, "test-session").unwrap();
+    assert_eq!(notices(&fixture), 2);
+}
+
+#[test]
+fn idle_notice_is_suppressed_only_while_worker_question_is_unresolved() {
+    use cockpit_protocol::orchestration::{ActorRef, MessageKind, Report, ReportKind};
+    let mut fixture = ReviewFixture::new(RunStage::Working);
+    fixture.worker_task(None);
+    let run = fixture.current().1;
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let report = Report { message_id: "question".into(), kind: ReportKind::NeedsInput, outcome: None,
+            summary: "Which option?".into(), plan: None, source_output: None, card: None,
+            at: "2000-01-01T00:00:00Z".into() };
+        super::super::messages::append(&mut state, super::super::messages::AppendMessage {
+            images: vec![], thread_id: None, handoff: None, from: ActorRef::Run { run_id: run.run_id.clone() },
+            to_run_id: &run.root_id, message_id: "question", kind: MessageKind::Report, text: "Which option?",
+            in_reply_to: None, report: Some(report), stale: false, escalated_from: None,
+        }).unwrap();
+        locked.save(&mut state).unwrap();
+    }
+    let mut observed = runtime();
+    observed.panes[0].state_changed_at = Some("2000-01-01T00:00:00Z".into());
+    fixture.service.record_observation(&observed, "test-session").unwrap();
+    assert!(!fixture.service.store.lock().unwrap().read().unwrap().messages.iter()
+        .any(|message| message.message_id.contains(":idle_without_report:")));
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        super::super::messages::append(&mut state, super::super::messages::AppendMessage {
+            images: vec![], thread_id: None, handoff: None, from: ActorRef::Run { run_id: run.root_id.clone() },
+            to_run_id: &run.run_id, message_id: "answer", kind: MessageKind::Answer, text: "Option A",
+            in_reply_to: Some("question".into()), report: None, stale: false, escalated_from: None,
+        }).unwrap();
+        locked.save(&mut state).unwrap();
+    }
+    fixture.service.record_observation(&observed, "test-session").unwrap();
+    assert!(fixture.service.store.lock().unwrap().read().unwrap().messages.iter()
+        .any(|message| message.message_id.contains(":idle_without_report:")));
+}
+
+#[test]
 fn queued_resource_stall_waits_ten_minutes_and_notifies_once() {
     use cockpit_protocol::orchestration::{AttachmentReference, ResourceRequestRecord, ResourceRequestState, ResourceSourceIdentity};
     let mut fixture = ReviewFixture::new(RunStage::Working);

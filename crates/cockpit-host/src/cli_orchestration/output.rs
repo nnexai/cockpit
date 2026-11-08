@@ -216,6 +216,7 @@ fn print_waiting(waiting: &cockpit_protocol::orchestration::TaskWait) {
     let cause = match waiting.cause {
         TaskWaitCause::RecoveryBlocked => "recovery blocked",
         TaskWaitCause::Question => "question",
+        TaskWaitCause::WorkerWaiting => "worker waiting",
         TaskWaitCause::Review => "review",
         TaskWaitCause::Prerequisites => "prerequisites",
         TaskWaitCause::DependencyInput => "dependency input",

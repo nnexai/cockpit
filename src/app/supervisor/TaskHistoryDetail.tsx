@@ -30,6 +30,13 @@ function HistoryEventRow({ event }: { event: HistoryEvent }) {
       sub = event.answer ? `answered by ${by}${gap ? ` ${gap}${gap === "within a minute" ? "" : " later"}` : ""}` : event.open ? "waiting for an answer" : "not answered";
       break;
     }
+    case "interim":
+    case "waiting":
+    case "resumed":
+      label = event.kind === "interim" ? "Interim deliverable" : event.kind === "waiting" ? "Worker said it was waiting" : "Worker resumed";
+      tone = event.kind === "resumed" ? "" : " is-wait";
+      detail = <p className="liaison-result-summary">{event.summary}</p>;
+      break;
     case "result":
       label = `Result reported${event.outcome ? ` · ${event.outcome}` : ""}`;
       tone = event.outcome === "succeeded" ? " is-ok" : event.outcome === "failed" ? " is-bad" : "";
@@ -44,8 +51,8 @@ function HistoryEventRow({ event }: { event: HistoryEvent }) {
       detail = <><p className="liaison-result-summary is-full">{event.text ?? "Text isn't available in this view."}</p>{event.imageCount ? <p className="liaison-event-sub">{event.imageCount} image{event.imageCount === 1 ? "" : "s"} attached; not shown here.</p> : null}<p className="liaison-event-sub">{event.closed ? "Nothing is replayed. If it's still wanted, ask the liaison for a follow-up task." : "The liaison can wait for a new Result or send the task back."}</p></>;
       break;
     }
-    case "merged":
-      label = `Merged into ${event.target}`; tone = " is-ok"; detail = <Facts facts={event.facts} />;
+    case "integrated":
+      label = `Integrated into ${event.target}`; tone = " is-ok"; detail = <Facts facts={event.facts} />;
       break;
     case "recovery":
       label = event.phase === "blocked" ? "Recovery blocked" : event.phase === "connected" || event.phase === "reattached" ? "Recovered" : "Recovery in progress";
@@ -61,9 +68,10 @@ function HistoryEventRow({ event }: { event: HistoryEvent }) {
 export const waitCopy = {
   recovery_blocked: ["Worker recovery is blocked.", "The recovery blocker is resolved.", "The liaison resolves the blocker"],
   question: ["A worker question needs an answer.", "The question is answered.", "Answer through the liaison"],
+  worker_waiting: ["Worker says it is waiting.", "The worker explicitly resumes or the attempt ends.", "The liaison follows up with the worker"],
   review: ["The result is waiting for review.", "The liaison accepts or returns the result.", "The liaison reviews it"],
   prerequisites: ["Prerequisite tasks aren't done yet.", "Those tasks are done.", "Starts automatically"],
-  dependency_input: ["A prerequisite's output isn't in the target branch yet.", "That output is merged into the target branch.", "The liaison integrates the prerequisite"],
+  dependency_input: ["A prerequisite's output isn't in the target branch yet.", "That output is integrated into the target branch.", "The liaison integrates the prerequisite"],
   capacity: ["All worker slots for this project are in use.", "A worker slot frees up.", "Starts automatically"],
   resource: ["Waiting for a shared resource.", "The current holder releases it.", "Continues automatically"],
   schedule_hold: ["Scheduling is on hold.", "The hold is resolved.", "The liaison resolves the hold"],
@@ -71,9 +79,9 @@ export const waitCopy = {
 } as const satisfies Record<NonNullable<TaskView["waiting"]>["cause"], readonly [string, string, string]>;
 
 function TaskProgress({ view, history }: { view: TaskView; history: TaskHistory | null }) {
-  const merged = history?.sub?.kind === "merged";
-  const steps = ["Ready", "Working", "Review", "Accepted", ...(history?.sub?.kind === "no_merge" ? [] : ["Merged"])];
-  const current = merged ? 4 : view.lane === "accepted" || view.task.checked ? 3 : view.lane === "review" ? 2 : view.lane === "working" ? 1 : 0;
+  const integrated = history?.sub?.kind === "integrated";
+  const steps = ["Ready", "Working", "Review", "Accepted", ...(integrated ? ["Integrated"] : [])];
+  const current = integrated ? 4 : history?.outcome.accepted ? 3 : view.lane === "accepted" || view.task.checked ? -1 : view.lane === "review" ? 2 : view.lane === "working" ? 1 : 0;
   return <ol className="liaison-task-progress" aria-label="Task progress">{steps.map((step, index) =>
     <li key={step} className={index < current ? "is-complete" : index === current ? "is-current" : undefined} aria-current={index === current ? "step" : undefined}>
       <span className="liaison-progress-mark" aria-hidden="true" /><span>{step}</span>
@@ -84,14 +92,15 @@ function WaitingDetail({ waiting }: { waiting: NonNullable<TaskView["waiting"]> 
   const [headline, clears, next] = waitCopy[waiting.cause];
   // Raw codes only explain generic holds; named causes already say what is wrong.
   const code = waiting.cause === "schedule_hold" || waiting.cause === "recovery_blocked" ? waiting.code : null;
-  return <section className="liaison-wait-detail" aria-label="Why is this waiting">
-    <p className="liaison-wait-heading">Why is this waiting?</p>
+  return <section className="liaison-wait-detail" aria-label={waiting.cause === "worker_waiting" ? "Worker-stated wait" : "Why is this waiting"}>
+    <p className="liaison-wait-heading">{waiting.cause === "worker_waiting" ? "Worker says it is waiting" : "Why is this waiting?"}</p>
     <p className="liaison-wait-headline">{headline}</p>
     {waiting.detail ? <p className="liaison-wait-description">{waiting.detail}</p> : null}
+    {waiting.cause === "worker_waiting" ? <p className="liaison-wait-description">Worker claim · Cockpit has not verified it.</p> : null}
     <dl className="liaison-wait-facts">
       {waiting.held_by.length ? <><dt>Held by</dt><dd>{waiting.held_by.map((ref, index) => <span key={`${ref.id}:${index}`}>{index ? ", " : ""}{ref.title}</span>)}</dd></> : null}
       <dt>Clears when</dt><dd>{clears}</dd>
-      {waiting.since && formatEventTime(waiting.since, new Date()) ? <><dt>Since</dt><dd><EventTime at={waiting.since} /></dd></> : null}
+      {waiting.since && formatEventTime(waiting.since, new Date()) ? <><dt>{waiting.cause === "worker_waiting" ? "Stated" : "Since"}</dt><dd><EventTime at={waiting.since} /></dd></> : null}
       {code ? <><dt>Code</dt><dd><code>{code}</code></dd></> : null}
     </dl>
     <p className="liaison-wait-next"><strong>Next:</strong> {next}</p>
@@ -102,15 +111,16 @@ export function TaskHistoryDetail({ view, history }: { view: TaskView; history: 
   const outcome = history?.outcome;
   const stage = outcome?.stage ?? (view.task.checked ? "done" : view.lane);
   const sub = history?.sub;
-  const subText = sub?.kind === "merged" ? `Merged into ${sub.target}` : sub?.kind === "no_merge" ? "No merge needed" : sub?.kind === "merge_not_recorded" ? "Merge not recorded" : sub?.kind === "after" ? sub.text : sub?.kind === "reconnecting" ? `Reconnecting worker · ${sub.phase}` : sub?.kind === "not_started" ? "No worker has started yet" : null;
+  const subText = sub?.kind === "integrated" ? `Integrated into ${sub.target}` : sub?.kind === "non_code" ? "Non-code result · no Git integration needed" : sub?.kind === "integration_not_recorded" ? "Integration not recorded" : sub?.kind === "after" ? sub.text : sub?.kind === "reconnecting" ? `Reconnecting worker · ${sub.phase}` : sub?.kind === "not_started" ? "No worker has started yet" : null;
   return <section className="liaison-detail" aria-label={`History of ${view.task.title}`}>
     <div className={`liaison-detail-summary lane-${view.lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}`}>
       <span className="liaison-task-dot" aria-hidden="true" /><h2>{view.task.title}</h2>
       <p className="liaison-detail-outcome"><span className={outcome?.stalled ? "stalled" : undefined}>{stage[0].toUpperCase() + stage.slice(1)}</span>{outcome?.scheduled ? " · scheduled" : ""}{outcome?.accepted ? " · accepted" : ""}{outcome?.attempt ? ` · attempt ${outcome.attempt}` : ""}{outcome?.kept ? <> · <span className="kept">{outcome.kept} resource{outcome.kept === 1 ? "" : "s"} kept</span></> : null}</p>
-      {!view.waiting && subText ? <p className="liaison-detail-sub">{subText}</p> : null}
+      {!view.waiting && !view.worker_waiting && subText ? <p className="liaison-detail-sub">{subText}</p> : null}
     </div>
     <TaskProgress view={view} history={history} />
     {view.waiting ? <WaitingDetail waiting={view.waiting} /> : null}
+    {view.worker_waiting && view.waiting?.cause !== "worker_waiting" ? <WaitingDetail waiting={view.worker_waiting} /> : null}
     {history?.liveUnavailable ? <p className="liaison-history-notice" role="status">Live worker state unavailable — showing recorded history.</p> : null}
     {history?.unreflectedNotice ? <p className="liaison-history-notice">{history.unreflectedNotice}. See History below.</p> : null}
     {!history ? <p className="liaison-empty">History unavailable — no task snapshot is available.</p> : history.identity === "ambiguous" ? <p className="liaison-empty">History unavailable — this task's ID appears more than once in the task file.</p> : <>

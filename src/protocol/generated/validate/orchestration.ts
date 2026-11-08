@@ -193,7 +193,7 @@ export const wireInboxRun: WireDescriptor<V1.InboxRun> = struct<V1.InboxRun>("In
   "report_images": req(list(named(() => wireMessageImage))),
 });
 
-export const wireInboxEntryKind: WireDescriptor<V1.InboxEntryKind> = literal<V1.InboxEntryKind>("InboxEntryKind", ["request", "follow_up", "answer", "question", "update", "result", "widget", "directive"]);
+export const wireInboxEntryKind: WireDescriptor<V1.InboxEntryKind> = literal<V1.InboxEntryKind>("InboxEntryKind", ["request", "follow_up", "answer", "question", "update", "interim", "result", "widget", "directive"]);
 
 export const wireInboxWidgetEvent: WireDescriptor<V1.InboxWidgetEvent> = struct<V1.InboxWidgetEvent>("InboxWidgetEvent", {
   "key": req(named(() => wireWidgetKey)),
@@ -202,6 +202,13 @@ export const wireInboxWidgetEvent: WireDescriptor<V1.InboxWidgetEvent> = struct<
   "title": req(str),
   "publication_id": req(str),
   "content_sha256": req(str),
+});
+
+export const wireInboxInterimRef: WireDescriptor<V1.InboxInterimRef> = struct<V1.InboxInterimRef>("InboxInterimRef", {
+  "run_id": req(str),
+  "message_id": req(str),
+  "task_id": req(str),
+  "attempt": req(u32),
 });
 
 export const wireInboxEntry: WireDescriptor<V1.InboxEntry> = struct<V1.InboxEntry>("InboxEntry", {
@@ -213,6 +220,8 @@ export const wireInboxEntry: WireDescriptor<V1.InboxEntry> = struct<V1.InboxEntr
   "outcome": req(nullable(named(() => wireReportOutcome)), { fill: null }),
   "images": req(list(named(() => wireMessageImage))),
   "in_reply_to": req(nullable(str), { fill: null }),
+  "interim": opt(named(() => wireInboxInterimRef), OMIT, { fill: null, rustOmits: true }),
+  "artifacts": req(list(named(() => wireInboxArtifact)), { fill: () => ([]) }),
   "task_title": opt(str, OMIT, { fill: null, rustOmits: true }),
   "widget": opt(named(() => wireInboxWidgetEvent), OMIT, { fill: null, rustOmits: true }),
 });
@@ -269,6 +278,7 @@ export const wireInboxTaskLink: WireDescriptor<V1.InboxTaskLink> = struct<V1.Inb
   "lane": req(named(() => wireTaskLane)),
   "run": req(nullable(named(() => wireInboxRun)), { fill: null }),
   "evidence": req(nullable(named(() => wireInboxTaskEvidence)), { fill: null }),
+  "worker_waiting": opt(named(() => wireTaskWait), OMIT, { fill: null, rustOmits: true }),
 });
 
 export const wireInboxThread: WireDescriptor<V1.InboxThread> = struct<V1.InboxThread>("InboxThread", {
@@ -285,6 +295,7 @@ export const wireInboxThread: WireDescriptor<V1.InboxThread> = struct<V1.InboxTh
   "recommendation": req(nullable(named(() => wireInboxText)), { fill: null }),
   "reply": req(nullable(named(() => wireInboxText)), { fill: null }),
   "unread_result_message_id": req(nullable(str), { fill: null }),
+  "unread_interims": req(list(named(() => wireInboxInterimRef)), { fill: () => ([]) }),
   "tasks": req(list(named(() => wireInboxTaskLink))),
   "receipts": req(list(named(() => wireInboxReceipt))),
   "facts": req(list(named(() => wireInboxText))),
@@ -572,6 +583,7 @@ export const wireTaskView: WireDescriptor<V1.TaskView> = struct<V1.TaskView>("Ta
   "scheduled": req(bool),
   "attempt": req(nullable(named(() => wireAttemptBadge)), { fill: null }),
   "waiting": req(nullable(named(() => wireTaskWait)), { fill: null }),
+  "worker_waiting": opt(named(() => wireTaskWait), OMIT, { fill: null, rustOmits: true }),
 });
 
 export const wireTaskWait: WireDescriptor<V1.TaskWait> = struct<V1.TaskWait>("TaskWait", {
@@ -588,7 +600,7 @@ export const wireTaskWaitRef: WireDescriptor<V1.TaskWaitRef> = struct<V1.TaskWai
   "title": req(str),
 });
 
-export const wireTaskWaitCause: WireDescriptor<V1.TaskWaitCause> = literal<V1.TaskWaitCause>("TaskWaitCause", ["recovery_blocked", "question", "review", "prerequisites", "dependency_input", "capacity", "resource", "schedule_hold", "dispatch"]);
+export const wireTaskWaitCause: WireDescriptor<V1.TaskWaitCause> = literal<V1.TaskWaitCause>("TaskWaitCause", ["recovery_blocked", "question", "worker_waiting", "review", "prerequisites", "dependency_input", "capacity", "resource", "schedule_hold", "dispatch"]);
 
 export const wireTaskLane: WireDescriptor<V1.TaskLane> = literal<V1.TaskLane>("TaskLane", ["blocked", "ready", "working", "review", "accepted"]);
 
@@ -1385,17 +1397,4 @@ export const wireTaskAssignmentIntent: WireDescriptor<V1.TaskAssignmentIntent> =
 });
 
 export const wirePresence: WireDescriptor<V1.Presence> = literal<V1.Presence>("Presence", ["present", "missing", "endpoint_changed", "unobserved"]);
-
-export const wireRunObservation: WireDescriptor<V1.RunObservation> = struct<V1.RunObservation>("RunObservation", {
-  "run_id": req(str),
-  "presence": req(named(() => wirePresence)),
-  "actual_agent": req(bool),
-  "workspace_id": req(nullable(str), { fill: null }),
-  "workspace_label": req(nullable(str), { fill: null }),
-  "tab_id": req(nullable(str), { fill: null }),
-  "tab_label": req(nullable(str), { fill: null }),
-  "pane_id": req(nullable(str), { fill: null }),
-  "agent_status": req(nullable(str), { fill: null }),
-  "state_changed_at": req(nullable(str), { fill: null }),
-});
 
