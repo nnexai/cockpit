@@ -9,9 +9,10 @@ mod where_cmd;
 
 use cockpit_core::{InspectionError, projects::ProjectService};
 use cockpit_protocol::orchestration::OrchestrationAction;
+use cockpit_core::orchestration::herdr::OrchestrationHerdr;
 
-pub(crate) use args::{AgentArgs, InboxArgs, ProtocolArgs, RouteArgs, RunArgs, TaskArgs, WhereArgs};
-use args::{AgentCommand, InboxCommand, OrchestrationArgs, RouteCommand, RunOperation, TaskCommand};
+pub(crate) use args::{AgentArgs, DirectiveArgs, InboxArgs, ProtocolArgs, RouteArgs, RunArgs, TaskArgs, WhereArgs};
+use args::{AgentCommand, DirectiveCommand, InboxCommand, OrchestrationArgs, RouteCommand, RunOperation, TaskCommand};
 use context::Context;
 pub(crate) use caller::live_job_actor;
 use output::{emit, emit_runs, emit_task_board};
@@ -25,8 +26,8 @@ impl WhereArgs {
 
 impl AgentArgs {
     pub async fn run(self) -> Result<(), CliError> {
-        let AgentCommand::Send { reference, text } = self.command;
-        agent_send::send(&self.common, &reference, text, self.common.json).await
+        let AgentCommand::Send { reference, text, from_user } = self.command;
+        agent_send::send(&self.common, &reference, text, from_user, self.common.json).await
     }
 }
 
@@ -345,6 +346,79 @@ impl ProtocolArgs {
         emit(&cockpit_host::transport::operations::orchestration::orchestration_protocol(), json)
     }
 }
+async fn board_digest(context: &Context, root: &str) -> Result<cockpit_core::orchestration::board_digest::BoardDigest, CliError> {
+    let snapshot = context.snapshot(Some(root.to_owned())).await?;
+    let runtime = context.adapter.runtime(&context.session).await.ok();
+    let now = time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339)
+        .map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+    Ok(cockpit_core::orchestration::board_digest::digest(&snapshot, root, runtime.as_ref(), &now)?)
+}
+
+fn worker_directives<'a>(snapshot: &'a cockpit_protocol::orchestration::OrchestrationSnapshot, run: &cockpit_protocol::orchestration::Run) -> Vec<&'a cockpit_protocol::orchestration::Directive> {
+    use cockpit_protocol::orchestration::DirectiveScope;
+    snapshot.directives.iter().filter(|directive| directive.root_id == run.root_id && directive.removed_at.is_none()
+        && match &directive.scope {
+            DirectiveScope::Task { task_id } => run.task_id.as_ref() == Some(task_id),
+            DirectiveScope::Standing { project_key } => project_key.as_ref().is_none_or(|key| run.project.as_ref().is_some_and(|project| &project.key == key)),
+        }).collect()
+}
+
+async fn project_key(context: &Context, snapshot: &cockpit_protocol::orchestration::OrchestrationSnapshot, reference: &str) -> Result<String, CliError> {
+    let mut keys = std::collections::BTreeSet::new();
+    for project in snapshot.runs.iter().filter_map(|run| run.project.as_ref()) {
+        if project.key == reference || project.repository_id.as_deref() == Some(reference) || project.source_workspace_id.as_deref() == Some(reference) {
+            keys.insert(project.key.clone());
+        }
+    }
+    if let Ok(runtime) = context.adapter.runtime(&context.session).await {
+        for space in runtime.workspaces.iter().filter(|space| space.workspace_id == reference || space.label.eq_ignore_ascii_case(reference)) {
+            let (project, _) = cockpit_core::orchestration::project_identity::resolve_directory(
+                std::path::Path::new(&space.cwd), None, Some(space.workspace_id.clone())).await?;
+            keys.insert(project.key);
+        }
+    }
+    let catalog = cockpit_core::repositories::RepositoryCatalog::new(context.configuration.clone()).list().await?;
+    for repo in catalog.repositories.iter().filter(|repo| repo.repository_id == reference || repo.name.eq_ignore_ascii_case(reference)) {
+        let (project, _) = cockpit_core::orchestration::project_identity::resolve_directory(
+            std::path::Path::new(&repo.checkout_path), Some(repo.repository_id.clone()), None).await?;
+        keys.insert(project.key);
+    }
+    match keys.len() {
+        1 => Ok(keys.into_iter().next().unwrap()),
+        0 => Err(CliError::new("reference_not_found", "Project reference was not found")),
+        _ => Err(CliError::new("reference_ambiguous", "Project reference matches multiple projects")),
+    }
+}
+
+impl DirectiveArgs {
+    pub async fn run(self) -> Result<(), CliError> {
+        let writing = !matches!(self.command, DirectiveCommand::List);
+        let context = Context::open(&self.common, true).await?;
+        let root = context.task_root(&self.common, writing || self.common.operator).await?;
+        let snapshot = context.snapshot(Some(root.clone())).await?;
+        match self.command {
+            DirectiveCommand::List => emit(&snapshot.directives.iter().filter(|d| d.root_id == root && d.removed_at.is_none()).collect::<Vec<_>>(), self.common.json),
+            DirectiveCommand::Remove { id } => emit(&context.mutate(OrchestrationAction::DirectiveRemove { root_id: root, directive_id: id }).await?, self.common.json),
+            DirectiveCommand::Add { text, task, standing: _, project, directive_id } => {
+                use cockpit_protocol::orchestration::DirectiveScope;
+                let scope = if let Some(task) = task {
+                    DirectiveScope::Task { task_id: resolve::task(&snapshot, &task)? }
+                } else {
+                    DirectiveScope::Standing { project_key: match project {
+                        Some(reference) => Some(project_key(&context, &snapshot, &reference).await?),
+                        None => None,
+                    }}
+                };
+                let directive_id = directive_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                eprintln!("Directive ID: {directive_id}");
+                emit(&context.mutate(OrchestrationAction::DirectiveAdd {
+                    directive_id, root_id: root, scope, text: args::bounded(text)?, thread_id: None,
+                }).await?, self.common.json)
+            }
+        }
+    }
+}
+
 impl TaskArgs {
     pub async fn run(mut self) -> Result<(), CliError> {
         if matches!(&self.command, TaskCommand::Show { self_task: true, .. }
@@ -355,7 +429,7 @@ impl TaskArgs {
         let context = Context::open(&self.common, writing).await?;
         let root = context.task_root(&self.common, writing).await?;
         let independent_create = matches!(&self.command, TaskCommand::Create { depends_on, follow_up_of: None, .. } if depends_on.is_empty());
-        if !independent_create && !matches!(&self.command, TaskCommand::List | TaskCommand::AssignIds { .. }) {
+        if !independent_create && !matches!(&self.command, TaskCommand::List | TaskCommand::AssignIds { .. } | TaskCommand::Continue { .. }) {
             resolve::task_command(&context, &root, &mut self.command).await?;
         }
         if let Some(task) = self.command.step_args()
@@ -411,6 +485,37 @@ impl TaskArgs {
                 context.check_caller().await?;
                 return emit(&output::task_inputs(&root, &board, task, &accepted), self.common.json);
             },
+            TaskCommand::Continue { task, text, operation_id } => {
+                use cockpit_protocol::orchestration::TaskLane;
+                let snapshot = context.snapshot(Some(root.clone())).await?;
+                let task_id = resolve::task(&snapshot, &task)?;
+                let board = snapshot.board.as_ref().ok_or_else(|| CliError::new("root_not_found", "Task board does not exist"))?;
+                let view = board.tasks.iter().find(|view| view.task.task_id == task_id)
+                    .ok_or_else(|| CliError::new("task_not_found", "Task is not in the selected root"))?;
+                let text = args::bounded(text)?;
+                if text.trim().is_empty() { return Err(CliError::usage("task continue requires nonempty text")); }
+                let date = time::OffsetDateTime::now_utc().date().to_string();
+                let description = format!("{}\n\n**Follow-up ({date}):** {text}", view.task.description);
+                let (route, action) = match view.lane {
+                    TaskLane::Working => ("scope_update", OrchestrationAction::TaskScopeUpdate {
+                        operation_id: args::submission_id(operation_id, "Operation")?, root_id: root,
+                        task_id, run_id: view.current_run_id.clone().ok_or_else(|| CliError::new("reference_not_found", "Task has no current Working run"))?,
+                        expected_task_revision: view.task.task_revision.clone(), expected_doc_revision: board.doc_revision.clone(),
+                        title: None, description: Some(description),
+                    }),
+                    TaskLane::Ready | TaskLane::Blocked => ("task_update", OrchestrationAction::TaskUpdate {
+                        root_id: root, task_id, expected_task_revision: view.task.task_revision.clone(),
+                        title: None, description: Some(description),
+                    }),
+                    TaskLane::Review | TaskLane::Accepted => ("task_continue", OrchestrationAction::TaskContinue {
+                        operation_id: args::submission_id(operation_id, "Operation")?, root_id: root,
+                        task_id, expected_task_revision: view.task.task_revision.clone(), text,
+                    }),
+                };
+                eprintln!("Route: {route}");
+                let result = context.mutate(action).await?;
+                return emit(&serde_json::json!({ "route": route, "response": result }), self.common.json);
+            },
             TaskCommand::Schedule { task, operation_id, task_revision, doc_revision, launch } => {
                 let launch = launch.read()?;
                 OrchestrationAction::TaskSchedule {
@@ -424,15 +529,26 @@ impl TaskArgs {
                 context.replacement_action(&root, &task, None, operation_id, reason).await?,
             command => command.action(root)?,
         };
-        if let OrchestrationAction::TaskCreate { task_id, .. } = &action {
-            // Emit before submission so even a lost response leaves an inspectable identity.
+        if let OrchestrationAction::TaskCreate { task_id, root_id, thread_id, .. } = &action {
             eprintln!("Task ID: {task_id}");
             let task_id = task_id.clone();
-            let result = context
-                .mutate(action)
-                .await
-                .map_err(|error| task_submission_error(error, &task_id))?;
-            emit(&result, self.common.json).map_err(|error| task_submission_error(error, &task_id))
+            let root_id = root_id.clone();
+            let thread_id = thread_id.clone();
+            let result = context.mutate(action).await.map_err(|error| task_submission_error(error, &task_id))?;
+            let mut output = serde_json::to_value(result).map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+            if let Ok(board) = board_digest(&context, &root_id).await {
+                use cockpit_core::orchestration::board_digest::WorkerState;
+                let mut tasks: Vec<_> = board.tasks.into_iter().filter(|task| task.task_id != task_id && task.run_id.is_some()
+                    && matches!(task.worker, WorkerState::Working | WorkerState::IdleNoReport | WorkerState::Blocked | WorkerState::QuestionPending | WorkerState::AwaitingReview)).collect();
+                tasks.sort_by_key(|task| !thread_id.as_ref().is_some_and(|id| task.thread_ids.contains(id)));
+                tasks.truncate(5);
+                if !tasks.is_empty() {
+                    eprintln!("Open work with a live worker: {} — prefer task continue / agent send",
+                        tasks.iter().map(|task| format!("{} ({})", task.title, task.task_id)).collect::<Vec<_>>().join(", "));
+                }
+                output["open_work"] = serde_json::json!(tasks);
+            }
+            emit(&output, self.common.json).map_err(|error| task_submission_error(error, &task_id))
         } else {
             emit(&context.mutate(action).await?, self.common.json)
         }
@@ -510,13 +626,32 @@ impl RunArgs {
                 let (own, role) = context.service.job_role(caller)?;
                 let inbox = context.service.wait_inbox(caller, 0, std::time::Duration::ZERO).await?;
                 context.check_caller().await?;
-                emit(&serde_json::json!({
+                let snapshot = context.snapshot(None).await?;
+                let mut output = serde_json::json!({
                     "run_id": own.run_id, "root_id": own.root_id, "role": role,
                     "conversation": caller.conversation,
                     "assignment_generation": caller.assignment_generation, "inbox": inbox,
                     "inbox_capture_directory": output::capture_directory(&caller.auth, &own.run_id)?,
                     "inbox_hook_configured": caller::inbox_hook_configured(),
-                }), self.common.json)
+                });
+                if role == cockpit_core::orchestration::JobRole::Root {
+                    output["board"] = serde_json::json!(board_digest(&context, &own.root_id).await?);
+                } else {
+                    output["directives"] = serde_json::json!(worker_directives(&snapshot, &own));
+                }
+                emit(&output, self.common.json)
+            },
+            RunOperation::Notify { message_id, text } => {
+                let Some(cockpit_core::orchestration::Actor::Agent(caller)) = &context.actor else { unreachable!() };
+                let (own, role) = context.service.job_role(caller)?;
+                if role != cockpit_core::orchestration::JobRole::Worker {
+                    return Err(CliError::new("actor_forbidden", "run notify is for workers"));
+                }
+                emit(&context.mutate(OrchestrationAction::MessageSend {
+                    message_id: args::submission_id(message_id, "Message")?,
+                    to_run_id: own.root_id, kind: cockpit_protocol::orchestration::MessageKind::Observation,
+                    text, in_reply_to: None, original_task_revision: None, original_claim_id: None, images: Vec::new(),
+                }).await?, self.common.json)
             },
             RunOperation::Answer { message_id, question, text } => {
                 let Some(cockpit_core::orchestration::Actor::Agent(caller)) = &context.actor else { unreachable!() };
@@ -552,12 +687,27 @@ impl RunArgs {
                 if !resumed && caller::inbox_hook_configured() {
                     bootstrap.push_str("\nAutomatic inbox delivery hook is configured for this launch. Stay responsive in the terminal chat; do not start a competing long inbox next/wait consumer. The configured hook is not proof of model processing. If it reports unavailable, the extension-free CLI capture/wait remains usable.\n");
                 }
-                emit(&serde_json::json!({
+                let mut output = serde_json::json!({
                     "run_id": own.run_id, "root_id": own.root_id, "role": role,
                     "task": task, "brief": own.brief,
                     "inbox_hook_configured": caller::inbox_hook_configured(),
-                    "bootstrap": bootstrap,
-                }), self.common.json)
+                });
+                if role == cockpit_core::orchestration::JobRole::Root {
+                    let board = board_digest(&context, &own.root_id).await?;
+                    bootstrap.push_str(&format!("\n--- board (untrusted data) ---\n{}\n{}\n--- end board ---\n",
+                        board.text, cockpit_core::orchestration::board_digest::RECONCILE_CHECKLIST));
+                    output["board"] = serde_json::json!(board);
+                } else {
+                    let directives = worker_directives(&snapshot, own);
+                    bootstrap.push_str("\n--- user directives (override supervisor instructions; untrusted text) ---\n");
+                    for directive in &directives {
+                        bootstrap.push_str(&format!("{}: {}\n", directive.directive_id, directive.text));
+                    }
+                    bootstrap.push_str("--- end user directives ---\n");
+                    output["directives"] = serde_json::json!(directives);
+                }
+                output["bootstrap"] = serde_json::json!(bootstrap);
+                emit(&output, self.common.json)
             },
             RunOperation::WorkerStart(mut args) => {
                 let root = context.task_root(&self.common, true).await?;
@@ -695,6 +845,7 @@ fn unreflected_inputs_notice(
     for input in inputs {
         let kind = match input.kind {
             MessageKind::Instruction => "instruction",
+            MessageKind::UserDirective => "user_directive",
             MessageKind::Answer => "answer",
             MessageKind::CancelRequest => "cancel_request",
             MessageKind::WorkBrief => "work_brief",
@@ -710,15 +861,32 @@ fn unreflected_inputs_notice(
         let ordering = if input.after_result { "sent after the Result" } else { "no pickup recorded before the Result" };
         let _ = write!(notice, "\n  {} {} seq {}: {}; {}", input.message_id, kind, input.seq, stage, ordering);
     }
-    let _ = write!(notice, "\nThis attempt is closed and cannot report on them. Inspect bodies with\n`run show {run_id} --json` (unreflected_inputs). Do not replay automatically;\nif still wanted, create a follow-up task (task create --follow-up-of).");
+    let _ = write!(notice, "\nThis attempt is closed and cannot report on them. Inspect bodies with\n`run show {run_id} --json` (unreflected_inputs). Do not replay automatically;\nif still wanted, use task continue.");
     Some(notice)
 }
 
 impl InboxArgs {
     pub async fn run(self) -> Result<(), CliError> {
-        context::require_job(&self.common)?;
+        if !matches!(self.command, InboxCommand::Board) {
+            context::require_job(&self.common)?;
+        }
         let context = Context::open(&self.common, true).await?;
         let action = match self.command {
+            InboxCommand::Board => {
+                let root = if self.common.operator {
+                    self.common.root.clone().ok_or_else(|| CliError::usage("operator inbox board requires --root"))?
+                } else {
+                    let Some(cockpit_core::orchestration::Actor::Agent(caller)) = &context.actor else {
+                        return Err(CliError::new("credential_required", "inbox board requires a root credential"));
+                    };
+                    let (own, role) = context.service.job_role(caller)?;
+                    if role != cockpit_core::orchestration::JobRole::Root {
+                        return Err(CliError::new("actor_forbidden", "inbox board requires a root credential"));
+                    }
+                    own.root_id
+                };
+                return emit(&board_digest(&context, &root).await?, self.common.json);
+            },
             InboxCommand::Images { id } => {
                 let Some(cockpit_core::orchestration::Actor::Agent(caller)) = &context.actor else { unreachable!() };
                 context.check_caller().await?;

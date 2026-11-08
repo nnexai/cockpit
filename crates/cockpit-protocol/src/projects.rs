@@ -82,6 +82,9 @@ pub struct OrchestrationConfiguration {
     /// Maximum non-closed workers per project key within a Herdr session.
     #[serde(default = "default_max_parallel")]
     pub max_parallel: u32,
+    /// Time without activity before a supervisor reconciliation check.
+    #[serde(default = "default_quiet_period_seconds")]
+    pub quiet_period_seconds: u32,
     #[serde(default)]
     pub process_scope: ScopeMode,
     #[serde(default)]
@@ -100,13 +103,14 @@ pub enum ScopeMode {
 
 fn default_harness() -> String { "omp".into() }
 fn default_max_parallel() -> u32 { 4 }
+fn default_quiet_period_seconds() -> u32 { 900 }
 
 impl Default for OrchestrationConfiguration {
     fn default() -> Self {
         Self { harness_kind: default_harness(), command: default_harness(),
             extra_args: Vec::new(), resume_args: None, initial_prompt_args: None,
-            hook_args: None, max_parallel: default_max_parallel(), process_scope: ScopeMode::Auto, inbox_prompt_hints: false,
-            routes: Vec::new() }
+            hook_args: None, max_parallel: default_max_parallel(), quiet_period_seconds: default_quiet_period_seconds(),
+            process_scope: ScopeMode::Auto, inbox_prompt_hints: false, routes: Vec::new() }
     }
 }
 

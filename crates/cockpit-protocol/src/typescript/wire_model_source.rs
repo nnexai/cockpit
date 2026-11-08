@@ -130,7 +130,7 @@ fn literal_default_function(
     visiting: &mut BTreeSet<String>,
 ) -> Result<serde_json::Value, String> {
     let fail = || format!("OrchestrationConfiguration: unsupported literal default function {name}");
-    if !matches!(name, "default_harness" | "default_max_parallel") || !visiting.insert(name.to_owned()) {
+    if !matches!(name, "default_harness" | "default_max_parallel" | "default_quiet_period_seconds") || !visiting.insert(name.to_owned()) {
         return Err(fail());
     }
     let mut functions = file.items.iter().filter_map(|item| match item {

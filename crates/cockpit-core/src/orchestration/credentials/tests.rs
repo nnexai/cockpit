@@ -124,6 +124,7 @@ impl Fixture {
                 claim_operation_id: worker_record.credential_id.clone(),
             }),
             schedule: None,
+            reopened_after_attempt: None,
         }];
         let state = OrchestrationState {
             task_ownership,

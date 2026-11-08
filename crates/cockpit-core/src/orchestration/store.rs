@@ -54,6 +54,10 @@ pub(crate) struct OrchestrationState {
     pub thread_reads: Vec<ThreadReadRecord>,
     #[serde(default)]
     pub widget_publications: Vec<WidgetPublication>,
+    #[serde(default)]
+    pub directives: Vec<cockpit_protocol::orchestration::Directive>,
+    #[serde(default)]
+    pub continue_intents: Vec<super::mutate::continuation::ContinueIntent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,7 +121,7 @@ pub(crate) struct AssignmentIntent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum DurableOperationKind { SupervisorStart, RunResume, RunAttach, RunRegister, TaskUnassign, WorkerStart, TaskScopeUpdate, IntegrationRecord, Report, MessageSend, ThreadHandoff, ResourceRequest, ResourceRegister, CleanupFinish, TaskSchedule, TaskScheduleCancel, WorkerReplace, ScopeRelease }
+pub(crate) enum DurableOperationKind { SupervisorStart, RunResume, RunAttach, RunRegister, TaskUnassign, WorkerStart, TaskScopeUpdate, IntegrationRecord, Report, MessageSend, ThreadHandoff, ResourceRequest, ResourceRegister, CleanupFinish, TaskSchedule, TaskScheduleCancel, WorkerReplace, ScopeRelease, TaskContinue, DirectiveAdd }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DurableOperationRecord {
@@ -171,6 +175,8 @@ impl Default for OrchestrationState {
             thread_links: Vec::new(),
             thread_reads: Vec::new(),
             widget_publications: Vec::new(),
+            directives: Vec::new(),
+            continue_intents: Vec::new(),
         }
     }
 }

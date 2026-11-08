@@ -154,11 +154,11 @@ fn recipient(
         Actor::Operator(_) => {
             if !matches!(
                 kind,
-                MessageKind::Instruction | MessageKind::Answer | MessageKind::CancelRequest
+                MessageKind::Instruction | MessageKind::UserDirective | MessageKind::Answer | MessageKind::CancelRequest
             ) {
                 return Err(error(
                     "actor_forbidden",
-                    "Operators may send Instruction, Answer, or CancelRequest",
+                    "Operators may send Instruction, UserDirective, Answer, or CancelRequest",
                 ));
             }
             Ok((to_run_id.to_owned(), None))
@@ -167,7 +167,7 @@ fn recipient(
             let (_, index) = agent(actor, caller)?;
             let job = caller.expect("admitted agent");
             let own = &state.runs[index].run_id;
-            if matches!(kind, MessageKind::Answer | MessageKind::Instruction | MessageKind::CancelRequest)
+            if matches!(kind, MessageKind::Answer | MessageKind::Instruction | MessageKind::UserDirective | MessageKind::CancelRequest)
                 && job.role != JobRole::Root && !(kind == MessageKind::Answer && self_answer(state, caller, target))
             {
                 return Err(error("actor_forbidden", "Only the root job may coordinate descendant runs"));
@@ -185,7 +185,7 @@ fn recipient(
                     }
                     Ok((to_run_id.to_owned(), None))
                 }
-                MessageKind::Instruction | MessageKind::CancelRequest => {
+                MessageKind::Instruction | MessageKind::UserDirective | MessageKind::CancelRequest => {
                     if !is_ancestor(state, own, to_run_id) {
                         return Err(error(
                             "not_in_subtree",

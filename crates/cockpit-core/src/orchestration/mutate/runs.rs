@@ -244,7 +244,7 @@ fn ownership_index(state: &mut OrchestrationState, root_id: &str, task_id: &str)
     if let Some(index) = state.task_ownership.iter().position(|record|
         record.root_id == root_id && record.task_id == task_id) { return index; }
     state.task_ownership.push(TaskOwnership { root_id: root_id.into(), task_id: task_id.into(),
-        generation: 0, owner: None, schedule: None });
+        generation: 0, owner: None, schedule: None, reopened_after_attempt: None });
     state.task_ownership.len() - 1
 }
 
@@ -615,11 +615,12 @@ pub(in crate::orchestration) fn schedule_principal_current(state: &Orchestration
     let operator_schedule = schedule.principal_key == "operator";
     root.stage == RunStage::Active && (operator_schedule || has_current_binding(state, root))
         && state.operations.iter().any(|receipt| receipt.operation_id == schedule.operation_id
-            && receipt.kind == super::super::store::DurableOperationKind::TaskSchedule
             && receipt.root_id == root.run_id
             && (if operator_schedule { receipt.actor_run_id.is_none() } else { receipt.actor_run_id.as_ref() == Some(&root.run_id) })
             && receipt.principal_key == schedule.principal_key
-            && matches!(&receipt.result, Some(OrchestrationActionResult::TaskScheduled { .. })))
+            && matches!((&receipt.kind, &receipt.result),
+                (super::super::store::DurableOperationKind::TaskSchedule, Some(OrchestrationActionResult::TaskScheduled { .. }))
+                | (super::super::store::DurableOperationKind::TaskContinue, Some(OrchestrationActionResult::TaskContinued { route: ContinueRoute::Successor, .. }))))
 }
 
 pub(in crate::orchestration) fn project_capacity_full(state: &OrchestrationState, session_id: &str, project_key: &str, max_parallel: u32) -> bool {
@@ -631,6 +632,7 @@ pub(in crate::orchestration) fn project_capacity_full(state: &OrchestrationState
 pub(in crate::orchestration) fn schedule_ready(state: &OrchestrationState, root: &Run, task: &Task,
     graph: &dependencies::DependencyGraph<'_>) -> bool {
     !task.checked && matches!(graph.evaluate(task).state, TaskDependencyState::None | TaskDependencyState::Satisfied)
+        && !state.continue_intents.iter().any(|intent| intent.root_id == root.run_id && intent.task_id == task.task_id)
         && !state.runs.iter().any(|run| run.root_id == root.run_id
             && run.task_id.as_deref() == Some(task.task_id.as_str()) && run.stage != RunStage::Closed)
 }
@@ -648,17 +650,18 @@ pub(in crate::orchestration) fn scheduled_project_key<'a>(
             .and_then(|run| run.project.as_ref().map(|project| project.key.as_str()))
     }
 }
-pub(in crate::orchestration) fn lone_share_allowed(state: &OrchestrationState, root_id: &str, checkout: &CheckoutIdentity) -> bool {
-    !state.runs.iter().any(|run| run.root_id == root_id && run.kind == RunKind::Worker && run.stage != RunStage::Closed)
+pub(in crate::orchestration) fn lone_share_allowed(state: &OrchestrationState, session_id: &str, project_key: &str, checkout: &CheckoutIdentity) -> bool {
+    !state.runs.iter().any(|run| run.session_id == session_id && run.kind == RunKind::Worker
+        && run.stage != RunStage::Closed && run.project.as_ref().is_some_and(|project| project.key == project_key))
         && !state.checkout_claims.iter().any(|claim| claim.state != claims::ClaimState::Released
             && claims::checkouts_conflict(&claim.checkout, checkout))
 }
 
 impl OrchestrationService {
-    pub(in crate::orchestration) fn scheduled_lone_share_allowed(&self, root_id: &str, checkout: &CheckoutIdentity) -> Result<bool, InspectionError> {
+    pub(in crate::orchestration) fn scheduled_lone_share_allowed(&self, session_id: &str, project_key: &str, checkout: &CheckoutIdentity) -> Result<bool, InspectionError> {
         let locked = self.store.lock()?;
         let state = locked.read_shared()?;
-        Ok(lone_share_allowed(&state, root_id, checkout))
+        Ok(lone_share_allowed(&state, session_id, project_key, checkout))
     }
     pub(in crate::orchestration) fn scheduled_shared_checkout(&self, run: &Run) -> Result<Option<CheckoutIdentity>, InspectionError> {
         use super::super::store::{DurableEffectReceipt, DurableOperationKind};
@@ -754,7 +757,7 @@ impl OrchestrationService {
                         && matches!((&project.source, &checkout.git),
                             (ProjectSource::Git { common_dir }, Some(git)) if common_dir == &git.common_dir)
                         && project_identity::revalidate_checkout(checkout).is_ok()
-                        && lone_share_allowed(&state, &candidate.root_id, checkout)
+                        && lone_share_allowed(&state, &candidate.session_id, &project.key, checkout)
                         && super::super::dispatch::clean_schedule_checkout_locked(&checkout.path)
                 }
                 _ => false,

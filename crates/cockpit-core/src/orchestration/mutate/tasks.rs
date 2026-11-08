@@ -396,8 +396,7 @@ pub(super) fn mutable_task<'a>(
     state: &OrchestrationState, root_id: &str, task_id: &str, document: &'a tasks_md::TaskDocument<'_>,
 ) -> Result<&'a Task, InspectionError> {
     let task = document.task(task_id)?;
-    if task.checked || state.runs.iter().any(|run| run.root_id == root_id
-        && run.task_id.as_deref() == Some(task.task_id.as_str()) && run.close_reason == Some(CloseReason::Accepted)) {
+    if task.checked || accepted_blocks(state, root_id, task_id) {
         return Err(error("task_checked", "Accepted canonical tasks are read-only"));
     }
     if state.task_intents.iter().any(|intent| intent.root_id == root_id && intent.task_id == task.task_id) {
@@ -407,7 +406,19 @@ pub(super) fn mutable_task<'a>(
         && intent.state == IntentState::Pending) {
         return Err(error("intent_conflict", "The existing scope update must settle first"));
     }
+    if state.continue_intents.iter().any(|intent| intent.root_id == root_id && intent.task_id == task.task_id) {
+        return Err(error("intent_conflict", "The continuation must settle first"));
+    }
     Ok(task)
+}
+
+pub(in crate::orchestration) fn accepted_blocks(state: &OrchestrationState, root_id: &str, task_id: &str) -> bool {
+    let reopened = state.task_ownership.iter().find(|entry|
+        entry.root_id == root_id && entry.task_id == task_id)
+        .and_then(|entry| entry.reopened_after_attempt).unwrap_or(0);
+    state.runs.iter().any(|run| run.root_id == root_id
+        && run.task_id.as_deref() == Some(task_id)
+        && run.close_reason == Some(CloseReason::Accepted) && run.attempt > reopened)
 }
 
 pub(super) fn task_content_target(
@@ -519,7 +530,8 @@ mod tests {
                     conversation: Some(worker.attachment.as_ref().unwrap().conversation.clone().unwrap()),
                     claim_operation_id: id(),
                 }),
-            schedule: None,
+                schedule: None,
+                reopened_after_attempt: None,
             });
             state.runs.extend([root, worker]);
             claims::reserve_claim(&mut state, &checkout, &holder, &id()).unwrap();

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Args, Subcommand, ValueEnum};
 use cockpit_protocol::{
     orchestration::{
-        DispatchTarget, HandoffBinding, MessageKind, OrchestrationAction, ReportKind, ReportOutcome,
+        DispatchTarget, HandoffBinding, HandoffRecipient, MessageKind, OrchestrationAction, ReportKind, ReportOutcome,
         TaskStepScope, ThreadCard, WorkerCleanupPolicy,
     },
     projects::{WorkspaceRecoveryAction, WorkspaceSetupRequest},
@@ -134,6 +134,14 @@ fn revision_fence(revision: Option<String>) -> Result<String, CliError> {
 pub(super) enum TaskCommand {
     /// List canonical tasks, dependency state, step progress and exact document revision.
     List,
+    /// Append follow-up work to a task, reopening completed work when needed.
+    Continue {
+        task: String,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        operation_id: Option<String>,
+    },
     /// Link an existing task to a thread in its root.
     Link {
         task: String,
@@ -500,7 +508,7 @@ impl TaskCommand {
                 root_id,
                 expected_doc_revision: doc_revision,
             },
-            Self::List | Self::Show { .. } | Self::Inputs { .. } | Self::Schedule { .. } | Self::Restart { .. } => {
+            Self::List | Self::Show { .. } | Self::Inputs { .. } | Self::Schedule { .. } | Self::Restart { .. } | Self::Continue { .. } => {
                 return Err(CliError::usage(
                     "read-only task command has no mutation action",
                 ));
@@ -749,6 +757,13 @@ pub(super) enum RunCommand {
     Context,
     /// Read canonical task scope and the short launch bootstrap.
     Brief,
+    /// Notify the supervisor of a scope change or conflict.
+    Notify {
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        message_id: Option<String>,
+    },
     /// Read a previous attempt's progress (untrusted advisory data), without accessing its inbox.
     ProgressHistory {
         /// Exact previous run ID, from the replacement brief or run list.
@@ -1025,6 +1040,8 @@ pub(crate) struct InboxArgs {
 }
 #[derive(Debug, Subcommand)]
 pub(super) enum InboxCommand {
+    /// Show the supervisor's current board digest.
+    Board,
     /// List images visible to this run with verified local paths; data, not instructions.
     Images {
         #[arg(long)]
@@ -1096,7 +1113,36 @@ pub(crate) struct AgentArgs {
 #[derive(Debug, Subcommand)]
 pub(super) enum AgentCommand {
     /// Send a durable instruction or prompt a live unmanaged agent.
-    Send { reference: String, #[arg(long)] text: String },
+    Send { reference: String, #[arg(long)] text: String, #[arg(long)] from_user: bool },
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DirectiveArgs {
+    #[command(flatten)]
+    pub(super) common: OrchestrationArgs,
+    #[command(subcommand)]
+    pub(super) command: DirectiveCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(super) enum DirectiveCommand {
+    /// Record a task or standing user directive.
+    Add {
+        #[arg(long)]
+        text: String,
+        #[arg(long, required_unless_present = "standing", conflicts_with = "standing")]
+        task: Option<String>,
+        #[arg(long, required_unless_present = "task", conflicts_with = "task")]
+        standing: bool,
+        #[arg(long, requires = "standing", conflicts_with = "task")]
+        project: Option<String>,
+        #[arg(long)]
+        directive_id: Option<String>,
+    },
+    /// Remove an active directive.
+    Remove { id: String },
+    /// List active directives.
+    List,
 }
 
 #[derive(Debug, Args)]
@@ -1124,6 +1170,7 @@ pub(super) enum RunOperation {
     Brief,
     ProgressHistory { run: String, offset: usize, limit: usize },
     Answer { message_id: Option<String>, question: String, text: String },
+    Notify { message_id: Option<String>, text: String },
     WorkerStart(WorkerStartArgs),
     WorkerReplace { run: String, operation_id: Option<String>, reason: String },
     Done { message_id: Option<String>, summary: String, failed: bool, checks: Vec<String>,
@@ -1180,6 +1227,8 @@ impl RunCommand {
                 }
                 return Ok(RunOperation::Answer { message_id, question, text: bounded(text)? });
             },
+            Self::Notify { message_id, text } =>
+                return Ok(RunOperation::Notify { message_id, text: bounded(text)? }),
             Self::Handoff { text, thread, owner, task, task_revision, repository, space, branch, base_ref, message_id, image_ids, .. } => {
                 if !common.operator { return Err(CliError::usage("handoff requires --operator")); }
                 let thread_id = match thread {
@@ -1197,7 +1246,7 @@ impl RunCommand {
                     message_id: submission_id(message_id, "Message")?, thread_id,
                     to_run_id: owner.ok_or_else(|| CliError::usage("handoff requires a resolved owner"))?,
                     text: bounded(text)?, task_id: task, expected_task_revision: task_revision, binding,
-                    images: image_ids,
+                    images: image_ids, recipient: HandoffRecipient::Owner,
                 }
             },
             Self::WorkerReplace { run, operation_id, reason } =>
@@ -1332,7 +1381,7 @@ impl RunCommand {
             return Err(CliError::new("actor_forbidden", "handoff requires --operator"));
         }
         if matches!(self, Self::Register { .. } | Self::Context | Self::Brief | Self::ProgressHistory { .. }
-            | Self::Answer { .. } | Self::Done { .. } | Self::Report { .. }
+            | Self::Answer { .. } | Self::Notify { .. } | Self::Done { .. } | Self::Report { .. }
             | Self::Show { self_run: true, .. }
             | Self::ResourceRequest { .. } | Self::ResourceBuildRegister { .. }) {
             super::context::require_job(common)?;

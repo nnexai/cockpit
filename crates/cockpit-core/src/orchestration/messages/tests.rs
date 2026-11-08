@@ -2,6 +2,16 @@ use super::*;
 use sha2::{Digest, Sha256};
 use super::super::credentials::{JobAuth, SecretBytes, test_job_auth, test_job_credential};
 
+#[test]
+fn dispatcher_reconcile_wakes_but_stall_and_directive_copy_do_not() {
+    for id in ["stalled:root:key", "directive-copy:id"] {
+        assert!(!meaningful_parts(id, &ActorRef::Dispatcher, "root", MessageKind::Observation, None));
+        assert!(meaningful_parts(id, &ActorRef::Operator, "root", MessageKind::Observation, None));
+    }
+    assert!(meaningful_parts("reconcile:root:key", &ActorRef::Dispatcher, "root", MessageKind::Observation, None));
+    assert!(meaningful_parts("directive:id", &ActorRef::Operator, "worker", MessageKind::UserDirective, None));
+}
+
 fn apply(
     state: &mut OrchestrationState,
     actor: &Actor,

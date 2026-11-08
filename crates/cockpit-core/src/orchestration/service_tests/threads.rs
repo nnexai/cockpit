@@ -4,6 +4,7 @@ use super::super::store::ThreadLinkRecord;
 fn handoff(root: &str, thread: &str) -> OrchestrationAction {
     OrchestrationAction::ThreadHandoff {
         images: Vec::new(),
+        recipient: HandoffRecipient::Owner,
         message_id: id(), thread_id: thread.into(), to_run_id: root.into(),
         text: "Please investigate".into(), task_id: None,
         expected_task_revision: None, binding: None,

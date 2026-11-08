@@ -77,11 +77,12 @@ fn source_defaults_and_serialization_presence_are_preserved() {
         Some(json!({
             "harness_kind": "omp", "command": "omp", "extra_args": [],
             "resume_args": null, "initial_prompt_args": null, "hook_args": null,
-            "max_parallel": 4, "process_scope": "auto", "inbox_prompt_hints": false, "routes": []
+            "max_parallel": 4, "quiet_period_seconds": 900, "process_scope": "auto", "inbox_prompt_hints": false, "routes": []
         }))
     );
     assert_eq!(field("OrchestrationConfiguration", "harness_kind").fill, Some(json!("omp")));
     assert_eq!(field("OrchestrationConfiguration", "command").fill, Some(json!("omp")));
+    assert_eq!(field("OrchestrationConfiguration", "quiet_period_seconds").fill, Some(json!(900)));
 }
 
 #[test]

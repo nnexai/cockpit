@@ -798,7 +798,7 @@ impl OrchestrationService {
                 }
             } else if needs_merged && merged.is_none() {
                 CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "integration_pending",
-                    "Record IntegrationRecord with required passed target checks, or merge the accepted head into the root's checked-out target"))
+                    "Record IntegrationRecord, or merge/cherry-pick the accepted commits into the project's primary checkout; cleanup re-evaluates on ref changes."))
             } else if !drained && resource.cleanup.reason.as_ref().is_some_and(|why|
                 why.code == "containment_unproven" || why.code == "checkout_consumer_present" || why.code.starts_with("scope_")) {
                 CleanupEvaluation::Kept(resource.cleanup.reason.clone().expect("classified scope hold"))
@@ -1029,7 +1029,7 @@ fn cleanup_reason_explanation(code: &str) -> Option<(&'static str, &'static str)
         "terminal_observation_unavailable" => ("terminal_observation_unavailable", "Fresh terminal observation is unavailable; this is an observation hold, not a close refusal."),
         "containment_unproven" => ("containment_unproven", "The exact owned process scope has not proved consumer containment and drain."),
         "terminal_retained_HerdrRefused" => ("terminal_retained_HerdrRefused", "The runtime adapter refused the guarded terminal close."),
-        "integration_pending" => ("integration_pending", "Accepted output still needs exact target integration evidence."),
+        "integration_pending" => ("integration_pending", "Record IntegrationRecord, or merge/cherry-pick the accepted commits into the project's primary checkout; cleanup re-evaluates on ref changes."),
         "scope_dirty_checkout" => ("scope_dirty_checkout", "Uncommitted checkout changes protect this attempt."),
         "scope_unaccepted_commits" => ("scope_unaccepted_commits", "Unaccepted commits protect this attempt."),
         "scope_resource_admission" => ("scope_resource_admission", "This exact scope still holds an unresolved resource admission."),
@@ -1076,7 +1076,7 @@ fn cleanup_inspection_error(kind: OwnedResourceKind, why: InspectionError) -> Cl
 
 fn cleanup_hold_action(code: &str) -> &'static str {
     match code {
-        "integration_pending" => "Record exact target checks through IntegrationRecord, or merge the accepted head into the root's checked-out target; cleanup reevaluates on the resulting event.",
+        "integration_pending" => "Record IntegrationRecord, or merge/cherry-pick the accepted commits into the project's primary checkout; cleanup re-evaluates on ref changes.",
         "terminal_observation_unavailable" | "consumer_inventory_bounded" => "Restore the exact runtime observation connection and complete fresh consumer inventory; the next connection/pane event reevaluates automatically without resubmitting an uncertain effect.",
         "terminal_primary_checkout_space" => "Leave this explicitly borrowed primary checkout Space and foreign Spaces untouched; normal Git workers should use an isolated worktree. Do not retry this close or delete state to bypass the guard.",
         "terminal_retained_HerdrRefused" => "Inspect the runtime adapter's refusal for this exact terminal and preserve its identity; do not retry closure or substitute another pane to bypass the guard.",

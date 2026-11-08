@@ -1272,7 +1272,7 @@ fn schedule_normalization_cannot_override_explicit_space_or_unverified_source() 
 }
 
 #[test]
-fn lone_share_requires_closed_workers_and_no_cross_root_overlapping_claims() {
+fn lone_share_is_scoped_to_session_and_project_with_cross_root_claims() {
     let fixture = Fixture::new();
     let root = fixture.root();
     let task = fixture.create_task(&root, "Prior worker");
@@ -1280,9 +1280,23 @@ fn lone_share_requires_closed_workers_and_no_cross_root_overlapping_claims() {
     let mut state = fixture.state();
     let checkout = CheckoutIdentity { key: "source".into(), path: "/repo/source".into(), git: None,
         directory_identity: DirectoryIdentity { device: "1".into(), inode: "2".into() } };
-    let allowed = |state: &_| mutate::runs::lone_share_allowed(state, &root, &checkout);
+    let project = state.runs.iter().find(|run| run.run_id == worker).unwrap().project.as_ref().unwrap().key.clone();
+    let session = state.runs.iter().find(|run| run.run_id == worker).unwrap().session_id.clone();
+    let allowed = |state: &_| mutate::runs::lone_share_allowed(state, &session, &project, &checkout);
     assert!(!allowed(&state));
-    state.runs.iter_mut().find(|run| run.run_id == worker).unwrap().stage = RunStage::Closed;
+    let prior = state.runs.iter_mut().find(|run| run.run_id == worker).unwrap();
+    prior.root_id = "another-root".into();
+    assert!(!allowed(&state));
+    let prior = state.runs.iter_mut().find(|run| run.run_id == worker).unwrap();
+    prior.project.as_mut().unwrap().key = "another-project".into();
+    assert!(allowed(&state));
+    let prior = state.runs.iter_mut().find(|run| run.run_id == worker).unwrap();
+    prior.project.as_mut().unwrap().key = project.clone();
+    prior.session_id = "another-session".into();
+    assert!(allowed(&state));
+    let prior = state.runs.iter_mut().find(|run| run.run_id == worker).unwrap();
+    prior.session_id = session.clone();
+    prior.stage = RunStage::Closed;
     assert!(allowed(&state));
     let mut nested = checkout.clone();
     nested.key = "other".into();

@@ -21,7 +21,8 @@ impl Fixture {
     async fn new(merge: bool) -> Self {
         let directory = std::env::temp_dir().join(format!("cockpit-merged-cleanup-{}", id()));
         let repository = directory.join("repository");
-        let target = directory.join("root-target");
+        let target = repository.clone();
+        let root_target = directory.join("root-target");
         let worker_path = directory.join("accepted-worker");
         std::fs::create_dir_all(&repository).unwrap();
         git(&repository, &["init", "-b", "main"]);
@@ -31,7 +32,7 @@ impl Fixture {
         git(&repository, &["add", "tracked"]);
         git(&repository, &["commit", "-m", "base"]);
         let base = git(&repository, &["rev-parse", "HEAD"]).trim().to_owned();
-        git(&repository, &["worktree", "add", "-b", "root-target", target.to_str().unwrap()]);
+        git(&repository, &["worktree", "add", "-b", "root-target", root_target.to_str().unwrap()]);
         git(&repository, &["worktree", "add", "-b", "accepted-worker", worker_path.to_str().unwrap()]);
         // Capture original creation pins before the worker produces its output.
         let operation = id();
@@ -44,7 +45,7 @@ impl Fixture {
         if merge { git(&target, &["merge", "--no-ff", "accepted-worker", "-m", "merge accepted worker"]); }
 
         let (project, checkout) = project_identity::resolve_directory(&worker_path, None, None).await.unwrap();
-        let (root_project, root_checkout) = project_identity::resolve_directory(&target, None, None).await.unwrap();
+        let (root_project, root_checkout) = project_identity::resolve_directory(&root_target, None, None).await.unwrap();
         assert_eq!(project.key, root_project.key);
         assert_eq!(checkout.key, identity.checkout_key);
         assert_ne!(identity.creation_tip, head);
@@ -161,9 +162,7 @@ async fn accepted_no_ff_merge_removes_worktree_then_branch_without_integration_r
     assert!(crate::project_teardown::cleanup_owned_head(&fixture.identity, &fixture.run, None).is_err());
     let target = git(&fixture.target, &["rev-parse", "HEAD"]).trim().to_owned();
     let parents = git(&fixture.target, &["rev-list", "--parents", "-n", "1", &target]);
-    assert_eq!(parents.split_whitespace().count(), 3, "actual root target is a no-ff merge");
-    // The retained primary remains unmerged; a shared common directory is not the target.
-    assert_eq!(git(&fixture.repository, &["rev-parse", "HEAD"]).trim(), fixture.identity.creation_tip);
+    assert_eq!(parents.split_whitespace().count(), 3, "primary target is a no-ff merge");
     fixture.remove(OwnedResourceKind::Worktree).await;
     assert!(!fixture.worker_path.exists());
     assert_eq!(fixture.resource(OwnedResourceKind::Branch).cleanup.state, CleanupState::Pending);
@@ -198,32 +197,86 @@ async fn unmerged_accepted_head_has_no_proof_and_waits_for_integration() {
 }
 
 #[tokio::test]
-async fn merge_in_another_checkout_does_not_prove_actual_root_head() {
+async fn cherry_picked_output_removes_worktree_and_branch() {
     let fixture = Fixture::new(false).await;
-    git(&fixture.repository, &["merge", "--no-ff", "accepted-worker", "-m", "merge outside root"]);
+    let SourceOutput::Code { head_commit, .. } = fixture.run.source_output.as_ref().unwrap() else { unreachable!() };
+    // Different parents ensure the cherry-pick cannot reproduce the accepted SHA.
+    git(&fixture.target, &["commit", "--allow-empty", "-m", "diverge primary"]);
+    git(&fixture.target, &["cherry-pick", head_commit]);
+    let proof = merged_proof(&fixture.state(), &fixture.run).await.unwrap().unwrap();
+    assert!(proof.evidence().contains("patch-equivalent"));
+    proof.reprove().await.unwrap();
+    fixture.remove(OwnedResourceKind::Worktree).await;
+    fixture.remove(OwnedResourceKind::Branch).await;
+}
+
+#[tokio::test]
+async fn cherry_pick_reproof_fences_target_movement() {
+    let fixture = Fixture::new(false).await;
+    let SourceOutput::Code { head_commit, .. } = fixture.run.source_output.as_ref().unwrap() else { unreachable!() };
+    git(&fixture.target, &["commit", "--allow-empty", "-m", "diverge primary"]);
+    git(&fixture.target, &["cherry-pick", head_commit]);
+    let proof = merged_proof(&fixture.state(), &fixture.run).await.unwrap().unwrap();
+    git(&fixture.target, &["commit", "--allow-empty", "-m", "advance primary"]);
+    assert_eq!(proof.reprove().await.unwrap_err().code, "merged_target_changed");
+    fixture.assert_git_preserved();
+}
+
+#[tokio::test]
+async fn partial_cherry_pick_waits_for_integration() {
+    let mut fixture = Fixture::new(false).await;
+    let SourceOutput::Code { head_commit: first, .. } = fixture.run.source_output.as_ref().unwrap() else { unreachable!() };
+    let first = first.clone();
+    std::fs::write(fixture.worker_path.join("second"), "second patch\n").unwrap();
+    git(&fixture.worker_path, &["add", "second"]);
+    git(&fixture.worker_path, &["commit", "-m", "second output"]);
+    let second = git(&fixture.worker_path, &["rev-parse", "HEAD"]).trim().to_owned();
+    let SourceOutput::Code { head_commit, commits, .. } = fixture.run.source_output.as_mut().unwrap() else { unreachable!() };
+    *head_commit = second.clone();
+    *commits = vec![first.clone(), second];
+    fixture.run.result.as_mut().unwrap().source_output = fixture.run.source_output.clone();
+    fixture.mutate(|state| state.runs[1] = fixture.run.clone());
+    git(&fixture.target, &["commit", "--allow-empty", "-m", "diverge primary"]);
+    git(&fixture.target, &["cherry-pick", &first]);
+    assert!(merged_proof(&fixture.state(), &fixture.run).await.unwrap().is_none());
+    let resource = fixture.resource(OwnedResourceKind::Worktree);
+    fixture.service.save_evaluation(&resource, CleanupEvaluation::Waiting(reason(
+        CleanupReasonClass::Reconcilable, "integration_pending", "Partial integration"))).unwrap();
+    assert_eq!(fixture.resource(OwnedResourceKind::Worktree).cleanup.state, CleanupState::WaitingIntegration);
+    fixture.assert_git_preserved();
+}
+
+#[tokio::test]
+async fn bare_repository_without_primary_checkout_waits() {
+    let fixture = Fixture::new(false).await;
+    let bare = fixture.directory.join("bare.git");
+    git(&fixture.directory, &["init", "--bare", bare.to_str().unwrap()]);
+    let mut run = fixture.run.clone();
+    run.checkout.as_mut().unwrap().git.as_mut().unwrap().common_dir = bare.to_str().unwrap().into();
+    assert!(merged_proof(&fixture.state(), &run).await.unwrap().is_none());
+    let resource = fixture.resource(OwnedResourceKind::Worktree);
+    fixture.service.save_evaluation(&resource, CleanupEvaluation::Waiting(reason(
+        CleanupReasonClass::Reconcilable, "integration_pending", "No primary checkout"))).unwrap();
+    assert_eq!(fixture.resource(OwnedResourceKind::Worktree).cleanup.state, CleanupState::WaitingIntegration);
+    fixture.assert_git_preserved();
+}
+
+#[tokio::test]
+async fn merge_in_another_checkout_does_not_prove_primary_head() {
+    let fixture = Fixture::new(false).await;
+    let root = fixture.directory.join("root-target");
+    git(&root, &["merge", "--no-ff", "accepted-worker", "-m", "merge outside primary"]);
     assert!(merged_proof(&fixture.state(), &fixture.run).await.unwrap().is_none());
     fixture.assert_git_preserved();
 }
 
 #[tokio::test]
-async fn actual_root_same_checkout_or_foreign_repository_has_no_merged_proof() {
+async fn supervisor_checkout_is_not_the_project_target() {
     let fixture = Fixture::new(true).await;
-    let mut same = fixture.state();
-    same.runs[0].checkout = fixture.run.checkout.clone();
-    assert!(merged_proof(&same, &fixture.run).await.unwrap().is_none());
-    let foreign = fixture.directory.join("foreign");
-    std::fs::create_dir(&foreign).unwrap();
-    git(&foreign, &["init", "-b", "main"]);
-    git(&foreign, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid",
-        "commit", "--allow-empty", "-m", "foreign"]);
-    let (project, checkout) = project_identity::resolve_directory(&foreign, None, None).await.unwrap();
-    let mut wrong = fixture.state();
-    wrong.runs[0].project = Some(project);
-    wrong.runs[0].checkout = Some(checkout);
-    assert!(merged_proof(&wrong, &fixture.run).await.unwrap().is_none());
-    // Even a falsely reused canonical project key cannot bridge distinct Git common dirs.
-    wrong.runs[0].project.as_mut().unwrap().key = fixture.run.project.as_ref().unwrap().key.clone();
-    assert!(merged_proof(&wrong, &fixture.run).await.unwrap().is_none());
+    let mut state = fixture.state();
+    state.runs[0].checkout = None;
+    state.runs[0].project = None;
+    assert!(merged_proof(&state, &fixture.run).await.unwrap().is_some());
     fixture.assert_git_preserved();
 }
 
@@ -259,7 +312,9 @@ async fn merged_dirty_or_untracked_worker_is_refused_and_preserved() {
         fixture.service.finish_cleanup_effect(&intent, CleanupEffectOutcome { state: CleanupEffectState::Refused,
             evidence: None, reason: Some(reason(CleanupReasonClass::Reconcilable, &refused.code, &refused.message)),
             effects: Vec::new() }).unwrap();
-        assert_eq!(fixture.resource(OwnedResourceKind::Worktree).cleanup.state, CleanupState::Waiting);
+        let retained = fixture.resource(OwnedResourceKind::Worktree);
+        assert!(matches!(retained.cleanup.state, CleanupState::Waiting | CleanupState::Kept));
+        assert!(retained.cleanup.reason.is_some());
         assert_eq!(fixture.resource(OwnedResourceKind::Worktree).cleanup.effects.last().unwrap().state, CleanupEffectState::Refused);
         assert_eq!(std::fs::read_to_string(path).unwrap(), "preserve local output\n");
         assert!(remove_owned_branch(&fixture.identity, head, TIMEOUT_MS, OUTPUT_BYTES).await.is_err());
@@ -296,8 +351,8 @@ async fn merged_proof_cannot_override_unreleased_claim_or_concurrent_writer() {
 }
 
 #[tokio::test]
-async fn changed_accepted_result_or_root_metadata_fences_merged_proof() {
-    for changed in 0..6 {
+async fn changed_accepted_result_or_root_session_fences_merged_proof() {
+    for changed in 0..3 {
         let fixture = Fixture::new(true).await;
         let proof = merged_proof(&fixture.state(), &fixture.run).await.unwrap().unwrap();
         let resource = fixture.resource(OwnedResourceKind::Worktree);
@@ -314,9 +369,6 @@ async fn changed_accepted_result_or_root_metadata_fences_merged_proof() {
                 *task_revision = id();
                 state.runs[1].result.as_mut().unwrap().source_output = state.runs[1].source_output.clone();
             }
-            2 => state.runs[0].checkout.as_mut().unwrap().key = id(),
-            3 => state.runs[0].checkout.as_mut().unwrap().path = fixture.repository.to_str().unwrap().into(),
-            4 => state.runs[0].project.as_mut().unwrap().key = id(),
             _ => state.runs[0].session_id = id(),
         });
         let state = fixture.state();

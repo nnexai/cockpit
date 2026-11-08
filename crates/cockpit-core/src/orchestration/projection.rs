@@ -86,7 +86,7 @@ fn unreflected_inputs(runs: &[&Run], messages: &[&Message]) -> Vec<UnreflectedIn
         let run_id = message.to_run_id.as_str();
         let result_position = *result_positions.get(run_id)?;
         if message.stale
-            || !matches!(message.kind, MessageKind::Instruction | MessageKind::Answer | MessageKind::CancelRequest)
+            || !matches!(message.kind, MessageKind::Instruction | MessageKind::UserDirective | MessageKind::Answer | MessageKind::CancelRequest)
             || !super::messages::inbox_meaningful(message)
         {
             return None;
@@ -231,6 +231,13 @@ pub(crate) fn snapshot(
             .iter()
             .filter(|ownership| root_ids.contains(ownership.root_id.as_str()))
             .cloned()
+            .collect(),
+        directives: state.directives.iter().filter(|directive|
+            directive.removed_at.is_none() && root_ids.contains(directive.root_id.as_str()))
+            .cloned().collect(),
+        thread_links: state.thread_links.iter().filter(|link|
+            root_ids.contains(link.root_id.as_str()))
+            .map(|link| ThreadLink { thread_id: link.thread_id.clone(), root_id: link.root_id.clone(), task_id: link.task_id.clone() })
             .collect(),
         intents: intents.into_iter().cloned().collect(),
         assignment_intents: super::assignments::snapshot_intents(state, &request.session_id),
@@ -942,6 +949,7 @@ mod tests {
                     claim_operation_id: "claim".into(),
                 }),
                 schedule: None,
+                reopened_after_attempt: None,
             }],
             revision: 7,
             ..Default::default()
@@ -2024,10 +2032,17 @@ mod tests {
         durable.task_ownership.push(TaskOwnership {
             root_id: "foreign-root".into(), task_id: "foreign-task".into(),
             generation: 8, owner: None, schedule: None,
+            reopened_after_attempt: None,
         });
         let mut foreign_message = brief(MessageKind::SupervisorBrief, DeliveryStage::Stored);
         foreign_message.to_run_id = "foreign-root".into();
         durable.messages.push(foreign_message);
+        for (root, thread) in [(ROOT, "local-thread"), ("foreign-root", "foreign-thread")] {
+            durable.thread_links.push(super::super::store::ThreadLinkRecord {
+                root_id: root.into(), task_id: TASK.into(), thread_id: thread.into(),
+                linked_by: ActorRef::Operator, at: NOW.into(),
+            });
+        }
         let scoped = project(&durable, Ok(runtime("done")));
         assert_eq!(scoped.roots.len(), 1);
         assert_eq!(scoped.roots[0].open_runs, 2);
@@ -2035,6 +2050,8 @@ mod tests {
         assert_eq!(scoped.runs.len(), 2);
         assert_eq!(scoped.task_ownership.len(), 1);
         assert_eq!(scoped.task_ownership[0].root_id, ROOT);
+        assert_eq!(scoped.thread_links.len(), 1);
+        assert_eq!(scoped.thread_links[0].thread_id, "local-thread");
         assert!(scoped.messages.is_empty());
         assert_eq!(scoped.board.unwrap().tasks[0].lane, TaskLane::Review);
         let foreign_root = snapshot(

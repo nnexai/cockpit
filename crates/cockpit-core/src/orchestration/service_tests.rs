@@ -550,6 +550,8 @@ fn assert_code(result: Result<OrchestrationMutationResponse, InspectionError>, c
 
 mod attachment;
 mod authority_matrix;
+mod directives;
+mod continuation;
 mod job_reads;
 mod integration_release;
 mod launch;

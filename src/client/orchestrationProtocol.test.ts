@@ -194,7 +194,7 @@ const message = {
 };
 const snapshot: OrchestrationSnapshot = {
   state_store_id: hash, cleanup: [], restoration: { reattached: 1, total_attachments: 1, cleanup_pending: 0 },
-  session_id: "session", revision: 2, tasks_token: hash,
+  session_id: "session", revision: 2, tasks_token: hash, directives: [], thread_links: [],
   roots: [{ root_id: "root", label: "Supervisor", kind: "supervisor", open_runs: 1, needs_you: 1 }],
   board: { root_id: "root", path: "/tasks/root.md", doc_revision: hash, unidentified_items: 0,
     diagnostics: [{ code: "task_id_duplicate", message: "Duplicate" }], tasks: [{ task, project: { key: "repo", label: "Repository" }, lane: "working", current_run_id: "run", dependencies, scheduled: false, attempt: null, waiting: null }] },
@@ -202,7 +202,7 @@ const snapshot: OrchestrationSnapshot = {
     session_id: "session", brief: "Implement the assigned task", run_id: "run", kind: "worker", label: "Worker", root_id: "root",
     parent_run_id: "root", task_id: "task", attempt: 1, task_revision_at_start: hash, stage: "working", close_reason: null,
     assignment_generation: 1, launch_config: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null,
-      initial_prompt_args: null, hook_args: null, max_parallel: 4, process_scope: "auto", inbox_prompt_hints: false, routes: [] },
+      initial_prompt_args: null, hook_args: null, max_parallel: 4, quiet_period_seconds: 900, process_scope: "auto", inbox_prompt_hints: false, routes: [] },
     dispatch: { step: "launched", launch_attempt: 1, error: { code: "launch_unknown", message: "Review" }, updated_at: at,
       launch_tag: "launch", endpoint_identity: "endpoint", recovery: null, agent_started: true, scope_unit: null, pre_move_scope: null,
       latch: null, latch_state: null, source_location: null, move_operation_id: null, staging_workspace_id: null },
@@ -215,7 +215,7 @@ const snapshot: OrchestrationSnapshot = {
     created_at: at, updated_at: at,
   }],
   messages: [message],
-  task_ownership: [{ root_id: "root", task_id: "task", generation: 1, owner: { run_id: "run", conversation: attachment.conversation!, claim_operation_id: prerequisiteId }, schedule: null }],
+  task_ownership: [{ root_id: "root", task_id: "task", generation: 1, owner: { run_id: "run", conversation: attachment.conversation!, claim_operation_id: prerequisiteId }, schedule: null, reopened_after_attempt: null }],
   intents: [{ intent_id: "intent", root_id: "root", task_id: "task", run_id: "run", expected_task_revision: hash, state: "pending",
     origin: null, supervisor_run_id: null, conversation: null, result_message_id: null }],
   assignment_intents: [{ root_id: "root", task_id: assignmentTaskId, state: "conflict" }],
@@ -293,6 +293,10 @@ function replaceField(value: unknown, path: (string | number)[], replacement: un
   return copy;
 }
 const defaultedSnapshotFields: Readonly<Record<string, true>> = {
+  "directives": true,
+  "thread_links": true,
+  "task_ownership.0.reopened_after_attempt": true,
+  "runs.0.launch_config.quiet_period_seconds": true,
   "runs.0.attachment.process_scope": true,
   "runs.0.attachment.location.peer_process": true,
   "runs.0.dispatch.scope_unit": true,
@@ -1994,7 +1998,7 @@ describe("browser/native orchestration parity", () => {
       unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: at };
     const view = { session_id: "session", state_store_id: hash, revision: 1, tasks_token: hash,
       image_limits: { max_bytes: 5242880, max_count: 4, mime_types: ["image/png", "image/jpeg"] },
-      observation: { status: "fresh", observed_at: at }, owners: [], threads: [thread], unmanaged_agents: [] };
+      observation: { status: "fresh", observed_at: at }, owners: [], threads: [thread], stalls: [], unmanaged_agents: [] };
     let payload: unknown = view;
     const browserCall = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(payload)));
     const nativeCall = vi.fn(async () => payload);

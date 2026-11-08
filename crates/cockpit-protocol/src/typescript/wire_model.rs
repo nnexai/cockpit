@@ -343,7 +343,8 @@ fn fields_model(
             attr::Default::Path(path)
                 if owner == "OrchestrationConfiguration"
                     && ((matches!(name, "harness_kind" | "command") && path.path.is_ident("default_harness"))
-                        || (name == "max_parallel" && path.path.is_ident("default_max_parallel"))) =>
+                        || (name == "max_parallel" && path.path.is_ident("default_max_parallel"))
+                        || (name == "quiet_period_seconds" && path.path.is_ident("default_quiet_period_seconds"))) =>
             {
                 Some(inputs[owner].2.as_ref()
                     .and_then(|defaults| defaults.get(name))

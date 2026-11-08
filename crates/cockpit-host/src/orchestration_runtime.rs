@@ -81,6 +81,7 @@ impl OrchestrationRuntime {
             max_parallel: configuration.orchestration.max_parallel,
             resume_args: configuration.orchestration.resume_args.clone(),
             inbox_prompt_hints: configuration.orchestration.inbox_prompt_hints,
+            quiet_period: Duration::from_secs(configuration.orchestration.quiet_period_seconds.into()),
         };
         let dispatcher =
             Dispatcher::new(service.clone(), projects.clone(), library, herdr.clone(), settings);
@@ -118,7 +119,7 @@ impl OrchestrationRuntime {
         let adapter = self.agent_send_adapter.as_ref()
             .ok_or_else(|| InspectionError::new("herdr_unavailable", "Agent delivery is unavailable"))?;
         crate::agent_send::send_to_agent(
-            self.service.as_ref(), adapter.as_ref(), session, None, reference, text, origin, false, true, expected_target,
+            self.service.as_ref(), adapter.as_ref(), session, None, reference, text, origin, false, true, MessageKind::Instruction, expected_target,
             |_, _| Ok(None),
         ).await
     }

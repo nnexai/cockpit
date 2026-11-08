@@ -14,7 +14,7 @@ function malformed(label: string): never { throw new CockpitClientError("malform
 const nonempty = (value: string) => value.length > 0;
 const operationId = (value: string) => /^[A-Za-z0-9_-]{1,96}$/.test(value);
 const RULES = {
-  absent: new Set(["ProjectConfiguration.orchestration"]), // projects.rs:100: #[serde(default)], still validates supplied values.
+  absent: new Set(["ProjectConfiguration.orchestration", "OrchestrationConfiguration.quiet_period_seconds"]),
   exact: new Set(["WorkspaceSetupRequest[open]", "WorkspaceSetupRequest[create]"]),
   raw: new Set(["ProjectConfiguration", "RepositoryListResponse", "WorkspaceOperationRequest", "WorkspaceReconcileRequest",
     "WorkspaceSetupPlan", "WorkspaceOperation", "WorkspaceDefaults.artifact", "WorkspaceDefaults.repositories", "WorkspaceDefaults.linked_artifacts",

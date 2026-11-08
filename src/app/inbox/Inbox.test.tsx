@@ -9,7 +9,7 @@ import type { AttentionRow } from "../sidebar/agentAttentionModel";
 import { Inbox } from "./Inbox";
 
 const attention = { availability: "ready", response: null } as AgentAttentionState;
-const view = (session_id: string): InboxView => ({ session_id, state_store_id: `store-${session_id}`, revision: 1, tasks_token: "token", observation: { status: "fresh", observed_at: "now" }, owners: [{ root_id: "owner", run_id: "owner", attempt: 1, session_id, attachment_id: null, attachment_epoch: null, label: "Liaison", kind: "supervisor", stage: "active", harness: "omp", availability: "available", location: null, undelivered: 0 }], threads: [], image_limits: { max_bytes: 1024 * 1024, max_count: 4, mime_types: ["image/png", "image/jpeg"] }, unmanaged_agents: [] });
+const view = (session_id: string): InboxView => ({ session_id, state_store_id: `store-${session_id}`, revision: 1, tasks_token: "token", observation: { status: "fresh", observed_at: "now" }, owners: [{ root_id: "owner", run_id: "owner", attempt: 1, session_id, attachment_id: null, attachment_epoch: null, label: "Liaison", kind: "supervisor", stage: "active", harness: "omp", availability: "available", location: null, undelivered: 0 }], threads: [], image_limits: { max_bytes: 1024 * 1024, max_count: 4, mime_types: ["image/png", "image/jpeg"] }, stalls: [], unmanaged_agents: [] });
 let root: Root | null = null, host: HTMLDivElement;
 afterEach(() => { if (root) act(() => root!.unmount()); root = null; host?.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 async function flush(fn: () => void = () => {}) { await act(async () => { fn(); for (let i = 0; i < 8; i++) await Promise.resolve(); }); }
@@ -973,6 +973,61 @@ const press = (label: string) => flush(() => Array.from(host.querySelectorAll<HT
 const mutation = (client: CockpitClient, call = 0) => vi.mocked(client.orchestrationMutate).mock.calls[call]![0].action;
 
 describe("Inbox reply dock", () => {
+  const task = (stage: "working" | "reported" | "closed" = "working", presence: "present" | "missing" = "present"): InboxThread["tasks"][number] => ({
+    root_id: "owner", task_id: "task-id", title: "Build", project: null, lane: "working", evidence: null,
+    run: { run_id: "worker", attempt: 1, stage, harness: "omp", session_id: "a", attachment_id: null, attachment_epoch: null, presence, agent_status: "working", location: null, cleanup: [], report_images: [] },
+  });
+  const selectWorker = async () => flush(() => { const select = host.querySelector<HTMLSelectElement>('select[aria-label="Send to"]')!; select.value = JSON.stringify(["owner", "task-id"]); select.dispatchEvent(new Event("change", { bubbles: true })); });
+  it("only offers live working or reported workers", async () => {
+    await mountThread(dockThread([], { tasks: [task("closed"), task("working", "missing")] }));
+    expect(host.querySelector('select[aria-label="Send to"]')).toBeNull();
+  });
+  it("defaults to the unchanged supervisor payload", async () => {
+    const { client } = await mountThread(dockThread([], { tasks: [task()] }));
+    expect(host.querySelector<HTMLSelectElement>('select[aria-label="Send to"]')!.value).toBe("");
+    await flush(() => text("Follow up")); await flush(submit);
+    expect(mutation(client)).toMatchObject({ action: "thread_handoff", thread_id: "thread", to_run_id: "owner", text: "Follow up" });
+    expect(mutation(client)).not.toHaveProperty("recipient");
+  });
+  it("keeps the draft when switching and sends a revision-fenced worker directive", async () => {
+    const { client } = await mountThread(dockThread([], { tasks: [task("reported")] }));
+    client.orchestrationSnapshot = vi.fn(async () => ({ session_id: "a", state_store_id: "store-a", board: { root_id: "owner", tasks: [{ task: { task_id: "task-id", task_revision: "fresh-revision" } }] } })) as unknown as CockpitClient["orchestrationSnapshot"];
+    vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "worker", seq: 1, duplicate: false, stale: false } });
+    await flush(() => text("Keep this")); await selectWorker();
+    expect(field().value).toBe("Keep this");
+    expect(host.querySelector('select[aria-label="Follow-up target"]')).toBeNull();
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
+    await flush(submit);
+    expect(client.orchestrationSnapshot).toHaveBeenCalledWith({ session_id: "a", root_id: "owner" });
+    expect(mutation(client)).toEqual({ action: "thread_handoff", message_id: expect.any(String), thread_id: "thread", to_run_id: "owner", recipient: "task_worker", task_id: "task-id", expected_task_revision: "fresh-revision", text: "Keep this" });
+    expect(field().value).toBe("");
+  });
+  it("keeps the draft when the worker disappears during delivery", async () => {
+    const { client } = await mountThread(dockThread([], { tasks: [task()] }));
+    client.orchestrationSnapshot = vi.fn(async () => ({ session_id: "a", state_store_id: "store-a", board: { root_id: "owner", tasks: [{ task: { task_id: "task-id", task_revision: "fresh" } }] } })) as unknown as CockpitClient["orchestrationSnapshot"];
+    vi.mocked(client.orchestrationMutate).mockRejectedValueOnce(new CockpitClientError("http_error", "Unavailable", { operationCode: "task_worker_unavailable" }));
+    await selectWorker(); await flush(() => text("Keep this")); await flush(submit);
+    expect(field().value).toBe("Keep this");
+    expect(host.textContent).toContain("That worker is no longer running. Your draft is kept; send it to the supervisor instead.");
+    expect(host.textContent).not.toContain("Retry original request");
+  });
+  it("renders a directive as a user message to its worker", async () => {
+    await mountThread(dockThread([], { timeline: [{ message_id: "d", at: "2026-11-04T10:00:00Z", kind: "directive", task_title: "Build", text: "Use this", source: { kind: "user" }, outcome: null, images: [], in_reply_to: null }] }));
+    expect(host.querySelector(".inbox-you")?.textContent).toContain("To worker · Build");
+  });
+  it("shows one quiet stall notice and opens its owner", async () => {
+    const { client } = fixture(), inbox = view("a"), onOpenLocation = vi.fn(async () => {});
+    const location = { workspace_id: "s", workspace_label: "Space", tab_id: "t", tab_label: "Tab", pane_id: "p" };
+    inbox.owners[0]!.location = location;
+    inbox.stalls = [{ root_id: "owner", since: "2026-11-04T10:00:00Z", text: "stalled" }, { root_id: "owner", since: "2026-11-04T10:01:00Z", text: "stalled" }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    const app = setup(client, "a", undefined, { attention, onOpenLocation });
+    await flush(() => app.render());
+    expect(host.querySelectorAll(".inbox-stall")).toHaveLength(1);
+    expect(host.querySelector(".inbox-stall")?.textContent).toContain("Supervisor idle with open work since");
+    await press("Open supervisor");
+    expect(onOpenLocation).toHaveBeenCalledWith(location);
+  });
   it("shows an open question once, where it was asked, and preselects a single question", async () => {
     const { client } = await mountThread(dockThread([question("q", "Which database?", ["Postgres"])], { timeline: [entry("q", "question", "2026-11-04T10:00:00Z", "Which database?"), entry("u", "update", "2026-11-04T10:05:00Z", "Later update")] }));
     expect(host.querySelectorAll("[data-open-question]")).toHaveLength(1);

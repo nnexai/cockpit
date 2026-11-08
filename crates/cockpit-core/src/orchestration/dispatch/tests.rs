@@ -459,7 +459,7 @@ impl ReviewFixture {
         worker.assignment_generation = Some(1);
         state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
             root_id: worker.root_id.clone(), task_id: worker.task_id.clone().unwrap(),
-            generation: 0, owner: None, schedule: None,
+            generation: 0, owner: None, schedule: None, reopened_after_attempt: None,
         });
         state.runs.push(root);
         locked.save(&mut state).unwrap();
@@ -509,7 +509,7 @@ impl ReviewFixture {
         worker.assignment_generation = Some(1);
         state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
             root_id: worker.root_id.clone(), task_id: worker.task_id.clone().unwrap(),
-            generation: 0, owner: None, schedule: None,
+            generation: 0, owner: None, schedule: None, reopened_after_attempt: None,
         });
         state.runs.extend([root, worker.clone()]);
         locked.save(&mut state).unwrap();
@@ -579,6 +579,7 @@ impl ReviewFixture {
                 extra_args: self.run.launch_config.extra_args.clone(),
                 resume_args: self.run.launch_config.resume_args.clone(),
                 max_parallel: self.run.launch_config.max_parallel,
+                quiet_period: Duration::from_secs(900),
                 inbox_prompt_hints: self.run.launch_config.inbox_prompt_hints, herdr_executable: None,
             }))
     }
@@ -1255,7 +1256,7 @@ async fn blocked_consumer_does_not_prevent_independent_worker_in_same_root_from_
         independent.assignment_generation = Some(1);
         state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
             root_id: independent.root_id.clone(), task_id: independent_task.clone(),
-            generation: 0, owner: None, schedule: None,
+            generation: 0, owner: None, schedule: None, reopened_after_attempt: None,
         });
         state.runs.push(independent.clone());
         locked.save(&mut state).unwrap();
@@ -1996,9 +1997,14 @@ fn bootstrap_is_usable_without_conversation_metadata_or_registration_skill_turn(
             assert!(prompt.contains("run done"));
             assert!(prompt.contains("task show --self"));
             assert!(prompt.contains("task inputs --self --json"));
+            assert!(prompt.contains("User directives"));
+            assert!(prompt.contains("run notify"));
+            assert!(prompt.contains("definition of done"));
         } else {
             assert!(prompt.contains("task schedule"));
             assert!(prompt.contains("worker-replace"));
+            assert!(prompt.contains("cleanup of merged worktrees is automatic"));
+            assert!(prompt.contains("reconcile on start or resume"));
         }
     }
 }
@@ -2938,7 +2944,7 @@ async fn path_schedule_fixture(mode: &str) -> (ReviewFixture, Arc<Dispatcher>) {
             result: Some(OrchestrationActionResult::TaskScheduled { operation_id, task_id: task_id.clone(), duplicate: false }),
             effect_receipts: vec![], created_at: now(), updated_at: now() });
         state.task_ownership.push(TaskOwnership { root_id: fixture.run.run_id.clone(), task_id,
-            generation: 0, owner: None, schedule: Some(schedule) });
+            generation: 0, owner: None, schedule: Some(schedule), reopened_after_attempt: None });
     }
     fixture.service.store.tasks_dir().write(
         super::super::tasks_md::root_filename(&fixture.run.run_id).unwrap(), document.as_bytes(),

@@ -29,13 +29,22 @@ pub(in crate::orchestration) fn send_back(
         &provenance,
         &format!("Result {result_message_id} sent back"),
     );
+    let from = actor_ref(actor, caller, state);
+    reopen_reported(state, index, &text, from, annotation)?;
+    Ok(Applied::Machine(OrchestrationActionResult::Done))
+}
+
+pub(super) fn reopen_reported(
+    state: &mut OrchestrationState, index: usize, text: &str, from: ActorRef, annotation: Annotation,
+) -> Result<(), InspectionError> {
+    require_stage(&state.runs[index], RunStage::Reported)?;
+    let run_id = state.runs[index].run_id.clone();
     state.runs[index].stage = RunStage::Working;
     state.runs[index].result = None;
     state.runs[index].source_output = None;
     state.runs[index].integration = Integration::Pending;
-    let from = actor_ref(actor, caller, state);
-    messages::append(state, messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from, to_run_id: &run_id, message_id: &format!("sendback-{}", id()), kind: MessageKind::Answer, text: &text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
+    messages::append(state, messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from, to_run_id: &run_id, message_id: &format!("sendback-{}", id()), kind: MessageKind::Answer, text, in_reply_to: None, report: None, stale: false, escalated_from: None })?;
     state.runs[index].annotations.push(annotation);
-    Ok(Applied::Machine(OrchestrationActionResult::Done))
+    Ok(())
 }
 

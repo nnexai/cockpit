@@ -141,6 +141,8 @@ Output is JSON automatically; no --json flag.")]
     /// Pull, capture and wait for durable inbox messages.
     #[command(after_long_help = cli_orchestration::INBOX_HELP)]
     Inbox(cli_orchestration::InboxArgs),
+    /// Record persistent user directives for workers.
+    Directive(cli_orchestration::DirectiveArgs),
     /// Resolve configured artifact-to-project routing without guessing focus.
     #[command(after_long_help = cli_orchestration::ROUTE_HELP)]
     Route(cli_orchestration::RouteArgs),
@@ -603,7 +605,7 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
         Command::Contain(_) => unreachable!("contain is a launch-only exec helper"),
         Command::AgentExec(_) => unreachable!("agent-exec is a launch-only waiting exec helper"),
         Command::Context(args) => run_context(args).await,
-        Command::Orchestration(_) | Command::Task(_) | Command::Run(_) | Command::Inbox(_) | Command::Route(_) | Command::Where(_) | Command::Agent(_) =>
+        Command::Orchestration(_) | Command::Task(_) | Command::Run(_) | Command::Inbox(_) | Command::Directive(_) | Command::Route(_) | Command::Where(_) | Command::Agent(_) =>
             unreachable!("orchestration commands preserve their structured error contract"),
     }
 }
@@ -1295,6 +1297,7 @@ async fn main() -> ExitCode {
         Command::Task(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Run(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Inbox(args) => args.run().await.map(|()| 0).map_err(CliError::from),
+        Command::Directive(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Route(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Where(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Agent(args) => args.run().await.map(|()| 0).map_err(CliError::from),

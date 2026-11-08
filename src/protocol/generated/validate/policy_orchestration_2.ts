@@ -2,6 +2,12 @@
 import type * as V1 from "../v1";
 
 export interface WireTypes {
+  "OwnedGitIdentity": V1.OwnedGitIdentity;
+  "OwnedSpaceIdentity": V1.OwnedSpaceIdentity;
+  "OwnedFilesystemIdentity": V1.OwnedFilesystemIdentity;
+  "OwnedAttemptDirectoryIdentity": V1.OwnedAttemptDirectoryIdentity;
+  "FixtureAdapterId": V1.FixtureAdapterId;
+  "OwnedFixtureIdentity": V1.OwnedFixtureIdentity;
   "OwnedResourceIdentity": V1.OwnedResourceIdentity;
   "CleanupState": V1.CleanupState;
   "CleanupReasonClass": V1.CleanupReasonClass;
@@ -53,6 +59,11 @@ export interface WireTypes {
 }
 
 export interface WireOwners {
+  "OwnedGitIdentity": V1.OwnedGitIdentity;
+  "OwnedSpaceIdentity": V1.OwnedSpaceIdentity;
+  "OwnedFilesystemIdentity": V1.OwnedFilesystemIdentity;
+  "OwnedAttemptDirectoryIdentity": V1.OwnedAttemptDirectoryIdentity;
+  "OwnedFixtureIdentity": V1.OwnedFixtureIdentity;
   "OwnedResourceIdentity": V1.OwnedResourceIdentity;
   "OwnedResourceIdentity[worker_terminal]": Extract<V1.OwnedResourceIdentity, { "kind": "worker_terminal" }>;
   "OwnedResourceIdentity[worktree]": Extract<V1.OwnedResourceIdentity, { "kind": "worktree" }>;
@@ -105,6 +116,9 @@ export interface WireOwners {
   "RuntimeObservation[unavailable]": Extract<V1.RuntimeObservation, { "status": "unavailable" }>;
   "Attention": V1.Attention;
   "OrchestrationAction": V1.OrchestrationAction;
+  "OrchestrationAction[directive_add]": Extract<V1.OrchestrationAction, { "action": "directive_add" }>;
+  "OrchestrationAction[directive_remove]": Extract<V1.OrchestrationAction, { "action": "directive_remove" }>;
+  "OrchestrationAction[task_continue]": Extract<V1.OrchestrationAction, { "action": "task_continue" }>;
   "OrchestrationAction[task_create]": Extract<V1.OrchestrationAction, { "action": "task_create" }>;
   "OrchestrationAction[task_assign]": Extract<V1.OrchestrationAction, { "action": "task_assign" }>;
   "OrchestrationAction[task_assignment_resolve]": Extract<V1.OrchestrationAction, { "action": "task_assignment_resolve" }>;
@@ -148,6 +162,9 @@ export interface WireOwners {
   "OrchestrationAction[inbox_pull]": Extract<V1.OrchestrationAction, { "action": "inbox_pull" }>;
   "OrchestrationAction[inbox_ack]": Extract<V1.OrchestrationAction, { "action": "inbox_ack" }>;
   "OrchestrationActionResult": V1.OrchestrationActionResult;
+  "OrchestrationActionResult[directive_added]": Extract<V1.OrchestrationActionResult, { "result": "directive_added" }>;
+  "OrchestrationActionResult[directive_removed]": Extract<V1.OrchestrationActionResult, { "result": "directive_removed" }>;
+  "OrchestrationActionResult[task_continued]": Extract<V1.OrchestrationActionResult, { "result": "task_continued" }>;
   "OrchestrationActionResult[run_registered]": Extract<V1.OrchestrationActionResult, { "result": "run_registered" }>;
   "OrchestrationActionResult[task_unassigned]": Extract<V1.OrchestrationActionResult, { "result": "task_unassigned" }>;
   "OrchestrationActionResult[worker_started]": Extract<V1.OrchestrationActionResult, { "result": "worker_started" }>;
@@ -171,6 +188,42 @@ export interface WireOwners {
 }
 
 export interface WireFields {
+  "OwnedGitIdentity.creation_operation_id": (V1.OwnedGitIdentity)["creation_operation_id"];
+  "OwnedGitIdentity.machine_id": (V1.OwnedGitIdentity)["machine_id"];
+  "OwnedGitIdentity.repository_key": (V1.OwnedGitIdentity)["repository_key"];
+  "OwnedGitIdentity.repository_root": (V1.OwnedGitIdentity)["repository_root"];
+  "OwnedGitIdentity.repository_device": (V1.OwnedGitIdentity)["repository_device"];
+  "OwnedGitIdentity.repository_inode": (V1.OwnedGitIdentity)["repository_inode"];
+  "OwnedGitIdentity.common_dir": (V1.OwnedGitIdentity)["common_dir"];
+  "OwnedGitIdentity.common_device": (V1.OwnedGitIdentity)["common_device"];
+  "OwnedGitIdentity.common_inode": (V1.OwnedGitIdentity)["common_inode"];
+  "OwnedGitIdentity.checkout_path": (V1.OwnedGitIdentity)["checkout_path"];
+  "OwnedGitIdentity.checkout_device": (V1.OwnedGitIdentity)["checkout_device"];
+  "OwnedGitIdentity.checkout_inode": (V1.OwnedGitIdentity)["checkout_inode"];
+  "OwnedGitIdentity.checkout_key": (V1.OwnedGitIdentity)["checkout_key"];
+  "OwnedGitIdentity.branch_ref": (V1.OwnedGitIdentity)["branch_ref"];
+  "OwnedGitIdentity.creation_tip": (V1.OwnedGitIdentity)["creation_tip"];
+  "OwnedSpaceIdentity.creation_operation_id": (V1.OwnedSpaceIdentity)["creation_operation_id"];
+  "OwnedSpaceIdentity.endpoint_identity": (V1.OwnedSpaceIdentity)["endpoint_identity"];
+  "OwnedSpaceIdentity.session_id": (V1.OwnedSpaceIdentity)["session_id"];
+  "OwnedSpaceIdentity.workspace_id": (V1.OwnedSpaceIdentity)["workspace_id"];
+  "OwnedSpaceIdentity.checkout_path": (V1.OwnedSpaceIdentity)["checkout_path"];
+  "OwnedFilesystemIdentity.creation_operation_id": (V1.OwnedFilesystemIdentity)["creation_operation_id"];
+  "OwnedFilesystemIdentity.machine_id": (V1.OwnedFilesystemIdentity)["machine_id"];
+  "OwnedFilesystemIdentity.root": (V1.OwnedFilesystemIdentity)["root"];
+  "OwnedFilesystemIdentity.device": (V1.OwnedFilesystemIdentity)["device"];
+  "OwnedFilesystemIdentity.inode": (V1.OwnedFilesystemIdentity)["inode"];
+  "OwnedFilesystemIdentity.manifest_path": (V1.OwnedFilesystemIdentity)["manifest_path"];
+  "OwnedFilesystemIdentity.manifest_device": (V1.OwnedFilesystemIdentity)["manifest_device"];
+  "OwnedFilesystemIdentity.manifest_inode": (V1.OwnedFilesystemIdentity)["manifest_inode"];
+  "OwnedAttemptDirectoryIdentity.creation_operation_id": (V1.OwnedAttemptDirectoryIdentity)["creation_operation_id"];
+  "OwnedAttemptDirectoryIdentity.root": (V1.OwnedAttemptDirectoryIdentity)["root"];
+  "OwnedAttemptDirectoryIdentity.device": (V1.OwnedAttemptDirectoryIdentity)["device"];
+  "OwnedAttemptDirectoryIdentity.inode": (V1.OwnedAttemptDirectoryIdentity)["inode"];
+  "OwnedFixtureIdentity.adapter": (V1.OwnedFixtureIdentity)["adapter"];
+  "OwnedFixtureIdentity.creation_operation_id": (V1.OwnedFixtureIdentity)["creation_operation_id"];
+  "OwnedFixtureIdentity.filesystem": (V1.OwnedFixtureIdentity)["filesystem"];
+  "OwnedFixtureIdentity.processes": (V1.OwnedFixtureIdentity)["processes"];
   "OwnedResourceIdentity.identity": (V1.OwnedResourceIdentity)["identity"];
   "OwnedResourceIdentity[worker_terminal].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "worker_terminal" }>)["identity"];
   "OwnedResourceIdentity[worktree].identity": (Extract<V1.OwnedResourceIdentity, { "kind": "worktree" }>)["identity"];
@@ -403,6 +456,18 @@ export interface WireFields {
   "Attention.task_id": (V1.Attention)["task_id"];
   "Attention.message_seq": (V1.Attention)["message_seq"];
   "Attention.since": (V1.Attention)["since"];
+  "OrchestrationAction[directive_add].directive_id": (Extract<V1.OrchestrationAction, { "action": "directive_add" }>)["directive_id"];
+  "OrchestrationAction[directive_add].root_id": (Extract<V1.OrchestrationAction, { "action": "directive_add" }>)["root_id"];
+  "OrchestrationAction[directive_add].scope": (Extract<V1.OrchestrationAction, { "action": "directive_add" }>)["scope"];
+  "OrchestrationAction[directive_add].text": (Extract<V1.OrchestrationAction, { "action": "directive_add" }>)["text"];
+  "OrchestrationAction[directive_add].thread_id": (Extract<V1.OrchestrationAction, { "action": "directive_add" }>)["thread_id"];
+  "OrchestrationAction[directive_remove].root_id": (Extract<V1.OrchestrationAction, { "action": "directive_remove" }>)["root_id"];
+  "OrchestrationAction[directive_remove].directive_id": (Extract<V1.OrchestrationAction, { "action": "directive_remove" }>)["directive_id"];
+  "OrchestrationAction[task_continue].operation_id": (Extract<V1.OrchestrationAction, { "action": "task_continue" }>)["operation_id"];
+  "OrchestrationAction[task_continue].root_id": (Extract<V1.OrchestrationAction, { "action": "task_continue" }>)["root_id"];
+  "OrchestrationAction[task_continue].task_id": (Extract<V1.OrchestrationAction, { "action": "task_continue" }>)["task_id"];
+  "OrchestrationAction[task_continue].expected_task_revision": (Extract<V1.OrchestrationAction, { "action": "task_continue" }>)["expected_task_revision"];
+  "OrchestrationAction[task_continue].text": (Extract<V1.OrchestrationAction, { "action": "task_continue" }>)["text"];
   "OrchestrationAction[task_create].root_id": (Extract<V1.OrchestrationAction, { "action": "task_create" }>)["root_id"];
   "OrchestrationAction[task_create].task_id": (Extract<V1.OrchestrationAction, { "action": "task_create" }>)["task_id"];
   "OrchestrationAction[task_create].title": (Extract<V1.OrchestrationAction, { "action": "task_create" }>)["title"];
@@ -536,6 +601,7 @@ export interface WireFields {
   "OrchestrationAction[thread_handoff].thread_id": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["thread_id"];
   "OrchestrationAction[thread_handoff].to_run_id": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["to_run_id"];
   "OrchestrationAction[thread_handoff].text": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["text"];
+  "OrchestrationAction[thread_handoff].recipient": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["recipient"];
   "OrchestrationAction[thread_handoff].images": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["images"];
   "OrchestrationAction[thread_handoff].task_id": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["task_id"];
   "OrchestrationAction[thread_handoff].expected_task_revision": (Extract<V1.OrchestrationAction, { "action": "thread_handoff" }>)["expected_task_revision"];
@@ -570,6 +636,15 @@ export interface WireFields {
   "OrchestrationAction[inbox_pull].after_seq": (Extract<V1.OrchestrationAction, { "action": "inbox_pull" }>)["after_seq"];
   "OrchestrationAction[inbox_pull].limit": (Extract<V1.OrchestrationAction, { "action": "inbox_pull" }>)["limit"];
   "OrchestrationAction[inbox_ack].through_seq": (Extract<V1.OrchestrationAction, { "action": "inbox_ack" }>)["through_seq"];
+  "OrchestrationActionResult[directive_added].directive_id": (Extract<V1.OrchestrationActionResult, { "result": "directive_added" }>)["directive_id"];
+  "OrchestrationActionResult[directive_added].delivered_run_ids": (Extract<V1.OrchestrationActionResult, { "result": "directive_added" }>)["delivered_run_ids"];
+  "OrchestrationActionResult[directive_added].duplicate": (Extract<V1.OrchestrationActionResult, { "result": "directive_added" }>)["duplicate"];
+  "OrchestrationActionResult[directive_removed].directive_id": (Extract<V1.OrchestrationActionResult, { "result": "directive_removed" }>)["directive_id"];
+  "OrchestrationActionResult[task_continued].operation_id": (Extract<V1.OrchestrationActionResult, { "result": "task_continued" }>)["operation_id"];
+  "OrchestrationActionResult[task_continued].task_id": (Extract<V1.OrchestrationActionResult, { "result": "task_continued" }>)["task_id"];
+  "OrchestrationActionResult[task_continued].task_revision": (Extract<V1.OrchestrationActionResult, { "result": "task_continued" }>)["task_revision"];
+  "OrchestrationActionResult[task_continued].route": (Extract<V1.OrchestrationActionResult, { "result": "task_continued" }>)["route"];
+  "OrchestrationActionResult[task_continued].duplicate": (Extract<V1.OrchestrationActionResult, { "result": "task_continued" }>)["duplicate"];
   "OrchestrationActionResult[run_registered].run_id": (Extract<V1.OrchestrationActionResult, { "result": "run_registered" }>)["run_id"];
   "OrchestrationActionResult[run_registered].conversation": (Extract<V1.OrchestrationActionResult, { "result": "run_registered" }>)["conversation"];
   "OrchestrationActionResult[run_registered].assignment_generation": (Extract<V1.OrchestrationActionResult, { "result": "run_registered" }>)["assignment_generation"];
@@ -614,6 +689,11 @@ export interface WireFields {
 }
 
 export interface WireFieldNames {
+  "OwnedGitIdentity": "creation_operation_id" | "machine_id" | "repository_key" | "repository_root" | "repository_device" | "repository_inode" | "common_dir" | "common_device" | "common_inode" | "checkout_path" | "checkout_device" | "checkout_inode" | "checkout_key" | "branch_ref" | "creation_tip";
+  "OwnedSpaceIdentity": "creation_operation_id" | "endpoint_identity" | "session_id" | "workspace_id" | "checkout_path";
+  "OwnedFilesystemIdentity": "creation_operation_id" | "machine_id" | "root" | "device" | "inode" | "manifest_path" | "manifest_device" | "manifest_inode";
+  "OwnedAttemptDirectoryIdentity": "creation_operation_id" | "root" | "device" | "inode";
+  "OwnedFixtureIdentity": "adapter" | "creation_operation_id" | "filesystem" | "processes";
   "OwnedResourceIdentity": "identity";
   "OwnedResourceIdentity[worker_terminal]": "identity";
   "OwnedResourceIdentity[worktree]": "identity";
@@ -666,6 +746,9 @@ export interface WireFieldNames {
   "RuntimeObservation[unavailable]": "error";
   "Attention": "kind" | "run_id" | "task_id" | "message_seq" | "since";
   "OrchestrationAction": never;
+  "OrchestrationAction[directive_add]": "directive_id" | "root_id" | "scope" | "text" | "thread_id";
+  "OrchestrationAction[directive_remove]": "root_id" | "directive_id";
+  "OrchestrationAction[task_continue]": "operation_id" | "root_id" | "task_id" | "expected_task_revision" | "text";
   "OrchestrationAction[task_create]": "root_id" | "task_id" | "title" | "description" | "depends_on" | "follow_up_of" | "expected_doc_revision" | "source_revision" | "thread_id";
   "OrchestrationAction[task_assign]": "root_id" | "task_id" | "title" | "description";
   "OrchestrationAction[task_assignment_resolve]": "root_id" | "task_id" | "expected_task_revision" | "assign";
@@ -700,7 +783,7 @@ export interface WireFieldNames {
   "OrchestrationAction[cancel_run]": "run_id";
   "OrchestrationAction[reconcile_run]": "run_id" | "recovery";
   "OrchestrationAction[intent_resolve]": "intent_id" | "apply";
-  "OrchestrationAction[thread_handoff]": "message_id" | "thread_id" | "to_run_id" | "text" | "images" | "task_id" | "expected_task_revision" | "binding";
+  "OrchestrationAction[thread_handoff]": "message_id" | "thread_id" | "to_run_id" | "text" | "recipient" | "images" | "task_id" | "expected_task_revision" | "binding";
   "OrchestrationAction[thread_mark_read]": "thread_id" | "through_message_id";
   "OrchestrationAction[thread_link]": "root_id" | "task_id" | "thread_id";
   "OrchestrationAction[report]": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "to_run_id" | "original_task_revision" | "original_claim_id" | "thread_id" | "card" | "images";
@@ -709,6 +792,9 @@ export interface WireFieldNames {
   "OrchestrationAction[inbox_pull]": "after_seq" | "limit";
   "OrchestrationAction[inbox_ack]": "through_seq";
   "OrchestrationActionResult": never;
+  "OrchestrationActionResult[directive_added]": "directive_id" | "delivered_run_ids" | "duplicate";
+  "OrchestrationActionResult[directive_removed]": "directive_id";
+  "OrchestrationActionResult[task_continued]": "operation_id" | "task_id" | "task_revision" | "route" | "duplicate";
   "OrchestrationActionResult[run_registered]": "run_id" | "conversation" | "assignment_generation" | "duplicate";
   "OrchestrationActionResult[task_unassigned]": "task_id" | "assignment_generation" | "previous_run_id" | "duplicate";
   "OrchestrationActionResult[worker_started]": "start";
@@ -732,6 +818,7 @@ export interface WireFieldNames {
 }
 
 export interface WireChildNames {
+  "OwnedFixtureIdentity.filesystem": "OwnedFilesystemIdentity";
   "OwnedResourceIdentity.identity": "OwnedAttemptDirectoryIdentity" | "OwnedFilesystemIdentity" | "OwnedFixtureIdentity" | "OwnedGitIdentity" | "OwnedSpaceIdentity" | "RetirementIdentity";
   "OwnedResourceIdentity[worker_terminal].identity": "RetirementIdentity";
   "OwnedResourceIdentity[worktree].identity": "OwnedGitIdentity";
@@ -793,8 +880,10 @@ export interface WireChildNames {
   "OrchestrationAction.registration": "ResourceBuildRegistration";
   "OrchestrationAction.release": "ResourceRelease";
   "OrchestrationAction.request": "CleanupFinish" | "ResourceRegister" | "ResourceRequest";
+  "OrchestrationAction.scope": "DirectiveScope";
   "OrchestrationAction.source_output": "SourceOutput";
   "OrchestrationAction.target": "DispatchTarget";
+  "OrchestrationAction[directive_add].scope": "DirectiveScope";
   "OrchestrationAction[supervisor_start].target": "DispatchTarget";
   "OrchestrationAction[run_attach].conversation": "ConversationIdentity";
   "OrchestrationAction[run_adopt].location": "RunLocation";
@@ -817,9 +906,11 @@ export interface WireChildNames {
   "OrchestrationActionResult.request": "ResourceRequestRecord";
   "OrchestrationActionResult.resource": "OwnedResourceRecord";
   "OrchestrationActionResult.resume": "RunResumeResult";
+  "OrchestrationActionResult.route": "ContinueRoute";
   "OrchestrationActionResult.start": "SupervisorStartResult" | "WorkerStartResult";
   "OrchestrationActionResult.task": "Task";
   "OrchestrationActionResult.update": "TaskScopeUpdateResult";
+  "OrchestrationActionResult[task_continued].route": "ContinueRoute";
   "OrchestrationActionResult[run_registered].conversation": "ConversationIdentity";
   "OrchestrationActionResult[worker_started].start": "WorkerStartResult";
   "OrchestrationActionResult[worker_replaced].start": "WorkerStartResult";
@@ -863,6 +954,9 @@ export interface WireTagNames {
   "RuntimeObservation[fresh]": "status";
   "RuntimeObservation[unavailable]": "status";
   "OrchestrationAction": "action";
+  "OrchestrationAction[directive_add]": "action";
+  "OrchestrationAction[directive_remove]": "action";
+  "OrchestrationAction[task_continue]": "action";
   "OrchestrationAction[task_create]": "action";
   "OrchestrationAction[task_assign]": "action";
   "OrchestrationAction[task_assignment_resolve]": "action";
@@ -906,6 +1000,9 @@ export interface WireTagNames {
   "OrchestrationAction[inbox_pull]": "action";
   "OrchestrationAction[inbox_ack]": "action";
   "OrchestrationActionResult": "result";
+  "OrchestrationActionResult[directive_added]": "result";
+  "OrchestrationActionResult[directive_removed]": "result";
+  "OrchestrationActionResult[task_continued]": "result";
   "OrchestrationActionResult[run_registered]": "result";
   "OrchestrationActionResult[task_unassigned]": "result";
   "OrchestrationActionResult[worker_started]": "result";
@@ -929,6 +1026,11 @@ export interface WireTagNames {
 }
 
 export interface WireCheckpointFieldNames {
+  "OwnedGitIdentity": "creation_operation_id" | "machine_id" | "repository_key" | "repository_root" | "repository_device" | "repository_inode" | "common_dir" | "common_device" | "common_inode" | "checkout_path" | "checkout_device" | "checkout_inode" | "checkout_key" | "branch_ref" | "creation_tip";
+  "OwnedSpaceIdentity": "creation_operation_id" | "endpoint_identity" | "session_id" | "workspace_id" | "checkout_path";
+  "OwnedFilesystemIdentity": "creation_operation_id" | "machine_id" | "root" | "device" | "inode" | "manifest_path" | "manifest_device" | "manifest_inode";
+  "OwnedAttemptDirectoryIdentity": "creation_operation_id" | "root" | "device" | "inode";
+  "OwnedFixtureIdentity": "adapter" | "creation_operation_id" | "filesystem" | "processes";
   "OwnedResourceIdentity": "identity" | "kind";
   "OwnedResourceIdentity[worker_terminal]": "identity" | "kind";
   "OwnedResourceIdentity[worktree]": "identity" | "kind";
@@ -980,7 +1082,10 @@ export interface WireCheckpointFieldNames {
   "RuntimeObservation[fresh]": "endpoint_identity" | "observed_at" | "runs" | "status";
   "RuntimeObservation[unavailable]": "error" | "status";
   "Attention": "kind" | "run_id" | "task_id" | "message_seq" | "since";
-  "OrchestrationAction": "action" | "after_seq" | "apply" | "assign" | "attachment_id" | "before_step_id" | "binding" | "brief" | "card" | "checked" | "cleanup_policy" | "confirmed_stopped_attachment_id" | "conversation" | "depends_on" | "description" | "expected_assignment_generation" | "expected_attachment_epoch" | "expected_doc_revision" | "expected_run_id" | "expected_task_revision" | "follow_up_of" | "images" | "in_reply_to" | "intent_id" | "kind" | "label" | "limit" | "location" | "message_id" | "operation_id" | "original_claim_id" | "original_task_revision" | "outcome" | "parent_step_id" | "plan" | "reason" | "record" | "recovery" | "registration" | "release" | "request" | "root_id" | "run_id" | "scope" | "selected_root_id" | "source_output" | "source_revision" | "step_id" | "summary" | "target" | "task_id" | "text" | "thread_id" | "through_message_id" | "through_seq" | "title" | "to_run_id";
+  "OrchestrationAction": "action" | "after_seq" | "apply" | "assign" | "attachment_id" | "before_step_id" | "binding" | "brief" | "card" | "checked" | "cleanup_policy" | "confirmed_stopped_attachment_id" | "conversation" | "depends_on" | "description" | "directive_id" | "expected_assignment_generation" | "expected_attachment_epoch" | "expected_doc_revision" | "expected_run_id" | "expected_task_revision" | "follow_up_of" | "images" | "in_reply_to" | "intent_id" | "kind" | "label" | "limit" | "location" | "message_id" | "operation_id" | "original_claim_id" | "original_task_revision" | "outcome" | "parent_step_id" | "plan" | "reason" | "recipient" | "record" | "recovery" | "registration" | "release" | "request" | "root_id" | "run_id" | "scope" | "selected_root_id" | "source_output" | "source_revision" | "step_id" | "summary" | "target" | "task_id" | "text" | "thread_id" | "through_message_id" | "through_seq" | "title" | "to_run_id";
+  "OrchestrationAction[directive_add]": "directive_id" | "root_id" | "scope" | "text" | "thread_id" | "action";
+  "OrchestrationAction[directive_remove]": "root_id" | "directive_id" | "action";
+  "OrchestrationAction[task_continue]": "operation_id" | "root_id" | "task_id" | "expected_task_revision" | "text" | "action";
   "OrchestrationAction[task_create]": "root_id" | "task_id" | "title" | "description" | "depends_on" | "follow_up_of" | "expected_doc_revision" | "source_revision" | "thread_id" | "action";
   "OrchestrationAction[task_assign]": "root_id" | "task_id" | "title" | "description" | "action";
   "OrchestrationAction[task_assignment_resolve]": "root_id" | "task_id" | "expected_task_revision" | "assign" | "action";
@@ -1015,7 +1120,7 @@ export interface WireCheckpointFieldNames {
   "OrchestrationAction[cancel_run]": "run_id" | "action";
   "OrchestrationAction[reconcile_run]": "run_id" | "recovery" | "action";
   "OrchestrationAction[intent_resolve]": "intent_id" | "apply" | "action";
-  "OrchestrationAction[thread_handoff]": "message_id" | "thread_id" | "to_run_id" | "text" | "images" | "task_id" | "expected_task_revision" | "binding" | "action";
+  "OrchestrationAction[thread_handoff]": "message_id" | "thread_id" | "to_run_id" | "text" | "recipient" | "images" | "task_id" | "expected_task_revision" | "binding" | "action";
   "OrchestrationAction[thread_mark_read]": "thread_id" | "through_message_id" | "action";
   "OrchestrationAction[thread_link]": "root_id" | "task_id" | "thread_id" | "action";
   "OrchestrationAction[report]": "message_id" | "kind" | "outcome" | "summary" | "plan" | "source_output" | "to_run_id" | "original_task_revision" | "original_claim_id" | "thread_id" | "card" | "images" | "action";
@@ -1023,7 +1128,10 @@ export interface WireCheckpointFieldNames {
   "OrchestrationAction[annotate]": "run_id" | "text" | "action";
   "OrchestrationAction[inbox_pull]": "after_seq" | "limit" | "action";
   "OrchestrationAction[inbox_ack]": "through_seq" | "action";
-  "OrchestrationActionResult": "assigned" | "assignment_generation" | "attach" | "attempt" | "cleanup" | "conversation" | "doc_revision" | "duplicate" | "messages" | "operation_id" | "placement" | "previous_run_id" | "read_through_seq" | "receipt" | "request" | "resource" | "result" | "resume" | "run_id" | "seq" | "stale" | "start" | "task" | "task_id" | "to_run_id" | "update";
+  "OrchestrationActionResult": "assigned" | "assignment_generation" | "attach" | "attempt" | "cleanup" | "conversation" | "delivered_run_ids" | "directive_id" | "doc_revision" | "duplicate" | "messages" | "operation_id" | "placement" | "previous_run_id" | "read_through_seq" | "receipt" | "request" | "resource" | "result" | "resume" | "route" | "run_id" | "seq" | "stale" | "start" | "task" | "task_id" | "task_revision" | "to_run_id" | "update";
+  "OrchestrationActionResult[directive_added]": "directive_id" | "delivered_run_ids" | "duplicate" | "result";
+  "OrchestrationActionResult[directive_removed]": "directive_id" | "result";
+  "OrchestrationActionResult[task_continued]": "operation_id" | "task_id" | "task_revision" | "route" | "duplicate" | "result";
   "OrchestrationActionResult[run_registered]": "run_id" | "conversation" | "assignment_generation" | "duplicate" | "result";
   "OrchestrationActionResult[task_unassigned]": "task_id" | "assignment_generation" | "previous_run_id" | "duplicate" | "result";
   "OrchestrationActionResult[worker_started]": "start" | "result";
@@ -1047,6 +1155,7 @@ export interface WireCheckpointFieldNames {
 }
 
 export type WireOmittableField =
+  | "OwnedGitIdentity.branch_ref"
   | "CleanupEffectReceipt.evidence"
   | "CleanupItem.operation_id"
   | "CleanupItem.reason"
@@ -1123,6 +1232,7 @@ export type WireOmittableField =
   | "Attention.run_id"
   | "Attention.task_id"
   | "Attention.message_seq"
+  | "OrchestrationAction[directive_add].thread_id"
   | "OrchestrationAction[task_create].follow_up_of"
   | "OrchestrationAction[task_create].expected_doc_revision"
   | "OrchestrationAction[task_create].source_revision"
@@ -1147,6 +1257,7 @@ export type WireOmittableField =
   | "OrchestrationAction[task_scope_update].title"
   | "OrchestrationAction[task_scope_update].description"
   | "OrchestrationAction[reconcile_run].recovery"
+  | "OrchestrationAction[thread_handoff].recipient"
   | "OrchestrationAction[thread_handoff].images"
   | "OrchestrationAction[thread_handoff].task_id"
   | "OrchestrationAction[thread_handoff].expected_task_revision"
@@ -1175,8 +1286,10 @@ export type WireOptionalField =
   | "Message.thread_id"
   | "Message.handoff"
   | "QuestionStatus.thread_id"
+  | "OrchestrationAction[directive_add].thread_id"
   | "OrchestrationAction[task_create].thread_id"
   | "OrchestrationAction[run_resume].confirmed_stopped_attachment_id"
+  | "OrchestrationAction[thread_handoff].recipient"
   | "OrchestrationAction[thread_handoff].images"
   | "OrchestrationAction[thread_handoff].task_id"
   | "OrchestrationAction[thread_handoff].expected_task_revision"
@@ -1192,6 +1305,7 @@ export type WireOptionalField =
   | never;
 
 export type WireListField =
+  | "OwnedFixtureIdentity.processes"
   | "CleanupItem.effects"
   | "OwnedResourceRecord.consumers"
   | "CleanupFinishResult.items"
@@ -1205,6 +1319,7 @@ export type WireListField =
   | "OrchestrationAction[thread_handoff].images"
   | "OrchestrationAction[report].images"
   | "OrchestrationAction[message_send].images"
+  | "OrchestrationActionResult[directive_added].delivered_run_ids"
   | "OrchestrationActionResult[inbox].messages"
   | never;
 

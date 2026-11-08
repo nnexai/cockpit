@@ -45,7 +45,7 @@ impl Fixture {
         claims::reserve_claim(&mut state, &checkout, &holder, &id()).unwrap();
         state.credentials.push(credential);
         state.task_ownership.push(TaskOwnership {
-            root_id: ROOT.into(), task_id: task.task_id.clone(), generation: 1, schedule: None,
+            root_id: ROOT.into(), task_id: task.task_id.clone(), generation: 1, schedule: None, reopened_after_attempt: None,
             owner: Some(TaskOwner {
                 run_id: state.runs[1].run_id.clone(),
                 conversation: Some(conversation()), claim_operation_id: id(),
@@ -788,7 +788,7 @@ fn replacement_retirement_uses_durable_root_authority_without_inventing_result_p
     successor.assignment_generation = Some(2);
     let mut state = OrchestrationState { runs: vec![previous.clone(), successor],
         task_ownership: vec![TaskOwnership { root_id: ROOT.into(), task_id: previous.task_id.clone().unwrap(),
-            generation: 2, owner: None, schedule: None }], ..Default::default() };
+            generation: 2, owner: None, schedule: None, reopened_after_attempt: None }], ..Default::default() };
     state.operations.push(super::store::DurableOperationRecord { operation_id: operation_id.clone(),
         actor_run_id: Some(ROOT.into()), principal_key: "root".into(), root_id: ROOT.into(),
         kind: super::store::DurableOperationKind::WorkerReplace, request_digest: "trusted committed replacement".into(),

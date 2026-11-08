@@ -6,6 +6,7 @@ use super::store::OrchestrationState;
 use super::{Actor, AgentCaller, AuthorizedJob, ImageViewer, ResolvedMutationInput, actor_ref, error, image_visible, is_ancestor, now, run_index};
 use super::credentials::{JobRole, validate_caller};
 use crate::InspectionError;
+use super::board_digest::{BoardDigest, WorkerState};
 
 mod inbox;
 mod report;
@@ -35,11 +36,19 @@ pub struct InboxMessageContext {
     pub task_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<TaskProject>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_state: Option<WorkerState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 impl super::OrchestrationService {
     /// Enrich one captured batch from durable state without a Herdr snapshot.
-    pub fn inbox_message_context(&self, caller: &AgentCaller, messages: &[Message])
+    pub fn inbox_message_context(&self, caller: &AgentCaller, messages: &[Message], digest: Option<&BoardDigest>)
         -> Result<std::collections::BTreeMap<String, InboxMessageContext>, InspectionError> {
         let locked = self.store.lock()?;
         let state = locked.read_shared()?;
@@ -62,15 +71,36 @@ impl super::OrchestrationService {
                         resource.root_id == recipient.root_id && resource.resource_id == resource_id)?;
                     state.runs.iter().find(|run| run.run_id == resource.run_id && run.root_id == recipient.root_id)
                 });
-            let task_id = run.and_then(|run| run.task_id.clone()).or_else(|| {
-                message.message_id.split(':').skip(1).find(|part|
-                    document.task(part).is_ok()).map(str::to_owned)
-            });
-            let task_title = task_id.as_ref().and_then(|id| document.task(id).ok()).map(|task| task.title.clone());
+            let task_id = run.and_then(|run| run.task_id.clone())
+                .or_else(|| message.handoff.as_ref().and_then(|handoff| handoff.task_id.clone()))
+                .or_else(|| {
+                    message.message_id.split(':').skip(1).find(|part|
+                        document.task(part).is_ok()).map(str::to_owned)
+                });
+            let task = task_id.as_ref().and_then(|id| document.task(id).ok());
+            let task_title = task.map(|task| task.title.clone());
             let project = task_id.as_ref().and_then(|id| super::projection::task_project(&state, &recipient.root_id, id, None));
-            if run.is_some() || task_title.is_some() {
+            let thread_title = message.thread_id.as_ref().and_then(|thread_id| state.messages.iter()
+                .filter(|m| m.thread_id.as_ref() == Some(thread_id) && !m.stale
+                    && (m.to_run_id == recipient.root_id || matches!(&m.from, ActorRef::Run { run_id } if run_id == &recipient.root_id)))
+                .filter_map(|m| m.report.as_ref()?.card.as_ref().map(|card| (m, card)))
+                .max_by(|(a, _), (b, _)| (&a.created_at, a.seq, &a.message_id).cmp(&(&b.created_at, b.seq, &b.message_id)))
+                .map(|(_, card)| card.title.clone()));
+            let row = digest.filter(|d| d.root_id == recipient.root_id)
+                .and_then(|d| task_id.as_ref().and_then(|id| d.tasks.iter().find(|row| &row.task_id == id)));
+            let current = task_id.as_ref().and_then(|id| super::projection::current_task_run(&state, &recipient.root_id, id));
+            let current_run = run.is_some_and(|run| current.is_some_and(|current| current.run_id == run.run_id));
+            let obsolete = message.stale
+                || run.is_some_and(|run| run.stage == RunStage::Closed
+                    && !(current_run && run.close_reason == Some(CloseReason::Accepted)))
+                || (task.is_some_and(|task| task.checked) && !current_run
+                    && message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Result));
+            let note = obsolete.then(|| "attempt superseded or task already accepted; no action needed".to_owned());
+            if run.is_some() || task_title.is_some() || thread_title.is_some() || note.is_some() {
                 contexts.insert(message.message_id.clone(), InboxMessageContext {
                     run_label: run.map(|run| run.label.clone()), task_id, task_title, project,
+                    thread_title, worker_state: row.map(|row| row.worker),
+                    last_activity_at: row.and_then(|row| row.last_activity_at.clone()), note,
                 });
             }
         }
@@ -97,6 +127,7 @@ fn meaningful_parts(id: &str, sender: &ActorRef, recipient: &str, kind: MessageK
         MessageKind::Observation if matches!(sender, ActorRef::Dispatcher) => {
             !(id.starts_with("cleanup:") || id.starts_with("scope-cleanup:")
                 || id.starts_with("scheduled-") || id.starts_with("dispatch-recovered:")
+                || id.starts_with("stalled:") || id.starts_with("directive-copy:")
                 || (id.starts_with("observation:") && id.split(':').nth(2) == Some("endpoint_changed")))
         }
         _ => true,
@@ -152,7 +183,7 @@ fn count_inbox<'a>(messages: impl Iterator<Item = InboxEntry<'a>> + Clone, run_i
             MessageKind::WorkBrief => "work_brief", MessageKind::SupervisorBrief => "supervisor_brief",
             MessageKind::Instruction => "instruction", MessageKind::Answer => "answer",
             MessageKind::CancelRequest => "cancel_request", MessageKind::Report => "report",
-            MessageKind::Observation => "observation",
+            MessageKind::Observation => "observation", MessageKind::UserDirective => "user_directive",
         };
         counts.entry(key).or_insert(InboxKindCount { kind: message.kind, count: 0 }).count += 1;
     }

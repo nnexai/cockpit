@@ -47,7 +47,7 @@ export const wireProjectConfiguration: WireDescriptor<V1.ProjectConfiguration> =
   "checkout_template": req(str),
   "providers": req(list(named(() => wireProjectProvider))),
   "limits": req(named(() => wireProjectLimits)),
-  "orchestration": req(named(() => wireOrchestrationConfiguration), { fill: () => ({"command":"omp","extra_args":[],"harness_kind":"omp","hook_args":null,"inbox_prompt_hints":false,"initial_prompt_args":null,"max_parallel":4,"process_scope":"auto","resume_args":null,"routes":[]}) }),
+  "orchestration": req(named(() => wireOrchestrationConfiguration), { fill: () => ({"command":"omp","extra_args":[],"harness_kind":"omp","hook_args":null,"inbox_prompt_hints":false,"initial_prompt_args":null,"max_parallel":4,"process_scope":"auto","quiet_period_seconds":900,"resume_args":null,"routes":[]}) }),
 });
 
 export const wireOrchestrationConfiguration: WireDescriptor<V1.OrchestrationConfiguration> = struct<V1.OrchestrationConfiguration>("OrchestrationConfiguration", {
@@ -58,6 +58,7 @@ export const wireOrchestrationConfiguration: WireDescriptor<V1.OrchestrationConf
   "initial_prompt_args": req(nullable(list(str)), { fill: null }),
   "hook_args": req(nullable(list(str)), { fill: null }),
   "max_parallel": req(u32, { fill: 4 }),
+  "quiet_period_seconds": req(u32, { fill: 900 }),
   "process_scope": req(named(() => wireScopeMode), { fill: "auto" }),
   "inbox_prompt_hints": req(bool, { fill: false }),
   "routes": req(list(named(() => wireOrchestrationRoute)), { fill: () => ([]) }),

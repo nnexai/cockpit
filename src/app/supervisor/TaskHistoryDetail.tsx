@@ -36,7 +36,7 @@ function HistoryEventRow({ event }: { event: HistoryEvent }) {
       detail = <><p className="liaison-result-summary">{event.summary}</p><Facts facts={event.facts} /></>;
       break;
     case "unreflected_input": {
-      const kind = event.inputKind === "instruction" ? "Instruction" : event.inputKind === "answer" ? "Answer" : event.inputKind === "cancel_request" ? "Cancel request" : "Message";
+      const kind = event.inputKind === "instruction" ? "Instruction" : event.inputKind === "user_directive" ? "User directive" : event.inputKind === "answer" ? "Answer" : event.inputKind === "cancel_request" ? "Cancel request" : "Message";
       const stage = event.stage === "stored" ? event.closed ? "no pickup recorded" : "waiting to be picked up" : event.stage === "read" ? "picked up" : "captured, processing not confirmed";
       label = `${kind} sent ${event.afterResult ? "after" : "before"} the Result`;
       tone = " is-wait";

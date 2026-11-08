@@ -551,6 +551,12 @@ fn validate_orchestration(
     if !(1..=64).contains(&configuration.max_parallel) {
         return Err(InspectionError::new("invalid_orchestration_parallelism", "max_parallel must be between 1 and 64"));
     }
+    if !(30..=86_400).contains(&configuration.quiet_period_seconds) {
+        return Err(InspectionError::new(
+            "invalid_orchestration_quiet_period",
+            "quiet_period_seconds must be between 30 and 86400",
+        ));
+    }
     for (args, placeholder, allow_empty) in [
         (configuration.initial_prompt_args.as_ref(), "{prompt}", false),
         (configuration.hook_args.as_ref(), "{hook_path}", true),
@@ -783,3 +789,25 @@ fn xdg_directory(variable: &str, home_suffix: &str) -> Result<PathBuf, Inspectio
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod quiet_period_tests {
+    use super::*;
+
+    #[test]
+    fn quiet_period_is_bounded_and_defaults_to_fifteen_minutes() {
+        let mut configuration = OrchestrationConfiguration::default();
+        assert_eq!(configuration.quiet_period_seconds, 900);
+        for seconds in [30, 900, 86_400] {
+            configuration.quiet_period_seconds = seconds;
+            assert!(validate_orchestration(&configuration).is_ok());
+        }
+        for seconds in [0, 29, 86_401, u32::MAX] {
+            configuration.quiet_period_seconds = seconds;
+            assert_eq!(
+                validate_orchestration(&configuration).unwrap_err().code,
+                "invalid_orchestration_quiet_period"
+            );
+        }
+    }
+}

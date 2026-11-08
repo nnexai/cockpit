@@ -1,6 +1,6 @@
 use cockpit_core::orchestration::{Actor, OrchestrationService};
 use cockpit_herdr::HerdrCliAdapter;
-use cockpit_protocol::orchestration::OperatorOrigin;
+use cockpit_protocol::orchestration::{MessageKind, OperatorOrigin};
 use super::{CliError, args::OrchestrationArgs, output::emit, resolve};
 use crate::endpoint::{AmbientEndpoint, resolve_endpoint};
 
@@ -20,15 +20,20 @@ fn endpoint(common: &OrchestrationArgs, service: &OrchestrationService) -> Resul
     }
 }
 
+fn message_kind(from_user: bool) -> MessageKind {
+    if from_user { MessageKind::UserDirective } else { MessageKind::Instruction }
+}
 
-/// Integration: route `agent send REF --text TEXT [--json]` to this function.
+
+/// Route `agent send REF --text TEXT [--from-user] [--json]`.
 /// The common endpoint/config options are reused without credential admission.
-pub(super) async fn send(common: &OrchestrationArgs, reference: &str, text: String, json_output: bool) -> Result<(), CliError> {
+pub(super) async fn send(common: &OrchestrationArgs, reference: &str, text: String, from_user: bool, json_output: bool) -> Result<(), CliError> {
     let configuration = common.configuration()?;
     let service = OrchestrationService::open(&configuration)?;
     let endpoint = endpoint(common, &service)?;
     let adapter = HerdrCliAdapter::new(endpoint.config);
-    let result = cockpit_host::agent_send::send_to_agent(&service, &adapter, &endpoint.session, common.root.clone(), reference, text, OperatorOrigin::Native, true, false, None, |snapshot, reference| {
+    let kind = message_kind(from_user);
+    let result = cockpit_host::agent_send::send_to_agent(&service, &adapter, &endpoint.session, common.root.clone(), reference, text, OperatorOrigin::Native, true, false, kind, None, |snapshot, reference| {
         match resolve::run(snapshot, reference) {
             Ok(id) => Ok(Some(id)),
             Err(error) if error.code == "reference_not_found" => Ok(None),
@@ -39,3 +44,13 @@ pub(super) async fn send(common: &OrchestrationArgs, reference: &str, text: Stri
 }
 
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_user_selects_user_directive_for_managed_delivery() {
+        assert_eq!(message_kind(true), MessageKind::UserDirective);
+        assert_eq!(message_kind(false), MessageKind::Instruction);
+    }
+}

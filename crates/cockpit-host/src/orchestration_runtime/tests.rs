@@ -1226,6 +1226,7 @@ async fn handoff_binding_observes_the_current_workspace_checkout_and_refuses_sta
             message_id: "message".into(), thread_id: "thread".into(), to_run_id: "run".into(),
             text: "Investigate".into(), task_id: None, expected_task_revision: None,
             binding: Some(binding.clone()),
+            recipient: cockpit_protocol::orchestration::HandoffRecipient::Owner,
         },
     };
     let projects = fixture.projects(None);

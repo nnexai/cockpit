@@ -241,7 +241,7 @@ class AppFixture {
     setProviderCredential: vi.fn(async () => { throw new Error("Unexpected provider credentials in terminal fixture"); }),
     clearProviderCredential: vi.fn(async () => { throw new Error("Unexpected provider credentials in terminal fixture"); }),
     repositories: vi.fn(async () => { throw new Error("Unexpected project operation in terminal fixture"); }),
-    orchestrationInbox: vi.fn(async request => ({ session_id: request.session_id, state_store_id: "fixture", revision: 0, tasks_token: "fixture", observation: { status: "fresh" as const, observed_at: "2026-01-01T00:00:00Z" }, owners: [], threads: [], unmanaged_agents: [], image_limits: { max_bytes: 5 * 1024 * 1024, max_count: 4, mime_types: ["image/png", "image/jpeg"] } })),
+    orchestrationInbox: vi.fn(async request => ({ session_id: request.session_id, state_store_id: "fixture", revision: 0, tasks_token: "fixture", observation: { status: "fresh" as const, observed_at: "2026-01-01T00:00:00Z" }, owners: [], threads: [], stalls: [], unmanaged_agents: [], image_limits: { max_bytes: 5 * 1024 * 1024, max_count: 4, mime_types: ["image/png", "image/jpeg"] } })),
     orchestrationImagePut: vi.fn(async () => { throw new Error("Unexpected image upload in terminal fixture"); }),
     orchestrationImageRead: vi.fn(async () => { throw new Error("Unexpected image read in terminal fixture"); }),
     orchestrationArtifactRead: vi.fn(async () => { throw new Error("Unexpected artifact read in terminal fixture"); }),
@@ -717,7 +717,7 @@ describe("mounted App mutation and session ordering", () => {
     vi.mocked(fixture.client.projectConfiguration).mockResolvedValue({
       version: 1, repository_roots: [], worktree_root: "", state_root: "", cache_root: "",
       library_root: "/data/cockpit/library", notes_root: "/data/cockpit/notes", branch_template: "", checkout_template: "", providers: [],
-      orchestration: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, initial_prompt_args: null, hook_args: null, max_parallel: 4, process_scope: "auto", inbox_prompt_hints: false, routes: [] },
+      orchestration: { harness_kind: "omp", command: "omp", extra_args: [], resume_args: null, initial_prompt_args: null, hook_args: null, max_parallel: 4, quiet_period_seconds: 900, process_scope: "auto", inbox_prompt_hints: false, routes: [] },
       limits: { catalog_depth: 1, catalog_entries: 1, git_timeout_ms: 1, git_output_bytes: 1, operation_timeout_ms: 1,
         context_preview_bytes: 1, context_preview_lines: 1, context_directory_entries: 1, context_tree_depth: 1,
         library_folder_files: 1, library_folder_bytes: 1, library_file_bytes: 1, library_space_pages: 1,

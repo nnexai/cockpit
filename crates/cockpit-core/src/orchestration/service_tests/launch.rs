@@ -350,7 +350,7 @@ fn captured_message_context_uses_durable_task_and_project() {
     let messages = state.messages.clone();
     drop(locked);
     let Actor::Agent(caller) = supervisor else { unreachable!() };
-    let contexts = fixture.service.inbox_message_context(&caller, &messages).unwrap();
+    let contexts = fixture.service.inbox_message_context(&caller, &messages, None).unwrap();
     let context = contexts.get("digest-test").unwrap();
     assert_eq!(context.run_label.as_deref(), Some(fixture.run(&worker).label.as_str()));
     assert_eq!(context.task_id.as_deref(), Some(task.task_id.as_str()));

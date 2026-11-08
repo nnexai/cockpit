@@ -65,10 +65,18 @@ fn check_ready_pane(reference: &str, pane: Option<&RuntimePane>) -> Result<(), I
     Ok(())
 }
 
+fn prompt_text(kind: MessageKind, text: String) -> String {
+    if kind == MessageKind::UserDirective {
+        format!("(from the user) {text}")
+    } else {
+        text
+    }
+}
+
 pub async fn send_to_agent<F>(
     service: &OrchestrationService, adapter: &HerdrCliAdapter, session: &str,
     root: Option<String>, reference: &str, text: String, origin: OperatorOrigin, announce: bool, idle_only: bool,
-    expected_target: Option<AgentSendTarget>, resolve_run: F,
+    kind: MessageKind, expected_target: Option<AgentSendTarget>, resolve_run: F,
 ) -> Result<serde_json::Value, InspectionError>
 where F: FnOnce(&cockpit_protocol::orchestration::OrchestrationSnapshot, &str) -> Result<Option<String>, InspectionError> {
     if reference.trim().is_empty() || text.trim().is_empty() {
@@ -110,7 +118,7 @@ where F: FnOnce(&cockpit_protocol::orchestration::OrchestrationSnapshot, &str) -
                 OrchestrationMutationRequest { session_id: session.to_owned(), expected_revision: None,
                     action: OrchestrationAction::MessageSend { message_id: message_id.clone(), to_run_id: run.run_id.clone(),
                         images: Vec::new(),
-                        kind: MessageKind::Instruction, text, in_reply_to: None,
+                        kind, text, in_reply_to: None,
                         original_task_revision: None, original_claim_id: None } },
                 &cockpit_core::orchestration::ResolvedMutationInput::default(),
             )?;
@@ -130,6 +138,7 @@ where F: FnOnce(&cockpit_protocol::orchestration::OrchestrationSnapshot, &str) -
         || snapshot.runs.iter().any(|run| run.stage != RunStage::Closed && run.kind == RunKind::Worker && location_pane(run) == Some(pane.pane_id.as_str())) {
         return Err(InspectionError::new("ambiguous_reference", "Agent pane has ambiguous managed run bindings"));
     }
+    let text = prompt_text(kind, text);
     adapter.prompt_unmanaged_agent(session, &runtime, pane, &text).await?;
     Ok(json!({"delivery":"prompted", "pane_id":pane.pane_id}))
 }
@@ -244,6 +253,12 @@ mod tests {
         assert_eq!(pane_candidates("ALPHA", &runtime).len(), 1);
         assert_eq!(pane_candidates("shared", &runtime).len(), 2);
         assert!(pane_candidates("missing", &runtime).is_empty());
+    }
+
+    #[test]
+    fn unmanaged_user_directive_is_attributed_without_changing_instruction() {
+        assert_eq!(prompt_text(MessageKind::UserDirective, "hello".into()), "(from the user) hello");
+        assert_eq!(prompt_text(MessageKind::Instruction, "hello".into()), "hello");
     }
     #[test]
     fn managed_workers_use_inbox_unmanaged_use_prompt_and_liaisons_are_refused() {

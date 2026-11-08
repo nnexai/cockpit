@@ -80,6 +80,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const [wideDetail, setWideDetail] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<{ agent: UnmanagedAgent; terminalId: string | null } | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [recipients, setRecipients] = useState<Record<string, string>>({});
   const [selectedQuestion, setSelectedQuestion] = useState<string | null>(null);
   const [selectedOwner, setOwner] = useState("");
   const [preferredOwner, setPreferredOwner] = useState("");
@@ -247,6 +248,9 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   // Follow-up, new-work and direct drafts keep their key (and images); each open question has its own answer draft.
   const followKey = direct ? JSON.stringify(["agent", direct.pane_id]) : selected ?? "new";
   const draftKey = thread && picked ? answerDraftKey(thread.thread_id, picked) : followKey;
+  const recipient = recipients[followKey] ?? "";
+  const workerTasks = thread?.tasks.filter(task => task.run?.presence === "present" && (task.run.stage === "working" || task.run.stage === "reported")) ?? [];
+  const recipientTask = thread?.tasks.find(task => JSON.stringify([task.root_id, task.task_id]) === recipient);
   const text = mode === "choose" ? "" : drafts[draftKey] ?? "";
   const images = useInboxImages(client, sessionId, followKey, view?.image_limits);
   const setText = (value: string) => { setDrafts(d => ({ ...d, [draftKey]: value })); };
@@ -291,11 +295,11 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const directReady = !!direct && !!liveDirect && (liveDirect.agent.status === "idle" || liveDirect.agent.status === "done") && directTargetMatches && direct.expected_target?.pane_id === direct.pane_id && direct.expected_target.workspace_id === direct.workspace_id && direct.expected_target.tab_id === direct.tab_id && direct.expected_target.terminal_id === selectedAgent?.terminalId && (direct.expected_target.agent_name === null || direct.expected_target.agent_name === direct.agent_name) && !directStale && !directUncertain[direct.pane_id];
   const directContext = direct && directTargetMatches && liveDirect ? contextFor(latestDirect!) : null;
   const visibleOutcome = directOutcome && direct && directOutcome.pane === direct.pane_id && directOutcome.target === JSON.stringify(direct.expected_target) ? directOutcome : null;
-  const open = (location: InboxLocation | null) => {
-    if (!location || !current || view?.observation.status !== "fresh" || snapshot?.session_id !== sessionId || (direct && (!liveDirect || !directTargetMatches))) return;
+  const open = (location: InboxLocation | null, supervisor = false) => {
+    if (!location || !current || view?.observation.status !== "fresh" || snapshot?.session_id !== sessionId || (!supervisor && direct && (!liveDirect || !directTargetMatches))) return;
     // Capture the completion at the click, not after navigation: a later
     // completion must remain unseen even if it arrives while focus is pending.
-    const row = direct && liveDirect?.canSeen ? liveDirect : null;
+    const row = !supervisor && direct && liveDirect?.canSeen ? liveDirect : null;
     const target = direct?.expected_target;
     const attempt = selectionVersion.current;
     const instance = snapshot.server_instance;
@@ -317,7 +321,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
       const response = await client.orchestrationMutate({ session_id: sessionId, expected_revision: null, action: operation.action });
       if (!mounted.current) return;
       revisionFloor.current = Math.max(revisionFloor.current, response.revision);
-      if (response.result.result !== "message" || (operation.action.action === "thread_handoff" && response.result.to_run_id !== operation.action.to_run_id) || (operation.action.action === "message_send" && response.result.to_run_id !== operation.action.to_run_id)) throw new Error("Delivery receipt did not match the request");
+      if (response.result.result !== "message" || (operation.action.action === "thread_handoff" && operation.action.recipient !== "task_worker" && response.result.to_run_id !== operation.action.to_run_id) || (operation.action.action === "message_send" && response.result.to_run_id !== operation.action.to_run_id)) throw new Error("Delivery receipt did not match the request");
       if (response.result.result === "message" && response.result.stale) { const answering = operation.action.action === "message_send" && operation.action.kind === "answer"; setPending(null); setError(answering ? "The question changed before your answer was delivered. Not sent. Your draft was kept; review the current question, select it, then send again." : "The question or task changed. Your draft is preserved; review the current work before sending again."); if (answering) setSelectedQuestion(""); }
       else {
         setPending(null);
@@ -333,7 +337,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
         if (operation.action.action === "thread_handoff") { images.clear(operation.key, operation.action.images ?? []); setSelected(operation.action.thread_id); }
       }
       refreshVersion.current++; wake.current?.();
-    } catch (e) { if (mounted.current) { setError(`${e instanceof Error ? e.message : "Delivery was not confirmed"}. The original request is retained; retry it without changing its identity.`); refreshVersion.current++; wake.current?.(); } }
+    } catch (e) { if (mounted.current) { if (e instanceof CockpitClientError && e.operationCode === "task_worker_unavailable") { setPending(null); setError("That worker is no longer running. Your draft is kept; send it to the supervisor instead."); } else setError(`${e instanceof Error ? e.message : "Delivery was not confirmed"}. The original request is retained; retry it without changing its identity.`); refreshVersion.current++; wake.current?.(); } }
     finally { lock.current = false; if (mounted.current) setBusy(false); }
   };
   const send = async () => {
@@ -372,10 +376,11 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     if (selectedQuestion && !picked) { setError("The selected question changed. Your draft is preserved; choose the current question before sending."); return; }
     if (picked) action = { action: "message_send", message_id: crypto.randomUUID(), to_run_id: picked.run_id, kind: "answer", text, in_reply_to: picked.question_message_id };
     else {
-      const target = thread ? (thread.owner_root_ids.length === 1 ? thread.owner_root_ids[0] : owner) : newOwner;
+      const target = recipient ? recipientTask?.root_id : thread ? (thread.owner_root_ids.length === 1 ? thread.owner_root_ids[0] : owner) : newOwner;
+      if (recipient && (!recipientTask || !workerTasks.includes(recipientTask))) { setError("That worker is no longer running. Your draft is kept; send it to the supervisor instead."); return; }
       if (!target || (thread && !thread.owner_root_ids.includes(target))) { setError("Choose the owner for this request."); return; }
-      const task = taskId ? thread?.tasks.find(t => t.task_id === taskId) : undefined;
-      if (taskId && !task) { setError("The selected task is no longer available. Your draft is preserved."); return; }
+      const task = recipient ? recipientTask : taskId ? thread?.tasks.find(t => t.task_id === taskId) : undefined;
+      if (!recipient && taskId && !task) { setError("The selected task is no longer available. Your draft is preserved."); return; }
       let taskRevision: string | undefined;
       if (task) {
         if (task.root_id !== target) { setError("Choose the task's owner for this follow-up."); return; }
@@ -390,7 +395,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
         if (!liveScope.current.current || liveScope.current.snapshot?.session_id !== sessionId) { setError("Session changed. Your draft is preserved."); return; }
       }
       const binding = !thread && (attachedSpace || repository.trim() || branch.trim() || base.trim()) ? { repository_id: repository.trim() || null, workspace_id: attachedSpace?.id ?? null, branch: branch.trim() || null, base_ref: base.trim() || null } : undefined;
-      action = { action: "thread_handoff", message_id: crypto.randomUUID(), thread_id: thread?.thread_id ?? crypto.randomUUID(), to_run_id: target, text, ...(images.ids.length ? { images: images.ids } : {}), ...(task && taskRevision ? { task_id: task.task_id, expected_task_revision: taskRevision } : {}), ...(binding ? { binding } : {}) };
+      action = { action: "thread_handoff", message_id: crypto.randomUUID(), thread_id: thread?.thread_id ?? crypto.randomUUID(), to_run_id: target, text, ...(recipient ? { recipient: "task_worker" as const } : {}), ...(images.ids.length ? { images: images.ids } : {}), ...(task && taskRevision ? { task_id: task.task_id, expected_task_revision: taskRevision } : {}), ...(binding ? { binding } : {}) };
     }
     await execute({ action, text, store: view.state_store_id, key: draftKey });
   };
@@ -480,12 +485,13 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
           {thread && !questions.length && <strong className="inbox-compose-label">Follow up</strong>}
           {thread?.unread_result_message_id && followupOpen && !pending && <button type="button" className="inbox-followup-cancel" onClick={() => { setFollowupOpen(false); requestAnimationFrame(() => followupRef.current?.focus()); }}>Cancel</button>}
           {replyTargets.length > 0 && <ReplyTargets targets={replyTargets} disabled={!!pending} onPick={pickTarget} />}
-          {ownerControl}
-          {mode === "followup" && thread && thread.tasks.length > 0 && <label className="inbox-pick">About <select aria-label="Follow-up target" value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!!pending}><option value="">Whole thread</option>{thread.tasks.map(task => <option key={`${task.root_id}:${task.task_id}`} value={task.task_id}>{task.title} · {ownerLabel(view, task.root_id)}</option>)}</select></label>}
+          {(mode !== "followup" || !recipient) && ownerControl}
+          {mode === "followup" && thread && (workerTasks.length > 0 || !!recipient) && <label className="inbox-pick">Send to <select aria-label="Send to" value={recipient} onChange={e => { setRecipients(previous => ({ ...previous, [followKey]: e.target.value })); setError(""); }} disabled={!!pending}><option value="">Supervisor</option>{recipient && !workerTasks.some(task => JSON.stringify([task.root_id, task.task_id]) === recipient) && <option value={recipient}>{recipientTask?.title ?? "Unavailable"} worker</option>}{workerTasks.map(task => <option key={JSON.stringify([task.root_id, task.task_id])} value={JSON.stringify([task.root_id, task.task_id])}>{task.title} worker</option>)}</select></label>}
+          {mode === "followup" && !recipient && thread && thread.tasks.length > 0 && <label className="inbox-pick">About <select aria-label="Follow-up target" value={taskId} onChange={e => setTaskId(e.target.value)} disabled={!!pending}><option value="">Whole thread</option>{thread.tasks.map(task => <option key={`${task.root_id}:${task.task_id}`} value={task.task_id}>{task.title} · {ownerLabel(view, task.root_id)}</option>)}</select></label>}
         </div>
         {thread && questions.length > 0 && <div className="inbox-quote" data-mode={mode}>
           {mode === "answer" && picked ? <><span className="inbox-quote-text"><b>Answering {labels[questions.indexOf(picked)]}</b> · “{plainQuestion(picked.text.text)}”</span><button type="button" className="inbox-link" onClick={() => showQuestion(picked)}>Show question</button></>
-            : mode === "followup" ? <span className="inbox-quote-text"><b>Follow-up to {followOwner}</b> · not an answer; {questions.length === 1 ? "1 question stays" : `${questions.length} questions stay`} open</span>
+            : mode === "followup" ? <span className="inbox-quote-text"><b>Follow-up to {recipientTask ? `${recipientTask.title} worker` : followOwner}</b> · not an answer; {questions.length === 1 ? "1 question stays" : `${questions.length} questions stay`} open</span>
             : <span className="inbox-quote-text"><b>Choose what you are replying to.</b> Select a question above, or Follow up.</span>}
         </div>}
         {error && <p role="alert" className="inbox-note" data-tone="error" title={error}><UiIcon name="alert" />{error}</p>}
@@ -523,6 +529,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
       {loadError && <div role="status" className="inbox-note" data-tone="error"><UiIcon name="alert" /><div><strong>Inbox unavailable.</strong>{view && <> Showing the last loaded items.</>}<div>{loadError}</div><small>Retrying automatically.</small></div></div>}
       {view?.observation.status === "unavailable" && <p role="status" className="inbox-note" title={view.observation.error.message}><UiIcon name="alert" />Can’t see live sessions right now. Replies are paused; your draft is kept.</p>}
       {attention.availability === "unavailable" && <p role="status" className="inbox-note"><UiIcon name="alert" />Agent attention unavailable.</p>}
+      {!!view?.stalls?.length && (() => { const stall = view.stalls[0]!; const location = view.owners.find(owner => owner.root_id === stall.root_id)?.location ?? null; return <div className="inbox-stall" role="status"><span>Supervisor idle with open work since <Time value={stall.since} /></span><button type="button" className="inbox-link" disabled={!location || view.observation.status !== "fresh"} onClick={() => open(location, true)}>Open supervisor</button></div>; })()}
       {view && !view.threads.some(t => t.state === "needs_you") && !view.unmanaged_agents.some(relevant) && <p className="inbox-empty"><UiIcon name="check-circle" />Nothing needs you right now.</p>}
       {count > 0 && <section aria-label={`Needs you · ${count}`}><h2 className="inbox-group">Needs you <span>· {count}</span></h2>
         {view?.threads.filter(t => t.state === "needs_you").map(t => <ThreadRow key={t.thread_id} thread={t} badge={badge(t)} selected={selected === t.thread_id} onSelect={() => select(t.thread_id)} />)}

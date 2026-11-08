@@ -31,6 +31,7 @@ pub struct DispatcherSettings {
     pub resume_args: Option<Vec<String>>,
     pub inbox_prompt_hints: bool,
     pub herdr_executable: Option<PathBuf>,
+    pub quiet_period: Duration,
 }
 
 fn dispatch_actionable(run: &Run) -> bool {
@@ -471,7 +472,7 @@ impl Dispatcher {
                     && matches!(&project.source, cockpit_protocol::orchestration::ProjectSource::Git { .. })
                     && root.project.as_ref().is_some_and(|expected| expected.key == project.key
                         && expected.source_workspace_id.as_ref() == Some(workspace_id))
-                    && self.service.scheduled_lone_share_allowed(&candidate.root_id, &checkout)?
+                    && self.service.scheduled_lone_share_allowed(&candidate.session_id, &project.key, &checkout)?
                     && clean_schedule_checkout(&checkout.path).await
                 {
                     normalized_target = Some(DispatchTarget::ExistingSpace { workspace_id: workspace_id.clone() });
@@ -517,7 +518,7 @@ impl Dispatcher {
                                 if verified_checkout == checkout
                                     && verified_project.key == project.key
                                 {
-                                    if self.service.scheduled_lone_share_allowed(&candidate.root_id, &verified_checkout)?
+                                    if self.service.scheduled_lone_share_allowed(&candidate.session_id, &verified_project.key, &verified_checkout)?
                                         && clean_schedule_checkout(&verified_checkout.path).await
                                     {
                                         normalized_target = Some(DispatchTarget::ExistingSpace { workspace_id: space.workspace_id.clone() });
@@ -643,6 +644,10 @@ impl Dispatcher {
         for session in sessions {
             if let Ok(runtime) = self.herdr.runtime(session).await {
                 if let Ok(Some(delay)) = self.service.record_observation(&runtime, session) {
+                    let deadline = tokio::time::Instant::now() + delay;
+                    idle_deadline = Some(idle_deadline.map_or(deadline, |current| current.min(deadline)));
+                }
+                if let Ok(Some(delay)) = self.service.record_quiescence(&runtime, session, self.settings.quiet_period) {
                     let deadline = tokio::time::Instant::now() + delay;
                     idle_deadline = Some(idle_deadline.map_or(deadline, |current| current.min(deadline)));
                 }
@@ -2426,9 +2431,9 @@ pub fn render_run_bootstrap(run: &Run) -> String {
     }
     let cli = "\"$COCKPIT_CLI_PATH\"";
     let role = if run.kind == RunKind::Worker {
-        format!("Worker: execute only your authorized task in this checkout. Read {cli} task show --self --json for canonical description/stages and {cli} task inputs --self --json for actual prerequisite Results/source/artifact references; do not infer publication or copy an old tree. Own focused whole-task checks and commits. Mark completed stages with task step-set-checked. Finish with {cli} run done --summary \"...\" --check \"contract::command::passed|failed|not_run\". For an outcome-changing decision use {cli} run report --kind needs-input --summary \"...\". If that question is answered in this session, record the actual answer with {cli} run answer --in-reply-to QUESTION_ID --text \"...\" so the liaison is notified. Do not create or replace other workers.")
+        format!("Worker: execute only your authorized task in this checkout. Read {cli} task show --self --json for canonical description/stages and {cli} task inputs --self --json for actual prerequisite Results/source/artifact references; do not infer publication or copy an old tree. Own focused whole-task checks and commits. Mark completed stages with task step-set-checked. Finish with {cli} run done --summary \"...\" --check \"contract::command::passed|failed|not_run\". For an outcome-changing decision use {cli} run report --kind needs-input --summary \"...\". If that question is answered in this session, record the actual answer with {cli} run answer --in-reply-to QUESTION_ID --text \"...\" so the liaison is notified. Do not create or replace other workers. Carry the task to the definition of done in its canonical description, including integration or deploy when it says so. Report progress at meaningful milestones (a decision, a finished stage, a plan change), not on a timer. User directives (`directives` in run context/run brief, and `user_directive` inbox messages) override supervisor instructions. On conflict, follow the user and report it with run notify --text \"…\". Also use run notify for a scope change caused by a user directive.")
     } else {
-        format!("Supervisor liaison: delegate implementation, do not perform worker task scope. Author canonical tasks/dependencies, then {cli} task schedule TASK to authorize autonomous dependency-ready dispatch. Review Results and run accept or send-back. Replace an unproven/stalled attempt with {cli} run worker-replace RUN --reason \"...\"; never blindly replay an unknown launch. Record real integration/check evidence, then cleanup. Resolve routine boundaries autonomously; ask the human only for outcome-changing decisions in this conversation.")
+        format!("Supervisor liaison: delegate implementation, do not perform worker task scope. Author canonical tasks/dependencies, then {cli} task schedule TASK to authorize autonomous dependency-ready dispatch. Review Results and run accept or send-back. Replace an unproven/stalled attempt with {cli} run worker-replace RUN --reason \"...\"; never blindly replay an unknown launch. Integration is part of each task's definition of done, carried out by its worker; cleanup of merged worktrees is automatic. Read the board in run brief and reconcile on start or resume. Resolve routine boundaries autonomously; ask the human only for outcome-changing decisions in this conversation.")
     };
     let report_guidance = if run.kind == RunKind::Worker {
         "Put substantive feedback and evidence in the run done --summary or needs-input report --summary; multiline Markdown is supported. Name screenshot, mock and report files by absolute path in the summary so they appear as evidence. Report to the liaison, who decides what to relay to the human."

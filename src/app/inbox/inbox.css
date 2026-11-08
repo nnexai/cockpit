@@ -42,6 +42,7 @@
 .inbox-row.is-quiet strong{font-size:var(--font-size-sm)}
 .inbox-empty{display:flex;align-items:center;gap:8px;min-height:40px;padding:8px 14px;color:var(--text-muted);font-size:14px;border-bottom:1px solid var(--border)}
 .inbox-empty .ui-icon{color:var(--done)}
+.inbox-stall{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 14px;color:var(--text-muted);font-size:var(--font-size-xs);border-bottom:1px solid var(--border)}
 .inbox-others>summary{list-style:none;display:flex;align-items:center;gap:8px;min-height:40px;padding:0 14px;color:var(--text-secondary);font-size:var(--font-size-control);font-weight:500;cursor:pointer}
 .inbox-others>summary::-webkit-details-marker{display:none}
 .inbox-others>summary:hover{color:var(--text-secondary)}

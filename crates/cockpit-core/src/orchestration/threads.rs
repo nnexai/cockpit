@@ -67,7 +67,9 @@ pub(super) fn check_report_authority(
     }
     for message in state.messages.iter().filter(|message| message_in_thread(message, thread_id)) {
         if matches!(message.from, ActorRef::Operator) && message.handoff.is_some() {
-            check_owner(&message.to_run_id)?;
+            let owner_id = state.runs.iter().find(|run| run.run_id == message.to_run_id)
+                .map(|run| run.root_id.as_str()).unwrap_or(&message.to_run_id);
+            check_owner(owner_id)?;
         } else if message.kind == MessageKind::Report {
             if let ActorRef::Run { run_id } = &message.from {
                 if message.to_run_id == *run_id && state.runs.iter().any(|run|
@@ -174,7 +176,7 @@ pub(super) fn mark_read(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) 
 
 pub(super) fn handoff(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
     let origin = operator(ctx.actor)?;
-    let OrchestrationAction::ThreadHandoff { message_id, thread_id, to_run_id, text, task_id, expected_task_revision, binding, images } = &action else { unreachable!() };
+    let OrchestrationAction::ThreadHandoff { message_id, thread_id, to_run_id, text, task_id, expected_task_revision, binding, images, recipient } = &action else { unreachable!() };
     if let Some(result) = resume::replay(ctx, message_id, DurableOperationKind::ThreadHandoff, &action)? {
         return Ok(Applied::Document(result));
     }
@@ -214,14 +216,35 @@ pub(super) fn handoff(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) ->
         if expected_task_revision.is_some() { return Err(error("task_revision_conflict", "Task revision requires a task")); }
         (None, None)
     };
+    let worker = if *recipient == HandoffRecipient::TaskWorker {
+        let task_id = task_id.as_ref().ok_or_else(|| error("task_worker_unavailable", "A task is required for a worker handoff"))?;
+        let run = projection::current_task_run(ctx.state, to_run_id, task_id)
+            .filter(|run| run.kind == RunKind::Worker && run.stage != RunStage::Closed)
+            .ok_or_else(|| error("task_worker_unavailable", "The task has no current open worker"))?;
+        Some(run.run_id.clone())
+    } else { None };
+    let directive_id = if worker.is_some() {
+        Some(directives::record_task_directive(ctx.state, to_run_id, task_id.as_deref().expect("worker task"),
+            text, thread_id, message_id)?)
+    } else { None };
+    let destination = worker.as_deref().unwrap_or(to_run_id);
     let result = messages::append(ctx.state, messages::AppendMessage {
-        from: ActorRef::Operator, to_run_id, message_id, kind: MessageKind::Instruction, text,
+        from: ActorRef::Operator, to_run_id: destination, message_id,
+        kind: if worker.is_some() { MessageKind::UserDirective } else { MessageKind::Instruction }, text,
         in_reply_to: None, report: None, thread_id: Some(thread_id.clone()),
         handoff: Some(HandoffRecord { task_id: task_id.clone(), task_revision: revision,
             attempt_run_id: attempt, binding: resolved_binding, origin }),
         images,
         stale: false, escalated_from: None,
     })?;
+    if let Some(directive_id) = directive_id {
+        let copy_id = format!("directive-copy:{directive_id}");
+        messages::append(ctx.state, messages::AppendMessage {
+            from: ActorRef::Dispatcher, to_run_id, message_id: &copy_id, kind: MessageKind::Observation, text,
+            in_reply_to: None, report: None, thread_id: Some(thread_id.clone()), handoff: None,
+            images: Vec::new(), stale: false, escalated_from: None,
+        })?;
+    }
     if let Some(task_id) = task_id {
         insert_link(ctx.state, thread_id, to_run_id, task_id, ActorRef::Operator);
     }

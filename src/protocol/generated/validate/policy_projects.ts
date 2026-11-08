@@ -97,6 +97,7 @@ export interface WireFields {
   "OrchestrationConfiguration.initial_prompt_args": (V1.OrchestrationConfiguration)["initial_prompt_args"];
   "OrchestrationConfiguration.hook_args": (V1.OrchestrationConfiguration)["hook_args"];
   "OrchestrationConfiguration.max_parallel": (V1.OrchestrationConfiguration)["max_parallel"];
+  "OrchestrationConfiguration.quiet_period_seconds": (V1.OrchestrationConfiguration)["quiet_period_seconds"];
   "OrchestrationConfiguration.process_scope": (V1.OrchestrationConfiguration)["process_scope"];
   "OrchestrationConfiguration.inbox_prompt_hints": (V1.OrchestrationConfiguration)["inbox_prompt_hints"];
   "OrchestrationConfiguration.routes": (V1.OrchestrationConfiguration)["routes"];
@@ -206,7 +207,7 @@ export interface WireFieldNames {
   "ProjectLimits": "catalog_depth" | "catalog_entries" | "git_timeout_ms" | "git_output_bytes" | "operation_timeout_ms" | "context_preview_bytes" | "context_preview_lines" | "context_directory_entries" | "context_tree_depth" | "library_folder_files" | "library_folder_bytes" | "library_file_bytes" | "library_space_pages" | "library_attachment_bytes" | "library_item_attachment_bytes" | "library_max_items";
   "ProjectProvider": "id" | "kind" | "base_url" | "executable" | "login" | "deployment";
   "ProjectConfiguration": "version" | "repository_roots" | "worktree_root" | "state_root" | "cache_root" | "library_root" | "notes_root" | "branch_template" | "checkout_template" | "providers" | "limits" | "orchestration";
-  "OrchestrationConfiguration": "harness_kind" | "command" | "extra_args" | "resume_args" | "initial_prompt_args" | "hook_args" | "max_parallel" | "process_scope" | "inbox_prompt_hints" | "routes";
+  "OrchestrationConfiguration": "harness_kind" | "command" | "extra_args" | "resume_args" | "initial_prompt_args" | "hook_args" | "max_parallel" | "quiet_period_seconds" | "process_scope" | "inbox_prompt_hints" | "routes";
   "OrchestrationRoute": "provider" | "instance" | "project_id_prefix" | "repository_id";
   "RepositoryCandidate": "repository_id" | "name" | "root" | "checkout_path" | "common_dir" | "branch" | "is_linked_worktree" | "is_detached" | "provenance";
   "ProjectDiagnostic": "code" | "message" | "path";
@@ -246,7 +247,7 @@ export interface WireCheckpointFieldNames {
   "ProjectLimits": "catalog_depth" | "catalog_entries" | "git_timeout_ms" | "git_output_bytes" | "operation_timeout_ms" | "context_preview_bytes" | "context_preview_lines" | "context_directory_entries" | "context_tree_depth" | "library_folder_files" | "library_folder_bytes" | "library_file_bytes" | "library_space_pages" | "library_attachment_bytes" | "library_item_attachment_bytes" | "library_max_items";
   "ProjectProvider": "id" | "kind" | "base_url" | "executable" | "login" | "deployment";
   "ProjectConfiguration": "version" | "repository_roots" | "worktree_root" | "state_root" | "cache_root" | "library_root" | "notes_root" | "branch_template" | "checkout_template" | "providers" | "limits" | "orchestration";
-  "OrchestrationConfiguration": "harness_kind" | "command" | "extra_args" | "resume_args" | "initial_prompt_args" | "hook_args" | "max_parallel" | "process_scope" | "inbox_prompt_hints" | "routes";
+  "OrchestrationConfiguration": "harness_kind" | "command" | "extra_args" | "resume_args" | "initial_prompt_args" | "hook_args" | "max_parallel" | "quiet_period_seconds" | "process_scope" | "inbox_prompt_hints" | "routes";
   "OrchestrationRoute": "provider" | "instance" | "project_id_prefix" | "repository_id";
   "RepositoryCandidate": "repository_id" | "name" | "root" | "checkout_path" | "common_dir" | "branch" | "is_linked_worktree" | "is_detached" | "provenance";
   "ProjectDiagnostic": "code" | "message" | "path";
@@ -278,6 +279,7 @@ export type WireOmittableField =
   | "OrchestrationConfiguration.initial_prompt_args"
   | "OrchestrationConfiguration.hook_args"
   | "OrchestrationConfiguration.max_parallel"
+  | "OrchestrationConfiguration.quiet_period_seconds"
   | "OrchestrationConfiguration.process_scope"
   | "OrchestrationConfiguration.inbox_prompt_hints"
   | "OrchestrationConfiguration.routes"

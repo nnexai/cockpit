@@ -210,6 +210,13 @@ impl OrchestrationService {
             true
         });
         scope_recovery?;
+        let continuation_recovery = super::continuation::recover(&locked, &mut state);
+        self.revision.send_if_modified(|revision| {
+            if *revision == state.revision { return false; }
+            *revision = state.revision;
+            true
+        });
+        continuation_recovery?;
         let mut changed = false;
         for intent in state.task_intents.clone() {
             if intent.state == IntentState::Conflict {

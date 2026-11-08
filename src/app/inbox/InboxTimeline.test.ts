@@ -7,6 +7,15 @@ function entry(id: string, kind: InboxEntryKind, inReplyTo: string | null = null
 }
 
 describe("groupTimeline", () => {
+  it("keeps directives as separate entries between update groups", () => {
+    const directive = { ...entry("directive", "directive"), task_title: "Build" };
+    const updates = [entry("1", "update"), entry("2", "update"), entry("3", "update")];
+    expect(groupTimeline([...updates, directive, ...updates])).toEqual([
+      { kind: "updates", entries: updates },
+      { kind: "entry", entry: directive, answers: [] },
+      { kind: "updates", entries: updates },
+    ]);
+  });
   it("collapses three or more consecutive updates", () => {
     const updates = [entry("1", "update"), entry("2", "update"), entry("3", "update"), entry("4", "update")];
     expect(groupTimeline(updates)).toEqual([{ kind: "updates", entries: updates }]);

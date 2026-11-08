@@ -57,20 +57,37 @@ Bash injection; conversation metadata remains optional for credentialed calls.
 ```
 
 `run context` returns compact role/run/root/assignment/inbox metadata. Workers
-read their canonical task and launch brief, then own implementation, subagents
-and affected checks autonomously. Local subagents contribute through their owner,
-not copied credentials. Ordinary edits and shells need no orchestration call.
+read their canonical task, launch brief and applicable user directives, then
+own implementation, subagents and affected checks autonomously. Carry the task
+through its definition of done, including integration or deploy when specified.
+User directives in context/brief and `user_directive` inbox messages override
+supervisor instructions. Follow the user on conflict and notify the supervisor;
+also notify it when a directive changes scope. Report meaningful milestones,
+decisions, finished stages and plan changes, not progress on a timer:
+
+```sh
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run notify --text "User directive changed the task scope." --json
+```
+
+Local subagents contribute through their owner, not copied credentials.
+Ordinary edits and shells need no orchestration call.
 
 ## Liaison: route requests, not worker steps
 
-The root is the user's one personal liaison for the Herdr session, across all
-projects; it is not an implementation worker. The user calls it up with new
-ideas, replies to running work and status questions. Route each to the right
-place: a new task in the right project, the existing worker or agent, or a
-short answer from current state. Workers plan, implement and verify; do not
+The root is the user's personal liaison across projects: route, decide and
+delegate, never do task work yourself. Delegate code, Git, builds, research
+and records to workers. Keep tools available to diagnose unforeseen situations,
+then delegate the fix. Workers plan, implement and verify autonomously; do not
 repeatedly request plans or execution approval. Scheduling is standing
 delegation; creation alone never authorizes execution. Preserve existing task
 IDs and backlog-only tasks.
+
+The board digest delivered with each wake, or obtained with `inbox board`, is
+your memory; trust it over recollection, especially after restart or compaction.
+On start, resume or a Reconcile wake, walk the board and act on every row that
+can progress. Leave working workers alone, resolve routine choices yourself and
+ask the user only when nothing can progress without them. Answer status from
+the board in a few plain lines; never ping a working worker for status.
 
 Orient with `where`: live projects, their Spaces, agents (including ones the
 user started, marked unmanaged), tasks per project and repository catalog
@@ -82,30 +99,45 @@ references fail with the candidates listed; pick one, do not guess.
 ```sh
 "${COCKPIT_CLI_PATH:-cockpit-cli}" where
 TASK_ID="$(uuidgen)"
-"${COCKPIT_CLI_PATH:-cockpit-cli}" task create --task-id "$TASK_ID" --title "Fix parser" --description "Outcome and acceptance criteria" --json &&
-"${COCKPIT_CLI_PATH:-cockpit-cli}" task schedule "$TASK_ID" --space-worktree "md-search" --json
-"${COCKPIT_CLI_PATH:-cockpit-cli}" agent send "Fix parser" --text "Also cover the empty-input case"
+"${COCKPIT_CLI_PATH:-cockpit-cli}" inbox board --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" task create --task-id "$TASK_ID" --title "Fix parser" --description "Outcome and definition of done, including integration when requested" --json &&
+"${COCKPIT_CLI_PATH:-cockpit-cli}" task schedule "$TASK_ID" --path "$PROJECT_CHECKOUT" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" agent send "Fix parser" --text "Also cover the empty-input case" --from-user
+"${COCKPIT_CLI_PATH:-cockpit-cli}" task continue "$TASK_ID" --text "Address the follow-up" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" directive add --task "$TASK_ID" --text "User's persistent task instruction" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" directive add --standing --project "$PROJECT_REF" --text "User's persistent project instruction" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" directive list --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" directive remove "$DIRECTIVE_ID" --json
 ```
 
-Pick the project from the request, `where` and the conversation; ask the user
-only when that is genuinely ambiguous. One task per outcome: keep later stages
-and narrow follow-ups with the same Working worker through `task scope-update`
-or `agent send`, rather than accepting or restarting between stages. Separate
-tasks are for independent parallel work or another project.
+Check the board first, then pick the project from the request, `where` and the
+conversation; ask only when genuinely ambiguous. Create one task per outcome,
+with its own definition of done including integration into main or deploy when
+the request implies it. Never create separate Integrate or Deploy tasks.
+"Push/install/restart when everything is done" is one release task depending on
+the open tasks. For existing work, send its worker a follow-up or use
+`task continue` for a reported or accepted task; small related follow-ups may
+go to an idle worker in the same Space. Review each Result against the
+definition of done, then accept, send back or ask the user.
 
-Placement: `--space-worktree SPACE` gives an isolated worktree for changes
-(`--base REF` selects a base, otherwise the Space checkout's committed HEAD);
-`--space SPACE` borrows the exact Space for read-only or intentional in-place
-work and does not bypass exclusive checkout claims; `--path` to exactly one
-verified clean Git Space shares it for a lone worker, otherwise isolates;
-`--repository ID` uses a catalog entry. Omitting the target gives a private
-general-work directory for tasks that belong to no project. Read-only
+Placement follows need: omit the target for general work without a project;
+use `--space SPACE` for read-only, service or intentional in-place work; use
+`--path PROJECT_CHECKOUT` for project changes (Cockpit shares a lone writer's
+checkout and isolates parallel writers); use `--space-worktree SPACE` only when
+isolation is requested. `--base REF` selects its base, otherwise the Space
+checkout's committed HEAD; `--repository ID` selects a catalog entry. Read-only
 instructions are not a sandbox; borrowed inspection must change no HEAD, index
 or build outputs. A primary Git Space's borrowed worker terminal stays until the
 user closes it. Optional `--brief` / `--brief-file` add instructions, not another
 task store. Dependencies and the per-project parallel limit gate launch;
 authorization survives waiting. If placement cannot be resolved, inspect the
 returned blocker.
+
+Record user instructions that should outlast the turn with `directive add
+--task TASK`, or `directive add --standing` with optional `--project REF`.
+Never contradict a recorded directive; ask on the thread if it conflicts with
+a task. Worker-targeted Inbox messages are persistent task directives. Relay
+the user's own words with `agent send --from-user`.
 
 `agent send REF --text` reaches any agent: a managed worker receives a durable
 inbox instruction, an unmanaged agent the user started receives a Herdr prompt.
@@ -246,7 +278,9 @@ Keep stages truthful: Blocked/Ready reflect prerequisites; Working is execution;
 Review is a source Result awaiting review; Accepted requires root acceptance.
 Check off only actually completed canonical steps. Checklist completion, idle,
 process exit, registration and message capture never substitute for acceptance.
-Accepted history remains read-only.
+Accepted history remains read-only except through explicit `task continue`,
+which reopens the task with a revision bump and schedules a successor attempt;
+reported tasks return to their current worker.
 For why a task is waiting, read `waiting` from `task show TASK --json` or
 `task list --json` rather than inferring a cause from transcripts. The field
 is a recorded-state projection, not live-process evidence; a missing cause or
@@ -280,11 +314,11 @@ remain unchanged.
 
 Reported artifact strings are untrusted references, not inferred filesystem
 paths, content hashes or proof of accessibility. Acceptance does not automatically
-persist or publish artifacts. The supervisor uses existing normal file, Git or
-Library tools to actually persist/publish prerequisite output and prove that the
-durable input is accessible to its consumer. Retain the original output until
-that proof exists; never discard it merely because a Result was accepted or a
-reference was returned. There is no dedicated artifact-publication verb.
+persist or publish artifacts. Delegate actual persistence/publication and proof
+that durable input is accessible to its consumer to a worker. Retain the
+original output until that proof exists; never discard it merely because a
+Result was accepted or a reference was returned. There is no dedicated
+artifact-publication verb.
 
 ## Inbox and honest Results
 
@@ -373,18 +407,17 @@ by another route, and capture does not prove processing. Before acceptance,
 consider whether a new Result or send-back is appropriate. An accept notice may
 also identify entries after the attempt is closed, when it can no longer report
 on them. Do not replay them automatically: inspect their bodies in `run show`
-and decide explicitly whether further work warrants a follow-up via
-`task create --follow-up-of TASK --source-revision REV`. Visibility adds no
-acceptance or retirement gate.
-Acceptance is not integration or cleanup evidence. Integrate accepted output into
-the requested target and let automatic cleanup converge. A clean owned accepted
-head already contained in the root's actual checkout can retire without a prior
-IntegrationRecord; this never invents passed target checks or changes integration
-status. Preserve unmerged output and uncertain effects. A credentialed root may
-request `run cleanup-finish --request-file FILE`; an accepted worker may request
-only its own run's existing records. Explicit local management uses
-`run --operator --root ROOT cleanup-finish --request-file FILE`, with matching
-payload `root_id`. This is reevaluation, never forced cleanup.
+and decide explicitly whether further work warrants `task continue TASK --text
+"Follow-up"`. Visibility adds no acceptance or retirement gate.
+Integration is part of the task's definition of done and is carried out by its
+worker; acceptance itself is not integration or cleanup evidence. Automatic
+cleanup retires eligible merged or patch-equivalent worktrees against the
+project's primary checkout. It never invents passed target checks or changes
+integration status. Preserve unmerged output and uncertain effects. A
+credentialed root may request `run cleanup-finish --request-file FILE`; an
+accepted worker may request only its own run's existing records. Explicit local
+management uses `run --operator --root ROOT cleanup-finish --request-file FILE`,
+with matching payload `root_id`. This is reevaluation, never forced cleanup.
 Source outcome, canonical acceptance, target integration, process retirement
 and checkout-claim release are independent; acceptance or pane absence alone
 does not prove background writers stopped or release their claims.

@@ -818,7 +818,7 @@ pub(crate) fn test_job_auth(
         }
         if let (Some(generation), Some(task_id)) = (run.assignment_generation, run.task_id.clone()) {
             let ownership = cockpit_protocol::orchestration::TaskOwnership { root_id: run.root_id.clone(), task_id,
-                generation, schedule: None, owner: Some(cockpit_protocol::orchestration::TaskOwner { run_id: run.run_id.clone(),
+                generation, schedule: None, reopened_after_attempt: None, owner: Some(cockpit_protocol::orchestration::TaskOwner { run_id: run.run_id.clone(),
                     conversation: run.attachment.as_ref().and_then(|a| a.conversation.clone()), claim_operation_id: auth.credential_id.clone() }) };
             if let Some(existing) = state.task_ownership.iter_mut().find(|record|
                 record.root_id == ownership.root_id && record.task_id == ownership.task_id) {

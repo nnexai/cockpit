@@ -119,7 +119,7 @@ impl Fixture {
         successor.assignment_generation = Some(2);
         state.runs.push(root);
         state.runs.push(successor);
-        state.task_ownership.push(TaskOwnership { root_id: root_id.clone(), task_id, generation: 2, owner: None, schedule: None });
+        state.task_ownership.push(TaskOwnership { root_id: root_id.clone(), task_id, generation: 2, owner: None, schedule: None, reopened_after_attempt: None });
         state.operations.push(super::store::DurableOperationRecord { operation_id: operation_id.clone(),
             actor_run_id: Some(root_id.clone()), principal_key: "root".into(), root_id,
             kind: super::store::DurableOperationKind::WorkerReplace, request_digest: "committed root replacement".into(),

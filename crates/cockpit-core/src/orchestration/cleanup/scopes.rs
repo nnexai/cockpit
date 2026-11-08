@@ -667,7 +667,7 @@ mod tests {
         successor.assignment_generation = Some(2);
         state.runs.push(successor);
         state.task_ownership.push(TaskOwnership { root_id: run.root_id.clone(), task_id: run.task_id.clone().unwrap(),
-            generation: 2, owner: None, schedule: None });
+            generation: 2, owner: None, schedule: None, reopened_after_attempt: None });
         state.operations.push(DurableOperationRecord { operation_id: operation_id.clone(), actor_run_id: Some(run.root_id.clone()),
             principal_key: "root".into(), root_id: run.root_id.clone(), kind: DurableOperationKind::WorkerReplace,
             request_digest: "committed root replacement".into(), run_id: Some(successor_id.clone()),

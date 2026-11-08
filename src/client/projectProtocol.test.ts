@@ -30,6 +30,15 @@ describe("provider configuration protocol", () => {
     expect(parseProjectConfiguration(configuration([{ id: "optional", kind: "jira", base_url: "https://jira.test" }])).providers[0]?.executable).toBeUndefined();
   });
 
+  it("accepts a defaulted quiet period and validates supplied values", () => {
+    const config = configuration([]);
+    expect(parseProjectConfiguration(config)).toBeDefined();
+    expect(parseProjectConfiguration({ ...config, orchestration: { ...config.orchestration, quiet_period_seconds: 900 } })).toBeDefined();
+    for (const value of [null, "900", -1, 1.5]) {
+      expect(() => parseProjectConfiguration({ ...config, orchestration: { ...config.orchestration, quiet_period_seconds: value } })).toThrow("Invalid project configuration");
+    }
+  });
+
   it.each([
     { executable: "jira" },
     { kind: null },

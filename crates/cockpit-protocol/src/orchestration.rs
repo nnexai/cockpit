@@ -57,6 +57,10 @@ pub struct OrchestrationSnapshot {
     pub questions: Vec<QuestionStatus>,
     pub unreflected_inputs: Vec<UnreflectedInput>,
     pub task_ownership: Vec<TaskOwnership>,
+    #[serde(default)]
+    pub directives: Vec<Directive>,
+    #[serde(default)]
+    pub thread_links: Vec<ThreadLink>,
     pub intents: Vec<TaskIntent>,
     pub assignment_intents: Vec<TaskAssignmentIntent>,
     pub cleanup: Vec<RunCleanupSummary>,
@@ -64,6 +68,14 @@ pub struct OrchestrationSnapshot {
     pub runtime: RuntimeObservation,
     pub unmanaged_agents: Vec<UnmanagedAgent>,
     pub attention: Vec<Attention>, // Public run list and read-only Overview projection.
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ThreadLink {
+    pub thread_id: String,
+    pub root_id: String,
+    pub task_id: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -451,6 +463,8 @@ pub struct TaskOwnership {
     pub owner: Option<TaskOwner>,
     #[serde(default)]
     pub schedule: Option<TaskSchedule>,
+    #[serde(default)]
+    pub reopened_after_attempt: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1284,6 +1298,7 @@ pub enum MessageKind {
     WorkBrief,
     SupervisorBrief,
     Instruction,
+    UserDirective,
     Answer,
     CancelRequest,
     Report,
@@ -1517,7 +1532,16 @@ pub struct InboxView {
     pub owners: Vec<InboxOwner>,
     pub threads: Vec<InboxThread>,
     pub image_limits: ImageLimits,
+    #[serde(default)]
+    pub stalls: Vec<InboxStall>,
     pub unmanaged_agents: Vec<UnmanagedAgent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxStall {
+    pub root_id: String,
+    pub since: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1614,7 +1638,7 @@ pub struct InboxRun {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
-pub enum InboxEntryKind { Request, FollowUp, Answer, Question, Update, Result, Widget }
+pub enum InboxEntryKind { Request, FollowUp, Answer, Question, Update, Result, Widget, Directive }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct InboxWidgetEvent {
@@ -1637,6 +1661,9 @@ pub struct InboxEntry {
     pub outcome: Option<ReportOutcome>,
     pub images: Vec<MessageImage>,
     pub in_reply_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub task_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub widget: Option<InboxWidgetEvent>,
@@ -1731,6 +1758,63 @@ pub struct InboxThread {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoffRecipient {
+    #[default]
+    Owner,
+    TaskWorker,
+}
+
+fn is_owner(recipient: &HandoffRecipient) -> bool {
+    *recipient == HandoffRecipient::Owner
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct Directive {
+    pub directive_id: String,
+    pub root_id: String,
+    pub scope: DirectiveScope,
+    pub text: String,
+    pub source: DirectiveSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub message_id: Option<String>,
+    pub created_by: ActorRef,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub removed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "scope", rename_all = "snake_case", deny_unknown_fields)]
+#[ts(tag = "scope", rename_all = "snake_case")]
+pub enum DirectiveScope {
+    Task { task_id: String },
+    Standing {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        project_key: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum DirectiveSource { Supervisor, Inbox, Operator }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "route", rename_all = "snake_case", deny_unknown_fields)]
+#[ts(tag = "route", rename_all = "snake_case")]
+pub enum ContinueRoute {
+    SameWorker { run_id: String },
+    Successor,
+}
+
 // ---------- actions ----------
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "action", rename_all = "snake_case")]
@@ -1738,6 +1822,23 @@ pub struct InboxThread {
 #[serde(deny_unknown_fields)]
 pub enum OrchestrationAction {
     // tag = "action"
+    DirectiveAdd {
+        directive_id: String,
+        root_id: String,
+        scope: DirectiveScope,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        thread_id: Option<String>,
+    },
+    DirectiveRemove { root_id: String, directive_id: String },
+    TaskContinue {
+        operation_id: String,
+        root_id: String,
+        task_id: String,
+        expected_task_revision: String,
+        text: String,
+    },
     // tasks: operator or agent
     TaskCreate {
         root_id: String,
@@ -1936,6 +2037,9 @@ pub enum OrchestrationAction {
         thread_id: String,
         to_run_id: String,
         text: String,
+        #[serde(default, skip_serializing_if = "is_owner")]
+        #[ts(as = "Option<HandoffRecipient>", optional)]
+        recipient: HandoffRecipient,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         images: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2008,6 +2112,15 @@ pub enum OrchestrationAction {
 #[ts(tag = "result", rename_all = "snake_case")]
 pub enum OrchestrationActionResult {
     // tag = "result"
+    DirectiveAdded { directive_id: String, delivered_run_ids: Vec<String>, duplicate: bool },
+    DirectiveRemoved { directive_id: String },
+    TaskContinued {
+        operation_id: String,
+        task_id: String,
+        task_revision: String,
+        route: ContinueRoute,
+        duplicate: bool,
+    },
     RunRegistered {
         run_id: String,
         #[serde(default)]
@@ -2087,6 +2200,45 @@ pub enum OrchestrationActionResult {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn directives_and_continuation_round_trip() {
+        let directive = json!({
+            "directive_id": "d", "root_id": "r", "scope": {"scope": "standing"},
+            "text": "Keep the tests", "source": "operator", "created_by": {"type": "operator"},
+            "created_at": "2026-01-01T00:00:00Z"
+        });
+        let parsed: Directive = serde_json::from_value(directive.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), directive);
+        for wire in [
+            json!({"action": "directive_add", "directive_id": "d", "root_id": "r",
+                "scope": {"scope": "task", "task_id": "t"}, "text": "Keep the tests"}),
+            json!({"action": "directive_remove", "root_id": "r", "directive_id": "d"}),
+            json!({"action": "task_continue", "operation_id": "o", "root_id": "r",
+                "task_id": "t", "expected_task_revision": "rev", "text": "Continue"}),
+        ] {
+            let parsed: OrchestrationAction = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+        }
+        for wire in [
+            json!({"result": "directive_added", "directive_id": "d", "delivered_run_ids": ["w"], "duplicate": false}),
+            json!({"result": "directive_removed", "directive_id": "d"}),
+            json!({"result": "task_continued", "operation_id": "o", "task_id": "t",
+                "task_revision": "rev", "route": {"route": "same_worker", "run_id": "w"}, "duplicate": false}),
+            json!({"result": "task_continued", "operation_id": "o", "task_id": "t",
+                "task_revision": "rev", "route": {"route": "successor"}, "duplicate": false}),
+        ] {
+            let parsed: OrchestrationActionResult = serde_json::from_value(wire.clone()).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+        }
+        let handoff = json!({"action": "thread_handoff", "message_id": "m", "thread_id": "t",
+            "to_run_id": "r", "text": "Follow up", "recipient": "task_worker"});
+        let parsed: OrchestrationAction = serde_json::from_value(handoff.clone()).unwrap();
+        assert_eq!(serde_json::to_value(parsed).unwrap(), handoff);
+        let ownership = json!({"root_id": "r", "task_id": "t", "generation": 1, "owner": null});
+        let parsed: TaskOwnership = serde_json::from_value(ownership).unwrap();
+        assert!(parsed.reopened_after_attempt.is_none());
+    }
 
     #[test]
     fn inbox_contract_round_trips_and_legacy_fields_remain_optional() {

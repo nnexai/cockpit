@@ -7,11 +7,97 @@ use cockpit_protocol::orchestration::{
 
 use super::super::{
     CliError,
-    args::{MAX_TEXT_BYTES, RecoveryArg, RunCommand, RunOperation, TaskCommand, InboxCommand},
+    args::{MAX_TEXT_BYTES, AgentArgs, AgentCommand, DirectiveArgs, DirectiveCommand, RecoveryArg, RunCommand, RunOperation, TaskCommand, InboxCommand},
     context::read_bounded,
     task_submission_error,
 };
 use super::{TestCli, TestCommand, parsed_task_action};
+
+#[derive(Debug, Parser)]
+struct DirectiveTestCli {
+    #[command(flatten)]
+    args: DirectiveArgs,
+}
+
+#[derive(Debug, Parser)]
+struct AgentTestCli {
+    #[command(flatten)]
+    args: AgentArgs,
+}
+
+#[test]
+fn directive_commands_enforce_scope_and_preserve_arguments() {
+    let parsed = DirectiveTestCli::try_parse_from([
+        "test", "add", "--text", "Use the API", "--task", "task-1", "--directive-id", "id-1",
+    ]).unwrap();
+    assert!(matches!(parsed.args.command, DirectiveCommand::Add {
+        text, task: Some(task), standing: false, project: None, directive_id: Some(id)
+    } if text == "Use the API" && task == "task-1" && id == "id-1"));
+    let parsed = DirectiveTestCli::try_parse_from([
+        "test", "add", "--standing", "--project", "project", "--text", "Always check",
+    ]).unwrap();
+    assert!(matches!(parsed.args.command, DirectiveCommand::Add {
+        text, task: None, standing: true, project: Some(project), directive_id: None
+    } if text == "Always check" && project == "project"));
+    let parsed = DirectiveTestCli::try_parse_from([
+        "test", "add", "--standing", "--text", "All projects",
+    ]).unwrap();
+    assert!(matches!(parsed.args.command, DirectiveCommand::Add {
+        text, task: None, standing: true, project: None, directive_id: None
+    } if text == "All projects"));
+    for args in [
+        vec!["test", "add", "--text", "x"],
+        vec!["test", "add", "--text", "x", "--task", "t", "--standing"],
+        vec!["test", "add", "--text", "x", "--task", "t", "--project", "p"],
+        vec!["test", "add", "--text", "x", "--project", "p"],
+        vec!["test", "add", "--standing"],
+    ] {
+        assert!(DirectiveTestCli::try_parse_from(&args).is_err(), "accepted {args:?}");
+    }
+    let parsed = DirectiveTestCli::try_parse_from(["test", "remove", "id-1"]).unwrap();
+    assert!(matches!(parsed.args.command, DirectiveCommand::Remove { id } if id == "id-1"));
+    let parsed = DirectiveTestCli::try_parse_from(["test", "list"]).unwrap();
+    assert!(matches!(parsed.args.command, DirectiveCommand::List));
+}
+
+#[test]
+fn continuation_board_notify_and_user_send_parse() {
+    let TestCommand::Task(args) = TestCli::try_parse_from([
+        "test", "task", "continue", "task-1", "--text", "Follow up", "--operation-id", "op-1",
+    ]).unwrap().command else { panic!("expected task") };
+    assert!(matches!(args.command, TaskCommand::Continue { task, text, operation_id: Some(id) }
+        if task == "task-1" && text == "Follow up" && id == "op-1"));
+    assert!(TestCli::try_parse_from(["test", "task", "continue", "task-1"]).is_err());
+    let TestCommand::Inbox(args) = TestCli::try_parse_from([
+        "test", "inbox", "--operator", "--root", "root", "board", "--json",
+    ]).unwrap().command else { panic!("expected inbox") };
+    assert!(matches!(args.command, InboxCommand::Board));
+    assert!(args.common.operator && args.common.json && args.common.root.as_deref() == Some("root"));
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "--operator", "notify", "--text", "Scope changed", "--message-id", "m-1",
+    ]).unwrap().command else { panic!("expected run") };
+    assert_eq!(args.command.preflight(&args.common).unwrap_err().code, "actor_forbidden");
+    assert!(matches!(args.command.operation(&args.common).unwrap(),
+        RunOperation::Notify { message_id: Some(id), text } if id == "m-1" && text == "Scope changed"));
+    assert!(TestCli::try_parse_from(["test", "run", "notify"]).is_err());
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "notify", "--text", "x",
+    ]).unwrap().command else { panic!("expected run") };
+    assert!(matches!(args.command.operation(&args.common).unwrap(),
+        RunOperation::Notify { message_id: None, text } if text == "x"));
+    let oversized = "x".repeat(MAX_TEXT_BYTES + 1);
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "notify", "--text", &oversized,
+    ]).unwrap().command else { panic!("expected run") };
+    assert!(args.command.operation(&args.common).is_err());
+    for (flag, expected) in [(vec![], false), (vec!["--from-user"], true)] {
+        let parsed = AgentTestCli::try_parse_from(
+            ["test", "send", "worker", "--text", "Review"].into_iter().chain(flag),
+        ).unwrap();
+        assert!(matches!(parsed.args.command, AgentCommand::Send { reference, text, from_user }
+            if reference == "worker" && text == "Review" && from_user == expected));
+    }
+}
 
 #[test]
 fn thread_report_summary_preserves_multiline_markdown() {
@@ -1371,5 +1457,5 @@ fn unreflected_accept_notice_names_stages_and_order_without_bodies() {
     assert!(!notice.contains("foreign"));
     assert!(notice.contains("run show worker --json"));
     assert!(notice.contains("Do not replay automatically"));
-    assert!(notice.contains("task create --follow-up-of"));
+    assert!(notice.contains("task continue"));
 }

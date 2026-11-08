@@ -311,6 +311,45 @@ pub(crate) async fn contained_head(checkout: &CheckoutIdentity, accepted_head: &
     Ok(Some(head))
 }
 
+/// Resolve the first non-bare worktree from the shared Git directory.
+pub(crate) async fn primary_worktree(common_dir: &str) -> Result<Option<String>, InspectionError> {
+    let budget = Budget::new(2_000, 128 * 1024)?;
+    let git_dir = format!("--git-dir={common_dir}");
+    let output = budget.checked(common_dir, &[&git_dir, "worktree", "list", "--porcelain", "-z"]).await?;
+    if output.stdout.is_empty() || !output.stdout.ends_with(b"\0\0") {
+        return Err(refusal("Worktree census is incomplete"));
+    }
+    for record in output.stdout.split(|b| *b == 0).collect::<Vec<_>>().split(|field| field.is_empty()) {
+        if record.is_empty() { continue; }
+        let first = std::str::from_utf8(record[0]).map_err(|_| refusal("Worktree census is not UTF-8"))?;
+        let path = first.strip_prefix("worktree ").filter(|path| Path::new(path).is_absolute())
+            .ok_or_else(|| refusal("Worktree census lacks an absolute checkout"))?;
+        if !record.iter().any(|field| *field == b"bare") { return Ok(Some(path.to_owned())); }
+    }
+    Ok(None)
+}
+
+/// Prove every accepted commit has an equivalent patch in a stable target.
+pub(crate) async fn patch_contained(checkout: &CheckoutIdentity, base: &str, accepted_head: &str,
+    commits: &[String], expected_head: Option<&str>) -> Result<Option<String>, InspectionError> {
+    if !oid(base) || !oid(accepted_head) || commits.iter().any(|commit| !oid(commit)) {
+        return Err(refusal("Accepted output is not exact commit objects"));
+    }
+    if commits.is_empty() { return Ok(None); }
+    let budget = Budget::new(2_000, 128 * 1024)?;
+    let head = containment_head(checkout, &budget).await?;
+    let changed = || InspectionError::new("merged_target_changed", "Merge target HEAD changed during cleanup");
+    if expected_head.is_some_and(|expected| expected != head) { return Err(changed()); }
+    let output = budget.checked(&checkout.path, &["cherry", &head, accepted_head, base]).await?;
+    let text = std::str::from_utf8(&output.stdout).map_err(|_| refusal("Git evidence is not UTF-8"))?;
+    let actual: Vec<_> = text.lines().collect();
+    let expected: HashSet<_> = commits.iter().map(String::as_str).collect();
+    let equivalent = expected.len() == commits.len() && actual.len() == commits.len()
+        && actual.iter().all(|line| line.strip_prefix("- ").is_some_and(|id| expected.contains(id)));
+    if containment_head(checkout, &budget).await? != head { return Err(changed()); }
+    Ok(equivalent.then_some(head))
+}
+
 /// True means present and eligible; false means exact absence, never uncertain state.
 pub async fn inspect_owned_git(identity: &OwnedGitIdentity, expected_head: &str, worktree: bool,
     timeout_ms: u64, output_bytes: usize) -> Result<bool, InspectionError> {
@@ -372,6 +411,47 @@ mod tests {
     }
     impl Drop for Fixture {
         fn drop(&mut self) { std::fs::remove_dir_all(&self.root).unwrap(); }
+    }
+
+    #[tokio::test]
+    async fn primary_worktree_resolves_common_dir_and_bare_only_has_none() {
+        let fixture = Fixture::new().await;
+        assert_eq!(primary_worktree(&fixture.identity.common_dir).await.unwrap(), Some(fixture.main.clone()));
+        let bare = fixture.root.join("bare.git");
+        let budget = Budget::new(10_000, 128 * 1024).unwrap();
+        budget.checked(&fixture.main, &["init", "--bare", bare.to_str().unwrap()]).await.unwrap();
+        assert_eq!(primary_worktree(bare.to_str().unwrap()).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn patch_containment_requires_every_exact_commit_and_stable_target() {
+        let fixture = Fixture::new().await;
+        let budget = Budget::new(10_000, 128 * 1024).unwrap();
+        let (_, checkout) = crate::orchestration::project_identity::resolve_directory(Path::new(&fixture.main), None, None).await.unwrap();
+        let base = fixture.identity.creation_tip.clone();
+        std::fs::write(Path::new(&fixture.linked).join("tracked"), "first\n").unwrap();
+        budget.checked(&fixture.linked, &["add", "tracked"]).await.unwrap();
+        budget.checked(&fixture.linked, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "first"]).await.unwrap();
+        let first = budget.line(&fixture.linked, &["rev-parse", "HEAD"]).await.unwrap();
+        std::fs::write(Path::new(&fixture.linked).join("second"), "second\n").unwrap();
+        budget.checked(&fixture.linked, &["add", "second"]).await.unwrap();
+        budget.checked(&fixture.linked, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "second"]).await.unwrap();
+        let second = budget.line(&fixture.linked, &["rev-parse", "HEAD"]).await.unwrap();
+        // A cherry-pick onto the same parent can recreate the original commit exactly.
+        // Diverge first so this exercises patch equivalence rather than ancestry.
+        budget.checked(&fixture.main, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "diverge target"]).await.unwrap();
+        budget.checked(&fixture.main, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "cherry-pick", &first]).await.unwrap();
+        let commits = vec![first.clone(), second.clone()];
+        assert!(patch_contained(&checkout, &base, &second, &commits, None).await.unwrap().is_none());
+        budget.checked(&fixture.main, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "cherry-pick", &second]).await.unwrap();
+        assert!(contained_head(&checkout, &second, None).await.unwrap().is_none());
+        let target = patch_contained(&checkout, &base, &second, &commits, None).await.unwrap().unwrap();
+        assert!(patch_contained(&checkout, &base, &second, &[], None).await.unwrap().is_none());
+        assert!(patch_contained(&checkout, &base, &second, &[first], None).await.unwrap().is_none());
+        budget.checked(&fixture.main, &["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "move"]).await.unwrap();
+        assert_eq!(patch_contained(&checkout, &base, &second, &commits, Some(&target)).await.unwrap_err().code, "merged_target_changed");
+        std::fs::write(Path::new(&fixture.identity.common_dir).join("info/grafts"), "").unwrap();
+        assert!(patch_contained(&checkout, &base, &second, &commits, None).await.is_err());
     }
 
     #[tokio::test]

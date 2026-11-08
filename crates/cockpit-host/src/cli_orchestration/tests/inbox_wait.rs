@@ -110,6 +110,48 @@ fn capture_keeps_exact_json_messages_and_recipient_prefix_private() {
 }
 
 #[test]
+fn root_board_is_in_output_and_capture_but_worker_has_no_board() {
+    use super::super::wait::{insert_board, is_root};
+    let root = private_capture_directory();
+    let path = root.join("board.json");
+    let board = serde_json::json!({"root_id": "root", "key": "board-key", "text": "Open work"});
+    let mut output = serde_json::json!({"run_id": "root", "messages": [], "through_sequence": 0});
+    assert!(is_root("root", "root"));
+    insert_board(&mut output, Some(board.clone()));
+    assert_eq!(output["board"], board);
+    capture(&path, &output).unwrap();
+    let captured: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(captured, output);
+    assert_eq!(captured["board"], board);
+
+    assert!(!is_root("worker", "root"));
+    let mut worker = serde_json::json!({"run_id": "worker", "messages": []});
+    insert_board(&mut worker, None);
+    assert!(!worker.as_object().unwrap().contains_key("board"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn message_context_carries_board_annotations() {
+    use cockpit_core::orchestration::{board_digest::WorkerState, InboxMessageContext};
+    let context = InboxMessageContext {
+        run_label: Some("worker".into()),
+        task_id: Some("task".into()),
+        task_title: Some("Fix issue".into()),
+        project: None,
+        thread_title: Some("Customer request".into()),
+        worker_state: Some(WorkerState::Working),
+        last_activity_at: Some("2026-11-08T00:00:00Z".into()),
+        note: Some("active".into()),
+    };
+    let value = serde_json::to_value(context).unwrap();
+    assert_eq!(value["thread_title"], "Customer request");
+    assert_eq!(value["worker_state"], "working");
+    assert_eq!(value["last_activity_at"], "2026-11-08T00:00:00Z");
+    assert_eq!(value["note"], "active");
+}
+
+#[test]
 fn capture_never_clobbers_existing_files_or_follows_symlinks() {
     use std::os::unix::fs::symlink;
     let root = private_capture_directory();

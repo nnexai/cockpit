@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use cockpit_protocol::orchestration::{DeliveryStage, OrchestrationAction, OrchestrationActionResult};
 use cockpit_core::orchestration::{Actor, inbox_meaningful};
+use cockpit_core::orchestration::{board_digest, herdr::OrchestrationHerdr};
 #[cfg(test)]
 pub(super) use cockpit_core::orchestration::inbox_meaningful as meaningful;
 #[cfg(test)]
@@ -55,9 +56,21 @@ pub(super) async fn inbox_next(
         return Err(CliError::new("orchestration_output", "Inbox pull returned no captured prefix"));
     };
     let captured = !messages.is_empty();
+    // Pull changes delivery stages, so project the board from a fresh snapshot.
+    // Workers must not receive the root's board.
+    let board = if is_root(&own.run_id, &own.root_id) {
+        let snapshot = context.snapshot(None).await?;
+        let runtime = context.adapter.runtime(&context.session).await.ok();
+        let now = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+        Some(board_digest::digest(&snapshot, &own.root_id, runtime.as_ref(), &now)?)
+    } else {
+        None
+    };
     let messages: Vec<_> = messages.into_iter().filter(|message| !deliverable || inbox_meaningful(message)).collect();
     let contexts = if messages.is_empty() { Default::default() } else {
-        context.service.inbox_message_context(caller, &messages).unwrap_or_else(|error| {
+        context.service.inbox_message_context(caller, &messages, board.as_ref()).unwrap_or_else(|error| {
             eprintln!("Inbox context unavailable: {}", error.message);
             Default::default()
         })
@@ -79,7 +92,7 @@ pub(super) async fn inbox_next(
         None if captured => Some(super::output::default_capture_file(&caller.auth, &own.run_id)?),
         None => None,
     };
-    let output = serde_json::json!({
+    let mut output = serde_json::json!({
         "run_id": own.run_id,
         "messages": messages,
         "through_sequence": read_through_seq,
@@ -87,6 +100,8 @@ pub(super) async fn inbox_next(
         "counts": remaining.counts,
         "capture_file": capture_file,
     });
+    insert_board(&mut output, board.map(serde_json::to_value).transpose()
+        .map_err(|error| CliError::new("orchestration_output", error.to_string()))?);
     // Every acknowledged batch is recoverable even if stdout is interrupted or
     // the final live fence fails. Context exposes the default recovery directory.
     if let Some(path) = &capture_file {
@@ -97,4 +112,14 @@ pub(super) async fn inbox_next(
     }
     context.check_caller().await?;
     emit(&output, json)
+}
+
+pub(super) fn is_root(run_id: &str, root_id: &str) -> bool {
+    run_id == root_id
+}
+
+pub(super) fn insert_board(output: &mut serde_json::Value, board: Option<serde_json::Value>) {
+    if let Some(board) = board {
+        output.as_object_mut().expect("inbox output is an object").insert("board".into(), board);
+    }
 }

@@ -423,6 +423,29 @@ impl<'a> TaskDocument<'a> {
         self.prepare_item(task_id, item, patches)
     }
 
+    pub(crate) fn prepare_continue(
+        &self, task_id: &str, expected_task_revision: &str, description: &str,
+    ) -> Result<PreparedTaskUpdate<'_, 'a>, InspectionError> {
+        let item = self.item(task_id, expected_task_revision)?;
+        validate_description(description)?;
+        let range = item.description_range.clone().ok_or_else(||
+            InspectionError::new("task_description_ambiguous",
+                "description has no single safe prose slot; edit canonical source instead"))?;
+        let mut replacement = String::new();
+        if item.header_end == item.content_end && !description.is_empty() {
+            replacement.push_str(self.eol());
+        }
+        replacement.push_str(&encode_body(description, self.eol()));
+        let mut patches = vec![BytePatch { range, replacement: Cow::Owned(replacement.into_bytes()) }];
+        if self.task(task_id)?.checked {
+            patches.push(BytePatch {
+                range: item.context.top_checkbox_offset..item.context.top_checkbox_offset + 1,
+                replacement: Cow::Borrowed(b" "),
+            });
+        }
+        self.prepare_item(task_id, item, patches)
+    }
+
     pub(crate) fn step(
         &self,
         task_id: &str,

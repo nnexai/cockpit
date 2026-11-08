@@ -19,7 +19,7 @@ const message = (seq: number, kind = "instruction", report?: { kind: string }) =
 type HookAPI = Parameters<typeof bindHook>[0];
 type HookContext = Parameters<Parameters<HookAPI["on"]>[1]>[1];
 
-function fixture(batches: unknown[][] = [[message(1)]], idle = true) {
+function fixture(batches: unknown[][] = [[message(1)]], idle = true, role = "worker", boards: ({ key: string; text: string } | undefined)[] = []) {
   const root = mkdtempSync(join(tmpdir(), "cockpit-hook-test-"));
   roots.push(root);
   const credentials = join(root, "credentials");
@@ -54,11 +54,12 @@ function fixture(batches: unknown[][] = [[message(1)]], idle = true) {
     signals.push(signal);
     signal.addEventListener("abort", () => stopped.resolve(), { once: true });
     if (args[1] === "context") return {};
-    if (args[1] === "brief") return { run_id: "run-one", bootstrap: "Bootstrap" };
+    if (args[1] === "brief") return { run_id: "run-one", role, bootstrap: "Bootstrap" };
+    if (args[1] === "board") return { key: "compact-key", text: "Compacted board" };
     if (args[1] === "report") return {};
     if (batches.length) {
       const path = args[args.indexOf("--capture-file") + 1];
-      const response = { run_id: "run-one", messages: batches.shift(), through_sequence: 1 };
+      const response = { run_id: "run-one", messages: batches.shift(), through_sequence: 1, board: boards.shift() };
       writeFileSync(path, JSON.stringify(response), { mode: 0o600, flag: "wx" });
       return response;
     }
@@ -81,7 +82,7 @@ function fixture(batches: unknown[][] = [[message(1)]], idle = true) {
 describe("optional public OMP Cockpit hook", () => {
   it("trusts the CLI deliverable capture without a second classification", () => {
     const delivered = [message(1, "observation"), message(2, "report", { kind: "needs_input" })];
-    expect(capturedMessages({ messages: delivered })).toEqual(delivered);
+    expect(capturedMessages({ messages: delivered }).messages).toEqual(delivered);
   });
 
   it("omits unknown task context from dispatcher banners", () => {
@@ -99,10 +100,53 @@ describe("optional public OMP Cockpit hook", () => {
   });
 
   it("rejects copied wrong-run captures and mismatched envelope recipients", () => {
-    expect(capturedMessages({ run_id: "run-one", messages: [message(1)] }, "run-one")).toEqual([message(1)]);
+    expect(capturedMessages({ run_id: "run-one", messages: [message(1)] }, "run-one").messages).toEqual([message(1)]);
     expect(() => capturedMessages({ run_id: "run-other", messages: [message(1)] }, "run-one")).toThrow();
     expect(() => capturedMessages({ run_id: "run-one", messages: [{ ...message(1), to_run_id: "run-other" }] }, "run-one")).toThrow();
     expect(() => capturedMessages({ messages: [message(1)] }, "run-one")).toThrow();
+  });
+
+  it("captures and renders board and message annotations as untrusted data", () => {
+    const board = { key: "key", text: "Board rows" };
+    expect(capturedMessages({ messages: [message(1)], board }).board).toEqual(board);
+    expect(() => capturedMessages({ messages: [], board: { key: 1, text: "bad" } })).toThrow();
+    const annotated = { ...message(1, "user_directive"), context: {
+      thread_title: "Request", worker_state: "idle_no_report", last_activity_at: "yesterday", note: "no action needed",
+    } };
+    const rendered = frames([annotated], board).join("");
+    expect(rendered).toContain('thread "Request" · worker idle_no_report · last activity yesterday · no action needed');
+    expect(rendered).toContain("[user_directive]");
+    expect(rendered).toContain("--- BEGIN UNTRUSTED DATA 1/1 ---\nBoard:\nBoard rows");
+  });
+
+  it("keeps the latest board once for a coalesced flush", async () => {
+    const f = fixture([[message(1)], [message(2)]], true, "root", [
+      { key: "old", text: "Old board" }, { key: "new", text: "New board" },
+    ]);
+    f.emit("session_start"); await f.waiting; f.flush();
+    expect(f.sends[1].text.match(/Board:\n/g)).toHaveLength(1);
+    expect(f.sends[1].text).toContain("New board");
+    expect(f.sends[1].text).not.toContain("Old board");
+    f.emit("session_shutdown");
+  });
+
+  it("refreshes the board after compaction only for the current main root", async () => {
+    const root = fixture([], true, "root");
+    root.emit("session_start"); await root.waiting;
+    root.emit("session_compact"); await Promise.resolve(); await Promise.resolve();
+    expect(root.calls).toContainEqual(["inbox", "board", "--json"]);
+    expect(root.sends[1].text).toContain("Reconcile:");
+    expect(root.sends[1].text).toContain("Board:\nCompacted board");
+    root.changeSession("other");
+    root.emit("session_compact");
+    expect(root.calls.filter(args => args[1] === "board")).toHaveLength(1);
+    root.emit("session_shutdown");
+    const worker = fixture([], true, "worker");
+    worker.emit("session_start"); await worker.waiting;
+    worker.emit("session_compact");
+    worker.ctx.agent.kind = "sub"; worker.emit("session_compact");
+    expect(worker.calls.some(args => args[1] === "board")).toBe(false);
+    worker.ctx.agent.kind = "main"; worker.emit("session_shutdown");
   });
 
   it("splits large compact digests into bounded recoverable untrusted fragments", () => {
@@ -230,7 +274,7 @@ describe("optional public OMP Cockpit hook", () => {
       { ...message(6, "observation"), from: { type: "dispatcher" } },
     ]], false);
     f.env.COCKPIT_BOOTSTRAP_ARGV = "1";
-    f.emit("session_start"); await f.waiting; f.flush();
+    f.emit("session_start"); f.emit("agent_start"); await f.waiting; f.flush();
     expect(f.sends).toHaveLength(1);
     for (const kind of ["instruction", "answer", "cancel_request", "needs_input", "result", "observation"]) {
       expect(f.sends[0].text).toContain(kind);
@@ -276,11 +320,34 @@ describe("optional public OMP Cockpit hook", () => {
   it("does not inject a second bootstrap when launch argv already supplied it", async () => {
     const f = fixture();
     f.env.COCKPIT_BOOTSTRAP_ARGV = "1";
-    f.emit("session_start"); await f.waiting;
+    f.emit("session_start"); f.emit("agent_start"); await f.waiting;
     expect(f.sends).toEqual([]);
     f.flush();
     expect(f.sends).toHaveLength(1);
     expect(f.sends[0].text).not.toContain("Bootstrap");
+    f.emit("session_shutdown");
+  });
+
+  it("queues nothing until the launch-argv bootstrap turn has started", async () => {
+    const f = fixture([[message(1, "instruction")]]);
+    f.env.COCKPIT_BOOTSTRAP_ARGV = "1";
+    f.emit("session_start");
+    for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+    expect(f.calls.some(args => args[0] === "inbox")).toBe(false);
+    expect(f.sends).toEqual([]);
+    f.emit("agent_start"); await f.waiting; f.flush();
+    expect(f.sends).toHaveLength(1);
+    expect(f.sends[0].text).toContain("instruction");
+    f.emit("session_shutdown");
+  });
+
+  it("releases delivery after the fallback when the launch prompt never starts a turn", async () => {
+    const f = fixture([[message(1, "instruction")]]);
+    f.env.COCKPIT_BOOTSTRAP_ARGV = "1";
+    f.emit("session_start");
+    expect(f.delays).toContain(20_000);
+    f.flush(); await f.waiting; f.flush();
+    expect(f.sends).toHaveLength(1);
     f.emit("session_shutdown");
   });
 

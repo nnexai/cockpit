@@ -1,5 +1,5 @@
 use cockpit_protocol::orchestration::{
-    ActorRef, CloseReason, IntentState, MessageKind, OrchestrationActionResult, RunKind, RunStage,
+    ActorRef, IntentState, MessageKind, OrchestrationActionResult, RunKind, RunStage,
     TaskScopeUpdateResult, TaskScopeUpdateState,
 };
 use serde::{Deserialize, Serialize};
@@ -82,9 +82,7 @@ pub(super) fn resume(
                 && run.stage == RunStage::Working)
         && !state.task_intents.iter().any(|acceptance| acceptance.root_id == intent.root_id
             && acceptance.task_id == intent.task_id)
-        && !state.runs.iter().any(|run| run.root_id == intent.root_id
-            && run.task_id.as_deref() == Some(intent.task_id.as_str())
-            && run.close_reason == Some(CloseReason::Accepted));
+        && !super::mutate::tasks::accepted_blocks(state, &intent.root_id, &intent.task_id);
     let valid_task = match &task {
         Ok(task) => !task.checked && dependencies::DependencyGraph::new(&document.tasks).require(task).is_ok(),
         Err(failure) if matches!(failure.code.as_str(), "task_not_found" | "task_id_duplicate") => false,

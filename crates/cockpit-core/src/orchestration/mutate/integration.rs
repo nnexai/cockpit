@@ -883,7 +883,7 @@ mod tests {
             task_revision: "updated canonical scope".into(), artifacts: vec!["actual analysis result".into()],
             focused_checks: Vec::new() };
         let mut state = OrchestrationState { runs: vec![run], task_ownership: vec![TaskOwnership {
-            root_id: "root".into(), task_id: "task".into(), generation: 1, schedule: None,
+            root_id: "root".into(), task_id: "task".into(), generation: 1, schedule: None, reopened_after_attempt: None,
             owner: Some(TaskOwner { run_id: "worker".into(), conversation: Some(conversation), claim_operation_id: id() }),
         }], ..Default::default() };
         let mut action = OrchestrationAction::Report { thread_id: None, card: None, message_id: "current-result".into(),

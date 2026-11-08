@@ -205,7 +205,7 @@ def configure_action_launcher(root):
         'description = "Fixture direct binding"\n')
 
 
-def start(with_plugins=False, with_action_launcher=False, inherit_omp_auth=False):
+def start(with_plugins=False, with_action_launcher=False, inherit_omp_auth=False, quiet_period_seconds=None):
     inherited_agent_dir = inherited_omp_agent_dir() if inherit_omp_auth else None
     root = Path(tempfile.mkdtemp(prefix="cpol-", dir="/tmp"))
     session = "polish-" + root.name[5:]
@@ -225,11 +225,18 @@ def start(with_plugins=False, with_action_launcher=False, inherit_omp_auth=False
         f'state_root = "{root}/cockpit-state"\n')
     if inherited_agent_dir is not None:
         overlay = root / "omp-smoke.yml"
-        overlay.write_text("autoResume: false\n")
+        # The private fixture HOME would otherwise stop a fresh OMP at its setup wizard
+        # before the launch prompt runs.
+        overlay.write_text("autoResume: false\nstartup:\n  setupWizard: false\n")
+    if inherited_agent_dir is not None or quiet_period_seconds is not None:
         with (root / "cockpit.toml").open("a") as config:
-            config.write('\n[orchestration]\nextra_args = ["--config", '
-                         + json.dumps(str(overlay))
-                         + ', "--no-extensions", "--no-skills", "--no-rules", "--no-context-files"]\n')
+            config.write("\n[orchestration]\n")
+            if quiet_period_seconds is not None:
+                config.write(f"quiet_period_seconds = {quiet_period_seconds}\n")
+            if inherited_agent_dir is not None:
+                config.write('extra_args = ["--config", '
+                             + json.dumps(str(overlay))
+                             + ', "--no-extensions", "--no-skills", "--no-rules", "--no-context-files"]\n')
     fixture = root / "repositories/sample"
     (fixture / "README.md").write_text('---\ntitle: Polish fixture\n---\n# Sample project\n\n## Summary\n\nOriginal source coordinates survive rendered Markdown.\n\n## Detail\n\nSelect this text to leave a comment.\n')
     (fixture / "sample.txt").write_text(''.join(f'Original line {i}\n' for i in range(1, 81)))
@@ -300,11 +307,13 @@ if __name__ == "__main__":
                         help="copy the owner's action launcher and configure harmless marker and persistent tab actions")
     parser.add_argument("--inherit-omp-auth", action="store_true",
                         help="start with the existing default-profile OMP agent directory (writable auth and cache state)")
+    parser.add_argument("--quiet-period-seconds", type=int,
+                        help="override the orchestration quiet period for this fixture")
     parser.add_argument("--creation-id")
     parser.add_argument("--scratch-path")
     args = parser.parse_args()
     if args.action == "start":
-        start(args.with_plugins, args.with_action_launcher, args.inherit_omp_auth)
+        start(args.with_plugins, args.with_action_launcher, args.inherit_omp_auth, args.quiet_period_seconds)
     elif args.action == "stop":
         stop(args.root)
     elif args.action == "rpc":

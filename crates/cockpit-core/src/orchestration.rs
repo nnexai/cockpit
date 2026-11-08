@@ -6,6 +6,9 @@ mod dependency_inputs;
 mod scope_intents;
 mod steps;
 pub mod dispatch;
+pub mod board_digest;
+mod quiescence;
+mod directives;
 pub mod herdr;
 pub mod project_identity;
 pub mod session_identity;
@@ -482,6 +485,15 @@ impl OrchestrationService {
         scope_run(&state, session_id, job.run_index)?;
         let own_run_id = state.runs[job.run_index].run_id.clone();
         let root_id = state.runs[job.run_index].root_id.clone();
+        let worker_directives = if job.role == JobRole::Worker {
+            Some(directives::active_for_run(&state, &state.runs[job.run_index])
+                .into_iter().map(|directive| directive.directive_id.clone())
+                .collect::<std::collections::HashSet<_>>())
+        } else {
+            None
+        };
+        state.directives.retain(|directive| directive.root_id == root_id
+            && worker_directives.as_ref().is_none_or(|ids| ids.contains(&directive.directive_id)));
         state.runs.retain(|run| run.root_id == root_id && run.session_id == session_id);
         if job.role == JobRole::Worker {
             for run in state.runs.iter_mut().filter(|run| run.run_id != own_run_id) {
@@ -1322,11 +1334,13 @@ fn launch_receipt_coherent(run: &Run) -> bool {
 
 fn supervisor_guidance() -> &'static str {
     concat!(
-        "You are the user's personal liaison for this Herdr session, across all of their projects. Route each request to the right place; workers plan and do the work, you do not micromanage them. Read \"${COCKPIT_CLI_PATH:-cockpit-cli}\" skills show cockpit-cli-orchestration once for the command workflow. ",
-        "Orient with `where` (projects, Spaces, live agents including ones the user started, tasks). References accept task titles, UUID prefixes and Space labels; fences are resolved for you. ",
-        "New idea: one task per outcome with task create, then task schedule with the project's Space (--space-worktree for changes, --space for read-only work in place); omit the target only for general work that belongs to no project. Ask which project only when where and the conversation leave it genuinely ambiguous. ",
-        "Reply to existing work: task scope-update or agent send for the current worker or any other agent; answer worker questions with run message --kind answer --in-reply-to. Status: answer from where/task list in a few plain lines. ",
-        "Review Results against the task scope, then accept or send back, and integrate accepted output. Resolve routine choices yourself; ask the user only for real decisions. Keep bookkeeping, receipts and fences out of your replies unless the user must act. ",
+        "You are the user's personal liaison for this Herdr session, across all of their projects. Your job is routing, deciding and delegating; you never do task work yourself. Code, git, builds, research and records go to a worker. You keep every tool to diagnose unforeseen situations. Read \"${COCKPIT_CLI_PATH:-cockpit-cli}\" skills show cockpit-cli-orchestration once for commands. The board digest that arrives with each wake (or `inbox board`) is your memory; trust it over recollection, especially after restart or compaction.\n\n",
+        "- **New outcome:** check the board first, then create one task per outcome (task create, then task schedule). Placement follows need: omit the target for general work without a project; use --space SPACE for read-only, service or in-place work; use --path CHECKOUT for project changes (Cockpit shares a lone writer's checkout and isolates parallel writers); use --space-worktree only when isolation is requested. The task description states its own definition of done, including integration into main or deploy when the request implies it. Never create separate Integrate or Deploy tasks. \"Push/install/restart when everything is done\" is one release task that depends on the open tasks.\n",
+        "- **Follow-up on existing work:** agent send to its worker, or task continue TASK --text for a reported or accepted task. Small related follow-ups may go to an idle worker in the same Space.\n",
+        "- **Result:** review it against the definition of done, then run accept, send back, or ask the user.\n",
+        "- **Status:** answer from the board in a few plain lines. Never ping a working worker for status.\n",
+        "- **Unforeseen:** diagnose with any tool, then delegate the fix.\n\n",
+        "When the user says something in this conversation that should outlast the turn, record it with directive add (--task TASK, or --standing [--project P]). Never contradict a recorded directive; when one conflicts with a task, ask on the thread. Relay the user's own words to a worker with agent send --from-user. A wake titled Reconcile, or a start or resume, means: walk the board, act on each row that can progress, leave working workers alone, and ask the user only when nothing can progress without them. Resolve routine choices yourself. Keep bookkeeping, receipts and fences out of replies unless the user must act. ",
         "Inbox handoffs arrive as instructions with thread_id and optional handoff.task_id/binding. Interpret them: new work uses task create --thread; existing work uses task link and task scope-update; answer questions or status on the thread. Report to the human on the thread: run report --thread ID --kind needs-input for a real decision, with --title/--next and --recommend/--choice when helpful; use result for an answer or finished outcome, and progress for meaningful changes. Respect handoff.binding exactly; if placement cannot satisfy it, ask on the thread instead of choosing another. Answers from the Inbox arrive with thread_id; continue on that thread and do not run answer again. When a worker reports question_resolved_in_session, resolve the thread question you raised for it with run answer. ",
         "For a new Inbox thread, promptly publish a progress report with --thread ID, --title and --next: choose a concise, meaningful title describing the request rather than copying its opening words; honor a title the user explicitly asks for. Keep that title on subsequent reports and follow-ups unless the user asks to change it. Do this while handling the request, without a separate model call. The original request remains unchanged. ",
         "For human-facing thread reports, put the complete answer, progress, or decision context in --summary, not just a terse label; use Markdown paragraphs, lists, and code where useful. The card title and next action are short labels, not a substitute for the report body. ",
@@ -1419,6 +1433,8 @@ fn durable_operation(action: &OrchestrationAction) -> Option<(&str, store::Durab
         OrchestrationAction::TaskScheduleCancel { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::TaskScheduleCancel),
         OrchestrationAction::WorkerReplace { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::WorkerReplace),
         OrchestrationAction::TaskScopeUpdate { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::TaskScopeUpdate),
+        OrchestrationAction::TaskContinue { operation_id, .. } => (operation_id.as_str(), DurableOperationKind::TaskContinue),
+        OrchestrationAction::DirectiveAdd { directive_id, .. } => (directive_id.as_str(), DurableOperationKind::DirectiveAdd),
         OrchestrationAction::IntegrationRecord { record } => (record.operation_id.as_str(), DurableOperationKind::IntegrationRecord),
         OrchestrationAction::Report { message_id, .. } => (message_id.as_str(), DurableOperationKind::Report),
         OrchestrationAction::MessageSend { message_id, .. } => (message_id.as_str(), DurableOperationKind::MessageSend),
@@ -1439,6 +1455,7 @@ fn allows_stale_machine_revision(action: &OrchestrationAction) -> bool {
         | OrchestrationAction::TaskSchedule { .. } | OrchestrationAction::TaskScheduleCancel { .. }
         | OrchestrationAction::WorkerReplace { .. }
         | OrchestrationAction::TaskScopeUpdate { .. } | OrchestrationAction::Report { .. }
+        | OrchestrationAction::TaskContinue { .. } | OrchestrationAction::DirectiveAdd { .. } | OrchestrationAction::DirectiveRemove { .. }
         | OrchestrationAction::MessageSend { .. } | OrchestrationAction::ThreadHandoff { .. }
         | OrchestrationAction::ThreadMarkRead { .. } | OrchestrationAction::ThreadLink { .. }
         | OrchestrationAction::TaskCreate { thread_id: Some(_), .. } | OrchestrationAction::IntegrationRecord { .. }
@@ -1537,6 +1554,9 @@ fn admit(
             | OrchestrationAction::TaskSchedule { root_id, .. }
             | OrchestrationAction::TaskScheduleCancel { root_id, .. }
             | OrchestrationAction::TaskUnassign { root_id, .. }
+            | OrchestrationAction::TaskContinue { root_id, .. }
+            | OrchestrationAction::DirectiveAdd { root_id, .. }
+            | OrchestrationAction::DirectiveRemove { root_id, .. }
             | OrchestrationAction::WorkerReplace { root_id, .. } => {
                 scoped_index(state, &request.session_id, root_id)?;
                 if let OrchestrationAction::WorkerReplace { expected_run_id, .. } = &request.action {

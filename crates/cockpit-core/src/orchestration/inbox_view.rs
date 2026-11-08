@@ -40,7 +40,7 @@ fn report_owner<'a>(m: &Message, roots: &HashMap<&str, &'a Run>) -> Option<&'a R
     roots.get(run_id.as_str()).copied()
 }
 
-fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, roots: &HashMap<&str, &Run>) -> (Vec<InboxEntry>, u32, Vec<InboxEntry>, Option<u32>) {
+fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, roots: &HashMap<&str, &Run>, boards: &[TaskBoard]) -> (Vec<InboxEntry>, u32, Vec<InboxEntry>, Option<u32>) {
     let all = &state.messages;
     let positions: HashMap<*const Message, usize> = all.iter().enumerate()
         .map(|(index, message)| (message as *const Message, index)).collect();
@@ -64,7 +64,9 @@ fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, 
                 let kind = if had_request { InboxEntryKind::FollowUp } else { InboxEntryKind::Request };
                 had_request = true;
                 kind
-            } else if m.kind == MessageKind::Answer { InboxEntryKind::Answer } else { continue };
+            } else if m.kind == MessageKind::Answer { InboxEntryKind::Answer }
+            else if m.kind == MessageKind::UserDirective { InboxEntryKind::Directive }
+            else { continue };
             (kind, m.text.clone(), InboxSource::User, None)
         } else if let Some(root) = report_owner(m, roots) {
             let report = m.report.as_ref().unwrap();
@@ -77,8 +79,15 @@ fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, 
             (kind, report.summary.clone(), owner_source(root, false), if report.kind == ReportKind::Result { report.outcome } else { None })
         } else { continue };
         let position = positions[&(m as *const Message)];
+        let task_title = if m.kind == MessageKind::UserDirective {
+            state.runs.iter().find(|run| run.run_id == m.to_run_id)
+                .and_then(|run| boards.iter().find(|board| board.root_id == run.root_id))
+                .and_then(|board| m.handoff.as_ref().and_then(|handoff| handoff.task_id.as_ref())
+                    .and_then(|id| board.tasks.iter().find(|task| &task.task.task_id == id)))
+                .map(|task| task.task.title.clone())
+        } else { None };
         result.push(((position, 1, 0), InboxEntry { message_id: m.message_id.clone(), at: m.created_at.clone(), kind,
-            text: value, source, outcome, images: m.images.clone(), in_reply_to: m.in_reply_to.clone(), widget: None }));
+            text: value, source, outcome, images: m.images.clone(), in_reply_to: m.in_reply_to.clone(), widget: None, task_title }));
     }
     for (index, publication) in state.widget_publications.iter().enumerate().filter(|(_, p)|
         p.thread_id == thread_id && roots.contains_key(p.root_id.as_str())) {
@@ -88,7 +97,7 @@ fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, 
             message_id: event.publication_id.clone(), at: publication.at.clone(), kind: InboxEntryKind::Widget,
             text: event.title.clone(), source: if event.binding.run_id == root.run_id { owner_source(root, false) }
                 else { InboxSource::Worker { run_id: event.binding.run_id.clone() } }, outcome: None,
-            images: Vec::new(), in_reply_to: None, widget: Some(event.clone()),
+            images: Vec::new(), in_reply_to: None, widget: Some(event.clone()), task_title: None,
         }));
     }
     result.sort_by_key(|(order, _)| *order);
@@ -180,7 +189,9 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
     let mut groups: BTreeMap<&str, Vec<&Message>> = BTreeMap::new();
     for m in &state.messages {
         let owner_report = report_owner(m, &root_map).is_some();
-        if (root_map.contains_key(m.to_run_id.as_str()) && matches!(m.from, ActorRef::Operator)) || owner_report {
+        let worker_directive = m.kind == MessageKind::UserDirective && matches!(m.from, ActorRef::Operator)
+            && runs.iter().any(|run| run.run_id == m.to_run_id && root_map.contains_key(run.root_id.as_str()));
+        if (root_map.contains_key(m.to_run_id.as_str()) && matches!(m.from, ActorRef::Operator)) || owner_report || worker_directive {
             if let Some(id) = m.thread_id.as_deref() { groups.entry(id).or_default().push(m); }
         }
     }
@@ -202,7 +213,9 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
     }
     for messages in groups.values() { for m in messages {
         if let Some(task) = m.handoff.as_ref().and_then(|h| h.task_id.as_deref()) {
-            task_projects.entry((m.to_run_id.as_str(), task)).or_insert_with(|| projection::task_project(state, &m.to_run_id, task, runtime_ref));
+            if let Some(run) = runs.iter().find(|run| run.run_id == m.to_run_id) {
+                task_projects.entry((run.root_id.as_str(), task)).or_insert_with(|| projection::task_project(state, &run.root_id, task, runtime_ref));
+            }
         }
     }}
     let (observation, unmanaged_agents) = projection::observe(&runs, runtime, now);
@@ -232,7 +245,7 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             if m.handoff.is_some() && root_map.contains_key(m.to_run_id.as_str()) { owner_ids.insert(m.to_run_id.as_str()); }
             if let Some(root) = report_owner(m, &root_map) { owner_ids.insert(root.run_id.as_str()); }
         }
-        let mut handoffs = messages.iter().copied().filter(|m| matches!(m.from, ActorRef::Operator) && m.handoff.is_some());
+        let mut handoffs = messages.iter().copied().filter(|m| matches!(m.from, ActorRef::Operator) && m.kind == MessageKind::Instruction && m.handoff.is_some());
         let request_message = handoffs.next();
         let request_echo = request_message.map(build_request_echo);
         let follow_ups = handoffs.map(build_request_echo).collect();
@@ -249,7 +262,9 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
         let receipts: Vec<InboxReceipt> = messages.iter().filter(|m| matches!(m.from, ActorRef::Operator)).map(|m| InboxReceipt { message_id: m.message_id.clone(), kind: m.kind, to_run_id: m.to_run_id.clone(), attempt_run_id: m.handoff.as_ref().and_then(|h| h.attempt_run_id.clone()), stage: m.stage, created_at: m.created_at.clone(), acked_at: m.acked_at.clone(), stale: m.stale }).collect();
         let mut links = BTreeSet::new();
         for link in &state.thread_links { if link.thread_id == id && root_map.contains_key(link.root_id.as_str()) { links.insert((link.root_id.as_str(), link.task_id.as_str())); } }
-        for m in &messages { if let Some(task) = m.handoff.as_ref().and_then(|h| h.task_id.as_deref()) { links.insert((m.to_run_id.as_str(), task)); } }
+        for m in &messages { if let Some(task) = m.handoff.as_ref().and_then(|h| h.task_id.as_deref()) {
+            if let Some(run) = runs.iter().find(|run| run.run_id == m.to_run_id) { links.insert((run.root_id.as_str(), task)); }
+        } }
         let link_count = links.len();
         let mut tasks = Vec::new();
         for (root_id, task_id) in links {
@@ -313,7 +328,7 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
         let updated_at = messages.iter().map(|m| m.created_at.as_str())
             .chain(state.widget_publications.iter().filter(|p| p.thread_id == id && root_map.contains_key(p.root_id.as_str())).map(|p| p.at.as_str()))
             .max().unwrap_or(now).to_owned();
-        let (timeline, timeline_omitted, earlier_widgets, earlier_widgets_omitted) = timeline(&messages, state, id, &root_map);
+        let (timeline, timeline_omitted, earlier_widgets, earlier_widgets_omitted) = timeline(&messages, state, id, &root_map, &boards);
         threads.push(InboxThread { thread_id: id.into(), state: state_value, need, owner_root_ids: owner_ids.into_iter().map(str::to_owned).collect(), title, next, project, request: request_echo, follow_ups, questions: projected_questions, recommendation, reply, unread_result_message_id: unread, tasks, receipts, facts, updated_at, timeline, timeline_omitted, earlier_widgets: (!earlier_widgets.is_empty()).then_some(earlier_widgets), earlier_widgets_omitted });
     }
     threads.sort_by(|a,b| {
@@ -326,7 +341,22 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
     let mut handled = 0;
     threads.retain(|t| { if t.state != InboxState::Handled { true } else { handled += 1; handled <= 50 } });
     let observation = match observation { RuntimeObservation::Fresh { observed_at, .. } => InboxObservation::Fresh { observed_at }, RuntimeObservation::Unavailable { error } => InboxObservation::Unavailable { error } };
-    Ok(InboxView { session_id: request.session_id.clone(), state_store_id: store_id.into(), revision: state.revision, tasks_token: String::new(), observation, owners, threads, unmanaged_agents, image_limits: ImageLimits { max_bytes: super::images::MAX_IMAGE_BYTES as _, max_count: super::images::MAX_MESSAGE_IMAGES as _, mime_types: vec!["image/png".into(), "image/jpeg".into()] } })
+    let stalls = roots.iter().filter_map(|root| {
+        let subtree: HashSet<&str> = runs.iter().filter(|run| run.root_id == root.run_id).map(|run| run.run_id.as_str()).collect();
+        let prefix = format!("stalled:{}:", root.run_id);
+        let stall = state.messages.iter().filter(|message| message.to_run_id == root.run_id
+            && matches!(message.from, ActorRef::Dispatcher) && message.kind == MessageKind::Observation
+            && message.message_id.starts_with(&prefix))
+            .max_by(|a, b| message_order(a).cmp(&message_order(b)))?;
+        let newer_run = runs.iter().any(|run| run.root_id == root.run_id && run.updated_at > stall.created_at);
+        let newer_message = state.messages.iter().any(|message| message.created_at > stall.created_at
+            && (subtree.contains(message.to_run_id.as_str())
+                || matches!(&message.from, ActorRef::Run { run_id } if subtree.contains(run_id.as_str()))));
+        (!newer_run && !newer_message).then(|| InboxStall {
+            root_id: root.run_id.clone(), since: stall.created_at.clone(), text: stall.text.clone(),
+        })
+    }).collect();
+    Ok(InboxView { session_id: request.session_id.clone(), state_store_id: store_id.into(), revision: state.revision, tasks_token: String::new(), observation, owners, threads, unmanaged_agents, stalls, image_limits: ImageLimits { max_bytes: super::images::MAX_IMAGE_BYTES as _, max_count: super::images::MAX_MESSAGE_IMAGES as _, mime_types: vec!["image/png".into(), "image/jpeg".into()] } })
 }
 
 #[cfg(test)]
@@ -360,6 +390,48 @@ mod tests {
     }
     fn image(id: &str) -> MessageImage {
         MessageImage { image_id: id.into(), mime_type: "image/png".into(), width: 1, height: 1, bytes: 42 }
+    }
+    #[test]
+    fn worker_directive_is_a_user_timeline_entry_with_task_title() {
+        let mut worker = root("worker");
+        worker.kind = RunKind::Worker;
+        worker.root_id = "r".into();
+        worker.parent_run_id = Some("r".into());
+        worker.task_id = Some("task".into());
+        let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
+        let mut request = message("request", "r", 1, Some("t"), MessageKind::Instruction);
+        request.handoff = Some(HandoffRecord { task_id: None, task_revision: None, attempt_run_id: None, binding: None, origin: OperatorOrigin::Browser });
+        let mut directive = message("directive", "worker", 2, Some("t"), MessageKind::UserDirective);
+        directive.handoff = Some(HandoffRecord { task_id: Some("task".into()), task_revision: None, attempt_run_id: Some("worker".into()), binding: None, origin: OperatorOrigin::Browser });
+        state.messages.extend([request, directive]);
+        let result = view(&state, vec![board("r", "task")]);
+        let thread = &result.threads[0];
+        assert_eq!(thread.owner_root_ids, vec!["r"]);
+        assert!(thread.follow_ups.is_empty());
+        let entry = thread.timeline.iter().find(|entry| entry.message_id == "directive").unwrap();
+        assert_eq!(entry.kind, InboxEntryKind::Directive);
+        assert!(matches!(entry.source, InboxSource::User));
+        assert_eq!(entry.task_title.as_deref(), Some("Task"));
+        assert_eq!(thread.tasks.len(), 1);
+    }
+
+    #[test]
+    fn stall_disappears_after_subtree_activity() {
+        let mut worker = root("worker");
+        worker.root_id = "r".into();
+        worker.parent_run_id = Some("r".into());
+        worker.kind = RunKind::Worker;
+        let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
+        let mut stall = message("stalled:r:key", "r", 2, None, MessageKind::Observation);
+        stall.from = ActorRef::Dispatcher;
+        state.messages.push(stall);
+        let projected = view(&state, vec![]);
+        assert_eq!(projected.stalls.len(), 1);
+        assert_eq!(projected.stalls[0].root_id, "r");
+        let mut activity = message("activity", "r", 3, None, MessageKind::Observation);
+        activity.from = ActorRef::Run { run_id: "worker".into() };
+        state.messages.push(activity);
+        assert!(view(&state, vec![]).stalls.is_empty());
     }
     #[test]
     fn image_projection_preserves_handoffs_reports_and_inert_markdown() {
@@ -407,7 +479,7 @@ mod tests {
             machine_id: None, process_scope: None, launch_attempt: 1, updated_at: NOW.into(),
         });
         let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
-        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, schedule: None,
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, schedule: None, reopened_after_attempt: None,
             owner: Some(TaskOwner { run_id: "worker".into(), conversation: None, claim_operation_id: "claim".into() }) });
         state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
         state.messages.push(report("root-progress", "r", 1, Some("t"), ReportKind::Progress));
@@ -443,7 +515,7 @@ mod tests {
         worker.result = report("worker-result", "worker", 1, None, ReportKind::Result).report;
         worker.result.as_mut().unwrap().summary = summary.clone();
         let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
-        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, schedule: None,
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, schedule: None, reopened_after_attempt: None,
             owner: Some(TaskOwner { run_id: "worker".into(), conversation: None, claim_operation_id: "claim".into() }) });
         state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
         for seq in 1..=10 {
