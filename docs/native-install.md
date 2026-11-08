@@ -24,7 +24,7 @@ On Fedora 44, the distribution package path for native Voice is:
 # Build metadata (not needed to install an existing binary with --reuse):
 sudo dnf install pkgconf-pkg-config gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-bad-free-devel
 # Runtime elements and inspection tool:
-sudo dnf install gstreamer1-tools gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free libnice-gstreamer1
+sudo dnf install gstreamer1 gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free libnice-gstreamer1
 ```
 
 `libnice-gstreamer1` is separate from the libnice library and provides the ICE `nicesrc` element. PulseAudio-compatible input and output are required (including PipeWire's PulseAudio compatibility service). Fedora's [bad-free package](https://packages.fedoraproject.org/pkgs/gstreamer1-plugins-bad-free/gstreamer1-plugins-bad-free/fedora-44-updates.html) supplies WebRTC and echo processing; its [development package](https://packages.fedoraproject.org/pkgs/gstreamer1-plugins-bad-free/gstreamer1-plugins-bad-free-devel/fedora-44.html) supplies WebRTC pkg-config metadata.

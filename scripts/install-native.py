@@ -54,7 +54,7 @@ def voice_package_help(platform: str) -> str:
         )
     return (
         "Fedora: install gstreamer1-devel, gstreamer1-plugins-base-devel, "
-        "gstreamer1-plugins-bad-free-devel, gstreamer1-tools, "
+        "gstreamer1-plugins-bad-free-devel, gstreamer1, "
         "gstreamer1-plugins-base, gstreamer1-plugins-good, "
         "gstreamer1-plugins-bad-free and libnice-gstreamer1. "
         "Debian/Ubuntu: install libgstreamer1.0-dev, "
