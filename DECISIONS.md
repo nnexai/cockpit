@@ -332,7 +332,7 @@ Canonical tasks retain durable stages and dependencies while schedules drive bou
 
 - Leaf creation/reopening uses OpenFresh: stop/clean surviving session, never adopt, then start configured validated URL/default about:blank; CLI Open and existing-leaf Reconnect retain attach/new-page semantics rather than restoring a closed leaf. [Owner](crates/cockpit-core/src/browser/service.rs). Rationale: Fresh opening means a new disposable association.
 
-- Browser profiles/work, viewer batches/paste receipts and Review caches last one owner run. Only exclusive browser owner resets before socket/dependent services; observers clear nothing. Stop proven leftovers, clear browser except owner.lock/owner.sock plus comments/review, with stable lock inode/no-follow/same-device deletion; uncertain shutdown fails startup without wiping. [Owner](crates/cockpit-core/src/ephemeral.rs). Rationale: Reset authority belongs only to the proven owner.
+- Browser profiles/work, viewer batches/paste receipts and Review caches last one background-service owner run. Only the exclusive browser owner resets before socket/dependent services; GUI and web observers clear nothing when they close. Stop proven leftovers, clear browser except owner.lock/owner.sock plus comments/review, with stable lock inode/no-follow/same-device deletion; uncertain shutdown fails startup without wiping. [Owner](crates/cockpit-core/src/ephemeral.rs). Rationale: Reset authority belongs only to the proven owner.
 
 - Never reset Library/Notes/vault/config/project operations/real Herdr resources; close/fresh-open/retirement/shutdown discard outgoing association drafts/captures/feedback/receipts, with current tab/current CLI targeting and no detached saved-work guard/recovery surface. [Owner](crates/cockpit-core/src/ephemeral.rs). Rationale: Ephemeral cleanup is not durable-content teardown.
 
@@ -504,7 +504,7 @@ Canonical tasks retain durable stages and dependencies while schedules drive bou
 
 - Keep core Rust rules independent of Tauri/HTTP/WebSocket/socket framing; hosts compose narrow Herdr/provider/OS-vault traits. Share typed client requests/streams with startup adapter selection and validated response identity; stable typed error codes/useful messages stay at failure owner. [Owner](crates/cockpit-core/src/lib.rs). Rationale: Transport changes must not duplicate business rules.
 
-- Serve shared frontend/versioned HTTP-WebSocket API from explicit foreground loopback origin only, with native access restricted by Tauri capabilities; browser has no separate remote authentication. [Owner](crates/cockpit-host/src/server.rs). Rationale: The trusted workstation boundary is not a remote service.
+- Serve the shared frontend/versioned HTTP-WebSocket API from an explicitly controlled loopback gateway, independently of the native app and background service; native access is restricted by Tauri capabilities, and the browser has no separate remote authentication. [Owner](crates/cockpit-host/src/server.rs). Rationale: The trusted workstation boundary is not a remote service.
 
 - Keep native dragDropEnabled false so shared HTML dragover/drop drives tab sorting; do not consume native file-drop events. [Owner](src-tauri/tauri.conf.json). Rationale: Native interception can swallow frontend tab drops.
 

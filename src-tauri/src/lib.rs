@@ -1,16 +1,16 @@
 mod clipboard;
 mod commands;
+mod native_voice;
 mod power;
 mod startup;
 mod streams;
+mod update;
+mod voice_child;
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::Arc;
 
 use cockpit_core::HerdrAdapter;
-use cockpit_host::transport::shutdown::{HostShutdown, ShutdownPolicy};
+use cockpit_host::transport::{Transport, operations::backend::BackendContext, shutdown::HostShutdown};
 use tauri::Manager;
 
 use startup::NativeServices;
@@ -23,18 +23,27 @@ pub fn run() {
         browser_runtime,
         orchestration_runtime,
         shutdown_projects,
-        library,
-        library_sync_config,
+        library: _,
         window_config,
         startup_inspector,
+        backend_state_root,
+        backend_cli,
+        herdr_endpoint,
     } = startup::compose();
-    let mut library_sync_runtime = Some(startup::start_library_sync(&library, library_sync_config));
-    let shutdown_started = Arc::new(AtomicBool::new(false));
+    let backend_context = Arc::new(BackendContext::new(
+        backend_state_root,
+        backend_cli.clone().unwrap_or_else(|| "cockpit-cli".into()),
+        herdr_endpoint,
+        Transport::Native,
+        None,
+    ));
     let shutdown = HostShutdown::new(
         Some(orchestration_runtime.clone()),
         Some(shutdown_projects),
         Some(browser_runtime.clone()),
     );
+    let shutdown = Arc::new(update::NativeShutdown::new(shutdown));
+    let native_voice = native_voice::controller::NativeVoiceController::new(backend_context.clone());
     tauri::Builder::default()
         .plugin(
             tauri_plugin_opener::Builder::new()
@@ -44,15 +53,48 @@ pub fn run() {
         .manage(service)
         .manage(browser_runtime)
         .manage(orchestration_runtime)
+        .manage(backend_context.clone())
+        .manage(shutdown.clone())
         .manage(clipboard::TerminalFilesState::default())
         .manage(power::PowerState::default())
         .manage(StreamRegistry::new())
+        .manage(voice_child::VoiceViewState::<tauri::Wry>::default())
+        .manage(native_voice.clone())
+        .on_permission_request(|_, kind| match kind {
+            tauri::webview::PermissionKind::Microphone
+            | tauri::webview::PermissionKind::Camera
+            | tauri::webview::PermissionKind::DisplayCapture => tauri::webview::PermissionResponse::Deny,
+            _ => tauri::webview::PermissionResponse::Default,
+        })
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 webview.state::<StreamRegistry>().page_started(webview.label());
+                if webview.label() == voice_child::VOICE_CHILD_LABEL {
+                    webview.state::<Arc<native_voice::controller::NativeVoiceController>>().stop();
+                }
+            }
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && (matches!(event, tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed)
+                    || window.is_minimized().unwrap_or(true)
+                    || !window.is_visible().unwrap_or(false))
+            {
+                window.state::<Arc<native_voice::controller::NativeVoiceController>>().stop();
             }
         })
         .setup(move |app| {
+            {
+                use tauri::Emitter;
+                let app = app.handle().clone();
+                let mut updates = native_voice.subscribe();
+                tauri::async_runtime::spawn(async move {
+                    while updates.changed().await.is_ok() {
+                        let snapshot = updates.borrow_and_update().clone();
+                        let _ = app.emit_to(tauri::EventTarget::webview(voice_child::VOICE_CHILD_LABEL), "cockpit-native-voice-presentation", snapshot);
+                    }
+                });
+            }
             let main_window = app
                 .get_webview_window("main")
                 .expect("main window is missing from the Tauri configuration");
@@ -75,6 +117,16 @@ pub fn run() {
             main_window
                 .show()
                 .expect("failed to show the configured native window");
+            let backend_context = backend_context.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(cli) = backend_cli {
+                    if let Err(error) = cockpit_host::backend::ensure(
+                        &backend_context.state_root, &cli, &backend_context.herdr,
+                    ).await {
+                        eprintln!("Cockpit background service unavailable: {error}");
+                    }
+                }
+            });
             tauri::async_runtime::spawn(async move {
                 if let Err(error) = startup_inspector.inspect().await {
                     eprintln!("failed to initialize Herdr: {error}");
@@ -87,27 +139,19 @@ pub fn run() {
         .expect("error while building Cockpit Tauri application")
         .run(move |app, event| {
             if matches!(&event, tauri::RunEvent::Exit) {
+                app.state::<Arc<native_voice::controller::NativeVoiceController>>().stop();
                 app.state::<clipboard::TerminalFilesState>().close();
-            }
-            if matches!(
-                &event,
-                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-            ) {
-                drop(library_sync_runtime.take());
             }
             if let tauri::RunEvent::ExitRequested {
                 api, code: None, ..
             } = event
             {
                 api.prevent_exit();
-                if shutdown_started.swap(true, Ordering::AcqRel) {
-                    return;
-                }
+                app.state::<Arc<native_voice::controller::NativeVoiceController>>().stop();
                 let shutdown = shutdown.clone();
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    shutdown.run(ShutdownPolicy::Native).await;
-                    app.exit(0);
+                    shutdown.exit(app).await;
                 });
             }
         });

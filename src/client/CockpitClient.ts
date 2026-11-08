@@ -1,6 +1,7 @@
 import * as Wire from "../protocol/generated/validate";
 import { parseWire, tryParseWire } from "./wire";
 import { CLIENT } from "./clientPolicy";
+import type { VoiceConnectRequest, VoiceConnectResponse, VoiceEventsRequest, VoiceEventsResponse, VoiceControlRequest } from "./voiceProtocol";
 import type { QuickAskAvailability, QuickAskLocation, QuickAskRequest } from "../protocol/generated/v1";
 export type { QuickAskAvailability, QuickAskLocation, QuickAskRequest } from "../protocol/generated/v1";
 import type { SpaceServiceStatusRequest, SpaceServiceStatusResponse, SpaceTagsResponse, SpaceTagChangeRequest } from "../protocol/generated/v1";
@@ -345,9 +346,45 @@ export interface TerminalStream extends ClosableStream {
 }
 
 export type UpdateStatus = { installed_commit: string | null; source_path: string; commits_behind_main: number | null };
+export type RestartTicket = { pid: number; started_at: string; relaunch_app: boolean };
+export type BackendRestart = RestartTicket & {
+  step: string;
+  result: { state: "running" | "ok" | "interrupted" } | { state: "failed"; code: string; message: string };
+  finished_at: string | null;
+};
+export type BackendSurfaceStatus = {
+  backend: {
+    state: "running" | "starting" | "stopped" | "legacy_owner" | "endpoint_mismatch" | "unresponsive";
+    instance_id: string | null;
+    build_commit: string | null;
+    installed: boolean;
+    update_installed: boolean;
+    last_exit: { code: string; at: string; message?: string | null } | null;
+    ephemeral: { browser_associations: number; comment_batches: number; widgets: number } | null;
+    herdr?: { executable: string; session: string | null; socket: string | null } | null;
+    expected_herdr?: { executable: string; session: string | null; socket: string | null } | null;
+  };
+  surface: {
+    kind: "native" | "web";
+    installed: boolean;
+    update_installed: boolean;
+    build_commit: string | null;
+    frontend_entry: string | null;
+  };
+  installed_build_commit: string | null;
+  restart: BackendRestart | null;
+};
+
 
 export interface CockpitClient {
+  voiceConnect(request: VoiceConnectRequest): Promise<VoiceConnectResponse>;
+  voiceEvents(request: VoiceEventsRequest, signal: AbortSignal): Promise<VoiceEventsResponse>;
+  voiceControl(request: VoiceControlRequest): Promise<void>;
   status(): Promise<StatusResponse>;
+  backendStatus(): Promise<BackendSurfaceStatus>;
+  backendStart(): Promise<BackendSurfaceStatus>;
+  backendRestart(expectedInstance: string): Promise<RestartTicket>;
+  updateAndRelaunch?(expectedInstance: string): Promise<RestartTicket>;
   updateStatus(): Promise<UpdateStatus>;
   updateInstall(sessionId: string, spaceId: string): Promise<QuickAskLocation>;
   orchestrationSnapshot(request: OrchestrationSnapshotRequest): Promise<OrchestrationSnapshot>;

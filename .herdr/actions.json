@@ -1,11 +1,11 @@
 {
   "actions": [
     {
-      "id": "cockpit-install-restart",
-      "title": "Install and restart Cockpit",
-      "description": "Build and install this checkout's native Cockpit, then restart the running GUI.",
+      "id": "cockpit-install",
+      "title": "Install Cockpit",
+      "description": "Build and install this checkout without restarting Cockpit or its background service.",
       "mode": "tab",
-      "command": ["sh", "-c", "python3 scripts/install-native.py && python3 scripts/restart-native.py"],
+      "command": ["sh", "-c", "python3 scripts/install-native.py"],
       "cwd": "worktree",
       "tabLabel": "install cockpit"
     }

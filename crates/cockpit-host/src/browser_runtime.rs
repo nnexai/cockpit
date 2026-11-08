@@ -190,6 +190,40 @@ struct WireError {
     message: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct RequestEnvelope<T> {
+    v: u32,
+    req: T,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ResponseEnvelope<T> {
+    v: u32,
+    resp: T,
+}
+
+fn protocol_mismatch() -> InspectionError {
+    InspectionError::new("owner_protocol_mismatch", "Browser owner protocol mismatch")
+}
+
+fn decode_response(frame: &[u8]) -> Result<WireResponse, InspectionError> {
+    let envelope: ResponseEnvelope<WireResponse> =
+        serde_json::from_slice(frame).map_err(|_| protocol_mismatch())?;
+    if envelope.v != crate::backend::OWNER_PROTOCOL {
+        return Err(protocol_mismatch());
+    }
+    match envelope.resp {
+        WireResponse::Err(error) if error.code == "invalid_request" || error.code == "invalid_browser_request" => Err(protocol_mismatch()),
+        WireResponse::Err(error) => Err(InspectionError::new(error.code, error.message)),
+        response => Ok(response),
+    }
+}
+
+fn encode_request(request: &WireRequest) -> Result<Vec<u8>, InspectionError> {
+    serde_json::to_vec(&RequestEnvelope { v: crate::backend::OWNER_PROTOCOL, req: request })
+        .map_err(|error| InspectionError::new("invalid_browser_request", error.to_string()))
+}
+
 struct Owner {
     lock: File,
     socket: PathBuf,
@@ -238,6 +272,17 @@ impl Drop for WidgetStreamGuard {
 }
 
 impl BrowserRuntime {
+    pub fn observer(state_root: PathBuf, service: Arc<BrowserService>) -> Self {
+        let socket = state_root.join("browser").join("owner.sock");
+        Self {
+            role: Mutex::new(RuntimeRole::Observer { socket }),
+            state_root,
+            service,
+            helper: None,
+            widgets: None,
+        }
+    }
+
     pub async fn connect(
         state_root: PathBuf,
         service: Arc<BrowserService>,
@@ -333,6 +378,7 @@ impl BrowserRuntime {
                 let helper = Arc::new(BrowserHelperSupervisor::new(state_root.clone()));
                 let mut retired = helper.take_retired_receiver().await.expect("retirement receiver available");
                 let task_helper = Arc::clone(&helper);
+                let mut last_peer_limit_log: Option<Instant> = None;
                 let task = tokio::spawn(async move {
                     loop {
                         tokio::select! {
@@ -351,8 +397,14 @@ impl BrowserRuntime {
                             accepted = listener.accept() => {
                                 let Ok((stream, _)) = accepted else { continue };
                                 let Ok(peer_uid) = stream.peer_cred().map(|cred| cred.uid()) else { continue };
-                                if peer_uid != expected_uid { continue; }
-                                let Ok(permit) = Arc::clone(&peers).try_acquire_owned() else { continue; };
+                                if !peer_uid_matches(peer_uid, expected_uid) { continue; }
+                                let Ok(permit) = Arc::clone(&peers).try_acquire_owned() else {
+                                    if last_peer_limit_log.is_none_or(|last| last.elapsed() >= Duration::from_secs(60)) {
+                                        eprintln!("Browser owner peer limit reached");
+                                        last_peer_limit_log = Some(Instant::now());
+                                    }
+                                    continue;
+                                };
                                 let service = Arc::clone(&owner_service);
                                 let helper = Arc::clone(&task_helper);
                                 let widgets = Arc::clone(&owner_widgets);
@@ -1176,17 +1228,31 @@ async fn serve_peer(
     else {
         return;
     };
-    let request = match serde_json::from_slice::<WireRequest>(&frame) {
-        Ok(request) => request,
+    let value = serde_json::from_slice::<serde_json::Value>(&frame);
+    let version_matches = value.as_ref().ok()
+        .and_then(|value| value.get("v"))
+        .and_then(serde_json::Value::as_u64) == Some(crate::backend::OWNER_PROTOCOL as u64);
+    if !version_matches {
+        // Bare error is intentionally readable by old clients.
+        let response = WireResponse::Err(WireError {
+            code: "owner_protocol_mismatch".into(),
+            message: "Browser owner protocol mismatch".into(),
+        });
+        if let Ok(encoded) = serde_json::to_vec(&response) {
+            let _ = timeout(IO_TIMEOUT, async {
+                writer.write_all(&encoded).await?;
+                writer.write_all(b"\n").await
+            }).await;
+        }
+        return;
+    }
+    let request = match serde_json::from_value::<RequestEnvelope<WireRequest>>(value.unwrap()) {
+        Ok(envelope) => envelope.req,
         Err(error) => {
-            let _ = write_wire(
-                &mut writer,
-                &WireResponse::Err(WireError {
-                    code: "invalid_browser_request".into(),
-                    message: error.to_string(),
-                }),
-            )
-            .await;
+            let _ = write_wire(&mut writer, &WireResponse::Err(WireError {
+                code: "invalid_browser_request".into(),
+                message: error.to_string(),
+            })).await;
             return;
         }
     };
@@ -1293,7 +1359,7 @@ async fn write_wire<W: AsyncWrite + Unpin>(
     writer: &mut W,
     response: &WireResponse,
 ) -> Result<(), std::io::Error> {
-    let encoded = serde_json::to_vec(response).map_err(std::io::Error::other)?;
+    let encoded = serde_json::to_vec(&ResponseEnvelope { v: crate::backend::OWNER_PROTOCOL, resp: response }).map_err(std::io::Error::other)?;
     if encoded.len() > MAX_RESPONSE_FRAME {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -1331,8 +1397,7 @@ async fn forward(socket: &Path, request: WireRequest) -> Result<WireResponse, In
         ));
     }
     let (mut reader, mut writer) = stream.into_split();
-    let encoded = serde_json::to_vec(&request)
-        .map_err(|error| InspectionError::new("invalid_browser_request", error.to_string()))?;
+    let encoded = encode_request(&request)?;
     if encoded.len() > MAX_REQUEST_FRAME {
         return Err(InspectionError::new(
             "browser_request_too_large",
@@ -1367,12 +1432,7 @@ async fn forward(socket: &Path, request: WireRequest) -> Result<WireResponse, In
                 "Browser owner closed the request; inspect status before another mutation",
             )
         })?;
-    match serde_json::from_slice::<WireResponse>(&frame)
-        .map_err(|error| InspectionError::new("invalid_browser_response", error.to_string()))?
-    {
-        WireResponse::Err(error) => Err(InspectionError::new(error.code, error.message)),
-        response => Ok(response),
-    }
+    decode_response(&frame)
 }
 
 async fn forward_view_events(
@@ -1396,8 +1456,7 @@ async fn forward_view_events(
         ));
     }
     let (mut reader, mut writer) = stream.into_split();
-    let request = serde_json::to_vec(&WireRequest::BrowserViewEvents(view_id.to_owned()))
-        .map_err(|error| InspectionError::new("invalid_browser_request", error.to_string()))?;
+    let request = encode_request(&WireRequest::BrowserViewEvents(view_id.to_owned()))?;
     writer
         .write_all(&request)
         .await
@@ -1418,8 +1477,7 @@ async fn forward_view_events(
                 "Browser owner closed the event stream",
             )
         })?;
-    let response = serde_json::from_slice::<WireResponse>(&first)
-        .map_err(|error| InspectionError::new("invalid_browser_response", error.to_string()))?;
+    let response = decode_response(&first)?;
     let WireResponse::BrowserViewEvent(
         cockpit_protocol::browser_view::BrowserViewEvent::Attached { snapshot, .. },
     ) = response
@@ -1443,7 +1501,7 @@ async fn forward_view_events(
             let Ok(Some(frame)) = frame else {
                 break;
             };
-            let Ok(WireResponse::BrowserViewEvent(event)) = serde_json::from_slice(&frame) else {
+            let Ok(WireResponse::BrowserViewEvent(event)) = decode_response(&frame) else {
                 break;
             };
             if relay.send(event).is_err() {
@@ -1470,8 +1528,7 @@ async fn forward_widget_events(socket: &Path) -> Result<WidgetEventStream, Inspe
     }
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
-    let request = serde_json::to_vec(&WireRequest::WidgetEvents)
-        .map_err(|error| InspectionError::new("widget_usage", error.to_string()))?;
+    let request = encode_request(&WireRequest::WidgetEvents)?;
     timeout(IO_TIMEOUT, async {
         writer.write_all(&request).await?;
         writer.write_all(b"\n").await
@@ -1495,7 +1552,7 @@ async fn forward_widget_events(socket: &Path) -> Result<WidgetEventStream, Inspe
                 frame = read_stream_frame(&mut reader, MAX_RESPONSE_FRAME) => frame,
             };
             let Ok(Some(frame)) = frame else { break; };
-            let Ok(WireResponse::WidgetEvent(event)) = serde_json::from_slice(&frame) else { break; };
+            let Ok(WireResponse::WidgetEvent(event)) = decode_response(&frame) else { break; };
             if events.send(event).is_err() { break; }
         }
     });
@@ -1507,12 +1564,7 @@ async fn read_widget_stream_frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> Re
         .map_err(|_| InspectionError::new("browser_owner_timeout", "Widget event snapshot timed out"))?
         .map_err(|error| io_error("browser_owner_unavailable", error))?
         .ok_or_else(|| InspectionError::new("widget_retired", "Widget owner closed the event stream"))?;
-    match serde_json::from_slice(&frame)
-        .map_err(|error| InspectionError::new("invalid_browser_response", error.to_string()))?
-    {
-        WireResponse::Err(error) => Err(InspectionError::new(error.code, error.message)),
-        response => Ok(response),
-    }
+    decode_response(&frame)
 }
 
 // A stream reader must retain bytes following the first newline: subscription,
@@ -1572,6 +1624,10 @@ async fn read_frame<R: AsyncRead + Unpin>(
         }
         frame.extend_from_slice(&chunk[..count]);
     }
+}
+
+fn peer_uid_matches(peer_uid: u32, expected_uid: u32) -> bool {
+    peer_uid == expected_uid
 }
 
 fn verify_lock(lock: &File) -> Result<(), InspectionError> {
@@ -1755,21 +1811,21 @@ async fn wait_for_owner(
 fn owner_exited_before_ready() -> InspectionError {
     InspectionError::new(
         "browser_owner_unavailable",
-        "Browser owner exited before its private socket became ready; start Cockpit or `cockpit serve` with the same configuration",
+        "Browser owner exited before its private socket became ready; start Cockpit or `cockpit-cli service start` with the same configuration",
     )
 }
 
 fn owner_ready_timeout() -> InspectionError {
     InspectionError::new(
         "browser_owner_timeout",
-        "Browser owner did not become ready before the bounded startup wait elapsed; start Cockpit or `cockpit serve` with the same configuration",
+        "Browser owner did not become ready before the bounded startup wait elapsed; start Cockpit or `cockpit-cli service start` with the same configuration",
     )
 }
 
 fn io_error(code: &'static str, error: impl std::fmt::Display) -> InspectionError {
     let message = if code == "browser_owner_unavailable" {
         format!(
-            "Browser owner unavailable ({error}). Start Cockpit or `cockpit serve` with the same configuration"
+            "Browser owner unavailable ({error}). Start Cockpit or `cockpit-cli service start` with the same configuration"
         )
     } else {
         error.to_string()
@@ -1893,6 +1949,50 @@ mod tests {
         }
     }
 
+    #[test]
+    fn owner_wire_rejects_legacy_and_mismatched_responses() {
+        for frame in [
+            br#"{"kind":"err","value":{"code":"invalid_request","message":"legacy"}}"#.as_slice(),
+            br#"{"v":4294967295,"resp":{"kind":"widget_events"}}"#.as_slice(),
+            br#"{"v":1,"resp":{"kind":"err","value":{"code":"invalid_request","message":"bad"}}}"#.as_slice(),
+        ] {
+            assert_eq!(decode_response(frame).unwrap_err().code, "owner_protocol_mismatch");
+        }
+        assert!(peer_uid_matches(100, 100));
+        assert!(!peer_uid_matches(101, 100));
+    }
+
+    #[tokio::test]
+    async fn owner_refuses_unversioned_and_wrong_version_before_dispatch() {
+        let fixture = RuntimeFixture::new();
+        let owner = BrowserRuntime::start(fixture.0.clone(), fixture.service(), fixture.widgets()).await.unwrap();
+        for frame in [
+            br#"{"kind":"widget_show","value":{}}"#.as_slice(),
+            br#"{"v":4294967295,"req":{"kind":"widget_show","value":{}}}"#.as_slice(),
+        ] {
+            let mut stream = UnixStream::connect(fixture.0.join("browser/owner.sock")).await.unwrap();
+            stream.write_all(frame).await.unwrap();
+            stream.write_all(b"\n").await.unwrap();
+            let response = read_frame(&mut stream, MAX_RESPONSE_FRAME).await.unwrap().unwrap();
+            assert!(matches!(serde_json::from_slice::<WireResponse>(&response).unwrap(),
+                WireResponse::Err(error) if error.code == "owner_protocol_mismatch"));
+            assert!(read_frame(&mut stream, MAX_RESPONSE_FRAME).await.unwrap().is_none());
+        }
+        let observer = BrowserRuntime::observer(fixture.0.clone(), fixture.service());
+        let stream = observer.widget_events().await.unwrap();
+        assert!(matches!(stream.snapshot, WidgetEvent::Snapshot { ref widgets, .. } if widgets.is_empty()));
+        owner.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn observer_without_owner_and_oversized_frames_are_refused() {
+        let fixture = RuntimeFixture::new();
+        let observer = BrowserRuntime::observer(fixture.0.clone(), fixture.service());
+        assert_eq!(observer.cleanup_status().await.unwrap_err().code, "browser_owner_unavailable");
+        let bytes = vec![b'x'; MAX_REQUEST_FRAME + 1];
+        assert_eq!(read_frame(&mut bytes.as_slice(), MAX_REQUEST_FRAME).await.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    }
+
     #[tokio::test]
     async fn owner_start_resets_work_but_observers_preserve_it_until_replacement() {
         let fixture = RuntimeFixture::new();
@@ -1946,7 +2046,7 @@ mod tests {
             WireResponse::WidgetEvent(WidgetEvent::Snapshot { sequence: 1, widgets: Vec::new() }),
             WireResponse::WidgetEvent(WidgetEvent::Snapshot { sequence: 2, widgets: Vec::new() }),
         ] {
-            wire.extend(serde_json::to_vec(&response).unwrap());
+            wire.extend(serde_json::to_vec(&ResponseEnvelope { v: crate::backend::OWNER_PROTOCOL, resp: response }).unwrap());
             wire.push(b'\n');
         }
         // All three frames are deliberately returned by a single fill_buf.
@@ -1961,7 +2061,7 @@ mod tests {
         ));
         let event = read_stream_frame(&mut reader, MAX_RESPONSE_FRAME).await.unwrap().unwrap();
         assert!(matches!(
-            serde_json::from_slice::<WireResponse>(&event).unwrap(),
+            decode_response(&event).unwrap(),
             WireResponse::WidgetEvent(WidgetEvent::Snapshot { sequence: 2, .. })
         ));
         assert!(read_stream_frame(&mut reader, MAX_RESPONSE_FRAME).await.unwrap().is_none());
@@ -2021,7 +2121,7 @@ mod tests {
                 let mut peers = Vec::new();
                 for _ in 0..WIDGET_MAX_SELECTION_WAITERS {
                     let (mut client, server) = UnixStream::pair().unwrap();
-                    let mut frame = serde_json::to_vec(&WireRequest::WidgetSelection(request.clone())).unwrap();
+                    let mut frame = encode_request(&WireRequest::WidgetSelection(request.clone())).unwrap();
                     frame.push(b'\n');
                     client.write_all(&frame).await.unwrap();
                     server.readable().await.unwrap();

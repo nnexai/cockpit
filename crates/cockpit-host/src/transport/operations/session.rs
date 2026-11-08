@@ -57,7 +57,7 @@ pub async fn update_status(
             Err(_) => run("/usr/bin/git").output().await.ok(),
         }
     };
-    let count = if cfg!(target_os = "linux") && std::path::Path::new(ROOT).join("scripts/restart-native.py").is_file() {
+    let count = if std::path::Path::new(ROOT).join("scripts/install-native.py").is_file() {
         if let Some(build) = build {
             git(vec!["rev-list".into(), "--count".into(), format!("{build}..main")]).await
                 .filter(|output| output.status.success())
@@ -76,11 +76,8 @@ pub async fn update_install(
     if !valid_session_id(&session_id) || !valid_resource_id(&space_id) {
         return Err(OperationError::rejected("invalid_update_target", "Invalid session or Space id"));
     }
-    if !cfg!(target_os = "linux") {
-        return Err(OperationError::rejected("update_unavailable", "Native update installation is available only on Linux"));
-    }
     let root = std::path::Path::new(UPDATE_SOURCE_ROOT);
-    if !root.is_absolute() || !root.is_dir() || !root.join("scripts/restart-native.py").is_file() {
+    if !root.is_absolute() || !root.is_dir() || !root.join("scripts/install-native.py").is_file() {
         return Err(OperationError::rejected("update_unavailable", "The source checkout is unavailable"));
     }
     let bytes = tokio::fs::read(root.join(".herdr/actions.json")).await
@@ -88,7 +85,7 @@ pub async fn update_install(
     let config: serde_json::Value = serde_json::from_slice(&bytes)
         .map_err(|_| OperationError::rejected("update_unavailable", "The update action configuration is invalid"))?;
     let actions = config["actions"].as_array().ok_or_else(|| OperationError::rejected("update_unavailable", "The update action configuration is invalid"))?;
-    let mut matches = actions.iter().filter(|action| action["id"] == "cockpit-install-restart");
+    let mut matches = actions.iter().filter(|action| action["id"] == "cockpit-install");
     let action = matches.next().ok_or_else(|| OperationError::rejected("update_unavailable", "The update action is unavailable"))?;
     if matches.next().is_some() || action["mode"] != "tab" || action["cwd"] != "worktree" {
         return Err(OperationError::rejected("update_unavailable", "The update action configuration is invalid"));

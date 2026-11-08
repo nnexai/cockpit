@@ -9,12 +9,13 @@ import {
   CockpitClientError, matchBrowserViewCommandResponse, parseBrowserViewCommandRequest,
   parseBrowserViewFrameDescriptor, parseBrowserViewOpenRequest, parseBrowserViewSnapshot, parseErrorEnvelope,
   parseSessionStreamMessage, parseTerminalCommand, parseTerminalOpenRequest, parseTerminalStreamMessage,
-  validateSessionId, type BrowserViewCommandRequest, type BrowserViewEvent, type BrowserViewFrameDescriptor,
+  validateSessionId, validateResourceId, type BrowserViewCommandRequest, type BrowserViewEvent, type BrowserViewFrameDescriptor,
   type BrowserViewFramePacket, type BrowserViewOpenRequest, type BrowserViewSnapshot, type BrowserViewStream,
   type ClosableStream, type CockpitClient, type TerminalStream,
 } from "./CockpitClient";
 import { bindOperations } from "./operations";
 import { browserViewDecoder } from "./browserViewDecoder";
+import { parseRestartTicket } from "./backendProtocol";
 
 export type NativeInvoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 export interface NativeChannel<T> { onmessage: (message: T) => void; }
@@ -558,6 +559,10 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
 export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channelFactory: NativeChannelFactory = defaultChannel): CockpitClient {
   return {
     ...bindOperations("native", (operation) => invokeAndParse(invoke, operation.tauri.command, operation.tauri.args(), operation.operation, operation.parse)),
+    updateAndRelaunch(expectedInstance) {
+      validateResourceId(expectedInstance);
+      return invokeAndParse(invoke, "cockpit_update_and_relaunch", { expectedInstance }, "update and relaunch", parseRestartTicket);
+    },
     subscribeWidgets(onEvent, onError, signal) {
       return nativeWidgetSubscription(channelFactory, invoke, onEvent, onError, signal);
     },

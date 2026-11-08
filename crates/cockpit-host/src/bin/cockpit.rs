@@ -12,6 +12,10 @@ mod tags_cli;
 mod contain;
 #[path = "cockpit/agent_exec.rs"]
 mod agent_exec;
+#[path = "cockpit/service.rs"]
+mod service_cli;
+#[path = "cockpit/web.rs"]
+mod web_cli;
 
 use std::{fs::OpenOptions, io::{IsTerminal, Read}, net::SocketAddr, os::unix::fs::OpenOptionsExt, path::{Path, PathBuf}, process::ExitCode, sync::Arc, time::Duration};
 
@@ -39,7 +43,7 @@ use cockpit_protocol::widget::*;
 use cockpit_host::{
     BrowserRuntime,
     browser_runtime::WidgetProducerAuth,
-    server::{ServerConfig, serve},
+    server::ServerConfig,
 };
 
 #[path = "../cli_orchestration/mod.rs"]
@@ -72,7 +76,8 @@ Cleanup and replacement retain separate fresh physical-safety evidence.";
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "cockpit",
+    name = "cockpit-cli",
+    bin_name = "cockpit-cli",
     version,
     about = "Local Cockpit gateway and status client",
     after_long_help = ROOT_HELP
@@ -92,6 +97,10 @@ enum Command {
     Status(StatusArgs),
     /// Serve the browser client and HTTP API in the foreground.
     Serve(ServeArgs),
+    /// Manage the shared background service.
+    Service(service_cli::ServiceArgs),
+    /// Manage the independent browser gateway.
+    Web(web_cli::WebArgs),
     /// Inspect effective non-secret project configuration.
     Configuration(ProjectArgs),
     /// Control the browser associated with a Herdr tab.
@@ -348,7 +357,7 @@ impl CliError {
 #[derive(Debug, Args)]
 struct ProjectArgs {
     /// Versioned Cockpit project configuration file.
-    #[arg(long)]
+    #[arg(long, global = true)]
     config: Option<PathBuf>,
     /// Catalog root for existing local repositories; may be repeated.
     #[arg(long = "repository-root")]
@@ -375,11 +384,14 @@ struct ServeArgs {
     #[arg(long, default_value = "127.0.0.1:0")]
     bind: SocketAddr,
     /// Root directory containing the browser build.
-    #[arg(long, default_value = "dist")]
-    static_dir: PathBuf,
+    #[arg(long)]
+    static_dir: Option<PathBuf>,
     /// Disable live Herdr inspection and return deterministic unavailable status.
     #[arg(long)]
     test_mode: bool,
+    /// Run under managed web control.
+    #[arg(long, hide = true)]
+    managed: bool,
 }
 
 fn make_service(
@@ -504,90 +516,9 @@ async fn run_legacy(cli: Cli) -> Result<(), String> {
             println!("{output}");
             Ok(())
         }
-        Command::Serve(args) => {
-            let mode = if args.test_mode {
-                CockpitMode::Test
-            } else {
-                CockpitMode::Normal
-            };
-            let (projects, quota, browser_runtime, library_sync) = if args.test_mode {
-                (None, None, None, None)
-            } else {
-                let configuration = ConfigurationFile::load(args.project.config.as_deref())
-                    .map_err(|error| error.to_string())?;
-                let projects = configuration
-                    .project
-                    .resolve(
-                        (!args.project.repository_roots.is_empty())
-                            .then_some(args.project.repository_roots.as_slice()),
-                    )
-                    .map_err(|error| error.to_string())?;
-                let quota_configuration = configuration
-                    .quota
-                    .resolve()
-                    .map_err(|error| error.to_string())?;
-                let quota = Arc::new(cockpit_core::quota::QuotaService::new(
-                    quota_configuration,
-                    std::path::Path::new(&projects.cache_root),
-                ));
-                let browser_config = configuration
-                    .browser
-                    .resolve()
-                    .map_err(|error| error.to_string())?;
-                let browser_runtime = browser_owner_runtime(
-                    args.herdr.clone(),
-                    browser_config,
-                    PathBuf::from(&projects.state_root),
-                )
-                .await?;
-                (
-                    Some(projects),
-                    Some(quota),
-                    Some(browser_runtime),
-                    Some(configuration.library_sync),
-                )
-            };
-            let service = make_service(args.herdr.clone(), mode, projects.clone())?;
-            let orchestration_runtime = if let Some(configuration) = projects.as_ref() {
-                let herdr_config = HerdrCliConfig::from_options(
-                    args.herdr.herdr.clone(), args.herdr.herdr_session.clone(), args.herdr.herdr_socket.clone(),
-                ).map_err(|error| error.to_string())?;
-                Some(Arc::new(cockpit_host::OrchestrationRuntime::new(
-                    configuration, Arc::new(HerdrCliAdapter::new(herdr_config)),
-                    service.projects().map_err(|error| error.to_string())?.clone(),
-                    service.library().map_err(|error| error.to_string())?.clone(),
-                    args.project.config.clone(),
-                    cockpit_host::orchestration_runtime::CliProcessRole::Host,
-                ).map_err(|error| error.to_string())?))
-            } else { None };
-            let service = match &orchestration_runtime {
-                Some(runtime) => service.with_orchestration(runtime.service.clone()), None => service,
-            };
-            let service = match quota {
-                Some(quota) => service.with_quota(quota),
-                None => service,
-            };
-            // Only the long-lived host owns a scheduler; one-shot CLI service
-            // construction remains side-effect free.
-            let library_sync_runtime = if let Some(library_sync) = library_sync {
-                let sync_config = library_sync.resolve().map_err(|error| error.to_string())?;
-                Some(service.library().map_err(|error| error.to_string())?
-                    .start_sync(sync_config).map_err(|error| error.to_string())?)
-            } else {
-                None
-            };
-            let result = serve(ServerConfig {
-                bind: args.bind,
-                static_dir: args.static_dir,
-                service,
-                browser_runtime,
-                orchestration_runtime,
-            })
-            .await
-            .map_err(|error| error.to_string());
-            drop(library_sync_runtime);
-            result
-        }
+        Command::Serve(args) => service_cli::serve_gateway(args).await,
+        Command::Service(_) => unreachable!("service commands use their own exit-status contract"),
+        Command::Web(args) => web_cli::run(args).await,
         Command::Configuration(args) => {
             let configuration = project_configuration(&args)?;
             println!(
@@ -1293,6 +1224,7 @@ async fn main() -> ExitCode {
     };
     let result = match cli.command {
         Command::Widget(args) => run_widget(args).await,
+        Command::Service(args) => service_cli::run(args).await.map_err(CliError::from),
         Command::Orchestration(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Task(args) => args.run().await.map(|()| 0).map_err(CliError::from),
         Command::Run(args) => args.run().await.map(|()| 0).map_err(CliError::from),

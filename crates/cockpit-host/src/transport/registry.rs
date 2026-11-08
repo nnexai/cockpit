@@ -9,6 +9,36 @@
 macro_rules! cockpit_operations {
     ($callback:ident) => {
         $callback! {
+            { id: voice_connect, ctx: backend, out: ::cockpit_protocol::voice::VoiceConnectResponse,
+              call: $crate::voice::ops::connect,
+              native: cockpit_voice_connect(request: ::serde_json::Value)
+                  => $crate::transport::native_input::value($crate::transport::limits::MUTATION_BYTES * 2, "voice"),
+              http: post "/api/v1/voice/connect"
+                  (body: ::std::result::Result<::axum::Json<::cockpit_protocol::voice::VoiceConnectRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::body($crate::transport::http_input::Reject("invalid_voice_request", "Expected a bounded voice request"));
+                  limit = $crate::transport::limits::MUTATION_BYTES * 2; origin = route;
+                  guard = none; status = service
+            }
+            { id: voice_events, ctx: backend, out: ::cockpit_protocol::voice::VoiceEventsResponse,
+              call: $crate::voice::ops::events,
+              native: cockpit_voice_events(request: ::serde_json::Value)
+                  => $crate::transport::native_input::value($crate::transport::limits::MUTATION_BYTES, "voice"),
+              http: post "/api/v1/voice/events"
+                  (body: ::std::result::Result<::axum::Json<::cockpit_protocol::voice::VoiceEventsRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::body($crate::transport::http_input::Reject("invalid_voice_request", "Expected a bounded voice request"));
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
+                  guard = none; status = service
+            }
+            { id: voice_control, ctx: backend, out: ::serde_json::Value,
+              call: $crate::voice::ops::control,
+              native: cockpit_voice_control(request: ::serde_json::Value)
+                  => $crate::transport::native_input::value($crate::transport::limits::MUTATION_BYTES, "voice"),
+              http: post "/api/v1/voice/control"
+                  (body: ::std::result::Result<::axum::Json<::cockpit_protocol::voice::VoiceControlRequest>, ::axum::extract::rejection::JsonRejection>)
+                  => $crate::transport::http_input::body($crate::transport::http_input::Reject("invalid_voice_request", "Expected a bounded voice request"));
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
+                  guard = none; status = service
+            }
             { id: status, ctx: service, out: ::cockpit_protocol::v1::StatusResponse,
               call: $crate::transport::operations::session::status,
               native: cockpit_status()
@@ -17,6 +47,36 @@ macro_rules! cockpit_operations {
                   ()
                   => $crate::transport::http_input::none();
                   limit = none; origin = none;
+                  guard = none; status = service
+            }
+            { id: backend_status, ctx: backend, out: $crate::transport::operations::backend::BackendSurfaceStatus,
+              call: $crate::transport::operations::backend::status,
+              native: cockpit_backend_status()
+                  => $crate::transport::native_input::none(),
+              http: get "/api/v1/backend/status"
+                  ()
+                  => $crate::transport::http_input::none();
+                  limit = none; origin = none;
+                  guard = none; status = service
+            }
+            { id: backend_start, ctx: backend, out: $crate::transport::operations::backend::BackendSurfaceStatus,
+              call: $crate::transport::operations::backend::start,
+              native: cockpit_backend_start()
+                  => $crate::transport::native_input::none(),
+              http: post "/api/v1/backend/start"
+                  ()
+                  => $crate::transport::http_input::none();
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = method;
+                  guard = none; status = service
+            }
+            { id: backend_restart, ctx: backend, out: $crate::backend::RestartTicket,
+              call: $crate::transport::operations::backend::restart,
+              native: cockpit_backend_restart(expected_instance: ::std::string::String)
+                  => |(expected_instance,)| $crate::transport::operations::backend::native_restart_input(expected_instance),
+              http: post "/api/v1/backend/restart"
+                  (request: ::axum::Json<$crate::transport::operations::backend::BackendRestartRequest>)
+                  => $crate::transport::http_input::json();
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = method;
                   guard = none; status = service
             }
             { id: update_status, ctx: service, out: $crate::transport::operations::session::UpdateStatus,

@@ -15,6 +15,7 @@ pub struct HostShutdown {
 pub enum ShutdownPolicy {
     Gateway,
     Native,
+    Backend,
 }
 
 impl HostShutdown {
@@ -33,7 +34,7 @@ impl HostShutdown {
     pub async fn run(&self, policy: ShutdownPolicy) {
         self.orchestration().await;
         match policy {
-            ShutdownPolicy::Gateway => {
+            ShutdownPolicy::Gateway | ShutdownPolicy::Backend => {
                 if let Some(projects) = &self.projects {
                     projects.shutdown().await;
                 }

@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "voice",
+  "description": "Narrow IPC access for the isolated voice webview",
+  "webviews": ["voice-child"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-cockpit-native-voice-snapshot",
+    "allow-cockpit-voice-view-close"
+  ]
+}

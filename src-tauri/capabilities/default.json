@@ -2,11 +2,18 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Minimal capability for the Cockpit main window",
-  "windows": [
+  "webviews": [
     "main"
   ],
   "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-cockpit-voice-view-open",
     "allow-cockpit-status",
+    "allow-cockpit-backend-status",
+    "allow-cockpit-backend-start",
+    "allow-cockpit-backend-restart",
+    "allow-cockpit-update-and-relaunch",
     "allow-cockpit-quota-status",
     "allow-cockpit-update-status",
     "allow-cockpit-update-install",

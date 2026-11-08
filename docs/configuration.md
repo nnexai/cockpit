@@ -58,6 +58,8 @@ Agent launches receive an absolute selected `COCKPIT_CLI_PATH` and configuration
 
 The macOS native installer packages the matching CLI at `Cockpit.app/Contents/MacOS/cockpit-cli`. Native startup selects this sibling even with Finder/Spotlight's restricted PATH; installing a separate shell launcher is not a substitute for the bundled executable. Use `scripts/install-native.py` to build the paired bundle.
 
+The native app and browser gateway start or connect to a background Cockpit service for the configured state root. The service receives the resolved Herdr executable, session and socket explicitly; a different configured endpoint is not silently substituted. It runs independently of either surface until explicitly stopped. Development and disposable fixtures can select separate state roots and Herdr endpoints.
+
 ## Quick terminal and agent discovery
 
 Quick terminal reads Herdr's local configuration on opening: `HERDR_CONFIG_PATH`, otherwise `$XDG_CONFIG_HOME/herdr/config.toml` or `$HOME/.config/herdr/config.toml`. It uses `terminal.default_shell`, falling back to `SHELL` and then `/bin/sh`, and `terminal.shell_mode` (`login`, `non_login`, or `auto`; auto is login on macOS only). Missing or unreadable configuration uses those fallback defaults. Login mode uses the Unix login-shell `argv[0]` convention, matching new Herdr panes. Cockpit does not query the server's live configuration; reload changed configuration into Herdr for parity. It starts in the selected terminal's foreground directory.

@@ -41,6 +41,18 @@ macro_rules! native_command {
                 .map_err(ErrorResponse::from)
         }
     };
+    (backend, $command:ident, ($($arg:ident: $ty:ty),*), $out:ty, $call:path, $input:expr) => {
+        #[tauri::command]
+        pub async fn $command(
+            $($arg: $ty,)*
+            runtime: State<'_, Arc<cockpit_host::transport::operations::backend::BackendContext>>,
+        ) -> Result<$out, ErrorResponse> {
+            let input = ($input)(($($arg,)* )).map_err(ErrorResponse::from)?;
+            $call(runtime.inner(), Transport::Native, input)
+                .await
+                .map_err(ErrorResponse::from)
+        }
+    };
 }
 
 macro_rules! native_commands {
@@ -56,6 +68,11 @@ macro_rules! native_commands {
         {
             tauri::generate_handler![
                 $($command,)*
+                crate::voice_child::cockpit_voice_view_open,
+                crate::voice_child::cockpit_voice_view_close,
+                crate::voice_child::cockpit_voice_view_context,
+                crate::voice_child::cockpit_native_voice_snapshot,
+                crate::update::cockpit_update_and_relaunch,
                 crate::power::cockpit_power_status,
                 crate::power::cockpit_power_set_stay_awake,
                 crate::power::cockpit_power_screen_off,
@@ -84,8 +101,8 @@ mod tests {
     fn liaison_lookup_is_granted_only_to_the_main_window() {
         let capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
-        assert_eq!(capability["windows"], serde_json::json!(["main"]));
-        assert!(capability.get("webviews").is_none());
+        assert_eq!(capability["webviews"], serde_json::json!(["main"]));
+        assert!(capability.get("windows").is_none());
         let permissions = capability["permissions"].as_array().unwrap();
         assert_eq!(
             permissions

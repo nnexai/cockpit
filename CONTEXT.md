@@ -27,10 +27,10 @@ The Rust core owns application rules and durable state independently of transpor
 | Herdr adapter | Supported schema/socket protocol, snapshots, ordered events, attachment and Herdr identifiers. |
 | Provider adapters | Configured HTTP/CLI reads and canonical normalized snapshots. |
 | Vault adapter | OS credential storage behind the core credential-vault trait. |
-| Hosts | CLI, explicit foreground browser gateway and native application composition. |
+| Hosts | A background Cockpit service, CLI, independently controlled loopback browser gateway and native application composition. |
 | Client adapters | Shared typed requests, ordered streams and boundary decoding. |
 
-The shared frontend runs in a Tauri v2 native host or through `cockpit serve` at a loopback origin. Native requests use IPC and ordered channels; browser requests use HTTP and ordered WebSocket streams. UI components consume one `CockpitClient` contract. Tauri is a native host, not a general-purpose web server; remote access and multi-user authorization are outside the current product.
+The shared frontend runs in a Tauri v2 native host or through `cockpit serve` at a loopback origin. The native app and gateway connect to a background Cockpit service for shared Browser, widget and dispatcher ownership; closing either surface does not stop that service. Native requests use IPC and ordered channels; browser requests use HTTP and ordered WebSocket streams. UI components consume one `CockpitClient` contract. The gateway remains loopback-only; remote access and multi-user authorization are outside the current product.
 
 The Herdr socket carries persistent newline-delimited JSON interaction and subscriptions. Its CLI remains useful for bootstrap, documented wrappers and human debugging. A selected session supplies an authoritative snapshot followed by ordered events; switching sessions replaces subscriptions and stale selection state. Multiple windows still share Herdr's focus and writable-control authority.
 
@@ -58,8 +58,8 @@ Project setup is plan-driven: repository discovery, artifact validation, Herdr c
 | Space Notes | Durable UUID-scoped Markdown, separate from Library and checkouts. |
 | Supervisor task Markdown | Canonical task title, description, relationships, checklist and checked state, outside checkouts; current task/document revisions fence scope changes. |
 | Orchestration machine document | Jobs, attachments, operation/effect journals, messages, source outcomes, integration and cleanup receipts, not live Herdr status or another task store. |
-| Runtime pane state | Browser profiles/work, viewer comments/paste receipts and Review caches, cleared by their owning-runtime lifecycle. |
-| Widget memory | Trusted content, selections and user-removal tombstones for one runtime run. |
+| Runtime pane state | Browser profiles/work, viewer comments/paste receipts and Review caches, cleared when the owning background-service session ends. |
+| Widget memory | Trusted content, selections and user-removal tombstones for one background-service session. |
 
 Agents read selected Library paths and existing repository paths directly. Space relevance is not filesystem access control. A Library refresh becomes visible on the next read without a per-Space copy, update or follow phase. Removing a selection is distinct from removing content. Resource teardown and pane-state reset do not own Library, Notes or unrelated user files.
 

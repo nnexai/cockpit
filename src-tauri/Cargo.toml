@@ -17,19 +17,23 @@ cockpit-herdr = { path = "../crates/cockpit-herdr" }
 cockpit-host = { path = "../crates/cockpit-host" }
 cockpit-protocol = { path = "../crates/cockpit-protocol" }
 uuid.workspace = true
-tauri.workspace = true
+tauri = { workspace = true, features = ["unstable"] }
 tokio.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 url.workspace = true
 parking_lot.workspace = true
+gstreamer = "=0.23.7"
+gstreamer-sdp = "=0.23.5"
+gstreamer-webrtc = { version = "=0.23.5", features = ["v1_18"] }
 tauri-plugin-opener = "=2.7.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+webkit2gtk = { version = "2.0.2", features = ["v2_38"] }
 zbus = { version = "5.19", default-features = false, features = ["tokio"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "=0.6.4"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "NSImageRep"] }
-objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSString"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSBitmapImageRep", "NSImageRep", "NSView", "NSWindow", "NSButton", "NSControl", "NSPopUpButton", "NSTextField", "NSStackView", "NSResponder", "NSMenuItem"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSString", "NSGeometry", "NSObject", "NSTimer", "NSDate", "NSRunLoop", "NSObjCRuntime"] }

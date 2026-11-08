@@ -1,7 +1,17 @@
 fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
+            "cockpit_voice_connect",
+            "cockpit_voice_events",
+            "cockpit_voice_control",
+            "cockpit_voice_view_open",
+            "cockpit_voice_view_close",
+            "cockpit_voice_view_context",
             "cockpit_status",
+            "cockpit_backend_status",
+            "cockpit_backend_start",
+            "cockpit_backend_restart",
+            "cockpit_update_and_relaunch",
             "cockpit_update_status",
             "cockpit_update_install",
             "cockpit_power_status",
@@ -91,6 +101,7 @@ fn main() {
             "cockpit_comments_paste_send",
             "cockpit_comments_paste_mark_pasted",
             "cockpit_sessions",
+            "cockpit_native_voice_snapshot",
             "cockpit_session_snapshot",
             "cockpit_space_git_status",
             "cockpit_space_service_status",

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -14,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
@@ -84,6 +87,10 @@ class InstallPaths:
     @property
     def pending(self) -> Path:
         return self.data_home / PENDING_NAME
+
+    @property
+    def update_lock(self) -> Path:
+        return self.app_root / "update.lock"
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -158,23 +165,69 @@ def macos_bundle_config(project_root: Path, debug: bool) -> str:
 
 
 def run_build(project_root: Path, debug: bool) -> None:
-    # Tauri adds --bins and custom-protocol, then bundles after both binaries build.
+    # Build the web assets before Cargo embeds them in the host executable.
     tauri_command = ["bunx", "tauri", "build"]
+    config: dict[str, object] = {"build": {"beforeBuildCommand": None}}
     if sys.platform != "darwin":
         tauri_command.append("--no-bundle")
     else:
-        tauri_command.extend(["--bundles", "app", "--config", macos_bundle_config(project_root, debug)])
+        tauri_command.extend(["--bundles", "app"])
+        config.update(json.loads(macos_bundle_config(project_root, debug)))
+    tauri_command.extend(["--config", json.dumps(config)])
     if debug:
         tauri_command.append("--debug")
     tauri_command.append("--")
     for package in NATIVE_BUILD_PACKAGES:
         tauri_command.extend(["--package", package])
+    environment = os.environ.copy()
+    environment["COCKPIT_EMBED_WEB_DIST"] = str((project_root / "dist").resolve())
     try:
-        subprocess.run(tauri_command, cwd=project_root, check=True)
+        subprocess.run(["bun", "run", "build"], cwd=project_root, check=True)
+        subprocess.run(tauri_command, cwd=project_root, check=True, env=environment)
     except FileNotFoundError as error:
         raise InstallError(f"{error.filename} was not found; install the repository's toolchain first") from error
     except subprocess.CalledProcessError as error:
         raise InstallError(f"native build failed with exit status {error.returncode}") from error
+
+
+def source_commit(project_root: Path) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=project_root, check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout.strip() or None
+
+
+@contextlib.contextmanager
+def update_lock(paths: InstallPaths, timeout: float = 120.0):
+    """Serialize publication and restart without ever replacing the lock inode."""
+    paths.app_root.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(paths.update_lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    except OSError as error:
+        raise InstallError(f"cannot open update lock: {error}") from error
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise InstallError("update lock must be a private regular file owned by the current user")
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise InstallError("update_busy: timed out waiting for update lock")
+                time.sleep(min(0.25, max(0, deadline - time.monotonic())))
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _sync_directory(directory: Path) -> None:
@@ -742,7 +795,7 @@ def _write_journal(path: Path, journal: dict[str, object]) -> None:
     atomic_text(path, json.dumps(journal, indent=2, sort_keys=True) + "\n")
 
 
-def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bundle: Path | None = None) -> None:
+def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bundle: Path | None = None, build_commit: str | None = None) -> None:
     for candidate, label in ((binary, "native application"), (cli_binary, "Cockpit CLI")):
         if not candidate.is_file() or not os.access(candidate, os.X_OK):
             raise InstallError(f"{label} binary is missing or not executable: {candidate}")
@@ -759,8 +812,9 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
         bundled_cli = bundle / "Contents" / "MacOS" / CLI_LAUNCHER_NAME
         if sha256(bundled_cli) != sha256(cli_binary):
             raise InstallError("macOS application bundled CLI does not match the Cockpit CLI binary")
-    ensure_installable(paths)
-    existing_receipt = load_receipt(paths)
+    with update_lock(paths):
+        ensure_installable(paths)
+        existing_receipt = load_receipt(paths)
     raw_gui_migration = bool(
         paths.application is not None
         and existing_receipt is not None
@@ -798,6 +852,7 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
         paths.application.parent.mkdir(parents=True, exist_ok=True)
         bundle_stage_root = Path(tempfile.mkdtemp(prefix=f".{paths.application.name}.stage-{token}-", dir=paths.application.parent))
         stages["application"] = bundle_stage_root / BUNDLE_NAME
+    publication_lock = contextlib.ExitStack()
     try:
         if "binary" in stages:
             _stage_file(binary, stages["binary"], 0o755)
@@ -832,7 +887,13 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
             artifact_hashes["application"] = bundle_manifest_hash(application_manifest)
             artifact_manifests["application"] = application_manifest
         receipt = receipt_data(paths, "installed", artifact_hashes, artifact_manifests)
+        receipt["build_commit"] = build_commit
         atomic_text(stages["receipt"], json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+
+        publication_lock.enter_context(update_lock(paths))
+        ensure_installable(paths)
+        if load_receipt(paths) != existing_receipt:
+            raise InstallError("installation changed while staging; retry the install")
 
         journal_targets: dict[str, dict[str, object]] = {}
         for name, target in targets.items():
@@ -940,12 +1001,15 @@ def install(paths: InstallPaths, binary: Path, cli_binary: Path, icon: Path, bun
     except (OSError, shutil.Error) as error:
         raise InstallError(f"cannot stage native installation: {error}") from error
     finally:
-        if not paths.pending.exists():
-            for stage_root in stage_roots.values():
-                if _is_present(stage_root):
-                    _remove_known(stage_root)
-            if bundle_stage_root is not None and _is_present(bundle_stage_root):
-                _remove_known(bundle_stage_root)
+        try:
+            if not paths.pending.exists():
+                for stage_root in stage_roots.values():
+                    if _is_present(stage_root):
+                        _remove_known(stage_root)
+                if bundle_stage_root is not None and _is_present(bundle_stage_root):
+                    _remove_known(bundle_stage_root)
+        finally:
+            publication_lock.close()
 
 def _owned_artifacts(paths: InstallPaths, receipt: dict[str, object]) -> list[tuple[str, Path, object]]:
     hashes = receipt.get("artifact_sha256")
@@ -967,6 +1031,11 @@ def _owned_artifacts(paths: InstallPaths, receipt: dict[str, object]) -> list[tu
 
 
 def uninstall(paths: InstallPaths) -> bool:
+    with update_lock(paths):
+        return _uninstall_locked(paths)
+
+
+def _uninstall_locked(paths: InstallPaths) -> bool:
     _recover_pending(paths)
     receipt = load_receipt(paths)
     if receipt is None:
@@ -1025,10 +1094,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print(f"kept modified or foreign Cockpit files; receipt remains at {paths.receipt}", file=sys.stderr)
             return 0 if complete else 1
+        build_commit = None
         if not args.reuse:
+            before_build = source_commit(PROJECT_ROOT)
             run_build(PROJECT_ROOT, args.debug)
+            if before_build == source_commit(PROJECT_ROOT):
+                build_commit = before_build
         bundle = source_bundle(PROJECT_ROOT, args.debug) if paths.application is not None else None
-        install(paths, source_binary(PROJECT_ROOT, args.debug), source_cli_binary(PROJECT_ROOT, args.debug), source_icon(PROJECT_ROOT), bundle)
+        install(paths, source_binary(PROJECT_ROOT, args.debug), source_cli_binary(PROJECT_ROOT, args.debug), source_icon(PROJECT_ROOT), bundle, build_commit)
     except InstallError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

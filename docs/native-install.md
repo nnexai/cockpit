@@ -8,11 +8,15 @@ Run this from the repository root:
 python3 scripts/install-native.py
 ```
 
-On Linux, the default build invokes `bunx tauri build --no-bundle -- --package cockpit-host --package cockpit-tauri`, so the CLI and GUI compile in one Cargo invocation with one dependency feature graph. It installs `target/release/cockpit-tauri` as `$XDG_DATA_HOME/cockpit/bin/cockpit` (default `~/.local/share/cockpit/bin/cockpit`) and `target/release/cockpit` beside it as `cockpit-cli`.
+On Linux, the installer first builds the web frontend, then invokes `bunx tauri build --no-bundle` with both host and Tauri packages. The absolute `dist` path is passed as `COCKPIT_EMBED_WEB_DIST` when compiling the host, so its web gateway serves the matching embedded assets. It installs `target/release/cockpit-tauri` as `$XDG_DATA_HOME/cockpit/bin/cockpit` (default `~/.local/share/cockpit/bin/cockpit`) and `target/release/cockpit` beside it as `cockpit-cli`.
 
 On macOS, the installer uses one `bunx tauri build --bundles app --config <bundle-mapping> -- --package cockpit-host --package cockpit-tauri` invocation. Tauri compiles both binaries in one Cargo feature graph before bundling, so the fresh CLI is included as `Cockpit.app/Contents/MacOS/cockpit-cli`, beside `cockpit-tauri`. It installs the complete bundle at `~/Applications/Cockpit.app` and the same CLI under `$XDG_DATA_HOME/cockpit/bin`, defaulting to `~/Library/Application Support/cockpit/bin`. Finder and Spotlight launches use the bundled CLI without a shell PATH or CLI override. The graphical launcher points into the installed bundle; no second raw graphical binary is installed.
 
-Both platforms install `cockpit` and `cockpit-cli` launchers under `$XDG_BIN_HOME`, or `~/.local/bin` by default. Updates stage artifacts on their destination filesystems and journal publication and rollback. Individual replacements are atomic; a multi-artifact update is not one atomic filesystem operation. Existing processes are not stopped or restarted.
+The macOS packaging and lifecycle path is pending verification on a real Mac; Linux results do not establish macOS parity.
+
+Native Voice builds require GStreamer development libraries for core, SDP and WebRTC. At runtime it uses GStreamer WebRTC/ICE, DTLS, SCTP, Opus, audio conversion, platform audio input/output and WebRTC echo-processing plugins; missing plugins are reported rather than replaced with simulated audio. On Linux this includes the separately packaged libnice GStreamer plugin providing `nicesrc`. The macOS GStreamer SDK, plugin discovery and app-bundle packaging have not been verified; this installer does not currently bundle that media stack.
+
+Both platforms install `cockpit` and `cockpit-cli` launchers under `$XDG_BIN_HOME`, or `~/.local/bin` by default. Updates stage artifacts on their destination filesystems and journal publication and rollback. Publication, recovery and uninstall take the persistent `$XDG_DATA_HOME/cockpit/update.lock` flock, also used by the service restart helper; a prefix install uses its own `PREFIX/share/cockpit/update.lock`. Individual replacements are atomic; a multi-artifact update is not one atomic filesystem operation. The installer waits up to 120 seconds for the lock and never unlinks it. Existing processes are not stopped or restarted.
 
 Supervisor/worker launches use the existing file-backed `[orchestration]` harness kind, literal executable and argv; the default harness/executable is `omp`. No extension asset is installed, embedded or privately materialized. OMP resumes its registered conversation by default with `--resume`; other harnesses require configured replacement argv containing exactly one whole `{session_id}` argument. There is no implicit `--continue` or fallback harness. See [configuration](configuration.md#supervisor-launch-and-conversation-identity) for values, identity sources and optional prompt hints. The orchestration cutover has no legacy configuration aliases or store migration; unsupported store schemas fail without discarding bytes.
 
@@ -22,15 +26,11 @@ CLI selection uses an explicit `CliProcessRole::Host` or `CliProcessRole::Native
 
 The standalone `cockpit-cli` also embeds portable Notes and orchestration skills; no source checkout is required to read or install them. Native installation does not write agent skill directories. Inspect `cockpit-cli skills list` or `skills show NAME`, then explicitly use `skills install --home` for exactly `~/.agent/skills` (singular) or `skills install --project` for exactly `./.agents/skills` (plural). Omit names to select both bundled guides. Identical files remain untouched; differing files are preserved unless `--replace` is given. Unsafe targets are refused, and each skill has its own installation result. These are user-owned copies, not global agent configuration or receipt-owned native artifacts.
 
-After changing browser paths or installing an update, fully restart any
-existing `cockpit` or `cockpit serve` process before testing. Browser
-configuration is loaded at startup; if another process already owns the
-browser state root, the new process observes it and forwards browser
-operations to that owner.
+Starting a Cockpit surface starts the background service if needed. Closing the GUI or a web gateway does not stop it. Use the in-app restart offer after installation to restart the background service and relaunch the installed app; installation itself never does so. Browser work, comments and Review state are ephemeral and may clear when the service ends. Notes, Library, orchestration data and Herdr sessions are preserved.
 
-On Linux, `python3 scripts/restart-native.py` restarts the installed GUI. It matches only argument-free processes running the installed binary (including the renamed image left after an update), closes their windows through niri so Cockpit runs its graceful shutdown (SIGTERM without niri), waits for exit, then starts one replacement in a transient systemd user unit. Herdr and its agents are not touched. The repository's `.herdr/actions.json` exposes **Install and restart Cockpit**, which runs the installer and then this script in a tab.
+An older app or gateway that still owns the Browser runtime must be quit explicitly before the new background service can start; the installer never signals it. Independently operated frozen gateways, including Tailscale deployments, are not updated or restarted by the installer.
 
-On Linux the top-bar **↑ N commits · install** chip appears when the build's recorded commit is behind the source checkout's local `main`. It checks at startup, on focus and about every ten minutes without fetching, then launches the configured install-and-restart action in a Herdr tab rooted in that checkout. The chip is hidden when build metadata, `main`, or the checkout is unavailable, and on macOS where the restart action is not supported.
+The repository's **Install Cockpit** Herdr action builds and installs only. Service and GUI restart remain explicit user actions.
 
 Linux desktop entries and icons are installed under the selected data directory at `applications/dev.cockpit.app.desktop` and `icons/hicolor/256x256/apps/dev.cockpit.app.png`. On macOS, launch the installed app bundle or use the `cockpit` shell launcher. Add the selected `bin` directory to `PATH` if needed.
 
@@ -57,7 +57,7 @@ python3 scripts/install-native.py --reuse
 python3 scripts/install-native.py --reuse --debug
 ```
 
-On Linux, `--reuse` expects `target/release/cockpit-tauri` and `target/release/cockpit`. On macOS it requires the complete `target/release/bundle/macos/Cockpit.app`, including an executable `Contents/MacOS/cockpit-cli` matching `target/release/cockpit`, as well as the matching native binary. Bundles built without the paired CLI are refused; rebuild with this installer rather than adding files to a signed bundle. `--debug` selects the corresponding `target/debug` paths.
+On Linux, `--reuse` expects `target/release/cockpit-tauri` and `target/release/cockpit`. The host must already have been built with `COCKPIT_EMBED_WEB_DIST` set to the absolute path of the matching built frontend; `--reuse` does not rebuild or verify embedded assets. On macOS it also requires the complete `target/release/bundle/macos/Cockpit.app`, including an executable `Contents/MacOS/cockpit-cli` matching `target/release/cockpit`, as well as the matching native binary. Bundles built without the paired CLI are refused; rebuild with this installer rather than adding files to a signed bundle. `--debug` selects the corresponding `target/debug` paths. A reused binary's build commit is not inferred from the current checkout and is recorded as unknown.
 
 A disposable prefix contains both launchers in `PREFIX/bin` and installer data under `PREFIX/share`. On macOS its bundle is installed at `PREFIX/Applications/Cockpit.app`:
 
