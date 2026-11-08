@@ -1,6 +1,9 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { InboxEntry, InboxEntryKind } from "../../protocol/generated/v1";
-import { groupTimeline } from "./InboxTimeline";
+import type { InboxEntry, InboxEntryKind, InboxQuestion, InboxReceipt, InboxThread } from "../../protocol/generated/v1";
+import type { CockpitClient } from "../../client/CockpitClient";
+import { answerContext, groupTimeline, InboxTimeline } from "./InboxTimeline";
 
 function entry(id: string, kind: InboxEntryKind, inReplyTo: string | null = null): InboxEntry {
   return { message_id: id, kind, in_reply_to: inReplyTo, at: "2026-11-03T12:00:00Z", text: id, source: { kind: "user" }, outcome: null, images: [] };
@@ -27,15 +30,14 @@ describe("groupTimeline", () => {
     expect(groupTimeline(updates.slice(0, 1))).toHaveLength(1);
   });
 
-  it("attaches answers to their question and does not render answers independently", () => {
+  it("preserves answer and orphan positions across intervening entries", () => {
     const question = entry("q", "question");
     const answer = entry("a", "answer", "q");
     const orphan = entry("orphan", "answer", "unknown");
     const update = entry("u", "update");
-    expect(groupTimeline([question, update, answer, orphan])).toEqual([
-      { kind: "entry", entry: question, answers: [answer] },
-      { kind: "entry", entry: update, answers: [] },
-    ]);
+    expect(groupTimeline([question, update, answer, orphan])).toEqual(
+      [question, update, answer, orphan].map(item => ({ kind: "entry", entry: item, answers: [] })),
+    );
   });
 
   it("preserves request, result and follow-up order and separates update runs", () => {
@@ -71,5 +73,62 @@ describe("groupTimeline", () => {
       { kind: "entry", entry: publication, answers: [] },
       { kind: "entry", entry: answer, answers: [] },
     ]);
+  });
+});
+
+function receipt(to: string, stage: InboxReceipt["stage"] = "acked"): InboxReceipt {
+  return { message_id: "a", kind: "answer", to_run_id: to, attempt_run_id: null, stage, created_at: "2026-11-03T12:00:00Z", acked_at: null, stale: false };
+}
+
+function ownedQuestion(run: string, text: string): InboxEntry {
+  return { ...entry("q", "question"), text, source: { kind: "owner", run_id: run, harness: "omp" } };
+}
+
+describe("answer context", () => {
+  it("uses the receipt recipient to disambiguate matching question IDs", () => {
+    const one = ownedQuestion("one", "Question one");
+    const two = ownedQuestion("two", "Question two");
+    const answer = entry("a", "answer", "q");
+    const delivered = receipt("two", "read");
+    expect(answerContext(answer, [one, two], [delivered])).toEqual({ receipt: delivered, question: two });
+    expect(answerContext(answer, [one], [delivered])).toEqual({ receipt: delivered, question: undefined });
+    expect(answerContext(answer, [one, two], [])).toEqual({ receipt: undefined, question: undefined });
+    expect(answerContext(answer, [one, two], [receipt("one"), delivered])).toEqual({ receipt: undefined, question: undefined });
+    expect(answerContext(answer, [two, two], [delivered]).question).toBeUndefined();
+  });
+});
+
+describe("InboxTimeline rendering", () => {
+  it("renders answers in append order with the correct question and receipt", () => {
+    const one = ownedQuestion("one", "First question");
+    const two = ownedQuestion("two", "Second question");
+    const update = { ...entry("u", "update"), text: "Intervening update" };
+    const answer = { ...entry("a", "answer", "q"), text: "Answer text" };
+    const orphan = { ...entry("orphan", "answer", "missing"), text: "Orphan text" };
+    const thread = { thread_id: "thread", state: "underway", questions: [], receipts: [receipt("two", "read")], timeline: [one, two, update, answer, orphan], timeline_omitted: 0 } as unknown as InboxThread;
+    const html = renderToStaticMarkup(createElement(InboxTimeline, { thread, view: null, client: {} as CockpitClient, sessionId: "session", ownerLabel: run => run, visible: true, questionCard: () => null, resultActions: null, acknowledged: null, recommendation: null }));
+    expect(html.indexOf("Intervening update")).toBeLessThan(html.indexOf("Answer text"));
+    expect(html.indexOf("Answer text")).toBeLessThan(html.indexOf("Orphan text"));
+    expect(html).toContain("In reply to: Second question");
+    expect(html).not.toContain("In reply to: First question");
+    expect(html).toContain("Delivered · picked up");
+  });
+
+  it("attributes owner-recorded answers without borrowing a user receipt", () => {
+    const answer = { ...entry("a", "answer", "q"), source: { kind: "owner" as const, run_id: "one", harness: "omp" }, text: "Recorded answer" };
+    const thread = { thread_id: "thread", state: "underway", questions: [], receipts: [receipt("one")], timeline: [ownedQuestion("one", "Question"), answer], timeline_omitted: 0 } as unknown as InboxThread;
+    const html = renderToStaticMarkup(createElement(InboxTimeline, { thread, view: null, client: {} as CockpitClient, sessionId: "session", ownerLabel: run => run, visible: true, questionCard: () => null, resultActions: null, acknowledged: null, recommendation: null }));
+    expect(html).toContain("Owner recorded");
+    expect(html).toContain("Recorded answer");
+    expect(html).toContain("In reply to: Question");
+    expect(html).not.toContain("Delivered · received");
+  });
+
+  it("places unretained open questions in a labelled section before timeline entries", () => {
+    const question = { run_id: "one", question_message_id: "old", receipt: { status: "unresolved" } } as InboxQuestion;
+    const thread = { thread_id: "thread", state: "underway", questions: [question], receipts: [], timeline: [entry("new", "update")], timeline_omitted: 1 } as unknown as InboxThread;
+    const html = renderToStaticMarkup(createElement(InboxTimeline, { thread, view: null, client: {} as CockpitClient, sessionId: "session", ownerLabel: run => run, visible: true, questionCard: () => "Open question card", resultActions: null, acknowledged: null, recommendation: null }));
+    expect(html.indexOf("Open questions outside the timeline")).toBeLessThan(html.indexOf("Open question card"));
+    expect(html.indexOf("Open question card")).toBeLessThan(html.indexOf("new"));
   });
 });

@@ -1171,15 +1171,20 @@ describe("Inbox surfaces", () => {
     expect(chips().map(chip => chip.textContent)).toEqual(["Answer Q1", "Answer Q2", "Follow up"]);
     expect(host.querySelector(".inbox-row")!.textContent).toContain("2 questions");
   });
-  it("shows an answered question as one entry with its answer and a delivery receipt that never claims it was read", async () => {
+  it("shows an answer in timeline order with its question and accurate delivery receipt", async () => {
     const answer = { message_id: "a", at: "2026-11-04T10:02:00Z", kind: "answer" as const, text: "Postgres", source: { kind: "user" as const }, outcome: null, images: [], in_reply_to: "q" };
-    await mountThread(dockThread([], { state: "handled", need: null, receipts: [{ message_id: "a", kind: "answer", to_run_id: "owner", attempt_run_id: null, stage: "stored", created_at: "now", acked_at: null, stale: false }], timeline: [entry("q", "question", "2026-11-04T10:00:00Z", "Which database?"), answer] }));
+    await mountThread(dockThread([], { state: "handled", need: null, receipts: [{ message_id: "a", kind: "answer", to_run_id: "owner", attempt_run_id: null, stage: "stored", created_at: "now", acked_at: null, stale: false }], timeline: [entry("q", "question", "2026-11-04T10:00:00Z", "Which database?"), entry("u", "update", "2026-11-04T10:01:00Z", "Working on it"), answer] }));
     expect(host.querySelectorAll("[data-open-question]")).toHaveLength(0);
-    const answered = host.querySelector(".inbox-answer")!;
-    expect(answered.textContent).toContain("You answered");
-    expect(answered.textContent).toContain("Postgres");
-    expect(answered.querySelector(".inbox-receipt")!.textContent).toBe("Stored · waiting to be picked up");
-    expect(Array.from(host.querySelectorAll(".inbox-timeline .inbox-feedback")).filter(node => node.textContent === "Which database?")).toHaveLength(1);
+    const timeline = host.querySelector<HTMLOListElement>('ol[aria-label="Timeline"]')!;
+    const entries = Array.from(timeline.children);
+    const questionIndex = entries.findIndex(node => node.textContent?.includes("Which database?"));
+    const updateIndex = entries.findIndex(node => node.textContent?.includes("Working on it"));
+    const answerIndex = entries.findIndex(node => node.textContent?.includes("Postgres"));
+    expect(questionIndex).toBeGreaterThanOrEqual(0);
+    expect(updateIndex).toBeGreaterThan(questionIndex);
+    expect(answerIndex).toBeGreaterThan(updateIndex);
+    expect(entries[answerIndex]!.textContent).toContain("In reply to: Which database?");
+    expect(entries[answerIndex]!.textContent).toContain("Stored · waiting to be picked up");
   });
   it("announces a confirmed answer and how many questions remain open", async () => {
     await mountThread(dockThread([question("q1", "First?"), question("q2", "Second?")]));

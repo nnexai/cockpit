@@ -67,6 +67,7 @@ Notes presents Scratchpad, Todos, Kanban, Decisions and board-item comment threa
 
 ## Local surfaces
 Inbox is a separate switchable work-oriented screen alongside the existing Space/worktree-oriented Workbench. It aggregates human questions, requested results and other work without replacing repository hierarchy, Git, tags, tabs or real harness terminals. Switching screens preserves the Workbench; visiting a question or focusing a pane does not resolve it. Read state is explicit.
+The Inbox timeline follows durable message insertion order, including live-view publication positions; displayed timestamps are not a global sequence. Answers remain at their recorded position and are associated with a question only when its recipient and question identity are known. Questions outside the retained timeline remain separately accessible without inventing their position among retained events.
 
 The central router aggregates intake, handoffs and thread cards, not global task ownership. Each root remains authoritative for its own work; direct unmanaged harnesses remain unmanaged. Handoffs and replies carry optional explicit bindings rather than inferring a project from the selected Space. Receipts distinguish stored or captured delivery from model consumption. The default owner harness is OMP using its existing configured providers and authentication; rendering and deterministic delivery do not depend on a future JE V or Decision API.
 
