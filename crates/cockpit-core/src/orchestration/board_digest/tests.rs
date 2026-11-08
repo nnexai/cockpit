@@ -13,7 +13,7 @@ fn task(id: &str) -> TaskView {
         },
         project: None, lane: TaskLane::Ready, current_run_id: None,
         dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: vec![], problems: vec![] },
-        scheduled: false, attempt: None, waiting: None,
+        scheduled: false, attempt: None, waiting: None, worker_waiting: None,
     }
 }
 

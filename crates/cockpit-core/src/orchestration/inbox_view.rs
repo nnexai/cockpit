@@ -54,6 +54,13 @@ fn report_owner<'a>(m: &Message, roots: &HashMap<&str, &'a Run>) -> Option<&'a R
     let ActorRef::Run { run_id } = &m.from else { return None };
     roots.get(run_id.as_str()).copied()
 }
+fn interim_ref(state: &OrchestrationState, message: &Message) -> Option<InboxInterimRef> {
+    let ActorRef::Run { run_id } = &message.from else { return None };
+    let run = state.runs.iter().find(|run| run.run_id == *run_id)?;
+    Some(InboxInterimRef { run_id: run_id.clone(), message_id: message.message_id.clone(),
+        task_id: run.task_id.clone()?, attempt: run.attempt })
+}
+
 
 fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, roots: &HashMap<&str, &Run>, boards: &[TaskBoard]) -> (Vec<InboxEntry>, u32, Vec<InboxEntry>, Option<u32>) {
     let all = &state.messages;
@@ -75,7 +82,8 @@ fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, 
     entries.sort_by_key(|m| positions[&(*m as *const Message)]);
     let mut had_request = false;
     let mut result = Vec::new();
-    for m in entries.into_iter().filter(|m| !m.stale) {
+    for m in entries.into_iter().filter(|m| !m.stale || super::threads::linked_worker_interim(state,
+        roots.values().next().map_or("", |root| root.session_id.as_str()), thread_id, m)) {
         let (kind, value, source, outcome) = if matches!(m.from, ActorRef::Operator) {
             let kind = if m.kind == MessageKind::Instruction && m.handoff.is_some() {
                 let kind = if had_request { InboxEntryKind::FollowUp } else { InboxEntryKind::Request };
@@ -97,6 +105,11 @@ fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, 
                 ReportKind::Initialized => continue,
             };
             (kind, report.summary.clone(), owner_source(root, false), if report.kind == ReportKind::Result { report.outcome } else { None })
+        } else if super::threads::linked_worker_interim(state,
+            roots.values().next().map_or("", |root| root.session_id.as_str()), thread_id, m) {
+            let ActorRef::Run { run_id } = &m.from else { unreachable!() };
+            (InboxEntryKind::Interim, m.report.as_ref().unwrap().summary.clone(),
+                InboxSource::Worker { run_id: run_id.clone() }, None)
         } else { continue };
         let position = positions[&(m as *const Message)];
         let task_title = if m.kind == MessageKind::UserDirective {
@@ -106,8 +119,15 @@ fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, 
                     .and_then(|id| board.tasks.iter().find(|task| &task.task.task_id == id)))
                 .map(|task| task.task.title.clone())
         } else { None };
+        let interim = (kind == InboxEntryKind::Interim).then(|| interim_ref(state, m)).flatten();
+        let artifacts = interim.as_ref().and_then(|identity| {
+            let run = state.runs.iter().find(|run| run.run_id == identity.run_id)?;
+            let checkpoint = WorkerCheckpoint::decode(m.report.as_ref()?.plan.as_deref())?;
+            Some(super::artifacts::artifacts_for_run(run, &state.messages).into_iter()
+                .filter(|artifact| checkpoint.artifacts.contains(&artifact.path)).collect())
+        }).unwrap_or_default();
         result.push(((position, 1, 0), InboxEntry { message_id: m.message_id.clone(), at: m.created_at.clone(), kind,
-            text: value, source, outcome, images: m.images.clone(), in_reply_to: m.in_reply_to.clone(), widget: None, task_title }));
+            text: value, source, outcome, images: m.images.clone(), in_reply_to: m.in_reply_to.clone(), interim, artifacts, widget: None, task_title }));
     }
     for (index, publication) in state.widget_publications.iter().enumerate().filter(|(_, p)|
         p.thread_id == thread_id && roots.contains_key(p.root_id.as_str())) {
@@ -117,7 +137,7 @@ fn timeline(messages: &[&Message], state: &OrchestrationState, thread_id: &str, 
             message_id: event.publication_id.clone(), at: publication.at.clone(), kind: InboxEntryKind::Widget,
             text: event.title.clone(), source: if event.binding.run_id == root.run_id { owner_source(root, false) }
                 else { InboxSource::Worker { run_id: event.binding.run_id.clone() } }, outcome: None,
-            images: Vec::new(), in_reply_to: None, widget: Some(event.clone()), task_title: None,
+            images: Vec::new(), in_reply_to: None, interim: None, artifacts: Vec::new(), widget: Some(event.clone()), task_title: None,
         }));
     }
     result.sort_by_key(|(order, _)| *order);
@@ -173,7 +193,7 @@ fn task_evidence(state: &OrchestrationState, root_id: &str, task_id: &str, curre
     decisions.reverse();
     Some(InboxTaskEvidence { run_id: run.run_id.clone(), attempt: run.attempt, attempts: runs.len() as u32,
         result: run.result.as_ref().map(|r| InboxTaskResult { summary: r.summary.clone(), outcome: r.outcome, at: r.at.clone() }),
-        checks, commits, head_commit, integration, artifacts: super::artifacts::artifacts_for_run(run), images, decisions })
+        checks, commits, head_commit, integration, artifacts: super::artifacts::artifacts_for_run(run, &state.messages), images, decisions })
 }
 
 fn request_title(value: &str) -> String {
@@ -217,6 +237,14 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             && runs.iter().any(|run| run.run_id == m.to_run_id && root_map.contains_key(run.root_id.as_str()));
         if (root_map.contains_key(m.to_run_id.as_str()) && matches!(m.from, ActorRef::Operator)) || owner_report || worker_directive {
             if let Some(id) = m.thread_id.as_deref() { groups.entry(id).or_default().push(m); }
+        }
+    }
+    for link in &state.thread_links {
+        if !root_map.contains_key(link.root_id.as_str()) { continue; }
+        for message in state.messages.iter().filter(|message|
+            super::threads::linked_worker_interim(state, &request.session_id, &link.thread_id, message)) {
+            let group = groups.entry(link.thread_id.as_str()).or_default();
+            if !group.iter().any(|entry| std::ptr::eq(*entry, message)) { group.push(message); }
         }
     }
     for (&id, statuses) in &questions {
@@ -268,6 +296,11 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
         for m in &messages {
             if m.handoff.is_some() && root_map.contains_key(m.to_run_id.as_str()) { owner_ids.insert(m.to_run_id.as_str()); }
             if let Some(root) = report_owner(m, &root_map) { owner_ids.insert(root.run_id.as_str()); }
+            if super::threads::linked_worker_interim(state, &request.session_id, id, m) {
+                if let ActorRef::Run { run_id } = &m.from {
+                    if let Some(run) = runs.iter().find(|run| run.run_id == *run_id) { owner_ids.insert(run.root_id.as_str()); }
+                }
+            }
         }
         let mut handoffs = messages.iter().copied().filter(|m| matches!(m.from, ActorRef::Operator) && m.kind == MessageKind::Instruction && m.handoff.is_some());
         let request_message = handoffs.next();
@@ -306,15 +339,20 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
                     .max_by(|a, b| message_order(a).cmp(&message_order(b))).map(|m| m.images.clone()).unwrap_or_default();
                 InboxRun { run_id: r.run_id.clone(), attempt: r.attempt, stage: r.stage, harness: r.launch_config.harness_kind.clone(), session_id: r.session_id.clone(), attachment_id: r.attachment.as_ref().map(|a| a.attachment_id.clone()), attachment_epoch: r.attachment.as_ref().map(|a| a.epoch), presence: o.map_or(Presence::Unobserved, |o| o.presence), agent_status: o.and_then(|o| o.agent_status.clone()), location: location(o), cleanup: cleanups.iter().find(|c| c.run_id == r.run_id).map(|c| c.items.clone()).unwrap_or_default(), report_images }
             });
-            tasks.push(InboxTaskLink { root_id: root_id.into(), task_id: task_id.into(), title: view.task.title.clone(), project: task_projects.get(&(root_id, task_id)).cloned().flatten(), lane, run, evidence: task_evidence(state, root_id, task_id, current) });
+            let worker_waiting = if view.task.checked { None } else { current.and_then(|run| projection::worker_waiting(state, run)) };
+            tasks.push(InboxTaskLink { root_id: root_id.into(), task_id: task_id.into(), title: view.task.title.clone(), project: task_projects.get(&(root_id, task_id)).cloned().flatten(), lane, run, worker_waiting, evidence: task_evidence(state, root_id, task_id, current) });
         }
-        let unread = latest_report.filter(|(m, _)| m.report.as_ref().is_some_and(|r| r.kind == ReportKind::Result)).filter(|(m, _)| !state.thread_reads.iter().filter(|read| read.thread_id == id).any(|read| {
-            state.messages.iter().find(|mark| mark.message_id == read.through_message_id).is_some_and(|mark| mark.to_run_id == m.to_run_id && mark.seq >= m.seq)
-        })).map(|(m, _)| m.message_id.clone());
+        let unread = latest_report.filter(|(m, _)| m.report.as_ref().is_some_and(|r| r.kind == ReportKind::Result))
+            .filter(|(m, _)| !super::threads::is_read(state, &request.session_id, id, m))
+            .map(|(m, _)| m.message_id.clone());
+        let unread_interims: Vec<_> = messages.iter().copied().filter(|m|
+            super::threads::current_worker_interim(state, &request.session_id, id, m)
+                && !super::threads::is_read(state, &request.session_id, id, m))
+            .filter_map(|m| interim_ref(state, m)).collect();
         let unresolved = projected_questions.iter().any(|q| matches!(q.receipt, QuestionReceipt::Unresolved));
         let answered_legacy = questions.get(id).is_some_and(|qs| qs.iter().any(|q| q.thread_id.is_none() && !matches!(q.receipt, QuestionReceipt::Unresolved))) && latest_report.is_some_and(|(m, _)| m.message_id == id);
         let (state_value, need) = if unresolved { (InboxState::NeedsYou, Some(InboxNeed::Decision)) }
-            else if unread.is_some() { (InboxState::NeedsYou, Some(InboxNeed::Answer)) }
+            else if unread.is_some() || !unread_interims.is_empty() { (InboxState::NeedsYou, Some(InboxNeed::Answer)) }
             else if latest_report.is_some_and(|(m, _)| m.report.as_ref().is_some_and(|r| r.kind == ReportKind::Result)) || (link_count > 0 && tasks.len() == link_count && tasks.iter().all(|t| t.lane == TaskLane::Accepted)) || answered_legacy { (InboxState::Handled, None) }
             else { (InboxState::Underway, None) };
         let linked_title = state.thread_links.iter().filter(|link| link.thread_id == id)
@@ -325,7 +363,13 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
                 tasks.iter().find(|task| task.root_id == m.to_run_id && task.task_id == task_id)
             }));
         let title = if let Some((m, root)) = latest_card { text(m.report.as_ref().unwrap().card.as_ref().unwrap().title.clone(), owner_source(root, true), Some(m)) }
-            else if let Some(task) = linked_title.and_then(|task| root_map.get(task.root_id.as_str()).map(|root| (task, root))) { text(task.0.title.clone(), owner_source(task.1, false), None) }
+            else if let Some(task) = linked_title {
+                let worker_only = messages.iter().all(|message|
+                    super::threads::linked_worker_interim(state, &request.session_id, id, message));
+                let source = if worker_only { InboxSource::Recorded }
+                    else { root_map.get(task.root_id.as_str()).map_or(InboxSource::Recorded, |root| owner_source(root, false)) };
+                text(task.title.clone(), source, None)
+            }
             else if let Some(m) = request_message { let line = request_title(&m.text); text(if line.trim().is_empty() && !m.images.is_empty() { format!("Image request ({})", m.images.len()) } else { line }, InboxSource::User, Some(m)) }
             else if let Some(q) = projected_questions.first() { text(first_line(&q.text.text), q.text.source.clone(), messages.iter().copied().find(|m| m.message_id == q.question_message_id && matches!(&m.from, ActorRef::Run { run_id } if run_id == &q.run_id))) }
             else if let Some((m, root)) = latest_report { text(first_line(&m.report.as_ref().unwrap().summary), owner_source(root, false), Some(m)) }
@@ -356,12 +400,13 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             .chain(state.widget_publications.iter().filter(|p| p.thread_id == id && root_map.contains_key(p.root_id.as_str())).map(|p| p.at.as_str()))
             .max().unwrap_or(now).to_owned();
         let (timeline, timeline_omitted, earlier_widgets, earlier_widgets_omitted) = timeline(&messages, state, id, &root_map, &boards);
-        threads.push(InboxThread { thread_id: id.into(), state: state_value, need, owner_root_ids: owner_ids.into_iter().map(str::to_owned).collect(), title, next, project, request: request_echo, follow_ups, questions: projected_questions, recommendation, reply, unread_result_message_id: unread, tasks, receipts, facts, updated_at, timeline, timeline_omitted, earlier_widgets: (!earlier_widgets.is_empty()).then_some(earlier_widgets), earlier_widgets_omitted });
+        threads.push(InboxThread { thread_id: id.into(), state: state_value, need, owner_root_ids: owner_ids.into_iter().map(str::to_owned).collect(), title, next, project, request: request_echo, follow_ups, questions: projected_questions, recommendation, reply, unread_result_message_id: unread, unread_interims, tasks, receipts, facts, updated_at, timeline, timeline_omitted, earlier_widgets: (!earlier_widgets.is_empty()).then_some(earlier_widgets), earlier_widgets_omitted });
     }
     threads.sort_by(|a,b| {
         let rank = |t: &InboxThread| match t.need { Some(InboxNeed::Decision) => 0, Some(InboxNeed::Answer) => 1, None if t.state == InboxState::Underway => 2, None => 3 };
         rank(a).cmp(&rank(b)).then_with(|| if rank(a) == 0 { a.questions.iter().filter(|q| matches!(q.receipt, QuestionReceipt::Unresolved)).map(|q| &q.asked_at).min().cmp(&b.questions.iter().filter(|q| matches!(q.receipt, QuestionReceipt::Unresolved)).map(|q| &q.asked_at).min()) } else if rank(a) == 1 {
-            let result_time = |t: &InboxThread| t.unread_result_message_id.as_deref().and_then(|id| state.messages.iter().find(|m| m.message_id == id)).map(|m| m.created_at.as_str());
+            let result_time = |t: &InboxThread| t.unread_result_message_id.as_deref().and_then(|id| state.messages.iter().find(|m| m.message_id == id)).map(|m| m.created_at.as_str())
+                .or_else(|| t.unread_interims.first().and_then(|item| state.messages.iter().find(|m| m.message_id == item.message_id && matches!(&m.from, ActorRef::Run { run_id } if run_id == &item.run_id))).map(|m| m.created_at.as_str()));
             result_time(a).cmp(&result_time(b))
         } else { b.updated_at.cmp(&a.updated_at) }).then_with(|| a.thread_id.cmp(&b.thread_id))
     });
@@ -687,6 +732,165 @@ mod tests {
         assert_eq!(result.threads[0].tasks[0].run.as_ref().unwrap().report_images, vec![image("newest")]);
     }
     #[test]
+    fn inbox_task_exposes_worker_wait_independently_of_thread_question() {
+        let mut worker = root("worker");
+        worker.kind = RunKind::Worker;
+        worker.root_id = "r".into();
+        worker.parent_run_id = Some("r".into());
+        worker.task_id = Some("task".into());
+        worker.assignment_generation = Some(1);
+        worker.stage = RunStage::Working;
+        let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1,
+            schedule: None, reopened_after_attempt: None, owner: Some(TaskOwner { run_id: "worker".into(),
+                conversation: None, claim_operation_id: "claim".into() }) });
+        state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(),
+            task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
+        let question = report("question", "r", 1, Some("t"), ReportKind::NeedsInput);
+        let mut waiting = report("wait", "worker", 2, None, ReportKind::Progress);
+        waiting.to_run_id = "r".into();
+        let wait_report = waiting.report.as_mut().unwrap();
+        wait_report.summary = "Waiting for review".into();
+        wait_report.plan = Some(WorkerCheckpoint { kind: WorkerCheckpointKind::Waiting, artifacts: vec![] }.encode());
+        state.messages.extend([question, waiting]);
+        let mut tasks = board("r", "task");
+        tasks.tasks[0].task.checked = false;
+        let projected = view(&state, vec![tasks.clone()]);
+        assert_eq!(projected.threads[0].need, Some(InboxNeed::Decision));
+        let wait = projected.threads[0].tasks[0].worker_waiting.as_ref().unwrap();
+        assert_eq!(wait.cause, TaskWaitCause::WorkerWaiting);
+        assert_eq!(wait.detail.as_deref(), Some("Waiting for review"));
+        let mut resumed = report("resumed", "worker", 3, None, ReportKind::Progress);
+        resumed.report.as_mut().unwrap().plan = Some(WorkerCheckpoint { kind: WorkerCheckpointKind::Resumed, artifacts: vec![] }.encode());
+        state.messages.push(resumed);
+        assert!(view(&state, vec![tasks]).threads[0].tasks[0].worker_waiting.is_none());
+    }
+    #[test]
+    fn linked_interims_preserve_history_and_independent_exact_unread_identity() {
+        let mut worker = root("worker");
+        worker.kind = RunKind::Worker;
+        worker.root_id = "r".into();
+        worker.parent_run_id = Some("r".into());
+        worker.task_id = Some("task".into());
+        worker.assignment_generation = Some(2);
+        worker.stage = RunStage::Working;
+        let mut old = worker.clone();
+        old.run_id = "old".into();
+        old.assignment_generation = Some(1);
+        let mut unrelated = worker.clone();
+        unrelated.run_id = "unrelated".into();
+        unrelated.task_id = Some("other".into());
+        let mut foreign = worker.clone();
+        foreign.run_id = "foreign".into();
+        foreign.root_id = "other-root".into();
+        let mut state = OrchestrationState { runs: vec![root("r"), root("other-root"), worker, old, unrelated, foreign], ..Default::default() };
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 2,
+            schedule: None, reopened_after_attempt: None, owner: Some(TaskOwner { run_id: "worker".into(),
+                conversation: None, claim_operation_id: "claim".into() }) });
+        state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
+        let worker_report = |id, sender, seq| {
+            let mut m = report(id, sender, seq, None, ReportKind::Progress);
+            m.report.as_mut().unwrap().plan = Some(WorkerCheckpoint { kind: WorkerCheckpointKind::Interim, artifacts: vec![] }.encode());
+            m.to_run_id = "r".into();
+            m
+        };
+        let mut stale = worker_report("stale", "worker", 2);
+        stale.stale = true;
+        let mut one = worker_report("one", "worker", 3);
+        one.report.as_mut().unwrap().plan = Some(WorkerCheckpoint { kind: WorkerCheckpointKind::Interim, artifacts: vec!["/tmp/checkpoint.md".into()] }.encode());
+        let mut waiting = worker_report("waiting", "worker", 8);
+        waiting.report.as_mut().unwrap().plan = Some(WorkerCheckpoint { kind: WorkerCheckpointKind::Waiting, artifacts: vec![] }.encode());
+        state.messages.extend([worker_report("old", "old", 1), stale,
+            one, worker_report("two", "worker", 4),
+            worker_report("wrong-task", "unrelated", 5), worker_report("wrong-root", "foreign", 6),
+            report("result", "r", 7, Some("t"), ReportKind::Result), waiting]);
+        let mut worker_only = state.clone();
+        worker_only.messages.retain(|message| message.message_id == "one");
+        let worker_thread = view(&worker_only, vec![board("r", "task")]);
+        assert!(matches!(worker_thread.threads[0].title.source, InboxSource::Recorded));
+        let projected = view(&state, vec![board("r", "task")]);
+        let thread = &projected.threads[0];
+        assert_eq!(thread.unread_interims.iter().map(|item| item.message_id.as_str()).collect::<Vec<_>>(), vec!["one", "two"]);
+        assert_eq!(thread.unread_result_message_id.as_deref(), Some("result"));
+        assert_eq!(thread.state, InboxState::NeedsYou);
+        assert_eq!(thread.timeline.iter().map(|e| e.message_id.as_str()).collect::<Vec<_>>(),
+            vec!["old", "stale", "one", "two", "result"]);
+        assert!(thread.timeline[..4].iter().all(|e| e.kind == InboxEntryKind::Interim && e.outcome.is_none()
+            && matches!(&e.source, InboxSource::Worker { .. })));
+        let one = &thread.timeline[2];
+        let identity = one.interim.as_ref().unwrap();
+        assert_eq!((&*identity.run_id, &*identity.task_id, identity.attempt), ("worker", "task", 1));
+        assert_eq!(one.artifacts.iter().map(|artifact| artifact.path.as_str()).collect::<Vec<_>>(), vec!["/tmp/checkpoint.md"]);
+        let two_key = super::super::threads::interim_read_key(&state, &state.messages[3]).unwrap();
+        state.thread_reads.push(ThreadReadRecord { thread_id: "t".into(), through_message_id: two_key,
+            origin: ActorRef::Operator, at: NOW.into() });
+        let projected = view(&state, vec![board("r", "task")]);
+        assert_eq!(projected.threads[0].unread_interims.iter().map(|item| item.message_id.as_str()).collect::<Vec<_>>(), vec!["one"]);
+        assert_eq!(projected.threads[0].unread_result_message_id.as_deref(), Some("result"));
+        let old_key = super::super::threads::interim_read_key(&state, &state.messages[0]).unwrap();
+        state.thread_reads.push(ThreadReadRecord { thread_id: "t".into(), through_message_id: old_key,
+            origin: ActorRef::Operator, at: NOW.into() });
+        assert_eq!(view(&state, vec![board("r", "task")]).threads[0].unread_interims.len(), 1);
+        let one_key = super::super::threads::interim_read_key(&state, &state.messages[2]).unwrap();
+        state.thread_reads.last_mut().unwrap().through_message_id = one_key;
+        assert!(view(&state, vec![board("r", "task")]).threads[0].unread_interims.is_empty());
+        state.task_ownership[0].owner = None;
+        assert!(view(&state, vec![board("r", "task")]).threads[0].unread_interims.is_empty());
+    }
+
+    #[test]
+    fn legacy_result_read_does_not_acknowledge_same_id_worker_interim() {
+        let mut worker = root("worker");
+        worker.kind = RunKind::Worker; worker.root_id = "r".into(); worker.parent_run_id = Some("r".into());
+        worker.task_id = Some("task".into()); worker.assignment_generation = Some(1); worker.stage = RunStage::Working;
+        let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1,
+            schedule: None, reopened_after_attempt: None, owner: Some(TaskOwner { run_id: "worker".into(), conversation: None, claim_operation_id: "claim".into() }) });
+        state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
+        let mut interim = report("same", "worker", 1, None, ReportKind::Progress);
+        interim.report.as_mut().unwrap().plan = Some(WorkerCheckpoint { kind: WorkerCheckpointKind::Interim, artifacts: vec![] }.encode());
+        interim.to_run_id = "r".into();
+        state.messages.extend([interim, report("same", "r", 2, Some("t"), ReportKind::Result)]);
+        state.thread_reads.push(ThreadReadRecord { thread_id: "t".into(), through_message_id: "same".into(),
+            origin: ActorRef::Operator, at: NOW.into() });
+        let projected = view(&state, vec![board("r", "task")]);
+        assert_eq!(projected.threads[0].unread_interims[0].message_id, "same");
+        assert!(projected.threads[0].unread_result_message_id.is_none());
+        assert!(super::super::threads::read_target(&state, "session", "t", "same", Some("worker")).is_some());
+    }
+
+    #[test]
+    fn interim_selection_is_scoped_by_sender_and_requires_authorized_link() {
+        let mut first = root("first");
+        first.kind = RunKind::Worker; first.root_id = "r".into(); first.parent_run_id = Some("r".into());
+        first.task_id = Some("task".into()); first.assignment_generation = Some(1); first.stage = RunStage::Working;
+        let mut second = first.clone();
+        second.run_id = "second".into(); second.task_id = Some("task2".into());
+        let mut state = OrchestrationState { runs: vec![root("r"), first, second], ..Default::default() };
+        for (task, worker) in [("task", "first"), ("task2", "second")] {
+            state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: task.into(), generation: 1,
+                schedule: None, reopened_after_attempt: None, owner: Some(TaskOwner { run_id: worker.into(), conversation: None, claim_operation_id: "claim".into() }) });
+            state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: task.into(), linked_by: ActorRef::Operator, at: NOW.into() });
+            let mut m = report("shared", worker, 1, None, ReportKind::Progress);
+            m.to_run_id = "r".into();
+            m.report.as_mut().unwrap().plan = Some(WorkerCheckpoint { kind: WorkerCheckpointKind::Interim, artifacts: vec![] }.encode());
+            state.messages.push(m);
+        }
+        let projected = view(&state, vec![board("r", "task"), board("r", "task2")]);
+        assert_eq!(projected.threads[0].unread_interims.len(), 2);
+        assert!(super::super::threads::read_target(&state, "session", "t", "shared", None).is_none());
+        let target = super::super::threads::read_target(&state, "session", "t", "shared", Some("first")).unwrap();
+        let key = super::super::threads::interim_read_key(&state, target).unwrap();
+        state.thread_reads.push(ThreadReadRecord { thread_id: "t".into(), through_message_id: key, origin: ActorRef::Operator, at: NOW.into() });
+        let projected = view(&state, vec![board("r", "task"), board("r", "task2")]);
+        assert_eq!(projected.threads[0].unread_interims.len(), 1);
+        assert_eq!(projected.threads[0].unread_interims[0].run_id, "second");
+        assert!(super::super::threads::read_target(&state, "session", "wrong-thread", "shared", Some("second")).is_none());
+        assert!(super::super::threads::read_target(&state, "other-session", "t", "shared", Some("second")).is_none());
+        state.messages[1].to_run_id = "first".into();
+        assert!(super::super::threads::read_target(&state, "session", "t", "shared", Some("second")).is_none());
+    }
+    #[test]
     fn worker_claim_facts_keep_full_markdown_after_many_receipts() {
         let summary = format!("{}\n\n- **Evidence:** `cargo test`\n- [artifact](https://example.invalid/result)\n", "Long result ".repeat(12));
         let mut worker = root("worker");
@@ -734,7 +938,7 @@ mod tests {
                 relations_diagnostic: None, checked: true, line: 1, task_revision: String::new(), diagnostic: None },
                 project: None, lane: TaskLane::Ready, current_run_id: None,
                 dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: vec![], problems: vec![] },
-                scheduled: false, attempt: None, waiting: None }] }
+                scheduled: false, attempt: None, waiting: None, worker_waiting: None }] }
     }
     #[test]
     fn widget_publications_survive_storage_and_preserve_order_scope_and_cap() {

@@ -367,7 +367,7 @@ impl OrchestrationService {
         let state = self.store.lock()?.read_shared()?;
         let run = state.runs.iter().find(|run| run.session_id == request.session_id && run.run_id == request.run_id)
             .ok_or_else(|| error("artifact_not_found", "Artifact not found"))?;
-        artifacts::read(run, &request.path)
+        artifacts::read(run, &state.messages, &request.path)
     }
 
 
@@ -436,7 +436,7 @@ impl OrchestrationService {
             }
         }
         let tasks = document.tasks.into_iter().zip(facts).map(|(task, dependencies)| TaskView {
-            task, dependencies, lane: TaskLane::Ready, current_run_id: None, scheduled: false, attempt: None, project: None, waiting: None,
+            task, dependencies, lane: TaskLane::Ready, current_run_id: None, scheduled: false, attempt: None, project: None, waiting: None, worker_waiting: None,
         }).collect();
         Ok(TaskBoard {
             root_id: root_id.into(),

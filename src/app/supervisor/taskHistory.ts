@@ -6,6 +6,7 @@ export type HistoryEvent =
   | { kind: "started"; at: string; replacement: boolean; facts: HistoryFact[] }
   | { kind: "progress"; at: string; items: { at: string; text: string }[]; earlier: number }
   | { kind: "question"; at: string; answer: { at: string; by: "you" | "liaison" | "agent" | "cockpit" } | null; open: boolean }
+  | { kind: "interim" | "waiting" | "resumed"; at: string; summary: string }
   | { kind: "result"; at: string; outcome: ReportOutcome | null; summary: string; facts: HistoryFact[] }
   | { kind: "unreflected_input"; at: string; sortAt: string; messageId: string; seq: number; inputKind: MessageKind; by: "you" | "the liaison" | "Cockpit" | "another agent"; stage: DeliveryStage; afterResult: boolean; text: string | null; imageCount: number; closed: boolean }
   | { kind: "integrated"; at: string | null; target: string; facts: HistoryFact[] }
@@ -27,6 +28,20 @@ const humanize = (code: string) => code.replaceAll("_", " ").replace(/^./, c => 
 const timestamp = (value: string | null) => value ? Date.parse(value) : NaN;
 const compareTime = (a: string | null, b: string | null) => (Number.isFinite(timestamp(a)) ? timestamp(a) : Infinity) - (Number.isFinite(timestamp(b)) ? timestamp(b) : Infinity);
 const branch = (ref: string) => ref.replace(/^refs\/heads\//, "");
+
+function checkpointKind(report: Report | null): "interim" | "waiting" | "resumed" | null {
+  const prefix = "cockpit-worker-checkpoint:v1:";
+  if (report?.kind !== "progress" || !report.plan?.startsWith(prefix)) return null;
+  try {
+    const value: unknown = JSON.parse(report.plan.slice(prefix.length));
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).length !== 2 || !Array.isArray(record.artifacts) || !record.artifacts.every(item => typeof item === "string")) return null;
+    return record.kind === "interim" || record.kind === "waiting" || record.kind === "resumed" ? record.kind : null;
+  } catch {
+    return null;
+  }
+}
 const cleanupState = (state: CleanupState): LeftBehindRow["state"] => state === "pending" || state === "running" || state === "reconciling" ? "cleaning" : state === "waiting_integration" ? "waiting" : state;
 
 export function unreflectedInputLabel(inputs: readonly UnreflectedInput[]): string | null {
@@ -61,8 +76,8 @@ export function taskHistory(snapshot: OrchestrationSnapshot, rootId: string, vie
   const answers = new Map<string, Map<string, Message>>();
   const inputMessages = new Map<string, Map<string, Message>>();
   for (const message of snapshot.messages) {
-    if (message.stale) continue;
-    if (runIds.has(message.to_run_id)) {
+    if (message.stale && !(message.kind === "report" && checkpointKind(message.report))) continue;
+    if (!message.stale && runIds.has(message.to_run_id)) {
       let bucket = inputMessages.get(message.to_run_id);
       if (!bucket) inputMessages.set(message.to_run_id, bucket = new Map());
       bucket.set(message.message_id, message);
@@ -94,7 +109,9 @@ export function taskHistory(snapshot: OrchestrationSnapshot, rootId: string, vie
     const latestQuestionOrResult = [...bucket.values()].filter(report => report.kind === "needs_input" || report.kind === "result").sort((a, b) => compareTime(a.at, b.at)).at(-1);
     const progress: { at: string; text: string }[] = [];
     for (const report of bucket.values()) {
-      if (report.kind === "progress") progress.push({ at: report.at, text: report.summary });
+      const checkpoint = checkpointKind(report);
+      if (checkpoint) events.push({ kind: checkpoint, at: report.at, summary: report.summary });
+      else if (report.kind === "progress") progress.push({ at: report.at, text: report.summary });
       if (report.kind === "result") events.push({ kind: "result", at: report.at, outcome: report.outcome, summary: report.summary, facts: resultFacts(run, report) });
       if (report.kind === "needs_input") {
         const answer = answers.get(run.run_id)?.get(report.message_id);

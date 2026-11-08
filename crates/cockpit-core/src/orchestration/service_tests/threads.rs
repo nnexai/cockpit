@@ -47,6 +47,38 @@ fn rich_thread_reports_survive_storage_and_inbox_projection() {
     assert_eq!(serde_json::to_value(result_view).unwrap()["reply"]["text"], result);
 }
 
+#[test]
+fn fresh_worker_interim_creates_task_only_inbox_thread_once() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (task, run_id, worker) = fixture.working(&root);
+    assert!(!fixture.state().thread_links.iter().any(|link| link.root_id == root && link.task_id == task.task_id));
+    let mut action = report(ReportKind::Progress, None, None);
+    let message_id = if let OrchestrationAction::Report { message_id, summary, plan, .. } = &mut action {
+        *summary = "Prototype: /tmp/preview.html".into();
+        *plan = Some(WorkerCheckpoint { kind: WorkerCheckpointKind::Interim, artifacts: vec![] }.encode());
+        message_id.clone()
+    } else { unreachable!() };
+    fixture.apply(&worker, action.clone()).unwrap();
+    let state = fixture.state();
+    let links: Vec<_> = state.thread_links.iter().filter(|link| link.root_id == root && link.task_id == task.task_id).collect();
+    assert_eq!(links.len(), 1);
+    let thread_id = links[0].thread_id.clone();
+    assert!(matches!(&links[0].linked_by, ActorRef::Run { run_id: author } if author == &run_id));
+    let view = super::super::inbox_view::project(
+        &InboxRequest { session_id: SESSION.into() }, &state, vec![],
+        Err(InspectionError::new("offline", "unavailable")), "2026-10-05T12:00:00Z", "store",
+    ).unwrap();
+    let thread = view.threads.iter().find(|thread| thread.thread_id == thread_id).unwrap();
+    assert_eq!(thread.unread_interims.len(), 1);
+    assert_eq!(thread.unread_interims[0].run_id, run_id);
+    assert_eq!(thread.unread_interims[0].message_id, message_id);
+    assert!(thread.timeline.iter().any(|entry| entry.kind == InboxEntryKind::Interim
+        && matches!(&entry.source, InboxSource::Worker { run_id: author } if author == &run_id)));
+    fixture.apply(&worker, action).unwrap();
+    assert_eq!(fixture.state().thread_links.iter().filter(|link| link.root_id == root && link.task_id == task.task_id).count(), 1);
+}
+
 
 #[test]
 fn handoff_replay_survives_owner_close_and_rejects_changed_payload() {
@@ -314,7 +346,7 @@ fn read_marks_require_operator_and_root_result_in_the_same_thread() {
     let message_id = match &handoff { OrchestrationAction::ThreadHandoff { message_id, .. } => message_id.clone(), _ => unreachable!() };
     fixture.operator(handoff);
     let mark = |thread_id: &str, through_message_id: &str| OrchestrationAction::ThreadMarkRead {
-        thread_id: thread_id.into(), through_message_id: through_message_id.into(),
+        thread_id: thread_id.into(), through_message_id: through_message_id.into(), run_id: None,
     };
     let operator = Actor::Operator(OperatorOrigin::Browser);
     assert_code(fixture.apply(&operator, mark(&thread, &message_id)), "thread_result_invalid");

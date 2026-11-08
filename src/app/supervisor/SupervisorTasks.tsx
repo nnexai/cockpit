@@ -12,7 +12,7 @@ export const taskLanes: readonly { lane: TaskLane; label: string }[] = [
 ];
 export function taskStage(view: TaskView): string {
   const stage = view.task.checked ? "done" : view.attempt?.state === "starting" ? "starting" : view.attempt?.state === "stalled" ? "stalled" : view.lane === "accepted" ? "done" : view.lane;
-  return `${stage}${view.attempt && view.attempt.attempt > 1 ? ` · attempt ${view.attempt.attempt}` : ""}`;
+  return `${stage}${view.worker_waiting || view.waiting?.cause === "worker_waiting" ? " · worker waiting" : ""}${view.attempt && view.attempt.attempt > 1 ? ` · attempt ${view.attempt.attempt}` : ""}`;
 }
 export function TaskRow({ view, tasks, onOpen, rowKey, selected, projectLabel }: { view: TaskView; tasks: readonly TaskView[]; onOpen?(): void; rowKey?: string; selected?: boolean; projectLabel?: string }) {
   const dependency = dependencySummary(view, tasks);
@@ -100,7 +100,7 @@ export function SupervisorTasks({ tasks, runs, onOpen, selectedKey, project }: {
       <h2><span className="liaison-task-dot" aria-hidden="true" />{label}<span>{laneTasks.length}</span></h2>
       <ul>{shown.map(view => {
         const dependency = dependencySummary(view, tasks), worker = runs.find(run => run.run_id === view.current_run_id)?.label;
-        const meta = lane === "accepted" ? null : dependency ? `↳ ${dependency}` : [worker, view.scheduled && lane === "ready" ? "scheduled" : null, view.attempt && view.attempt.attempt > 1 ? `attempt ${view.attempt.attempt}` : null].filter(Boolean).join(" · ");
+        const meta = lane === "accepted" ? null : dependency ? `↳ ${dependency}` : [worker, view.worker_waiting || view.waiting?.cause === "worker_waiting" ? "worker waiting" : null, view.scheduled && lane === "ready" ? "scheduled" : null, view.attempt && view.attempt.attempt > 1 ? `attempt ${view.attempt.attempt}` : null].filter(Boolean).join(" · ");
         const attemptState = lane !== "accepted" && !dependency && view.attempt && view.attempt.state !== "running" ? view.attempt.state : null;
         const rowKey = `${view.task.task_id}:${tasks.indexOf(view)}`;
         return <li className={`liaison-task-card lane-${lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}`} key={rowKey}><button type="button" className="liaison-card-open" data-row-key={rowKey} aria-current={selectedKey === rowKey ? "true" : undefined} aria-label={`${view.task.title}, ${taskStage(view)}. Open history`} onClick={() => onOpen(view, rowKey)}><div className="liaison-card-title">{view.task.title}</div>{project === null || meta || attemptState ? <div className="liaison-card-meta">{project === null ? <><span className="liaison-card-project">{projectOf(view).label}</span>{meta || attemptState ? " · " : null}</> : null}{meta}{meta && attemptState ? " · " : null}{attemptState ? <span className={attemptState === "stalled" ? "liaison-attempt-stalled" : undefined}>{attemptState}</span> : null}</div> : null}</button></li>;

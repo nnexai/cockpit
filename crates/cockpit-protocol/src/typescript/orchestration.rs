@@ -28,6 +28,7 @@ section!(
         InboxRun,
         InboxEntryKind,
         InboxWidgetEvent,
+        InboxInterimRef,
         InboxEntry,
         InboxArtifactKind,
         InboxArtifact,

@@ -55,6 +55,20 @@ fn meaningful_filters_housekeeping_without_hiding_decisions() {
         });
         assert_eq!(meaningful(&item), matches!(kind, ReportKind::NeedsInput | ReportKind::Result));
     }
+    for kind in [
+        cockpit_protocol::orchestration::WorkerCheckpointKind::Interim,
+        cockpit_protocol::orchestration::WorkerCheckpointKind::Waiting,
+        cockpit_protocol::orchestration::WorkerCheckpointKind::Resumed,
+    ] {
+        let mut item = message("own", 1, MessageKind::Report, DeliveryStage::Stored, "checkpoint");
+        item.report = Some(Report {
+            message_id: item.message_id.clone(), kind: ReportKind::Progress, outcome: None,
+            summary: "checkpoint".into(),
+            plan: Some(cockpit_protocol::orchestration::WorkerCheckpoint { kind, artifacts: vec![] }.encode()),
+            source_output: None, card: None, at: item.created_at.clone(),
+        });
+        assert!(!meaningful(&item));
+    }
     for kind in [MessageKind::Instruction, MessageKind::Answer, MessageKind::CancelRequest, MessageKind::Observation] {
         assert!(meaningful(&message("own", 1, kind, DeliveryStage::Stored, "progress initialized")));
     }

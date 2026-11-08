@@ -99,11 +99,11 @@ export function InboxArtifact({ client, sessionId, runId, artifact }: Props) {
   }, [client, sessionId, runId, artifact.path, artifact.kind, key]);
 
   const current = state.key === key ? state : { key, status: "loading" as const };
-  const isDocument = artifact.kind === "markdown";
+  const isDocument = artifact.kind === "markdown" || artifact.kind === "other";
   return <>
-    <button ref={tile} type="button" className={isDocument ? "inbox-doc" : `inbox-shot${artifact.kind === "html" ? " inbox-shot-html" : ""}`} aria-label={artifact.name} aria-disabled={current.status !== "ready"} title={current.status === "error" ? current.message : artifact.name} onClick={() => { if (current.status === "ready") setOpen(true); }}>
-      {current.status === "error" ? <span className="inbox-artifact-unavailable">Unavailable</span>
-        : isDocument ? <><UiIcon name="file" /><span>{artifact.name}</span><em>md</em></>
+    <button ref={tile} type="button" className={isDocument ? "inbox-doc" : `inbox-shot${artifact.kind === "html" ? " inbox-shot-html" : ""}`} aria-label={current.status === "error" ? `${artifact.name}: ${current.message}` : artifact.name} aria-disabled={current.status !== "ready"} title={current.status === "error" ? current.message : artifact.name} onClick={() => { if (current.status === "ready") setOpen(true); }}>
+      {isDocument ? <><UiIcon name="file" /><span>{artifact.name}</span>{current.status === "error" || artifact.kind === "other" ? <em>Unavailable</em> : <em>md</em>}</>
+        : current.status === "error" ? <span className="inbox-artifact-unavailable">Unavailable</span>
         : current.status === "ready" && current.content.kind === "image" ? <img src={current.content.url} alt="" draggable={false} onError={() => setState({ key, status: "error", message: "Image unavailable" })} />
         : artifact.kind === "html" ? <UiIcon name="code" /> : null}
       {!isDocument && <span className="inbox-shot-name">{artifact.name}</span>}

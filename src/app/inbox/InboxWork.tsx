@@ -1,10 +1,11 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
-import type { InboxLocation, InboxTaskLink, InboxThread, InboxView } from "../../protocol/generated/v1";
+import type { InboxEntry, InboxLocation, InboxTaskLink, InboxThread, InboxView } from "../../protocol/generated/v1";
 import { UiIcon, type UiIconName } from "../UiIcon";
 import { InboxArtifact } from "./InboxArtifacts";
 import { InboxFeedback } from "./InboxFeedback";
 import { InboxImages } from "./InboxImages";
+import { Time } from "./InboxTime";
 
 type Props = {
   id?: string;
@@ -63,7 +64,7 @@ function copy(value: string) {
   if (navigator.clipboard) void navigator.clipboard.writeText(value).catch(() => {});
 }
 
-function TaskCard({ task, client, sessionId, open, liveOpen, initiallyOpen }: { task: InboxTaskLink; client: CockpitClient; sessionId: string; open(location: InboxLocation | null): void; liveOpen: boolean; initiallyOpen: boolean }) {
+function TaskCard({ task, interim, client, sessionId, open, liveOpen, initiallyOpen }: { task: InboxTaskLink; interim: InboxEntry | undefined; client: CockpitClient; sessionId: string; open(location: InboxLocation | null): void; liveOpen: boolean; initiallyOpen: boolean }) {
   const evidence = task.evidence;
   const lane = task.lane === "accepted" ? "done" : task.lane;
   const laneLabel = task.lane === "accepted" ? "Done" : task.lane === "working" ? "Working" : task.lane === "blocked" ? "Blocked" : task.lane === "review" ? "In review" : "Ready";
@@ -71,9 +72,11 @@ function TaskCard({ task, client, sessionId, open, liveOpen, initiallyOpen }: { 
   const documents = evidence?.artifacts.filter(artifact => artifact.kind === "markdown" || artifact.kind === "other") ?? [];
   const location = task.run?.presence === "present" ? task.run.location : null;
   return <details className="inbox-task" data-lane={lane} open={initiallyOpen || undefined}>
-    <summary><span className="inbox-lane" /><span className="inbox-task-title" title={task.title}>{task.title}</span><Chevron /><span className="inbox-task-status"><b>{laneLabel}</b>{evidence?.integration && <> · integrated into {evidence.integration.target} @<code>{evidence.integration.commit.slice(0, 7)}</code></>}{evidence && evidence.attempts > 1 && <> · attempt {evidence.attempt}</>}</span></summary>
+    <summary><span className="inbox-lane" /><span className="inbox-task-title" title={task.title}>{task.title}</span><Chevron /><span className="inbox-task-status"><b>{laneLabel}</b>{task.worker_waiting && <> · worker waiting</>}{evidence?.integration && <> · integrated into {evidence.integration.target} @<code>{evidence.integration.commit.slice(0, 7)}</code></>}{evidence && evidence.attempts > 1 && <> · attempt {evidence.attempt}</>}</span></summary>
     <div className="inbox-task-body">
       {location && <button type="button" className="inbox-btn" disabled={!liveOpen} onClick={() => open(location)} title={liveOpen ? "Open session" : "Live sessions unavailable"}><UiIcon name="terminal" />Open</button>}
+      {task.worker_waiting && <section className="inbox-sec" aria-label="Worker-stated wait"><h4><UiIcon name="work" />Worker says it is waiting</h4>{task.worker_waiting.detail && <div className="inbox-md"><InboxFeedback text={task.worker_waiting.detail} /></div>}<p className="inbox-kind">Worker claim · not a question{task.worker_waiting.since && <> · <Time value={task.worker_waiting.since} /></>}</p></section>}
+      {interim?.interim && <Section icon="eye" label="Interim" count={1}><Summary text={interim.text} /><p className="inbox-kind">Worker claim · attempt {interim.interim.attempt} · <Time value={interim.at} /></p><InboxImages client={client} sessionId={sessionId} images={interim.images} label="Interim images" />{!!interim.artifacts?.length && <div className="inbox-shots">{interim.artifacts.map((artifact, index) => <InboxArtifact key={`${artifact.path}:${index}`} client={client} sessionId={sessionId} runId={interim.interim!.run_id} artifact={artifact} />)}</div>}</Section>}
       {evidence?.result?.summary && <Summary text={evidence.result.summary} />}
       {!!evidence?.checks.length && <Section icon="check" label="Checks" count={evidence.checks.length}><ul className="inbox-checks">{evidence.checks.map((check, index) => <li className="inbox-check" data-r={check.outcome === "passed" ? "pass" : check.outcome === "failed" ? "fail" : "skip"} key={index}>
         {check.outcome === "not_run" ? <span aria-hidden="true">–</span> : <UiIcon name={check.outcome === "passed" ? "check" : "close"} />}
@@ -90,7 +93,10 @@ function TaskCard({ task, client, sessionId, open, liveOpen, initiallyOpen }: { 
 export function InboxWork({ id, thread, client, sessionId, open, liveOpen, diagnostics }: Props) {
   const active = thread.tasks.filter(task => task.lane !== "accepted");
   const done = thread.tasks.filter(task => task.lane === "accepted").sort((a, b) => (b.evidence?.result?.at ?? "").localeCompare(a.evidence?.result?.at ?? ""));
-  const card = (task: InboxTaskLink, initiallyOpen: boolean) => <TaskCard key={`${task.root_id}:${task.task_id}`} task={task} client={client} sessionId={sessionId} open={open} liveOpen={liveOpen} initiallyOpen={initiallyOpen} />;
+  const card = (task: InboxTaskLink, initiallyOpen: boolean) => {
+    const interim = [...thread.timeline].reverse().find(entry => entry.kind === "interim" && entry.interim?.task_id === task.task_id && entry.interim.run_id === task.run?.run_id);
+    return <TaskCard key={`${task.root_id}:${task.task_id}`} task={task} interim={interim} client={client} sessionId={sessionId} open={open} liveOpen={liveOpen} initiallyOpen={initiallyOpen} />;
+  };
   return <aside id={id} className="inbox-work" aria-label="Work">
     <div className="inbox-work-head"><h3>Work</h3><span>{thread.tasks.length} {thread.tasks.length === 1 ? "task" : "tasks"}</span></div>
     {thread.tasks.length === 0 && <p className="inbox-work-empty">No linked tasks yet.</p>}

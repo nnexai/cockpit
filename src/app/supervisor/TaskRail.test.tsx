@@ -105,6 +105,36 @@ it("shows recorded waiting facts and accessible task progress in the shared deta
   expect(wait.querySelector("time")?.getAttribute("datetime")).toBe("2026-10-01T12:00:00Z");
 });
 
+it("shows a worker-declared wait without treating it as a question or result", async () => {
+  const task = taskFixture("worker wait", {
+    lane: "working",
+    waiting: { cause: "worker_waiting", since: "2026-10-01T12:00:00Z", held_by: [], code: null, detail: "Waiting for external review.", next_automatic: false },
+  });
+  if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
+  await act(async () => root!.render(<TaskHistoryDetail view={task} history={null} />));
+  const wait = host.querySelector('[aria-label="Worker-stated wait"]')!;
+  expect(wait.textContent).toContain("Worker says it is waiting.");
+  expect(wait.textContent).toContain("Waiting for external review.");
+  expect(wait.textContent).toContain("The liaison follows up with the worker");
+  expect(wait.querySelector("time")?.getAttribute("datetime")).toBe("2026-10-01T12:00:00Z");
+  expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Working");
+});
+
+it("shows a worker wait alongside a question without duplicating the same wait", async () => {
+  const workerWait = { cause: "worker_waiting" as const, since: "2026-10-01T12:00:00Z", held_by: [], code: null, detail: "External review pending.", next_automatic: false };
+  const task = taskFixture("both waits", {
+    lane: "working",
+    waiting: { cause: "question", since: null, held_by: [], code: null, detail: null, next_automatic: false },
+    worker_waiting: workerWait,
+  });
+  if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
+  await act(async () => root!.render(<TaskHistoryDetail view={task} history={null} />));
+  expect(host.querySelector('[aria-label="Why is this waiting"]')?.textContent).toContain("question needs an answer");
+  expect(host.querySelector('[aria-label="Worker-stated wait"]')?.textContent).toContain("External review pending.");
+  await act(async () => root!.render(<TaskHistoryDetail view={{ ...task, waiting: workerWait }} history={null} />));
+  expect(host.querySelectorAll('[aria-label="Worker-stated wait"]')).toHaveLength(1);
+});
+
 it("shows liaison-owned waits without invented times and distinguishes non-code work", async () => {
   const task = taskFixture("report", {
     lane: "review",

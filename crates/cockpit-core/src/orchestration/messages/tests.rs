@@ -236,6 +236,98 @@ fn thread_report(id: &str, thread: &str, kind: ReportKind) -> OrchestrationActio
     action
 }
 
+fn checkpoint_report(id: &str, kind: WorkerCheckpointKind, artifacts: Vec<String>) -> OrchestrationAction {
+    let mut action = report(id, ReportKind::Progress, None);
+    if let OrchestrationAction::Report { plan, .. } = &mut action {
+        *plan = Some(WorkerCheckpoint { kind, artifacts }.encode());
+    }
+    action
+}
+
+#[test]
+fn worker_checkpoints_are_nonfinal_replayable_and_wake_root_once() {
+    let mut state = state();
+    let worker = main_actor("worker");
+    let root = main_actor("root");
+    let question = report("question-preserved", ReportKind::NeedsInput, None);
+    mutation(&mut state, &worker, 1, &question);
+    for (id, kind) in [("partial", WorkerCheckpointKind::Interim), ("waiting", WorkerCheckpointKind::Waiting), ("resumed", WorkerCheckpointKind::Resumed)] {
+        let action = checkpoint_report(id, kind, vec!["/tmp/artifact.html".into()]);
+        assert!(matches!(mutation(&mut state, &worker, 1, &action), OrchestrationActionResult::Message { duplicate: false, .. }));
+        let count = state.messages.len();
+        assert!(matches!(mutation(&mut state, &worker, 1, &action), OrchestrationActionResult::Message { duplicate: true, .. }));
+        assert_eq!(state.messages.len(), count);
+        let report = state.messages.iter().find(|m| m.message_id == id).unwrap();
+        assert!(!inbox_meaningful(report));
+        let observation = state.messages.iter().find(|m| m.message_id == format!("manage-worker-{id}")).unwrap();
+        assert!(inbox_meaningful(observation));
+        let payload: serde_json::Value = serde_json::from_str(&observation.text).unwrap();
+        assert_eq!(payload["run_id"], "worker");
+        assert_eq!(payload["receipt_message_id"], id);
+        assert_eq!(payload["summary"], format!("summary-{id}"));
+        assert_eq!(state.runs[1].stage, RunStage::Working);
+        assert!(state.runs[1].result.is_none());
+        assert_eq!(current_question_for(&state.messages, "worker", None).unwrap().message_id, "question-preserved");
+        assert_error(&mut state, &root, 0, &checkpoint_report("root-forbidden", WorkerCheckpointKind::Interim, vec![]), "invalid_stage");
+        assert_eq!(apply(&mut state, &worker, Some(1), true, &checkpoint_report("stale", WorkerCheckpointKind::Interim, vec![])).unwrap_err().code, "attempt_stale");
+    }
+    let child = main_actor("grandchild");
+    let action = checkpoint_report("nested-partial", WorkerCheckpointKind::Interim, vec![]);
+    mutation(&mut state, &child, 2, &action);
+    let count = state.messages.len();
+    assert_eq!(state.messages.iter().filter(|m| m.message_id == "manage-grandchild-nested-partial").count(), 1);
+    mutation(&mut state, &child, 2, &action);
+    assert_eq!(state.messages.len(), count);
+    state.runs[1].stage = RunStage::Reported;
+    assert_error(&mut state, &worker, 1, &checkpoint_report("late", WorkerCheckpointKind::Waiting, vec![]), "invalid_stage");
+    assert!(matches!(mutation(&mut state, &worker, 1, &checkpoint_report("partial", WorkerCheckpointKind::Interim, vec!["/tmp/artifact.html".into()])), OrchestrationActionResult::Message { duplicate: true, .. }));
+}
+
+#[test]
+fn checkpoint_validation_and_progress_delivery() {
+    let mut state = state();
+    let worker = main_actor("worker");
+    let root = main_actor("root");
+    for path in ["relative", "/tmp/../secret", "/tmp/bad\nname", ""] {
+        assert_error(&mut state, &worker, 1, &checkpoint_report("invalid", WorkerCheckpointKind::Interim, vec![path.into()]), "invalid_report");
+    }
+    assert_error(&mut state, &worker, 1, &checkpoint_report("many", WorkerCheckpointKind::Interim, vec!["/tmp/a".into(); 17]), "invalid_report");
+    let mut invalid = checkpoint_report("invalid-outcome", WorkerCheckpointKind::Waiting, vec![]);
+    if let OrchestrationAction::Report { outcome, .. } = &mut invalid { *outcome = Some(ReportOutcome::Succeeded); }
+    assert_error(&mut state, &worker, 1, &invalid, "invalid_report");
+    let mut invalid = checkpoint_report("invalid-source", WorkerCheckpointKind::Waiting, vec![]);
+    if let OrchestrationAction::Report { source_output, .. } = &mut invalid {
+        *source_output = Some(SourceOutput::NonCode { result_message_id: "invalid-source".into(), task_revision: "task-revision".into(), artifacts: vec![], focused_checks: vec![] });
+    }
+    assert_error(&mut state, &worker, 1, &invalid, "invalid_report");
+    let mut invalid = report("malformed", ReportKind::Progress, None);
+    if let OrchestrationAction::Report { plan, .. } = &mut invalid { *plan = Some("cockpit-worker-checkpoint:v1:{\"kind\":\"waiting\",\"extra\":true}".into()); }
+    mutation(&mut state, &worker, 1, &invalid);
+    let mut empty = checkpoint_report("empty", WorkerCheckpointKind::Waiting, vec![]);
+    if let OrchestrationAction::Report { summary, .. } = &mut empty { *summary = " ".into(); }
+    assert_error(&mut state, &worker, 1, &empty, "invalid_message");
+    let mut oversized_notice = checkpoint_report("oversized-notice", WorkerCheckpointKind::Waiting, vec![]);
+    if let OrchestrationAction::Report { summary, .. } = &mut oversized_notice { *summary = "\"".repeat(12_000); }
+    let before = state.messages.len();
+    assert_error(&mut state, &worker, 1, &oversized_notice, "message_too_large");
+    assert_eq!(state.messages.len(), before);
+    let mut legacy = report("legacy", ReportKind::Progress, None);
+    if let OrchestrationAction::Report { plan, .. } = &mut legacy { *plan = Some("ordinary legacy plan".into()); }
+    mutation(&mut state, &worker, 1, &legacy);
+    mutation(&mut state, &worker, 1, &checkpoint_report("first", WorkerCheckpointKind::Interim, vec![]));
+    mutation(&mut state, &worker, 1, &checkpoint_report("second", WorkerCheckpointKind::Waiting, vec![]));
+    mutation(&mut state, &worker, 1, &report("new-progress", ReportKind::Progress, None));
+    assert_error(&mut state, &worker, 1, &checkpoint_report("first", WorkerCheckpointKind::Waiting, vec![]), "message_id_conflict");
+    let headers: Vec<InboxMessage> = serde_json::from_value(serde_json::to_value(&state.messages).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(saved_inbox_counts(&headers, "root", 0)).unwrap(),
+        serde_json::to_value(inbox_counts(&state.messages, "root", 0)).unwrap());
+    let OrchestrationActionResult::Inbox { messages, .. } = mutation(&mut state, &root, 0, &OrchestrationAction::InboxPull { after_seq: 0, limit: 100 }) else { unreachable!() };
+    let ids: Vec<_> = messages.iter().map(|message| message.message_id.as_str()).collect();
+    assert!(!ids.contains(&"legacy"));
+    assert!(ids.contains(&"first") && ids.contains(&"second") && ids.contains(&"new-progress"));
+    assert_eq!(ids.iter().filter(|id| id.starts_with("manage-worker-")).count(), 2);
+}
+
 #[test]
 fn thread_questions_are_independent_and_root_answers_race_once() {
     let mut state = state();
