@@ -57,6 +57,7 @@ fn age(now: &str, at: Option<&str>) -> String {
     let delta = at.and_then(|at| Some(OffsetDateTime::parse(now, &Rfc3339).ok()? - OffsetDateTime::parse(at, &Rfc3339).ok()?));
     delta.map(|d| format!(" {}m", d.whole_minutes().max(0))).unwrap_or_default()
 }
+const RETAINED_LINES: usize = 5;
 fn add_line(text: &mut String, line: &str) -> bool {
     if text.len() + line.len() + 1 > 4096 { return false; }
     if !text.is_empty() { text.push('\n'); }
@@ -118,7 +119,8 @@ pub fn digest(snapshot: &OrchestrationSnapshot, root_id: &str, runtime: Option<&
     let resources: Vec<_> = retained.iter().map(|r| (&r.resource_id, &r.state, &r.reason)).collect();
     let canonical = serde_json::to_vec(&(key_rows, ids, resources)).expect("serializable digest key");
     let key = format!("{:x}", Sha256::digest(canonical))[..16].to_owned();
-    let open_work = rows.iter().filter(|r| r.counts_as_open).count().saturating_add(retained.len()).min(u32::MAX as usize) as u32;
+    // Retained resources inform decisions but are not work: on their own they never trigger a reconcile.
+    let open_work = rows.iter().filter(|r| r.counts_as_open).count().min(u32::MAX as usize) as u32;
     let mut text = format!("Board {key} · {open_work} open · {} retained · runtime {}", retained.len(), if runtime.is_some() { "fresh" } else { "unknown" });
     for d in &standing {
         let scope = match &d.scope { DirectiveScope::Standing { project_key } => project_key.as_deref().unwrap_or("all"), _ => unreachable!() };
@@ -132,7 +134,8 @@ pub fn digest(snapshot: &OrchestrationSnapshot, root_id: &str, runtime: Option<&
             if !add_line(&mut text, &format!("  user directive [{}]: {}", shorten(&directive.directive_id, 8), shorten(&directive.text, 160))) { break; }
         }
     }
-    for r in &retained { if !add_line(&mut text, &format!("Retained: {} {} {}{}", r.kind, shorten(&r.run_id, 12), r.state, r.reason.as_ref().map(|s| format!(": {}", shorten(s, 80))).unwrap_or_default())) { break; } }
+    for r in retained.iter().take(RETAINED_LINES) { if !add_line(&mut text, &format!("Retained: {} {} {}{}", r.kind, shorten(&r.run_id, 12), r.state, r.reason.as_ref().map(|s| format!(": {}", shorten(s, 80))).unwrap_or_default())) { break; } }
+    if retained.len() > RETAINED_LINES { add_line(&mut text, &format!("Retained: {} more (inbox board --json)", retained.len() - RETAINED_LINES)); }
     Ok(BoardDigest { root_id: root_id.into(), key, generated_at: now.into(), runtime_observed: runtime.is_some(), open_work, text, omitted_tasks: (rows.len() - displayed).min(u32::MAX as usize) as u32, tasks: rows, standing_directives: standing, retained })
 }
 

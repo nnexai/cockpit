@@ -185,3 +185,21 @@ fn attention_order_and_elapsed_age() {
     assert_eq!(age("2026-11-08T12:18:00Z", Some(NOW)), " 18m");
     assert_eq!(age("invalid", Some(NOW)), "");
 }
+
+#[test]
+fn retained_resources_alone_are_not_open_work_and_are_summarized() {
+    let mut s = snapshot();
+    s.board.as_mut().unwrap().tasks[0].lane = TaskLane::Accepted;
+    s.runs.push(worker(RunStage::Closed));
+    let items = (0..7).map(|i| CleanupResourceSummary {
+        resource_id: format!("resource-{i}"), kind: OwnedResourceKind::Worktree, ownership: ResourceOwnership::Owned,
+        cleanup: CleanupItem { operation_id: None, state: CleanupState::Kept, effects: vec![], updated_at: NOW.into(),
+            reason: Some(CleanupReason { class: CleanupReasonClass::UserWork, code: "kept_reason".into(), message: String::new() }) },
+    }).collect();
+    s.cleanup.push(RunCleanupSummary { run_id: "worker".into(), items, removed_count: 0, waiting_count: 0, kept_count: 7, unknown_count: 0 });
+    let d = digest_at(&s, None, NOW);
+    assert_eq!(d.open_work, 0);
+    assert_eq!(d.retained.len(), 7);
+    assert_eq!(d.text.lines().filter(|line| line.starts_with("Retained: worktree")).count(), 5);
+    assert!(d.text.contains("Retained: 2 more"), "{}", d.text);
+}
