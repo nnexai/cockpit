@@ -186,8 +186,8 @@ fn service_image_reads_enforce_scoped_visibility_and_current_credentials() {
     let root = std::env::temp_dir().join(format!("cockpit-image-visibility-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let service = OrchestrationService::open(&ProjectConfiguration::for_tests(&root)).unwrap();
-    // Minimal valid 1x1 JPEG, as used by the image-store tests.
-    let bytes = vec![0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0, 0xff, 0xd9];
+    // Structurally complete 1x1 JPEG marker stream, as in the image-store tests.
+    let bytes = vec![0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0, 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0, 0x12, 0xff, 0xd9];
     let image = service.image_put("session-a", &bytes).unwrap();
     let mut state = state();
     state.runs[1].assignment_generation = Some(1);

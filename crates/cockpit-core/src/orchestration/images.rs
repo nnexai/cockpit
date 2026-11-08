@@ -30,6 +30,52 @@ pub(crate) fn validate_image_id(id: &str) -> Result<(), InspectionError> {
     Ok(())
 }
 
+// Find the actual end of the JPEG stream, not an EOI-like byte sequence in
+// EXIF/XMP, an embedded thumbnail, or entropy-coded data. Mobile motion
+// photos can append a video or vendor data after the still image.
+fn jpeg_end(bytes: &[u8]) -> Result<usize, InspectionError> {
+    let invalid = || InspectionError::new("image_format_refused", "JPEG contains an incomplete or invalid marker stream");
+    let mut offset = 2;
+    let mut in_scan = false;
+    let mut saw_scan = false;
+    let mut scan_data = false;
+    while offset < bytes.len() {
+        if in_scan && bytes[offset] != 0xff {
+            scan_data = true;
+            offset += 1;
+            continue;
+        }
+        if bytes[offset] != 0xff { return Err(invalid()); }
+        while offset < bytes.len() && bytes[offset] == 0xff { offset += 1; }
+        let marker = *bytes.get(offset).ok_or_else(invalid)?;
+        offset += 1;
+        if in_scan && marker == 0x00 {
+            scan_data = true;
+            continue;
+        }
+        if in_scan && (0xd0..=0xd7).contains(&marker) { continue; }
+        if in_scan && !scan_data { return Err(invalid()); }
+        in_scan = false;
+        match marker {
+            0xd9 if saw_scan => return Ok(offset),
+            0xd8 | 0xd9 | 0x00 | 0x01 | 0xd0..=0xd7 => return Err(invalid()),
+            _ => {}
+        }
+        let length_bytes = bytes.get(offset..offset + 2).ok_or_else(invalid)?;
+        let length = u16::from_be_bytes([length_bytes[0], length_bytes[1]]) as usize;
+        if length < 2 || length > bytes.len() - offset { return Err(invalid()); }
+        if marker == 0xda {
+            let components = *bytes.get(offset + 2).ok_or_else(invalid)? as usize;
+            if components == 0 || length != 6 + 2 * components { return Err(invalid()); }
+            saw_scan = true;
+            scan_data = false;
+            in_scan = true;
+        }
+        offset += length;
+    }
+    Err(invalid())
+}
+
 fn metadata_for(bytes: &[u8]) -> Result<MessageImage, InspectionError> {
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
         return Err(InspectionError::new("image_too_large", "image exceeds the byte limit"));
@@ -44,8 +90,8 @@ fn metadata_for(bytes: &[u8]) -> Result<MessageImage, InspectionError> {
         };
         InspectionError::new(code, message)
     })?;
-    if info.mime_type == "image/jpeg" && !bytes.ends_with(&[0xff, 0xd9]) {
-        return Err(InspectionError::new("image_format_refused", "JPEG must end with its EOI marker"));
+    if info.mime_type == "image/jpeg" && jpeg_end(bytes)? != bytes.len() {
+        return Err(InspectionError::new("image_format_refused", "stored JPEG has trailing data"));
     }
     Ok(MessageImage {
         image_id: format!("sha256-{:x}", Sha256::digest(bytes)),
@@ -136,6 +182,15 @@ pub(crate) fn put(base: &Path, session_id: &str, bytes: &[u8]) -> Result<Message
 }
 
 fn put_with_limit(base: &Path, session_id: &str, bytes: &[u8], limit: u64) -> Result<MessageImage, InspectionError> {
+    // Apply the upload limit before discarding any motion-photo trailer.
+    if bytes.len() as u64 > MAX_IMAGE_BYTES {
+        return Err(InspectionError::new("image_too_large", "image exceeds the byte limit"));
+    }
+    let bytes = if bytes.starts_with(&[0xff, 0xd8]) {
+        &bytes[..jpeg_end(bytes)?]
+    } else {
+        bytes
+    };
     let image = metadata_for(bytes)?;
     let dir = directory(base, true)?;
     let mut options = OpenOptions::new();
@@ -209,7 +264,7 @@ mod tests {
     fn jpeg(width: u16) -> Vec<u8> {
         let mut bytes = vec![0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 1];
         bytes.extend_from_slice(&width.to_be_bytes());
-        bytes.extend_from_slice(&[1, 1, 0x11, 0, 0xff, 0xd9]);
+        bytes.extend_from_slice(&[1, 1, 0x11, 0, 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0, 0x12, 0xff, 0xd9]);
         bytes
     }
 
@@ -250,10 +305,53 @@ mod tests {
             assert_eq!(put(&root, "s", bytes).unwrap_err().code, "image_type_refused");
         }
         assert_eq!(put(&root, "s", &png(true)).unwrap_err().code, "image_format_refused");
-        let mut trailing = jpeg(1);
-        trailing.extend_from_slice(b"payload");
-        assert_eq!(put(&root, "s", &trailing).unwrap_err().code, "image_format_refused");
+        let mut truncated = jpeg(1);
+        truncated.truncate(truncated.len() - 2);
+        assert_eq!(put(&root, "s", &truncated).unwrap_err().code, "image_format_refused");
         assert_eq!(put(&root, "s", &vec![0; MAX_IMAGE_BYTES as usize + 1]).unwrap_err().code, "image_too_large");
+    }
+
+    #[test]
+    fn mobile_jpeg_trailer_is_removed_before_storage_and_hashing() {
+        let root = root();
+        // APP1 EXIF containing a thumbnail-like EOI; XMP commonly uses another
+        // APP1 segment. Neither embedded marker is the end of the main image.
+        let mut still = vec![0xff, 0xd8, 0xff, 0xe1, 0, 10, b'E', b'x', b'i', b'f', 0, 0, 0xff, 0xd9];
+        let xmp = b"http://ns.adobe.com/xap/1.0/\0<Camera:MotionPhoto>1</Camera:MotionPhoto>";
+        still.extend_from_slice(&[0xff, 0xe1]);
+        still.extend_from_slice(&((xmp.len() + 2) as u16).to_be_bytes());
+        still.extend_from_slice(xmp);
+        let image = jpeg(1);
+        still.extend_from_slice(&image[2..image.len() - 2]);
+        // Byte stuffing, restart markers, and another progressive scan.
+        still.extend_from_slice(&[0xff, 0x00, 0xd9, 0xff, 0xd0, 0x22,
+            0xff, 0xda, 0, 8, 1, 1, 0, 1, 63, 0, 0x33, 0xff, 0xd9]);
+        let mut motion = still.clone();
+        motion.extend_from_slice(b"\0\0\0\x18ftypmp42\0\0\0\0mp42isomvideo");
+        let saved = put(&root, "s", &motion).unwrap();
+        assert_eq!(saved.bytes, still.len() as u64);
+        assert_eq!(read_bytes(&root, "s", &saved.image_id).unwrap().1, still);
+        assert_eq!(put(&root, "s", &still).unwrap(), saved);
+        assert_eq!(fs::read(verify(&root, "s", &saved.image_id).unwrap().1).unwrap(), still);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn jpeg_marker_stream_rejects_false_eoi_and_truncation() {
+        let root = root();
+        let mut embedded_eoi = vec![0xff, 0xd8, 0xff, 0xe1, 0, 4, 0xff, 0xd9];
+        embedded_eoi.extend_from_slice(&jpeg(1)[2..15]);
+        for bytes in [
+            embedded_eoi,
+            vec![0xff, 0xd8, 0xff, 0xe1, 0, 20, 0xff, 0xd9],
+            vec![0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0, 0xff, 0xd9],
+            vec![0xff, 0xd8, 0xff, 0xda, 0, 8, 1, 1, 0, 0, 63, 0, 0xff, 0xd9],
+        ] {
+            assert_eq!(put(&root, "s", &bytes).unwrap_err().code, "image_format_refused");
+        }
+        let mut oversized = jpeg(1);
+        oversized.resize(MAX_IMAGE_BYTES as usize + 1, 0);
+        assert_eq!(put(&root, "s", &oversized).unwrap_err().code, "image_too_large");
     }
 
     #[test]
