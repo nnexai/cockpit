@@ -1656,6 +1656,143 @@ fn workspace_resolution_refuses_missing_relative_or_ambiguous_directory() {
     assert_eq!(authoritative_workspace(&runtime, "space").unwrap_err().code, "workspace_cwd_missing");
 }
 
+fn voice_observation_fixture() -> (VoiceScopeRequest, ProjectSnapshot, WorkspaceDirectoryEvidence, RuntimeView) {
+    let request = VoiceScopeRequest {
+        session_id: "fixture".into(), workspace_id: Some("space".into()), repository_id: None,
+        branch: Some("feature".into()), base: Some("main".into()),
+    };
+    let peer = NativeProcessIdentity { pid: 42, start_ticks: 7, kernel_boot_id: Some("kernel".into()) };
+    let snapshot = ProjectSnapshot {
+        endpoint_identity: "endpoint".into(), boot_id: Some("boot".into()), peer_process: Some(peer.clone()),
+        snapshot: wire::SessionSnapshotResponse {
+            session_id: "fixture".into(), server_instance: "instance".into(), version: "1".into(),
+            protocol: 1, focused_space_id: None, focused_tab_id: None, focused_pane_id: None,
+            spaces: vec![wire::SpaceSummary {
+                id: "space".into(), label: "Space".into(), number: 1, tab_count: 0,
+                pane_count: 0, focused: false, agent_status: "unknown".into(), git: None,
+            }], tabs: vec![], panes: vec![], agents: vec![], herdr_shell: None,
+        },
+    };
+    let explicit = WorkspaceDirectoryEvidence {
+        endpoint_identity: "endpoint".into(), boot_id: Some("boot".into()), peer_process: Some(peer.clone()),
+        session_id: "fixture".into(), server_instance: "instance".into(),
+        workspace_id: Some("space".into()), directory: Some("/project".into()),
+        directory_source: Some(WorkspaceDirectorySource::ExplicitCwd),
+    };
+    let mut runtime = observed();
+    runtime.boot_id = Some("boot".into());
+    runtime.peer_process = Some(peer);
+    runtime.workspaces.push(RuntimeWorkspace {
+        workspace_id: "space".into(), label: "Space".into(), cwd: "/project".into(),
+    });
+    (request, snapshot, explicit, runtime)
+}
+
+#[test]
+fn voice_scope_rejects_missing_mismatched_and_ambiguous_observations() {
+    let (request, snapshot, explicit, runtime) = voice_observation_fixture();
+    assert!(validate_voice_observation(&request, "endpoint", &snapshot, &explicit, &runtime).is_ok());
+    let mut worktree_snapshot = snapshot.clone();
+    worktree_snapshot.snapshot.spaces[0].git = Some(wire::SpaceGitSummary {
+        repository_key: "key".into(), repository: "repo".into(), branch: None,
+        checkout_path: "/project".into(), is_linked_worktree: true,
+    });
+    let mut worktree = explicit.clone();
+    worktree.directory_source = Some(WorkspaceDirectorySource::WorktreeCheckout);
+    assert!(validate_voice_observation(&request, "endpoint", &worktree_snapshot, &worktree, &runtime).is_ok());
+    worktree_snapshot.snapshot.spaces[0].git.as_mut().unwrap().checkout_path = "/other".into();
+    assert!(validate_voice_observation(&request, "endpoint", &worktree_snapshot, &worktree, &runtime).is_err());
+    let mut wrong = explicit.clone();
+    wrong.server_instance = "different".into();
+    assert!(validate_voice_observation(&request, "endpoint", &snapshot, &wrong, &runtime).is_err());
+    wrong = explicit.clone();
+    wrong.directory = Some("/other".into());
+    assert!(validate_voice_observation(&request, "endpoint", &snapshot, &wrong, &runtime).is_err());
+    let mut missing = snapshot.clone();
+    missing.snapshot.spaces.clear();
+    assert!(validate_voice_observation(&request, "endpoint", &missing, &explicit, &runtime).is_err());
+    let mut duplicate = runtime.clone();
+    duplicate.workspaces.push(duplicate.workspaces[0].clone());
+    assert!(validate_voice_observation(&request, "endpoint", &snapshot, &explicit, &duplicate).is_err());
+    let mut stale = runtime.clone();
+    stale.boot_id = Some("new-boot".into());
+    assert!(validate_voice_observation(&request, "endpoint", &snapshot, &explicit, &stale).is_err());
+    stale = runtime.clone();
+    stale.endpoint_identity = "other".into();
+    assert!(validate_voice_observation(&request, "endpoint", &snapshot, &explicit, &stale).is_err());
+    let mut no_peer = snapshot.clone();
+    let mut no_peer_explicit = explicit.clone();
+    let mut no_peer_runtime = runtime.clone();
+    no_peer.peer_process = None;
+    no_peer_explicit.peer_process = None;
+    no_peer_runtime.peer_process = None;
+    assert!(validate_voice_observation(&request, "endpoint", &no_peer, &no_peer_explicit, &no_peer_runtime).is_err());
+    let mut repo_request = request.clone();
+    repo_request.workspace_id = None;
+    repo_request.repository_id = Some("repo".into());
+    let mut repo_explicit = explicit.clone();
+    repo_explicit.workspace_id = None;
+    repo_explicit.directory = None;
+    repo_explicit.directory_source = None;
+    let mut no_spaces = snapshot.clone();
+    no_spaces.snapshot.spaces.clear();
+    assert!(validate_voice_observation(&repo_request, "endpoint", &no_spaces, &repo_explicit, &runtime).is_ok());
+}
+
+#[tokio::test]
+async fn voice_scope_evidence_detects_checkout_and_requested_scope_changes() {
+    let fixture = Fixture::new();
+    let (request, snapshot, explicit, _) = voice_observation_fixture();
+    let (project, checkout) = resolve_directory(&fixture.root, None, Some("space".into())).await.unwrap();
+    let evidence = VoiceScopeEvidence {
+        request, endpoint_identity: snapshot.endpoint_identity, endpoint_derived_server_instance: snapshot.snapshot.server_instance,
+        boot_id: snapshot.boot_id, peer_process: snapshot.peer_process, workspace_directory: explicit.directory,
+        workspace_directory_source: explicit.directory_source,
+        project, checkout,
+    };
+    let mut fresh = evidence.clone();
+    assert_eq!(evidence, fresh);
+    fresh.request.base = Some("other".into());
+    assert_ne!(evidence, fresh);
+    fresh = evidence.clone();
+    fresh.checkout.path.push_str("/changed");
+    assert_ne!(evidence, fresh);
+}
+#[tokio::test]
+async fn voice_repository_only_resolves_a_configured_checkout() {
+    let fixture = Fixture::new();
+    let path = fixture.root.join("repository");
+    fs::create_dir(&path).unwrap();
+    assert!(std::process::Command::new("git").args(["init", "-q"])
+        .current_dir(&path).status().unwrap().success());
+    assert!(std::process::Command::new("git").args([
+        "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "--allow-empty", "-qm", "Fixture",
+    ]).current_dir(&path).status().unwrap().success());
+    let projects = fixture.projects(None);
+    let repositories = projects.repositories().await.unwrap().repositories;
+    let candidate = repositories.iter().find(|r| r.checkout_path == path.to_string_lossy()).unwrap();
+    let selected = find_voice_repository(&projects, Some(&candidate.repository_id)).await.unwrap().unwrap();
+    let (project, checkout) = resolve_directory(Path::new(&selected.checkout_path), Some(selected.repository_id.clone()), None).await.unwrap();
+    assert!(verify_voice_repository(&candidate.repository_id, &selected.repository_id, &selected.common_dir, &project, &checkout).is_ok());
+    assert!(project.source_workspace_id.is_none());
+    assert!(find_voice_repository(&projects, Some("not-configured")).await.is_err());
+}
+
+#[tokio::test]
+async fn voice_repository_comparison_requires_exact_id_and_both_common_dirs() {
+    let fixture = Fixture::new();
+    assert!(std::process::Command::new("git").args(["init", "-q"])
+        .current_dir(&fixture.root).status().unwrap().success());
+    let (project, checkout) = resolve_directory(&fixture.root, Some("repo".into()), Some("space".into())).await.unwrap();
+    let common = checkout.git.as_ref().unwrap().common_dir.clone();
+    assert!(verify_voice_repository("repo", "repo", &common, &project, &checkout).is_ok());
+    assert!(verify_voice_repository("repo", "other", &common, &project, &checkout).is_err());
+    assert!(verify_voice_repository("repo", "repo", "/other", &project, &checkout).is_err());
+    let mut changed = checkout.clone();
+    changed.git.as_mut().unwrap().common_dir = "/other".into();
+    assert!(verify_voice_repository("repo", "repo", &common, &project, &changed).is_err());
+}
 #[test]
 fn installed_native_cockpit_uses_sibling_cli_never_gui_self() {
     let root =
