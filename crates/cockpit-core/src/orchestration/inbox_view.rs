@@ -17,6 +17,16 @@ fn owner_source(run: &Run, card: bool) -> InboxSource {
 fn text(value: String, source: InboxSource, message: Option<&Message>) -> InboxText {
     InboxText { text: value, source, message_id: message.map(|m| m.message_id.clone()), at: message.map(|m| m.created_at.clone()), images: Vec::new() }
 }
+
+fn task_lane_label(lane: TaskLane) -> &'static str {
+    match lane {
+        TaskLane::Blocked => "Blocked",
+        TaskLane::Ready => "Ready",
+        TaskLane::Working => "Assigned",
+        TaskLane::Review => "Review",
+        TaskLane::Accepted => "Accepted",
+    }
+}
 fn integration_fact(run: &Run) -> Option<InboxText> {
     let (value, source) = match (&run.integration, &run.source_output) {
         (Integration::Integrated { .. }, _) => ("Integration: Integrated", InboxSource::Recorded),
@@ -376,14 +386,14 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             else { text(id.to_owned(), InboxSource::Recorded, None) };
         let next = if let Some((m, root)) = latest_card { Some(text(m.report.as_ref().unwrap().card.as_ref().unwrap().next.clone(), owner_source(root, true), Some(m))) }
             else if let Some(receipt) = receipts.last() { let label = root_map.get(receipt.to_run_id.as_str()).map_or(receipt.to_run_id.as_str(), |r| r.label.as_str()); Some(text(if receipt.stage == DeliveryStage::Stored { format!("Waiting for {label} to pick up") } else { format!("With {label}") }, InboxSource::Recorded, None)) }
-            else if tasks.len() == 1 { Some(text(format!("{:?} · {}", tasks[0].lane, tasks[0].title), InboxSource::Recorded, None)) } else { None };
+            else if tasks.len() == 1 { Some(text(format!("{} · {}", task_lane_label(tasks[0].lane), tasks[0].title), InboxSource::Recorded, None)) } else { None };
         let recommendation = reports.iter().rev().find_map(|(m, root)| m.report.as_ref()?.card.as_ref()?.recommendation.as_ref().map(|v| text(v.clone(), owner_source(root, true), Some(m))));
         let reply = reports.iter().rev().find(|(m, _)| m.report.as_ref().is_some_and(|r| matches!(r.kind, ReportKind::Progress | ReportKind::Result))).map(|(m, root)| message_text(m.report.as_ref().unwrap().summary.clone(), owner_source(root, false), m));
         let project = latest_card.and_then(|(m, _)| m.report.as_ref()?.card.as_ref()?.project.clone());
         let mut facts = Vec::new();
         for r in &receipts { facts.push(text(format!("Delivery {:?}", r.stage), InboxSource::Recorded, messages.iter().copied().find(|m| m.message_id == r.message_id && m.to_run_id == r.to_run_id && matches!(m.from, ActorRef::Operator)))); }
         for t in &tasks {
-            facts.push(text(format!("{:?} · {}", t.lane, t.title), InboxSource::Recorded, None));
+            facts.push(text(format!("{} · {}", task_lane_label(t.lane), t.title), InboxSource::Recorded, None));
             if let Some(run) = &t.run {
                 for item in &run.cleanup { if matches!(item.cleanup.state, CleanupState::Removed | CleanupState::Kept) { facts.push(text(format!("Cleanup {:?}: {}", item.cleanup.state, item.cleanup.reason.as_ref().map_or("", |r| r.message.as_str())), InboxSource::Recorded, None)); } }
                 if let Some(worker) = state.runs.iter().find(|r| r.run_id == run.run_id) {
@@ -939,6 +949,42 @@ mod tests {
                 project: None, lane: TaskLane::Ready, current_run_id: None,
                 dependencies: TaskDependencies { state: TaskDependencyState::None, unmet: vec![], problems: vec![] },
                 scheduled: false, attempt: None, waiting: None, worker_waiting: None }] }
+    }
+    #[test]
+    fn task_lane_labels_are_neutral_and_preserve_other_states() {
+        for (lane, label) in [
+            (TaskLane::Blocked, "Blocked"),
+            (TaskLane::Ready, "Ready"),
+            (TaskLane::Working, "Assigned"),
+            (TaskLane::Review, "Review"),
+            (TaskLane::Accepted, "Accepted"),
+        ] {
+            assert_eq!(task_lane_label(lane), label);
+        }
+    }
+
+    #[test]
+    fn generated_task_text_describes_assignment_without_claiming_activity() {
+        let mut worker = root("worker");
+        worker.kind = RunKind::Worker;
+        worker.root_id = "r".into();
+        worker.parent_run_id = Some("r".into());
+        worker.task_id = Some("task".into());
+        worker.assignment_generation = Some(1);
+        worker.stage = RunStage::Working;
+        let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1,
+            schedule: None, reopened_after_attempt: None,
+            owner: Some(TaskOwner { run_id: "worker".into(), conversation: None, claim_operation_id: "claim".into() }) });
+        state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
+        state.messages.push(report("progress", "r", 1, Some("t"), ReportKind::Progress));
+        let mut task_board = board("r", "task");
+        task_board.tasks[0].task.checked = false;
+        let projected = view(&state, vec![task_board]);
+        let thread = &projected.threads[0];
+        assert_eq!(thread.tasks[0].lane, TaskLane::Working);
+        assert_eq!(thread.next.as_ref().unwrap().text, "Assigned · Task");
+        assert!(thread.facts.iter().any(|fact| fact.text == "Assigned · Task"));
     }
     #[test]
     fn widget_publications_survive_storage_and_preserve_order_scope_and_cap() {

@@ -633,6 +633,8 @@ pub(in crate::orchestration) fn schedule_ready(state: &OrchestrationState, root:
     graph: &dependencies::DependencyGraph<'_>) -> bool {
     !task.checked && matches!(graph.evaluate(task).state, TaskDependencyState::None | TaskDependencyState::Satisfied)
         && !state.continue_intents.iter().any(|intent| intent.root_id == root.run_id && intent.task_id == task.task_id)
+        && !state.task_ownership.iter().any(|ownership| ownership.root_id == root.run_id
+            && ownership.task_id == task.task_id && ownership.owner.is_some())
         && !state.runs.iter().any(|run| run.root_id == root.run_id
             && run.task_id.as_deref() == Some(task.task_id.as_str()) && run.stage != RunStage::Closed)
 }

@@ -977,6 +977,28 @@ describe("Inbox reply dock", () => {
     root_id: "owner", task_id: "task-id", title: "Build", project: null, lane: "working", evidence: null,
     run: { run_id: "worker", attempt: 1, stage, harness: "omp", session_id: "a", attachment_id: null, attachment_epoch: null, presence, agent_status: "working", location: null, cleanup: [], report_images: [] },
   });
+  it.each([
+    ["working", "present", "working", false, "Working"],
+    ["working", "present", "idle", false, "Idle"],
+    ["working", "present", "done", false, "Idle"],
+    ["working", "missing", "working", false, "status unknown"],
+    ["reported", "present", "working", false, "status unknown"],
+    ["closed", "present", "working", false, "status unknown"],
+    ["working", "present", "working", true, "worker waiting"],
+  ] as const)("labels a %s run with %s presence and %s activity (wait %s) as %s", async (stage, presence, status, waiting, expected) => {
+    const linked = task(stage, presence);
+    linked.run!.agent_status = status;
+    if (waiting) linked.worker_waiting = { cause: "worker_waiting", detail: null, since: null, held_by: [], code: null, next_automatic: false };
+    await mountThread(dockThread([], { tasks: [linked] }));
+    expect(host.querySelector(".inbox-task-status")?.textContent).toBe(`Assigned · ${expected}`);
+  });
+  it("does not retain an active label when live observations become unavailable", async () => {
+    const { inbox, waits, client } = await mountThread(dockThread([], { tasks: [task()] }));
+    expect(host.querySelector(".inbox-task-status")?.textContent).toBe("Assigned · Working");
+    vi.mocked(client.orchestrationInbox).mockResolvedValue({ ...inbox, revision: 2, observation: { status: "unavailable", error: { code: "unavailable", message: "Offline" } } });
+    await flush(() => waits[waits.length - 1]!({ revision: 2, tasks_token: "updated", changed: true }));
+    expect(host.querySelector(".inbox-task-status")?.textContent).toBe("Assigned · status unknown");
+  });
   const selectWorker = async () => flush(() => { const select = host.querySelector<HTMLSelectElement>('select[aria-label="Send to"]')!; select.value = JSON.stringify(["owner", "task-id"]); select.dispatchEvent(new Event("change", { bubbles: true })); });
   it("only offers live working or reported workers", async () => {
     await mountThread(dockThread([], { tasks: [task("closed"), task("working", "missing")] }));

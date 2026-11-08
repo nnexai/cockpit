@@ -22,8 +22,8 @@ it("retains full task titles and stage words in rail rows", async () => {
   const row = host.querySelector<HTMLButtonElement>("[data-row-key]")!;
   expect(row.querySelector(".liaison-task-title")?.textContent).toBe(title);
   expect(row.querySelector(".liaison-task-title")?.getAttribute("title")).toBe(title);
-  expect(row.querySelector(".liaison-task-stage")?.textContent).toBe("working");
-  expect(row.getAttribute("aria-label")).toBe(`${title}, working. Open history`);
+  expect(row.querySelector(".liaison-task-stage")?.textContent).toBe("unconfirmed");
+  expect(row.getAttribute("aria-label")).toBe(`${title}, unconfirmed. Open history`);
 });
 it("restores the originating row after Escape and does not steal focus on snapshot updates", async () => {
   const task = taskFixture("task");
@@ -97,7 +97,7 @@ it("shows recorded waiting facts and accessible task progress in the shared deta
   if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
   await act(async () => root!.render(<TaskHistoryDetail view={task} history={null} />));
   const rail = host.querySelector('[aria-label="Task progress"]')!;
-  expect([...rail.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Ready", "Working", "Review", "Accepted"]);
+  expect([...rail.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Ready", "Assigned", "Review", "Accepted"]);
   expect(rail.querySelector('[aria-current="step"]')?.textContent).toBe("Ready");
   const wait = host.querySelector('[aria-label="Why is this waiting"]')!;
   expect(wait.textContent).toContain("Predecessor");
@@ -117,7 +117,7 @@ it("shows a worker-declared wait without treating it as a question or result", a
   expect(wait.textContent).toContain("Waiting for external review.");
   expect(wait.textContent).toContain("The liaison follows up with the worker");
   expect(wait.querySelector("time")?.getAttribute("datetime")).toBe("2026-10-01T12:00:00Z");
-  expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Working");
+  expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Assigned");
 });
 
 it("shows a worker wait alongside a question without duplicating the same wait", async () => {
@@ -150,13 +150,13 @@ it("shows liaison-owned waits without invented times and distinguishes non-code 
   expect(wait.textContent).not.toContain("Since");
   expect(wait.querySelector("time")).toBeNull();
   await act(async () => root!.render(<TaskHistoryDetail view={{ ...task, lane: "accepted", waiting: null }} history={{ ...history, outcome: { ...history.outcome, accepted: true }, sub: { kind: "non_code" } }} />));
-  expect([...host.querySelectorAll('[aria-label="Task progress"] li')].map(item => item.textContent)).toEqual(["Ready", "Working", "Review", "Accepted"]);
+  expect([...host.querySelectorAll('[aria-label="Task progress"] li')].map(item => item.textContent)).toEqual(["Ready", "Assigned", "Review", "Accepted"]);
   expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Accepted");
   expect(host.textContent).toContain("Non-code result · no Git integration needed");
   await act(async () => root!.render(<TaskHistoryDetail view={{ ...task, lane: "accepted", waiting: null }} history={{ ...history, outcome: { ...history.outcome, accepted: true }, sub: { kind: "integration_not_recorded" } }} />));
   expect(host.textContent).toContain("Integration not recorded");
   expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Accepted");
-  expect([...host.querySelectorAll('[aria-label="Task progress"] li')].map(item => item.textContent)).toEqual(["Ready", "Working", "Review", "Accepted"]);
+  expect([...host.querySelectorAll('[aria-label="Task progress"] li')].map(item => item.textContent)).toEqual(["Ready", "Assigned", "Review", "Accepted"]);
 });
 
 it("marks recorded integration as integrated and hides the waiting block when clear", async () => {
@@ -176,6 +176,6 @@ it("does not claim acceptance for checked-only tasks or anticipate integration",
   if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
   await act(async () => root!.render(<TaskHistoryDetail view={task} history={null} />));
   expect(host.querySelector('[aria-current="step"]')).toBeNull();
-  expect([...host.querySelectorAll('[aria-label="Task progress"] li')].map(item => item.textContent)).toEqual(["Ready", "Working", "Review", "Accepted"]);
+  expect([...host.querySelectorAll('[aria-label="Task progress"] li')].map(item => item.textContent)).toEqual(["Ready", "Assigned", "Review", "Accepted"]);
   expect(host.textContent).not.toContain("Integrated");
 });

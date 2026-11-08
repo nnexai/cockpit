@@ -31,6 +31,9 @@
 .attempt-starting { --task-color:var(--accent); }
 .attempt-stalled { --task-color:var(--blocked); }
 .lane-blocked .liaison-task-dot { background:transparent; border:1.5px solid var(--text-muted); }
+.activity-waiting .liaison-task-dot { background:transparent; border:1.5px solid var(--warning); }
+.activity-idle .liaison-task-dot, .activity-unconfirmed .liaison-task-dot, .activity-hold .liaison-task-dot { background:transparent; border:1.5px dashed var(--text-muted); }
+.activity-not-observed .liaison-task-dot, .activity-runtime-blocked .liaison-task-dot { background:transparent; border:1.5px dashed var(--blocked); }
 .liaison-task-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-primary); font-size:var(--font-size-xs); font-weight:500; }
 .liaison-task-rail .liaison-task-title { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; white-space:normal; overflow-wrap:anywhere; line-height:1.3; }
 .lane-blocked .liaison-task-title { color:var(--text-secondary); }

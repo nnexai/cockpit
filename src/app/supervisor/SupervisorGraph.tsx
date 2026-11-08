@@ -1,12 +1,13 @@
 import { useId, useMemo, useState } from "react";
-import type { TaskView } from "../../protocol/generated/v1";
+import type { OrchestrationSnapshot, TaskView } from "../../protocol/generated/v1";
 import { dependencyLayout } from "./dependencyLayout";
 import { dependencySummary, uniqueTask } from "./dependencies";
 import { TaskRow, taskStage } from "./SupervisorTasks";
 import { projectOf } from "./taskProjects";
+import { taskActivity } from "./taskActivity";
 
 /** Task prerequisites only: no agent topology or provenance relationships. */
-export function SupervisorGraph({ tasks, onOpen, selectedKey }: { tasks: readonly TaskView[]; onOpen(view: TaskView, rowKey: string): void; selectedKey?: string | null }) {
+export function SupervisorGraph({ tasks, onOpen, selectedKey, snapshot = null, rootId = null, fresh = false }: { tasks: readonly TaskView[]; onOpen(view: TaskView, rowKey: string): void; selectedKey?: string | null; snapshot?: OrchestrationSnapshot | null; rootId?: string | null; fresh?: boolean }) {
   const marker = useId().replaceAll(":", ""), [pointer, setHover] = useState<string | null>(null), [focused, setFocused] = useState<string | null>(null);
   const hover = focused ?? pointer;
   const open = useMemo(() => tasks.filter(view => !view.task.checked), [tasks]);
@@ -36,14 +37,15 @@ export function SupervisorGraph({ tasks, onOpen, selectedKey }: { tasks: readonl
       })}</svg>
       {model.positions.map(({ view, x, y, cycle }) => {
         const dependency = view.dependencies.state === "invalid" ? dependencySummary(view, tasks) : view.dependencies.unmet.map(item => uniqueTask(tasks, item.task_id)?.task.title ?? "Unreadable prerequisite").join(", ");
-        const detail = `${projectOf(view).label} · ${taskStage(view)}${view.dependencies.unmet.length ? ` · after ${view.dependencies.unmet.length}` : view.scheduled && view.lane === "ready" ? " · scheduled" : ""}${cycle ? " · prerequisite cycle" : ""}`;
+        const activity = taskActivity(view, snapshot, rootId, fresh);
+        const detail = `${projectOf(view).label} · ${taskStage(view, activity)}${view.dependencies.unmet.length ? ` · after ${view.dependencies.unmet.length}` : view.scheduled && view.lane === "ready" ? " · scheduled" : ""}${cycle ? " · prerequisite cycle" : ""}`;
         const rowKey = `${view.task.task_id}:${tasks.indexOf(view)}`;
-        return <button type="button" key={view.task.task_id} data-row-key={rowKey} aria-current={selectedKey === rowKey ? "true" : undefined} className={`liaison-graph-task lane-${view.lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}${hover === view.task.task_id ? " is-highlighted" : ""}`} style={{ left: x, top: y }} title={`${view.task.title}, ${detail}${dependency ? `, ${dependency}` : ""}`} aria-label={`${view.task.title}, ${detail}${dependency ? `, ${dependency}` : ""}. Open history`} onMouseEnter={() => setHover(view.task.task_id)} onMouseLeave={() => setHover(null)} onFocus={() => setFocused(view.task.task_id)} onBlur={() => setFocused(null)} onClick={() => { setHover(null); onOpen(view, rowKey); }}><span className="liaison-task-dot" aria-hidden="true" /><span className="liaison-task-title">{view.task.title}</span><span className="liaison-task-stage">{detail}</span></button>;
+        return <button type="button" key={view.task.task_id} data-row-key={rowKey} aria-current={selectedKey === rowKey ? "true" : undefined} className={`liaison-graph-task lane-${view.lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}${activity ? ` activity-${activity.kind}` : ""}${hover === view.task.task_id ? " is-highlighted" : ""}`} style={{ left: x, top: y }} title={`${view.task.title}, ${detail}${dependency ? `, ${dependency}` : ""}${activity ? `. ${activity.detail}` : ""}`} aria-label={`${view.task.title}, ${detail}${dependency ? `, ${dependency}` : ""}. Open history`} onMouseEnter={() => setHover(view.task.task_id)} onMouseLeave={() => setHover(null)} onFocus={() => setFocused(view.task.task_id)} onBlur={() => setFocused(null)} onClick={() => { setHover(null); onOpen(view, rowKey); }}><span className="liaison-task-dot" aria-hidden="true" /><span className="liaison-task-title">{view.task.title}</span><span className="liaison-task-stage">{detail}</span></button>;
       })}
     </div>
     <ul className="liaison-dependency-outline" role="list" aria-label="Task dependency outline">{model.positions.map(position => {
       const rowKey = `${position.view.task.task_id}:${tasks.indexOf(position.view)}`;
-      return <li key={position.view.task.task_id} data-indented={position.level > 0 || undefined} style={{ paddingLeft: Math.min(position.level, 6) * 20 }}><TaskRow view={position.view} tasks={tasks} rowKey={rowKey} selected={selectedKey === rowKey} projectLabel={projectOf(position.view).label} onOpen={() => onOpen(position.view, rowKey)} />{position.view.dependencies.unmet.length > 1 ? <p className="liaison-outline-after">also after {position.view.dependencies.unmet.slice(1).map(item => `“${uniqueTask(tasks, item.task_id)?.task.title ?? "Unreadable prerequisite"}”`).join(", ")}</p> : null}</li>;
+      return <li key={position.view.task.task_id} data-indented={position.level > 0 || undefined} style={{ paddingLeft: Math.min(position.level, 6) * 20 }}><TaskRow view={position.view} tasks={tasks} rowKey={rowKey} selected={selectedKey === rowKey} projectLabel={projectOf(position.view).label} activity={taskActivity(position.view, snapshot, rootId, fresh)} onOpen={() => onOpen(position.view, rowKey)} />{position.view.dependencies.unmet.length > 1 ? <p className="liaison-outline-after">also after {position.view.dependencies.unmet.slice(1).map(item => `“${uniqueTask(tasks, item.task_id)?.task.title ?? "Unreadable prerequisite"}”`).join(", ")}</p> : null}</li>;
     })}</ul>
     {open.some(view => !positions.has(view.task.task_id)) ? <p className="liaison-task-status">Some task identities are unreadable.</p> : null}
   </div>{tasks.length > open.length ? <footer className="liaison-graph-footer">{tasks.length - open.length} done not shown</footer> : null}</div>;

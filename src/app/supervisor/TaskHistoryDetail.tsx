@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { OwnedResourceKind, TaskView } from "../../protocol/generated/v1";
 import { formatEventTime, formatGap, type HistoryEvent, type HistoryFact, type TaskHistory } from "./taskHistory";
+import type { TaskActivity } from "./taskActivity";
 
 const resourceLabels: Record<OwnedResourceKind, string> = { worker_terminal: "Worker terminal", worktree: "Worktree", branch: "Branch", space: "Space", scratch: "Scratch files", fixture_set: "Test fixtures", attempt_directory: "Attempt folder" };
 
@@ -80,7 +81,7 @@ export const waitCopy = {
 
 function TaskProgress({ view, history }: { view: TaskView; history: TaskHistory | null }) {
   const integrated = history?.sub?.kind === "integrated";
-  const steps = ["Ready", "Working", "Review", "Accepted", ...(integrated ? ["Integrated"] : [])];
+  const steps = ["Ready", "Assigned", "Review", "Accepted", ...(integrated ? ["Integrated"] : [])];
   const current = integrated ? 4 : history?.outcome.accepted ? 3 : view.lane === "accepted" || view.task.checked ? -1 : view.lane === "review" ? 2 : view.lane === "working" ? 1 : 0;
   return <ol className="liaison-task-progress" aria-label="Task progress">{steps.map((step, index) =>
     <li key={step} className={index < current ? "is-complete" : index === current ? "is-current" : undefined} aria-current={index === current ? "step" : undefined}>
@@ -107,20 +108,22 @@ function WaitingDetail({ waiting }: { waiting: NonNullable<TaskView["waiting"]> 
   </section>;
 }
 
-export function TaskHistoryDetail({ view, history }: { view: TaskView; history: TaskHistory | null }) {
+export function TaskHistoryDetail({ view, history, activity = null }: { view: TaskView; history: TaskHistory | null; activity?: TaskActivity | null }) {
   const outcome = history?.outcome;
-  const stage = outcome?.stage ?? (view.task.checked ? "done" : view.lane);
+  const rawStage = outcome?.stage ?? (view.task.checked ? "done" : view.lane);
+  const stage = view.lane === "working" ? "assigned" : rawStage === "working" ? "assigned" : rawStage;
   const sub = history?.sub;
   const subText = sub?.kind === "integrated" ? `Integrated into ${sub.target}` : sub?.kind === "non_code" ? "Non-code result · no Git integration needed" : sub?.kind === "integration_not_recorded" ? "Integration not recorded" : sub?.kind === "after" ? sub.text : sub?.kind === "reconnecting" ? `Reconnecting worker · ${sub.phase}` : sub?.kind === "not_started" ? "No worker has started yet" : null;
   return <section className="liaison-detail" aria-label={`History of ${view.task.title}`}>
-    <div className={`liaison-detail-summary lane-${view.lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}`}>
+    <div className={`liaison-detail-summary lane-${view.lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}${activity ? ` activity-${activity.kind}` : ""}`}>
       <span className="liaison-task-dot" aria-hidden="true" /><h2>{view.task.title}</h2>
-      <p className="liaison-detail-outcome"><span className={outcome?.stalled ? "stalled" : undefined}>{stage[0].toUpperCase() + stage.slice(1)}</span>{outcome?.scheduled ? " · scheduled" : ""}{outcome?.accepted ? " · accepted" : ""}{outcome?.attempt ? ` · attempt ${outcome.attempt}` : ""}{outcome?.kept ? <> · <span className="kept">{outcome.kept} resource{outcome.kept === 1 ? "" : "s"} kept</span></> : null}</p>
+      <p className="liaison-detail-outcome"><span className={outcome?.stalled ? "stalled" : undefined}>{stage[0].toUpperCase() + stage.slice(1)}</span>{activity ? ` · ${activity.word}` : view.lane === "working" ? " · unconfirmed" : ""}{outcome?.scheduled ? " · scheduled" : ""}{outcome?.accepted ? " · accepted" : ""}{outcome?.attempt ? ` · attempt ${outcome.attempt}` : ""}{outcome?.kept ? <> · <span className="kept">{outcome.kept} resource{outcome.kept === 1 ? "" : "s"} kept</span></> : null}</p>
       {!view.waiting && !view.worker_waiting && subText ? <p className="liaison-detail-sub">{subText}</p> : null}
     </div>
     <TaskProgress view={view} history={history} />
     {view.waiting ? <WaitingDetail waiting={view.waiting} /> : null}
     {view.worker_waiting && view.waiting?.cause !== "worker_waiting" ? <WaitingDetail waiting={view.worker_waiting} /> : null}
+    {activity && (activity.kind === "hold" || activity.kind === "idle" || activity.kind === "not-observed" || activity.kind === "runtime-blocked") ? <p className="liaison-history-notice">{activity.detail}</p> : null}
     {history?.liveUnavailable ? <p className="liaison-history-notice" role="status">Live worker state unavailable — showing recorded history.</p> : null}
     {history?.unreflectedNotice ? <p className="liaison-history-notice">{history.unreflectedNotice}. See History below.</p> : null}
     {!history ? <p className="liaison-empty">History unavailable — no task snapshot is available.</p> : history.identity === "ambiguous" ? <p className="liaison-empty">History unavailable — this task's ID appears more than once in the task file.</p> : <>

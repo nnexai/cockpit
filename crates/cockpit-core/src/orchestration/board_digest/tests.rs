@@ -121,6 +121,53 @@ fn maps_task_and_runtime_states() {
 }
 
 #[test]
+fn closed_attempt_uses_schedule_not_stale_dispatch_or_runtime_status() {
+    let mut s = snapshot();
+    let rt = runtime();
+    active(&mut s, RunStage::Closed);
+    s.runs[0].dispatch = Some(DispatchState {
+        launch_tag: None, endpoint_identity: None, scope_unit: None, pre_move_scope: None,
+        latch: None, latch_state: None, source_location: None, move_operation_id: None,
+        staging_workspace_id: None, recovery: None, agent_started: false,
+        step: DispatchStep::LaunchUnknown, launch_attempt: 1, error: None, updated_at: NOW.into(),
+    });
+    observe(&mut s, Presence::Present, Some("working"));
+    for reason in [CloseReason::Cancelled, CloseReason::Superseded, CloseReason::Failed, CloseReason::Accepted] {
+        s.runs[0].close_reason = Some(reason);
+        for started in [false, true] {
+            s.runs[0].dispatch.as_mut().unwrap().agent_started = started;
+            let digest = digest_at(&s, Some(&rt), NOW);
+            assert_eq!(digest.tasks[0].worker, WorkerState::Unscheduled, "{reason:?}, started={started}");
+            assert_eq!(digest.tasks[0].observed_status.as_deref(), Some("working"));
+            assert!(digest.text.contains("observed status: working"));
+            assert_eq!(digest.open_work, 1);
+        }
+    }
+    s.task_ownership.push(TaskOwnership { root_id: "root".into(), task_id: "task".into(), generation: 0,
+        owner: None, reopened_after_attempt: None, schedule: Some(TaskSchedule {
+            operation_id: "op".into(), principal_key: "principal".into(), target: None,
+            brief: String::new(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
+            label: None, scheduled_at: NOW.into(), hold: None,
+        }) });
+    s.runs[0].dispatch.as_mut().unwrap().agent_started = false;
+    assert_eq!(digest_at(&s, Some(&rt), NOW).tasks[0].worker, WorkerState::Queued);
+    observe(&mut s, Presence::Missing, None);
+    assert_eq!(digest_at(&s, Some(&rt), NOW).tasks[0].worker, WorkerState::Queued);
+    assert_eq!(digest_at(&s, None, NOW).tasks[0].worker, WorkerState::Queued);
+}
+
+#[test]
+fn direct_active_attempt_does_not_require_a_schedule() {
+    let mut s = snapshot();
+    let rt = runtime();
+    active(&mut s, RunStage::Starting);
+    assert_eq!(digest_at(&s, None, NOW).tasks[0].worker, WorkerState::Starting);
+    s.runs[0].stage = RunStage::Working;
+    observe(&mut s, Presence::Present, Some("working"));
+    assert_eq!(digest_at(&s, Some(&rt), NOW).tasks[0].worker, WorkerState::Working);
+}
+
+#[test]
 fn worker_wait_claim_is_independent_of_runtime_and_questions() {
     let mut s = snapshot();
     let rt = runtime();
@@ -130,7 +177,7 @@ fn worker_wait_claim_is_independent_of_runtime_and_questions() {
         code: None, detail: Some("Waiting for external review".into()), next_automatic: false,
     });
     for (status, expected) in [("idle", WorkerState::Waiting), ("done", WorkerState::Waiting),
-        ("working", WorkerState::Working), ("blocked", WorkerState::Blocked)] {
+        ("working", WorkerState::Waiting), ("blocked", WorkerState::Blocked)] {
         observe(&mut s, Presence::Present, Some(status));
         let digest = digest_at(&s, Some(&rt), NOW);
         let row = &digest.tasks[0];
@@ -157,6 +204,35 @@ fn worker_wait_claim_is_independent_of_runtime_and_questions() {
     assert_eq!(user_question.tasks[0].worker, WorkerState::WaitingOnUser);
     assert_eq!(user_question.open_work, 0);
     assert!(user_question.text.contains("worker-stated wait: Waiting for external review"));
+}
+
+#[test]
+fn explicit_wait_overrides_observed_working_until_resume() {
+    let mut s = snapshot();
+    let rt = runtime();
+    active(&mut s, RunStage::Working);
+    observe(&mut s, Presence::Present, Some("working"));
+    let working = digest_at(&s, Some(&rt), NOW);
+    assert_eq!(working.tasks[0].worker, WorkerState::Working);
+    assert_eq!(working.tasks[0].observed_status.as_deref(), Some("working"));
+
+    s.board.as_mut().unwrap().tasks[0].worker_waiting = Some(TaskWait {
+        cause: TaskWaitCause::WorkerWaiting, since: Some(NOW.into()), held_by: vec![],
+        code: None, detail: Some("Waiting for review".into()), next_automatic: false,
+    });
+    let waiting = digest_at(&s, Some(&rt), NOW);
+    assert_eq!(waiting.tasks[0].worker, WorkerState::Waiting);
+    assert_eq!(waiting.tasks[0].observed_status.as_deref(), Some("working"));
+    assert!(waiting.text.contains("observed status: working"));
+    assert!(waiting.text.contains("worker-stated wait: Waiting for review"));
+    assert_ne!(working.key, waiting.key);
+
+    s.board.as_mut().unwrap().tasks[0].worker_waiting = None;
+    let resumed = digest_at(&s, Some(&rt), NOW);
+    assert_eq!(resumed.tasks[0].worker, WorkerState::Working);
+    assert_eq!(resumed.tasks[0].observed_status.as_deref(), Some("working"));
+    assert!(resumed.tasks[0].worker_waiting.is_none());
+    assert_eq!(resumed.key, working.key);
 }
 
 #[test]

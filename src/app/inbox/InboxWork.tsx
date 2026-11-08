@@ -15,6 +15,7 @@ type Props = {
   sessionId: string;
   open(location: InboxLocation | null): void;
   liveOpen: boolean;
+  liveStatusFresh: boolean;
   diagnostics: ReactNode;
 };
 
@@ -64,15 +65,18 @@ function copy(value: string) {
   if (navigator.clipboard) void navigator.clipboard.writeText(value).catch(() => {});
 }
 
-function TaskCard({ task, interim, client, sessionId, open, liveOpen, initiallyOpen }: { task: InboxTaskLink; interim: InboxEntry | undefined; client: CockpitClient; sessionId: string; open(location: InboxLocation | null): void; liveOpen: boolean; initiallyOpen: boolean }) {
+function TaskCard({ task, interim, client, sessionId, open, liveOpen, liveStatusFresh, questionOpen, initiallyOpen }: { task: InboxTaskLink; interim: InboxEntry | undefined; client: CockpitClient; sessionId: string; open(location: InboxLocation | null): void; liveOpen: boolean; liveStatusFresh: boolean; questionOpen: boolean; initiallyOpen: boolean }) {
   const evidence = task.evidence;
-  const lane = task.lane === "accepted" ? "done" : task.lane;
-  const laneLabel = task.lane === "accepted" ? "Done" : task.lane === "working" ? "Working" : task.lane === "blocked" ? "Blocked" : task.lane === "review" ? "In review" : "Ready";
+  const working = task.lane === "working";
+  const activelyWorking = working && !questionOpen && !task.worker_waiting && liveStatusFresh && task.run?.stage === "working" && task.run.presence === "present" && task.run.agent_status === "working";
+  const idle = working && !questionOpen && !task.worker_waiting && liveStatusFresh && task.run?.stage === "working" && task.run.presence === "present" && (task.run.agent_status === "idle" || task.run.agent_status === "done");
+  const lane = task.lane === "accepted" ? "done" : working ? activelyWorking ? "working" : questionOpen || task.worker_waiting ? "blocked" : "ready" : task.lane;
+  const laneLabel = task.lane === "accepted" ? "Done" : working ? "Assigned" : task.lane === "blocked" ? "Blocked" : task.lane === "review" ? "In review" : "Ready";
   const visuals = evidence?.artifacts.filter(artifact => artifact.kind === "image" || artifact.kind === "html") ?? [];
   const documents = evidence?.artifacts.filter(artifact => artifact.kind === "markdown" || artifact.kind === "other") ?? [];
   const location = task.run?.presence === "present" ? task.run.location : null;
   return <details className="inbox-task" data-lane={lane} open={initiallyOpen || undefined}>
-    <summary><span className="inbox-lane" /><span className="inbox-task-title" title={task.title}>{task.title}</span><Chevron /><span className="inbox-task-status"><b>{laneLabel}</b>{task.worker_waiting && <> · worker waiting</>}{evidence?.integration && <> · integrated into {evidence.integration.target} @<code>{evidence.integration.commit.slice(0, 7)}</code></>}{evidence && evidence.attempts > 1 && <> · attempt {evidence.attempt}</>}</span></summary>
+    <summary><span className="inbox-lane" /><span className="inbox-task-title" title={task.title}>{task.title}</span><Chevron /><span className="inbox-task-status"><b>{laneLabel}</b>{working && <> · {questionOpen ? "waiting for answer" : task.worker_waiting ? "worker waiting" : activelyWorking ? "Working" : idle ? "Idle" : "status unknown"}</>}{!working && task.worker_waiting && <> · worker waiting</>}{evidence?.integration && <> · integrated into {evidence.integration.target} @<code>{evidence.integration.commit.slice(0, 7)}</code></>}{evidence && evidence.attempts > 1 && <> · attempt {evidence.attempt}</>}</span></summary>
     <div className="inbox-task-body">
       {location && <button type="button" className="inbox-btn" disabled={!liveOpen} onClick={() => open(location)} title={liveOpen ? "Open session" : "Live sessions unavailable"}><UiIcon name="terminal" />Open</button>}
       {task.worker_waiting && <section className="inbox-sec" aria-label="Worker-stated wait"><h4><UiIcon name="work" />Worker says it is waiting</h4>{task.worker_waiting.detail && <div className="inbox-md"><InboxFeedback text={task.worker_waiting.detail} /></div>}<p className="inbox-kind">Worker claim · not a question{task.worker_waiting.since && <> · <Time value={task.worker_waiting.since} /></>}</p></section>}
@@ -90,12 +94,12 @@ function TaskCard({ task, interim, client, sessionId, open, liveOpen, initiallyO
   </details>;
 }
 
-export function InboxWork({ id, thread, client, sessionId, open, liveOpen, diagnostics }: Props) {
+export function InboxWork({ id, thread, client, sessionId, open, liveOpen, liveStatusFresh, diagnostics }: Props) {
   const active = thread.tasks.filter(task => task.lane !== "accepted");
   const done = thread.tasks.filter(task => task.lane === "accepted").sort((a, b) => (b.evidence?.result?.at ?? "").localeCompare(a.evidence?.result?.at ?? ""));
   const card = (task: InboxTaskLink, initiallyOpen: boolean) => {
     const interim = [...thread.timeline].reverse().find(entry => entry.kind === "interim" && entry.interim?.task_id === task.task_id && entry.interim.run_id === task.run?.run_id);
-    return <TaskCard key={`${task.root_id}:${task.task_id}`} task={task} interim={interim} client={client} sessionId={sessionId} open={open} liveOpen={liveOpen} initiallyOpen={initiallyOpen} />;
+    return <TaskCard key={`${task.root_id}:${task.task_id}`} task={task} interim={interim} client={client} sessionId={sessionId} open={open} liveOpen={liveOpen} liveStatusFresh={liveStatusFresh} questionOpen={!!task.run && thread.questions.some(question => question.run_id === task.run!.run_id && question.receipt.status === "unresolved")} initiallyOpen={initiallyOpen} />;
   };
   return <aside id={id} className="inbox-work" aria-label="Work">
     <div className="inbox-work-head"><h3>Work</h3><span>{thread.tasks.length} {thread.tasks.length === 1 ? "task" : "tasks"}</span></div>

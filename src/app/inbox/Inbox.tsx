@@ -61,7 +61,7 @@ function tone(thread: InboxThread): { kind: string; icon: UiIconName; label: str
     return { kind: outcome === "failed" ? "blocked" : outcome === "succeeded" ? "done" : "review", icon: outcome === "failed" ? "alert" : outcome === "succeeded" ? "check-circle" : "eye", label: `${label}${extra}` };
   }
   if (thread.unread_interims.length) return { kind: "review", icon: "eye", label: "Interim update" };
-  if (thread.state === "underway") return { kind: "work", icon: "work", label: "Working" };
+  if (thread.state === "underway") return { kind: "work", icon: "work", label: "In progress" };
   if (thread.state === "handled") return { kind: "done", icon: "check-circle", label: "Handled" };
   return { kind: "decision", icon: "help", label: "Needs you" };
 }
@@ -133,6 +133,10 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const detailRef = useRef<HTMLElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   liveScope.current = { current, snapshot, view, attention };
+  const runtimeIdentity = snapshot?.session_id === sessionId ? JSON.stringify([snapshot.server_instance, snapshot.spaces?.map(space => [space.id, space.label]), snapshot.tabs?.map(tab => [tab.id, tab.label]), snapshot.panes.map(pane => [pane.id, pane.terminal_id, pane.space_id, pane.tab_id, pane.agent, pane.agent_status]), snapshot.agents.map(agent => [agent.pane_id, agent.name, agent.status, agent.state_change_seq, agent.native_session_id])]) : null;
+  const runtimeIdentityRef = useRef(runtimeIdentity);
+  runtimeIdentityRef.current = runtimeIdentity;
+  const [observedRuntimeIdentity, setObservedRuntimeIdentity] = useState<string | null>(null);
   const newOwners = view?.owners.filter(candidate => (candidate.kind === "supervisor" || candidate.kind === "adopted") && candidate.stage !== "closed" && candidate.availability !== "absent") ?? [];
   const newOwner = newOwners.find(candidate => candidate.root_id === selectedOwner)?.root_id ?? newOwners.find(candidate => candidate.availability === "available")?.root_id ?? newOwners.find(candidate => candidate.root_id === preferredOwner)?.root_id ?? newOwners[0]?.root_id ?? "";
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
@@ -156,6 +160,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
       while (live) {
         try {
           const started = refreshVersion.current;
+          const readRuntimeIdentity = pendingRead.current ? null : runtimeIdentityRef.current;
           const read = pendingRead.current ?? client.orchestrationInbox({ session_id: sessionId });
           pendingRead.current = read;
           let next: InboxView;
@@ -163,7 +168,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
           if (!live) return;
           if (next.session_id !== sessionId || next.revision < Math.max(floor, revisionFloor.current)) { await sleep(); continue; }
           if (started !== refreshVersion.current) continue;
-          floor = next.revision; revisionFloor.current = floor; setView(next); setLoadError("");
+          floor = next.revision; revisionFloor.current = floor; setView(next); setObservedRuntimeIdentity(readRuntimeIdentity); setLoadError("");
           let revision = next.revision, token = next.tasks_token;
           while (live) {
             const controller = new AbortController();
@@ -190,7 +195,6 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     return () => { live = false; wake.current?.(); clearTimeout(timer); };
   }, [client, sessionId, current]);
   useEffect(() => { let live = true; void client.orchestrationLiaisonLookup({ session_id: sessionId, selected_root_id: null }).then(result => { if (live && result.status === "resolved" && result.preferred_root_id) setPreferredOwner(result.preferred_root_id); }).catch(() => {}); return () => { live = false; }; }, [client, sessionId]);
-  const runtimeIdentity = snapshot?.session_id === sessionId ? JSON.stringify([snapshot.server_instance, snapshot.spaces?.map(space => [space.id, space.label]), snapshot.tabs?.map(tab => [tab.id, tab.label]), snapshot.panes.map(pane => [pane.id, pane.terminal_id, pane.space_id, pane.tab_id, pane.agent, pane.agent_status]), snapshot.agents.map(agent => [agent.pane_id, agent.name, agent.status, agent.state_change_seq, agent.native_session_id])]) : null;
   const previousRuntime = useRef<string | null>(null);
   useEffect(() => {
     if (!current) return;
@@ -574,7 +578,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
         {view?.threads.filter(t => t.state === "needs_you").map(t => <ThreadRow key={t.thread_id} thread={t} badge={badge(t)} selected={selected === t.thread_id} onSelect={() => select(t.thread_id)} />)}
         {view?.unmanaged_agents.filter(relevant).map(a => <AgentRow key={a.pane_id} agent={a} context={contextFor(a)} selected={selected === `agent:${a.pane_id}`} onSelect={() => selectAgent(a)} />)}
       </section>}
-      {underway.length > 0 && <details className="inbox-others" open><summary><UiIcon name="right" />Working · {underway.length}</summary>{underway.map(t => <ThreadRow key={t.thread_id} thread={t} badge={badge(t)} selected={selected === t.thread_id} onSelect={() => select(t.thread_id)} />)}</details>}
+      {underway.length > 0 && <details className="inbox-others" open><summary><UiIcon name="right" />In progress · {underway.length}</summary>{underway.map(t => <ThreadRow key={t.thread_id} thread={t} badge={badge(t)} selected={selected === t.thread_id} onSelect={() => select(t.thread_id)} />)}</details>}
       {handled.length > 0 && <details className="inbox-others" open={handled.some(t => t.thread_id === selected) || undefined}><summary><UiIcon name="right" />Handled · {handled.length}</summary>{handled.map(t => <ThreadRow key={t.thread_id} thread={t} badge={badge(t)} selected={selected === t.thread_id} onSelect={() => select(t.thread_id)} />)}</details>}
       {view && view.unmanaged_agents.some(a => !relevant(a)) && <details className="inbox-others"><summary><UiIcon name="right" />Other agents · {view.unmanaged_agents.filter(a => !relevant(a)).length}</summary>{view.unmanaged_agents.filter(a => !relevant(a)).map(a => <AgentRow key={a.pane_id} agent={a} context={contextFor(a)} selected={selected === `agent:${a.pane_id}`} quiet onSelect={() => selectAgent(a)} />)}</details>}
     </nav>
@@ -588,7 +592,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
         <span className="inbox-sr" role="status">{announcement}</span>
         <div className="inbox-timeline" ref={timelineRef} role="region" aria-label="Thread timeline" tabIndex={0}><InboxTimeline thread={thread} view={view} client={client} sessionId={sessionId} ownerLabel={id => ownerLabel(view, id)} visible={visible && current} questionCard={question => { const index = questions.indexOf(question), key = answerDraftKey(thread.thread_id, question); return <InboxQuestionCard question={question} label={labels[index]!} imagesLabel={`Attached by ${source(question.text)}`} index={index} total={questions.length} selected={picked === question} updated={!!carried[key] && !!(drafts[key] ?? "").trim()} client={client} sessionId={sessionId} onSelect={pointer => pickTarget(questionKey(question), pointer)} />; }} resultActions={resultActions} interimActions={interimActions} acknowledged={acknowledged} recommendation={recommendationNote} /></div>
         {composer}
-      </section><InboxWork id={`${viewId}-work`} thread={thread} view={view} client={client} sessionId={sessionId} open={open} liveOpen={view?.observation.status === "fresh"} diagnostics={<Evidence thread={thread} view={view} displayed={displayed} />} />
+      </section><InboxWork id={`${viewId}-work`} thread={thread} view={view} client={client} sessionId={sessionId} open={open} liveOpen={view?.observation.status === "fresh"} liveStatusFresh={current && !loadError && view?.observation.status === "fresh" && runtimeIdentity !== null && observedRuntimeIdentity === runtimeIdentity} diagnostics={<Evidence thread={thread} view={view} displayed={displayed} />} />
       </div></> : direct ? <><DetailHeader backRef={backRef} onBack={leaveDetail} tone="unknown" icon="user" title={direct.agent_name} facts={<p className="inbox-facts"><span>{direct.workspace_label} · {direct.tab_label}</span><span>Direct agent · {liveDirect?.agent.status || "status unavailable"}</span></p>}>
         <button type="button" className="inbox-btn" aria-label={`Open ${direct.agent_name} session`} disabled={view?.observation.status !== "fresh"} onClick={() => open({ workspace_id: direct.workspace_id, workspace_label: direct.workspace_label, tab_id: direct.tab_id, tab_label: direct.tab_label, pane_id: direct.pane_id })}><UiIcon name="terminal" /><span>Open session</span></button>
       </DetailHeader><div className="inbox-content">{(directContext?.title || directContext?.activity) && <section aria-label="Session context">{directContext.title && <div className="inbox-update inbox-session-context" dir="auto"><small>{directContext.titleLabel}</small>{directContext.title}</div>}{directContext.activity && <div className="inbox-update inbox-session-context" dir="auto"><small>{directContext.activityLabel} · OMP session</small>{directContext.activity}</div>}</section>}<p className="inbox-placeholder">A direct message goes straight to this agent’s terminal; Cockpit does not manage the agent. Delivery means submitted, not read.</p></div>{composer}</>

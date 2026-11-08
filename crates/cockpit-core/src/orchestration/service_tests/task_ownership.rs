@@ -1345,6 +1345,60 @@ fn dependency_schedule_queues_until_acceptance_rechecks_fresh_graph_and_is_idemp
 }
 
 #[test]
+fn cancelled_scheduled_owner_blocks_admission_until_explicit_unassignment() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Retained cancelled owner");
+    let supervisor = fixture.root_actor(&root);
+    fixture.apply(&supervisor, schedule_action(&root, &task)).unwrap();
+    let first_candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    let resolved = ResolvedMutationInput { project: Some(fixture.project()), ..Default::default() };
+    let first = fixture.service.scheduled_start(&first_candidate, &resolved).unwrap().unwrap();
+    fixture.setup(&first.run_id);
+    fixture.launch_and_bind(&first.run_id);
+    fixture.apply(&supervisor, OrchestrationAction::CancelRun { run_id: first.run_id.clone() }).unwrap();
+    let retained = ownership(&fixture, &root, &task);
+    assert_eq!(fixture.run(&first.run_id).stage, RunStage::Closed);
+    assert_eq!(retained.owner.as_ref().unwrap().run_id, first.run_id);
+
+    // Model a candidate observed before the retained owner became visible, with
+    // the correct next attempt, so the locked owner check is tested separately
+    // from the next-attempt fence.
+    fixture.seed_state(|state| state.task_ownership.iter_mut().find(|record|
+        record.root_id == root && record.task_id == task.task_id).unwrap().owner = None);
+    let stale = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    assert_eq!(stale.next_attempt, 2);
+    fixture.seed_state(|state| state.task_ownership.iter_mut().find(|record|
+        record.root_id == root && record.task_id == task.task_id).unwrap().owner = retained.owner.clone());
+    let bytes = fixture.state_bytes();
+    for _ in 0..2 {
+        assert!(fixture.service.schedule_candidates(4).unwrap().is_empty());
+        assert!(fixture.service.scheduled_start(&stale, &resolved).unwrap().is_none());
+    }
+    assert_code(fixture.apply(&supervisor, fixture.start_action(&root, &task)), "assignment_generation_conflict");
+    assert_eq!(fixture.state_bytes(), bytes);
+    assert!(fixture.service.scheduled_start(&first_candidate, &resolved).unwrap().unwrap().duplicate);
+    assert_eq!(fixture.state_bytes(), bytes);
+
+    fixture.apply(&supervisor, unassign(&root, &task, retained.generation)).unwrap();
+    assert!(ownership(&fixture, &root, &task).owner.is_none());
+    let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    assert_eq!(candidate.next_attempt, 2);
+    fixture.apply(&supervisor, OrchestrationAction::TaskScheduleCancel {
+        operation_id: id(), root_id: root.clone(), task_id: task.task_id.clone(),
+    }).unwrap();
+    let bytes = fixture.state_bytes();
+    assert!(fixture.service.scheduled_start(&candidate, &resolved).unwrap().is_none());
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture.apply(&supervisor, schedule_action(&root, &task)).unwrap();
+    let candidate = fixture.service.schedule_candidates(4).unwrap().pop().unwrap();
+    let second = fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap();
+    assert_eq!(second.attempt, 2);
+    assert_eq!(fixture.run(&second.run_id).assignment_generation, Some(retained.generation + 2));
+    assert!(fixture.service.scheduled_start(&candidate, &resolved).unwrap().unwrap().duplicate);
+}
+
+#[test]
 fn schedule_dispatch_refuses_unbound_root_without_discarding_durable_authorization() {
     let fixture = Fixture::new();
     let root = fixture.root();

@@ -434,3 +434,20 @@ it("describes stored input before the Result according to the attempt's state", 
   await render([task], { snapshot: { ...snapshot, runs: [{ ...worker, stage: "closed", close_reason: "accepted" }] } });
   expect(host.querySelector(".liaison-detail")?.textContent).toContain("no pickup recorded · from the liaison");
 });
+
+it("keeps board, graph and history activity consistent as observation becomes stale", async () => {
+  const task = taskFixture("Work", { lane: "working", current_run_id: "worker" });
+  const worker = runFixture({ kind: "worker", run_id: "worker", task_id: "Work", stage: "working" });
+  const snapshot = orchestrationFixture([task], [worker]);
+  await render([task], { snapshot, runs: [worker] });
+  expect(host.querySelector('[aria-label="Assigned tasks"]')).not.toBeNull();
+  expect(host.querySelector(".liaison-card-meta")?.textContent).toContain("working");
+  act(() => host.querySelector<HTMLButtonElement>(".liaison-card-open")!.click());
+  expect(host.querySelector(".liaison-detail-outcome")?.textContent).toContain("Assigned · working");
+  await render([task], { snapshot, runs: [worker], fresh: false });
+  expect(host.querySelector(".liaison-detail-outcome")?.textContent).toContain("Assigned · unconfirmed");
+  act(() => host.querySelector<HTMLButtonElement>('[aria-label="Close task history"]')!.click());
+  act(() => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Graph")!.click());
+  expect(host.querySelector(".liaison-graph-task")?.textContent).toContain("unconfirmed");
+  expect(host.querySelector(".liaison-dependency-outline .liaison-task-stage")?.textContent).toContain("unconfirmed");
+});

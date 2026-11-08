@@ -89,11 +89,11 @@ pub fn digest(snapshot: &OrchestrationSnapshot, root_id: &str, runtime: Option<&
             else if !questions.is_empty() { WorkerState::QuestionPending }
             else if let Some(r) = run {
                 if r.stage == RunStage::Reported { WorkerState::AwaitingReview }
-                else if matches!(r.stage, RunStage::Queued | RunStage::Starting) || r.dispatch.as_ref().is_some_and(|d| !d.agent_started) { WorkerState::Starting }
                 else if r.stage == RunStage::Closed { if schedule.is_some() { WorkerState::Queued } else { WorkerState::Unscheduled } }
+                else if matches!(r.stage, RunStage::Queued | RunStage::Starting) || r.dispatch.as_ref().is_some_and(|d| !d.agent_started) { WorkerState::Starting }
                 else { match observation {
                     Some(o) if matches!(o.presence, Presence::Missing | Presence::EndpointChanged) => WorkerState::Gone,
-                    Some(o) if o.presence == Presence::Present => match o.agent_status.as_deref() { Some("working") => WorkerState::Working, Some("idle" | "done") if worker_waiting.is_some() => WorkerState::Waiting, Some("idle" | "done") => WorkerState::IdleNoReport, Some("blocked") => WorkerState::Blocked, _ => WorkerState::Unknown },
+                    Some(o) if o.presence == Presence::Present => match o.agent_status.as_deref() { Some("working" | "idle" | "done") if worker_waiting.is_some() => WorkerState::Waiting, Some("working") => WorkerState::Working, Some("idle" | "done") => WorkerState::IdleNoReport, Some("blocked") => WorkerState::Blocked, _ => WorkerState::Unknown },
                     None if runtime.is_some() && matches!(&snapshot.runtime, RuntimeObservation::Fresh { .. }) => WorkerState::Gone,
                     _ => WorkerState::Unknown,
                 }}

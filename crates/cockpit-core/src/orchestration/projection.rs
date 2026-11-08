@@ -492,6 +492,11 @@ fn task_wait(
         if let Some(hold) = &schedule.hold {
             return make(TaskWaitCause::ScheduleHold, Some(hold.at.clone()), vec![], Some(hold.code.clone()), None);
         }
+        if current.is_some_and(|run| run.stage == RunStage::Closed) {
+            return make(TaskWaitCause::ScheduleHold, None, vec![],
+                Some("retained_closed_owner".into()),
+                Some("Coordinate with the supervisor to review the retained owner and explicitly unassign it before another attempt can be scheduled.".into()));
+        }
         return make(TaskWaitCause::Dispatch, Some(schedule.scheduled_at.clone()), vec![], None, None);
     }
     if let Some(run) = current.filter(|run| matches!(run.stage, RunStage::Queued | RunStage::Starting)) {
@@ -1424,6 +1429,40 @@ mod tests {
         assert!(!wait.next_automatic);
         durable.task_ownership[0].schedule = None;
         assert!(task_wait(&durable, ROOT, &view, None, &titles).is_none());
+    }
+
+    #[test]
+    fn scheduled_closed_owner_requires_explicit_coordination() {
+        let mut durable = state(worker(RunStage::Closed));
+        durable.task_ownership[0].schedule = Some(TaskSchedule {
+            operation_id: "op".into(), principal_key: "operator".into(), target: None,
+            brief: String::new(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
+            label: None, scheduled_at: START.into(), hold: None,
+        });
+        let projected = |state: &OrchestrationState| {
+            project_board(vec![board()], Some(ROOT), state, &[], None).unwrap().unwrap().tasks.remove(0)
+        };
+        let view = projected(&durable);
+        assert_eq!(view.current_run_id.as_deref(), Some(WORKER));
+        let wait = view.waiting.unwrap();
+        assert_eq!(wait.cause, TaskWaitCause::ScheduleHold);
+        assert_eq!(wait.code.as_deref(), Some("retained_closed_owner"));
+        assert_eq!(wait.detail.as_deref(), Some("Coordinate with the supervisor to review the retained owner and explicitly unassign it before another attempt can be scheduled."));
+        assert!(!wait.next_automatic);
+        assert!(durable.task_ownership[0].owner.is_some());
+
+        durable.task_ownership[0].schedule.as_mut().unwrap().hold = Some(ScheduleHold {
+            code: "dependency_input_not_materialized".into(), at: NOW.into(),
+            dependency_task_id: None,
+        });
+        assert_eq!(projected(&durable).waiting.unwrap().cause, TaskWaitCause::DependencyInput);
+        durable.task_ownership[0].schedule.as_mut().unwrap().hold = None;
+        durable.task_ownership[0].owner = None;
+        let view = projected(&durable);
+        assert!(view.current_run_id.is_none());
+        let wait = view.waiting.unwrap();
+        assert_eq!(wait.cause, TaskWaitCause::Dispatch);
+        assert!(wait.next_automatic);
     }
 
     #[test]

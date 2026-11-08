@@ -6,6 +6,7 @@ import { TaskHistoryDetail, waitCopy } from "./TaskHistoryDetail";
 import { taskHistory, unreflectedInputLabel } from "./taskHistory";
 import { dependencySummary, uniqueTask } from "./dependencies";
 import { groupTasks } from "./taskProjects";
+import { taskActivity } from "./taskActivity";
 import "./supervisor.css";
 
 const attentionLabels = {
@@ -122,9 +123,9 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
     focusIntent.current = "origin";
     setSelected(null);
   };
-  const summary = taskLanes.filter(({ lane }) => lane !== "accepted").flatMap(({ lane }) => {
+  const summary = taskLanes.filter(({ lane }) => lane !== "accepted").flatMap(({ lane, label }) => {
     const count = tasks.filter(view => view.lane === lane).length;
-    return count ? [`${count} ${lane}`] : [];
+    return count ? [`${count} ${label.toLowerCase()}`] : [];
   }).join(" · ");
   return <section ref={overview} className="liaison-task-overview" aria-label="Task overview" onFocusCapture={event => { lastFocused.current = event.target as HTMLElement; }}
     onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (selected) goBack(); else onClose(); } }}>
@@ -144,12 +145,12 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
             <button type="button" aria-pressed={activeProject === null} onClick={() => setProject(null)}>All {groups.some(group => group.open) ? <span>{groups.reduce((sum, group) => sum + group.open, 0)}</span> : null}</button>
             {groups.map(group => <button type="button" key={group.key} aria-pressed={activeProject === group.key} onClick={() => setProject(group.key)}>{group.label} {group.open ? <span>{group.open}</span> : null}</button>)}
           </div> : null}
-          <SupervisorTasks tasks={tasks} runs={runs} selectedKey={selectedKey} onOpen={open} project={activeProject} />
-        </> : <SupervisorGraph tasks={tasks} selectedKey={selectedKey} onOpen={open} />}
+          <SupervisorTasks tasks={tasks} runs={runs} selectedKey={selectedKey} onOpen={open} project={activeProject} snapshot={snapshot} rootId={rootId} fresh={fresh} />
+        </> : <SupervisorGraph tasks={tasks} selectedKey={selectedKey} onOpen={open} snapshot={snapshot} rootId={rootId} fresh={fresh} />}
       </div>
       {selected && view ? <aside className="liaison-overview-detail" aria-label="Task history">
         <header><button type="button" className="liaison-detail-back" ref={closeDetail} aria-label="Close task history" onClick={goBack}>✕ Close</button></header>
-        <TaskHistoryDetail view={view} history={history} />
+        <TaskHistoryDetail view={view} history={history} activity={taskActivity(view, snapshot, rootId, fresh)} />
       </aside> : null}
     </div>
   </section>;
