@@ -367,7 +367,7 @@ impl OrchestrationService {
         let state = self.store.lock()?.read_shared()?;
         let run = state.runs.iter().find(|run| run.session_id == request.session_id && run.run_id == request.run_id)
             .ok_or_else(|| error("artifact_not_found", "Artifact not found"))?;
-        artifacts::read(run, &request.path)
+        artifacts::read(run, &state.messages, &request.path)
     }
 
 
@@ -436,7 +436,7 @@ impl OrchestrationService {
             }
         }
         let tasks = document.tasks.into_iter().zip(facts).map(|(task, dependencies)| TaskView {
-            task, dependencies, lane: TaskLane::Ready, current_run_id: None, scheduled: false, attempt: None, project: None, waiting: None,
+            task, dependencies, lane: TaskLane::Ready, current_run_id: None, scheduled: false, attempt: None, project: None, waiting: None, worker_waiting: None,
         }).collect();
         Ok(TaskBoard {
             root_id: root_id.into(),
@@ -1066,6 +1066,7 @@ impl OrchestrationService {
             } else {
                 None
             };
+            let mut idle_resume = None;
             let diagnostic = if !same_endpoint {
                 Some("endpoint_changed")
             } else if pane.is_none() && run.result.is_none() {
@@ -1076,6 +1077,11 @@ impl OrchestrationService {
                 Some("runtime_blocked")
             } else if run.stage == RunStage::Working
                 && run.result.is_none()
+                && !projection::current_worker_waiting(&state, &run)
+                && !messages::current_questions(&state.messages, &run.run_id).iter().any(|question|
+                    !state.messages.iter().any(|answer| !answer.stale && answer.kind == MessageKind::Answer
+                        && answer.to_run_id == run.run_id
+                        && answer.in_reply_to.as_deref() == Some(question.message_id.as_str())))
                 && pane.is_some_and(|p| matches!(p.agent_status.as_deref(), Some("idle" | "done")))
             {
                 let since = state
@@ -1087,7 +1093,22 @@ impl OrchestrationService {
                     .chain(pane.and_then(|p| p.state_changed_at.as_deref()))
                     .filter_map(parse_time)
                     .max();
-                let key = format!("observation:{}:idle_without_report:{}:{}", run.run_id, attachment.epoch, run.attempt);
+                let resume = state.messages.iter().rev().filter(|message| !message.stale
+                    && matches!(&message.from, ActorRef::Run { run_id } if run_id == &run.run_id))
+                    .find_map(|message| {
+                        let report = message.report.as_ref()?;
+                        if report.kind == ReportKind::Result { return Some(None); }
+                        if report.kind != ReportKind::Progress { return None; }
+                        let checkpoint = WorkerCheckpoint::decode(report.plan.as_deref())?;
+                        match checkpoint.kind {
+                            WorkerCheckpointKind::Resumed => Some(Some(message.message_id.as_str())),
+                            WorkerCheckpointKind::Waiting => Some(None),
+                            WorkerCheckpointKind::Interim => None,
+                        }
+                    }).flatten();
+                idle_resume = resume.map(str::to_owned);
+                let key = format!("observation:{}:idle_without_report:{}:{}{}", run.run_id, attachment.epoch,
+                    run.attempt, idle_resume.as_ref().map_or(String::new(), |id| format!(":resumed:{id}")));
                 if state.messages.iter().any(|message| message.message_id == key) {
                     None
                 } else if let Some(since) = since {
@@ -1118,7 +1139,10 @@ impl OrchestrationService {
                 };
                 recipient = parent.clone();
             }
-            let key = format!("observation:{}:{}:{}:{}", run.run_id, diagnostic, attachment.epoch, run.attempt);
+            let suffix = if diagnostic == "idle_without_report" {
+                idle_resume.as_ref().map_or(String::new(), |id| format!(":resumed:{id}"))
+            } else { String::new() };
+            let key = format!("observation:{}:{}:{}:{}{}", run.run_id, diagnostic, attachment.epoch, run.attempt, suffix);
             let duplicate = state.messages.iter().any(|m| m.message_id == key);
             if !duplicate {
                 let text = if diagnostic == "idle_without_report" {

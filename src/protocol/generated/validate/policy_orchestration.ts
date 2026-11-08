@@ -28,6 +28,7 @@ export interface WireTypes {
   "InboxRun": V1.InboxRun;
   "InboxEntryKind": V1.InboxEntryKind;
   "InboxWidgetEvent": V1.InboxWidgetEvent;
+  "InboxInterimRef": V1.InboxInterimRef;
   "InboxEntry": V1.InboxEntry;
   "InboxArtifactKind": V1.InboxArtifactKind;
   "InboxArtifact": V1.InboxArtifact;
@@ -134,10 +135,6 @@ export interface WireTypes {
   "ResourceRequestState": V1.ResourceRequestState;
   "ResourceRequestRecord": V1.ResourceRequestRecord;
   "ResourceRelease": V1.ResourceRelease;
-  "ResourceBuildRegistration": V1.ResourceBuildRegistration;
-  "OwnedResourceKind": V1.OwnedResourceKind;
-  "ResourceOwnership": V1.ResourceOwnership;
-  "CleanupAuthority": V1.CleanupAuthority;
 }
 
 export interface WireOwners {
@@ -170,6 +167,7 @@ export interface WireOwners {
   "InboxReceipt": V1.InboxReceipt;
   "InboxRun": V1.InboxRun;
   "InboxWidgetEvent": V1.InboxWidgetEvent;
+  "InboxInterimRef": V1.InboxInterimRef;
   "InboxEntry": V1.InboxEntry;
   "InboxArtifact": V1.InboxArtifact;
   "InboxDecision": V1.InboxDecision;
@@ -265,7 +263,6 @@ export interface WireOwners {
   "ResourceRequest": V1.ResourceRequest;
   "ResourceRequestRecord": V1.ResourceRequestRecord;
   "ResourceRelease": V1.ResourceRelease;
-  "ResourceBuildRegistration": V1.ResourceBuildRegistration;
 }
 
 export interface WireFields {
@@ -379,6 +376,10 @@ export interface WireFields {
   "InboxWidgetEvent.title": (V1.InboxWidgetEvent)["title"];
   "InboxWidgetEvent.publication_id": (V1.InboxWidgetEvent)["publication_id"];
   "InboxWidgetEvent.content_sha256": (V1.InboxWidgetEvent)["content_sha256"];
+  "InboxInterimRef.run_id": (V1.InboxInterimRef)["run_id"];
+  "InboxInterimRef.message_id": (V1.InboxInterimRef)["message_id"];
+  "InboxInterimRef.task_id": (V1.InboxInterimRef)["task_id"];
+  "InboxInterimRef.attempt": (V1.InboxInterimRef)["attempt"];
   "InboxEntry.message_id": (V1.InboxEntry)["message_id"];
   "InboxEntry.at": (V1.InboxEntry)["at"];
   "InboxEntry.kind": (V1.InboxEntry)["kind"];
@@ -387,6 +388,8 @@ export interface WireFields {
   "InboxEntry.outcome": (V1.InboxEntry)["outcome"];
   "InboxEntry.images": (V1.InboxEntry)["images"];
   "InboxEntry.in_reply_to": (V1.InboxEntry)["in_reply_to"];
+  "InboxEntry.interim": (V1.InboxEntry)["interim"];
+  "InboxEntry.artifacts": (V1.InboxEntry)["artifacts"];
   "InboxEntry.task_title": (V1.InboxEntry)["task_title"];
   "InboxEntry.widget": (V1.InboxEntry)["widget"];
   "InboxArtifact.path": (V1.InboxArtifact)["path"];
@@ -421,6 +424,7 @@ export interface WireFields {
   "InboxTaskLink.lane": (V1.InboxTaskLink)["lane"];
   "InboxTaskLink.run": (V1.InboxTaskLink)["run"];
   "InboxTaskLink.evidence": (V1.InboxTaskLink)["evidence"];
+  "InboxTaskLink.worker_waiting": (V1.InboxTaskLink)["worker_waiting"];
   "InboxThread.thread_id": (V1.InboxThread)["thread_id"];
   "InboxThread.state": (V1.InboxThread)["state"];
   "InboxThread.need": (V1.InboxThread)["need"];
@@ -434,6 +438,7 @@ export interface WireFields {
   "InboxThread.recommendation": (V1.InboxThread)["recommendation"];
   "InboxThread.reply": (V1.InboxThread)["reply"];
   "InboxThread.unread_result_message_id": (V1.InboxThread)["unread_result_message_id"];
+  "InboxThread.unread_interims": (V1.InboxThread)["unread_interims"];
   "InboxThread.tasks": (V1.InboxThread)["tasks"];
   "InboxThread.receipts": (V1.InboxThread)["receipts"];
   "InboxThread.facts": (V1.InboxThread)["facts"];
@@ -605,6 +610,7 @@ export interface WireFields {
   "TaskView.scheduled": (V1.TaskView)["scheduled"];
   "TaskView.attempt": (V1.TaskView)["attempt"];
   "TaskView.waiting": (V1.TaskView)["waiting"];
+  "TaskView.worker_waiting": (V1.TaskView)["worker_waiting"];
   "TaskWait.cause": (V1.TaskWait)["cause"];
   "TaskWait.since": (V1.TaskWait)["since"];
   "TaskWait.held_by": (V1.TaskWait)["held_by"];
@@ -812,9 +818,6 @@ export interface WireFields {
   "ResourceRequestRecord.updated_at": (V1.ResourceRequestRecord)["updated_at"];
   "ResourceRelease.request_id": (V1.ResourceRelease)["request_id"];
   "ResourceRelease.expected_holder": (V1.ResourceRelease)["expected_holder"];
-  "ResourceBuildRegistration.request_id": (V1.ResourceBuildRegistration)["request_id"];
-  "ResourceBuildRegistration.expected_holder": (V1.ResourceBuildRegistration)["expected_holder"];
-  "ResourceBuildRegistration.process": (V1.ResourceBuildRegistration)["process"];
 }
 
 export interface WireFieldNames {
@@ -847,14 +850,15 @@ export interface WireFieldNames {
   "InboxReceipt": "message_id" | "kind" | "to_run_id" | "attempt_run_id" | "stage" | "created_at" | "acked_at" | "stale";
   "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "session_id" | "attachment_id" | "attachment_epoch" | "presence" | "agent_status" | "location" | "cleanup" | "report_images";
   "InboxWidgetEvent": "key" | "revision" | "binding" | "title" | "publication_id" | "content_sha256";
-  "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to" | "task_title" | "widget";
+  "InboxInterimRef": "run_id" | "message_id" | "task_id" | "attempt";
+  "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to" | "interim" | "artifacts" | "task_title" | "widget";
   "InboxArtifact": "path" | "name" | "kind" | "recorded";
   "InboxDecision": "question" | "answer" | "asked_at" | "answered_at" | "by";
   "InboxTaskResult": "summary" | "outcome" | "at";
   "InboxTaskIntegration": "target" | "commit";
   "InboxTaskEvidence": "run_id" | "attempt" | "attempts" | "result" | "checks" | "commits" | "head_commit" | "integration" | "artifacts" | "images" | "decisions";
-  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence";
-  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
+  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence" | "worker_waiting";
+  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "unread_interims" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
   "Directive": "directive_id" | "root_id" | "scope" | "text" | "source" | "thread_id" | "message_id" | "created_by" | "created_at" | "removed_at";
   "DirectiveScope": never;
   "DirectiveScope[task]": "task_id";
@@ -891,7 +895,7 @@ export interface WireFieldNames {
   "ReplacementPlacement[isolated_directory]": "directory";
   "TaskDependencyBlocker": "task_id" | "reason";
   "TaskProject": "key" | "label";
-  "TaskView": "task" | "project" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt" | "waiting";
+  "TaskView": "task" | "project" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt" | "waiting" | "worker_waiting";
   "TaskWait": "cause" | "since" | "held_by" | "code" | "detail" | "next_automatic";
   "TaskWaitRef": "id" | "title";
   "AttemptBadge": "run_id" | "attempt" | "state";
@@ -942,7 +946,6 @@ export interface WireFieldNames {
   "ResourceRequest": "operation_id" | "resource_key" | "source_identity" | "holder";
   "ResourceRequestRecord": "request_id" | "sequence" | "resource_key" | "source_identity" | "holder" | "state" | "build_processes" | "machine_id" | "blocked_reason" | "updated_at";
   "ResourceRelease": "request_id" | "expected_holder";
-  "ResourceBuildRegistration": "request_id" | "expected_holder" | "process";
 }
 
 export interface WireChildNames {
@@ -962,12 +965,14 @@ export interface WireChildNames {
   "InboxWidgetEvent.key": "WidgetKey";
   "InboxWidgetEvent.binding": "WidgetLiveBinding";
   "InboxEntry.source": "InboxSource";
+  "InboxEntry.interim": "InboxInterimRef";
   "InboxEntry.widget": "InboxWidgetEvent";
   "InboxTaskEvidence.result": "InboxTaskResult";
   "InboxTaskEvidence.integration": "InboxTaskIntegration";
   "InboxTaskLink.project": "TaskProject";
   "InboxTaskLink.run": "InboxRun";
   "InboxTaskLink.evidence": "InboxTaskEvidence";
+  "InboxTaskLink.worker_waiting": "TaskWait";
   "InboxThread.title": "InboxText";
   "InboxThread.next": "InboxText";
   "InboxThread.request": "InboxRequestEcho";
@@ -995,6 +1000,7 @@ export interface WireChildNames {
   "TaskView.dependencies": "TaskDependencies";
   "TaskView.attempt": "AttemptBadge";
   "TaskView.waiting": "TaskWait";
+  "TaskView.worker_waiting": "TaskWait";
   "DispatchTarget.request": "WorkspaceSetupRequest";
   "DispatchTarget[setup].request": "WorkspaceSetupRequest";
   "ProjectIdentity.source": "ProjectSource";
@@ -1021,8 +1027,6 @@ export interface WireChildNames {
   "ResourceRequestRecord.source_identity": "ResourceSourceIdentity";
   "ResourceRequestRecord.holder": "AttachmentReference";
   "ResourceRelease.expected_holder": "AttachmentReference";
-  "ResourceBuildRegistration.expected_holder": "AttachmentReference";
-  "ResourceBuildRegistration.process": "NativeProcessIdentity";
 }
 
 export interface WireTagNames {
@@ -1095,14 +1099,15 @@ export interface WireCheckpointFieldNames {
   "InboxReceipt": "message_id" | "kind" | "to_run_id" | "attempt_run_id" | "stage" | "created_at" | "acked_at" | "stale";
   "InboxRun": "run_id" | "attempt" | "stage" | "harness" | "session_id" | "attachment_id" | "attachment_epoch" | "presence" | "agent_status" | "location" | "cleanup" | "report_images";
   "InboxWidgetEvent": "key" | "revision" | "binding" | "title" | "publication_id" | "content_sha256";
-  "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to" | "task_title" | "widget";
+  "InboxInterimRef": "run_id" | "message_id" | "task_id" | "attempt";
+  "InboxEntry": "message_id" | "at" | "kind" | "text" | "source" | "outcome" | "images" | "in_reply_to" | "interim" | "artifacts" | "task_title" | "widget";
   "InboxArtifact": "path" | "name" | "kind" | "recorded";
   "InboxDecision": "question" | "answer" | "asked_at" | "answered_at" | "by";
   "InboxTaskResult": "summary" | "outcome" | "at";
   "InboxTaskIntegration": "target" | "commit";
   "InboxTaskEvidence": "run_id" | "attempt" | "attempts" | "result" | "checks" | "commits" | "head_commit" | "integration" | "artifacts" | "images" | "decisions";
-  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence";
-  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
+  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence" | "worker_waiting";
+  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "unread_interims" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
   "Directive": "directive_id" | "root_id" | "scope" | "text" | "source" | "thread_id" | "message_id" | "created_by" | "created_at" | "removed_at";
   "DirectiveScope": "project_key" | "scope" | "task_id";
   "DirectiveScope[task]": "task_id" | "scope";
@@ -1139,7 +1144,7 @@ export interface WireCheckpointFieldNames {
   "ReplacementPlacement[isolated_directory]": "directory" | "placement";
   "TaskDependencyBlocker": "task_id" | "reason";
   "TaskProject": "key" | "label";
-  "TaskView": "task" | "project" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt" | "waiting";
+  "TaskView": "task" | "project" | "lane" | "current_run_id" | "dependencies" | "scheduled" | "attempt" | "waiting" | "worker_waiting";
   "TaskWait": "cause" | "since" | "held_by" | "code" | "detail" | "next_automatic";
   "TaskWaitRef": "id" | "title";
   "AttemptBadge": "run_id" | "attempt" | "state";
@@ -1190,7 +1195,6 @@ export interface WireCheckpointFieldNames {
   "ResourceRequest": "operation_id" | "resource_key" | "source_identity" | "holder";
   "ResourceRequestRecord": "request_id" | "sequence" | "resource_key" | "source_identity" | "holder" | "state" | "build_processes" | "machine_id" | "blocked_reason" | "updated_at";
   "ResourceRelease": "request_id" | "expected_holder";
-  "ResourceBuildRegistration": "request_id" | "expected_holder" | "process";
 }
 
 export type WireOmittableField =
@@ -1210,6 +1214,8 @@ export type WireOmittableField =
   | "InboxRun.location"
   | "InboxEntry.outcome"
   | "InboxEntry.in_reply_to"
+  | "InboxEntry.interim"
+  | "InboxEntry.artifacts"
   | "InboxEntry.task_title"
   | "InboxEntry.widget"
   | "InboxDecision.answer"
@@ -1222,6 +1228,7 @@ export type WireOmittableField =
   | "InboxTaskLink.project"
   | "InboxTaskLink.run"
   | "InboxTaskLink.evidence"
+  | "InboxTaskLink.worker_waiting"
   | "InboxThread.need"
   | "InboxThread.next"
   | "InboxThread.project"
@@ -1229,6 +1236,7 @@ export type WireOmittableField =
   | "InboxThread.recommendation"
   | "InboxThread.reply"
   | "InboxThread.unread_result_message_id"
+  | "InboxThread.unread_interims"
   | "InboxThread.earlier_widgets"
   | "InboxThread.earlier_widgets_omitted"
   | "Directive.thread_id"
@@ -1284,6 +1292,7 @@ export type WireOmittableField =
   | "TaskView.current_run_id"
   | "TaskView.attempt"
   | "TaskView.waiting"
+  | "TaskView.worker_waiting"
   | "TaskWait.since"
   | "TaskWait.code"
   | "TaskWait.detail"
@@ -1336,8 +1345,10 @@ export type WireOmittableField =
   | never;
 
 export type WireOptionalField =
+  | "InboxEntry.interim"
   | "InboxEntry.task_title"
   | "InboxEntry.widget"
+  | "InboxTaskLink.worker_waiting"
   | "InboxThread.earlier_widgets"
   | "InboxThread.earlier_widgets_omitted"
   | "Directive.thread_id"
@@ -1345,6 +1356,7 @@ export type WireOptionalField =
   | "Directive.removed_at"
   | "DirectiveScope[standing].project_key"
   | "UnmanagedAgent.expected_target"
+  | "TaskView.worker_waiting"
   | "ResumeRecord.fresh_conversation"
   | "ResumeRecord.previous_conversation"
   | "ResumeRecord.session_namespace"
@@ -1363,6 +1375,7 @@ export type WireListField =
   | "InboxRun.cleanup"
   | "InboxRun.report_images"
   | "InboxEntry.images"
+  | "InboxEntry.artifacts"
   | "InboxTaskEvidence.checks"
   | "InboxTaskEvidence.commits"
   | "InboxTaskEvidence.artifacts"
@@ -1371,6 +1384,7 @@ export type WireListField =
   | "InboxThread.owner_root_ids"
   | "InboxThread.follow_ups"
   | "InboxThread.questions"
+  | "InboxThread.unread_interims"
   | "InboxThread.tasks"
   | "InboxThread.receipts"
   | "InboxThread.facts"

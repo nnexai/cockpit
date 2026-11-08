@@ -86,6 +86,22 @@ pub(super) fn apply(
                 }
                 return Ok(Some(message_result(existing, true)));
             }
+            let checkpoint = (*kind == ReportKind::Progress).then(|| WorkerCheckpoint::decode(plan.as_deref())).flatten();
+            if let Some(checkpoint) = &checkpoint {
+                if outcome.is_some() || source_output.is_some() {
+                    return Err(error("invalid_report", "A checkpoint must be progress without outcome or source output"));
+                }
+                if caller.is_none_or(|job| job.role != super::JobRole::Worker)
+                    || run.stage != RunStage::Working
+                {
+                    return Err(error("invalid_stage", "A checkpoint requires a current working worker"));
+                }
+                validate_checkpoint(checkpoint)?;
+                // Check the encoded liaison notice before mutating the state.
+                let notice = serde_json::json!({"event":"waiting","run_id":run.run_id,
+                    "receipt_message_id":message_id,"summary":summary}).to_string();
+                text_bound(&notice)?;
+            }
             if let Some(thread_id) = thread_id {
                 super::super::threads::check_report_authority(state, thread_id, &state.runs[index].run_id)?;
             }
@@ -110,12 +126,30 @@ pub(super) fn apply(
                 report,
                 &recipient,
                 message_id,
+                checkpoint.as_ref(),
             )?;
+            if checkpoint.as_ref().is_some_and(|checkpoint| checkpoint.kind == WorkerCheckpointKind::Interim) {
+                super::super::threads::link_interim_task(state, index);
+            }
             result
         }
         _ => return Ok(None),
     };
     Ok(Some(result))
+}
+
+fn validate_checkpoint(checkpoint: &WorkerCheckpoint) -> Result<(), InspectionError> {
+    use std::path::{Component, Path};
+    if checkpoint.artifacts.len() > 16 || checkpoint.artifacts.iter().any(|artifact| {
+        artifact.len() > 4096 || artifact.trim().is_empty()
+            || artifact.chars().any(char::is_control)
+            || artifact.contains('\\')
+            || !Path::new(artifact).is_absolute()
+            || Path::new(artifact).components().any(|part| matches!(part, Component::ParentDir))
+    }) {
+        return Err(error("invalid_report", "Checkpoint artifacts must be bounded absolute paths without traversal"));
+    }
+    Ok(())
 }
 
 fn validate_card(card: &ThreadCard, kind: ReportKind, has_thread: bool) -> Result<(), InspectionError> {
@@ -161,6 +195,7 @@ fn publish_report_receipt(
     report: Report,
     recipient: &str,
     message_id: &str,
+    checkpoint: Option<&WorkerCheckpoint>,
 ) -> Result<(), InspectionError> {
     let run = &mut state.runs[index];
     run.last_report = Some(report.clone());
@@ -169,22 +204,35 @@ fn publish_report_receipt(
     if kind == ReportKind::Result && run.parent_run_id.is_some() {
         run.source_output = report.source_output.clone();
         run.integration = Integration::Pending;
-        run.result = Some(report);
+        run.result = Some(report.clone());
         run.stage = RunStage::Reported;
     }
     run.updated_at = now();
-    if matches!(kind, ReportKind::Initialized | ReportKind::Result | ReportKind::NeedsInput)
-        && recipient != state.runs[index].root_id
-        && state.runs[index].parent_run_id.is_some()
+    if state.runs[index].parent_run_id.is_some()
+        && (checkpoint.is_some()
+            || (matches!(kind, ReportKind::Initialized | ReportKind::Result | ReportKind::NeedsInput)
+                && recipient != state.runs[index].root_id))
     {
         let root_id = state.runs[index].root_id.clone();
         let run_id = state.runs[index].run_id.clone();
-        let event = match kind {
-            ReportKind::Initialized => "initialized",
-            ReportKind::Result => "result",
-            _ => "needs_input",
+        let event = if let Some(checkpoint) = checkpoint {
+            match &checkpoint.kind {
+                WorkerCheckpointKind::Interim => "interim",
+                WorkerCheckpointKind::Waiting => "waiting",
+                WorkerCheckpointKind::Resumed => "resumed",
+            }
+        } else {
+            match kind {
+                ReportKind::Initialized => "initialized",
+                ReportKind::Result => "result",
+                _ => "needs_input",
+            }
         };
-        let text = serde_json::json!({"event":event,"run_id":run_id,"receipt_message_id":message_id}).to_string();
+        let text = if checkpoint.is_some() {
+            serde_json::json!({"event":event,"run_id":run_id,"receipt_message_id":message_id,"summary":report.summary}).to_string()
+        } else {
+            serde_json::json!({"event":event,"run_id":run_id,"receipt_message_id":message_id}).to_string()
+        };
         append(state, AppendMessage { thread_id: None, handoff: None, from: ActorRef::Dispatcher,
         to_run_id: &root_id,
         message_id: &format!("manage-{run_id}-{message_id}"),

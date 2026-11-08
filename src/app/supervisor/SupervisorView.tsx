@@ -44,6 +44,8 @@ function taskAttention(snapshot: OrchestrationSnapshot | null, rootId: string | 
       const observedAgent = observation?.presence === "present" && observation.actual_agent;
       if (run.stage === "working" && (!fresh || !observedAgent)) labels.add("Live worker state unknown");
     }
+    const workerWait = view.worker_waiting ?? (view.waiting?.cause === "worker_waiting" ? view.waiting : null);
+    if (workerWait) labels.add(`Worker says it is waiting${workerWait.detail ? `: ${workerWait.detail}` : "."}`);
     if ((!view.current_run_id || run?.stage === "queued") && !view.task.checked && (view.scheduled || view.lane === "blocked")) {
       const dependency = dependencySummary(view, tasks);
       labels.add(dependency ? `Blocked: ${dependency}` : view.waiting ? waitCopy[view.waiting.cause][0] : view.lane === "blocked" ? "Blocked; reason unknown" : "Waiting for dispatch; reason unknown");

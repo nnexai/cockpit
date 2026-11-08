@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use cockpit_protocol::orchestration::{
-    DispatchTarget, OrchestrationAction, TaskStepScope,
+    DispatchTarget, OrchestrationAction, TaskStepScope, WorkerCheckpoint, WorkerCheckpointKind,
 };
 
 use super::super::{
@@ -114,6 +114,7 @@ fn thread_report_summary_preserves_multiline_markdown() {
 fn image_flags_and_inbox_images_parse() {
     for command in [
         vec!["run", "report", "--kind", "progress", "--summary", "Update"],
+        vec!["run", "checkpoint", "--interim", "--summary", "Update"],
         vec!["run", "done", "--summary", "Done"],
         vec!["run", "message", "worker", "--kind", "instruction", "--text", "Review"],
         vec!["run", "--operator", "handoff", "--owner", "root"],
@@ -1197,6 +1198,53 @@ fn report_generates_one_message_identity_when_not_supplied() {
     assert_eq!(uuid::Uuid::parse_str(&message_id).unwrap().get_version_num(), 4);
     assert_eq!(summary, "Choose the outcome");
     assert_eq!(kind, cockpit_protocol::orchestration::ReportKind::NeedsInput);
+}
+
+#[test]
+fn checkpoint_encodes_progress_and_requires_exactly_one_kind() {
+    for (flag, expected) in [
+        ("--interim", WorkerCheckpointKind::Interim),
+        ("--waiting", WorkerCheckpointKind::Waiting),
+        ("--resume", WorkerCheckpointKind::Resumed),
+    ] {
+        let TestCommand::Run(args) = TestCli::try_parse_from([
+            "test", "run", "checkpoint", flag, "--summary", "Evidence or reason",
+            "--artifact", "first/path", "--artifact", "second/path", "--message-id", "checkpoint-id",
+        ]).unwrap().command else { panic!("expected run") };
+        let RunOperation::Mutation(OrchestrationAction::Report {
+            message_id, kind, summary, outcome, plan, ..
+        }) = args.command.operation(&args.common).unwrap() else { panic!("expected report") };
+        assert_eq!(message_id, "checkpoint-id");
+        assert_eq!(kind, cockpit_protocol::orchestration::ReportKind::Progress);
+        assert_eq!(summary, "Evidence or reason");
+        assert!(outcome.is_none());
+        let checkpoint = WorkerCheckpoint::decode(plan.as_deref()).expect("checkpoint envelope");
+        assert_eq!(checkpoint.kind, expected);
+        assert_eq!(checkpoint.artifacts, ["first/path", "second/path"]);
+    }
+    for args in [
+        vec!["test", "run", "checkpoint", "--summary", "x"],
+        vec!["test", "run", "checkpoint", "--interim", "--waiting", "--summary", "x"],
+        vec!["test", "run", "checkpoint", "--resume", "--interim", "--summary", "x"],
+        vec!["test", "run", "checkpoint", "--waiting"],
+        vec!["test", "run", "report", "--kind", "interim", "--summary", "x"],
+        vec!["test", "run", "report", "--kind", "waiting", "--summary", "x"],
+    ] {
+        assert!(TestCli::try_parse_from(args).is_err());
+    }
+}
+
+#[test]
+fn checkpoint_generates_message_id_and_allows_no_artifacts() {
+    let TestCommand::Run(args) = TestCli::try_parse_from([
+        "test", "run", "checkpoint", "--resume", "--summary", "Continuing",
+    ]).unwrap().command else { panic!("expected run") };
+    let RunOperation::Mutation(OrchestrationAction::Report { message_id, plan, .. }) =
+        args.command.operation(&args.common).unwrap() else { panic!("expected report") };
+    assert_eq!(uuid::Uuid::parse_str(&message_id).unwrap().get_version_num(), 4);
+    let checkpoint = WorkerCheckpoint::decode(plan.as_deref()).expect("checkpoint envelope");
+    assert_eq!(checkpoint.kind, WorkerCheckpointKind::Resumed);
+    assert!(checkpoint.artifacts.is_empty());
 }
 
 #[test]

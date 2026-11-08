@@ -334,6 +334,23 @@ describe("orchestration protocol boundary", () => {
     expect(() => parseOrchestrationSnapshot(replaceField(dto, ["unreflected_inputs"], undefined, true))).toThrow(CockpitClientError);
   });
 
+  it("decodes an independent worker wait alongside a prioritized question", () => {
+    const question = { cause: "question", since: at, held_by: [], code: null, detail: null, next_automatic: false };
+    const workerWait = { cause: "worker_waiting", since: at, held_by: [], code: null, detail: "Awaiting approval", next_automatic: false };
+    const view = { ...snapshot.board!.tasks[0]!, waiting: question, worker_waiting: workerWait };
+    const dto = { ...snapshot, board: { ...snapshot.board!, tasks: [view] } };
+    expect(parseOrchestrationSnapshot(dto).board!.tasks[0]).toMatchObject({ waiting: question, worker_waiting: workerWait });
+    expect(parseOrchestrationSnapshot(replaceField(dto, ["board", "tasks", 0, "worker_waiting"], undefined, true)).board!.tasks[0])
+      .not.toHaveProperty("worker_waiting");
+    for (const invalid of [
+      { ...workerWait, cause: "future" }, { ...workerWait, since: "invalid" },
+      { ...workerWait, next_automatic: "false" }, { ...workerWait, unexpected: true },
+      { cause: "worker_waiting" }, null,
+    ]) {
+      expect(() => parseOrchestrationSnapshot(replaceField(dto, ["board", "tasks", 0, "worker_waiting"], invalid))).toThrow(CockpitClientError);
+    }
+  });
+
   it("validates image references on handoffs, reports, and messages", () => {
     const image_id = `sha256-${hash}`;
     const handoff = { action: "thread_handoff", message_id: "message", thread_id: prerequisiteId,
@@ -1995,7 +2012,7 @@ describe("browser/native orchestration parity", () => {
     const title = { text: "Investigate", source: { kind: "user" }, message_id: null, at: null, images: [] };
     const thread = { thread_id: prerequisiteId, state: "underway", need: null, owner_root_ids: ["root"],
       title, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null,
-      unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: at };
+      unread_result_message_id: null, unread_interims: [], tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: at };
     const view = { session_id: "session", state_store_id: hash, revision: 1, tasks_token: hash,
       image_limits: { max_bytes: 5242880, max_count: 4, mime_types: ["image/png", "image/jpeg"] },
       observation: { status: "fresh", observed_at: at }, owners: [], threads: [thread], stalls: [], unmanaged_agents: [] };
@@ -2004,14 +2021,55 @@ describe("browser/native orchestration parity", () => {
     const nativeCall = vi.fn(async () => payload);
     const client = transport === "browser" ? createBrowserClient(browserCall) : createNativeClient(nativeCall);
     await expect(client.orchestrationInbox(request)).resolves.toEqual(view);
+    const taskLink = { root_id: "root", task_id: "task", title: "Task", project: null, lane: "working", run: null, evidence: null };
+    const workerWait = { cause: "worker_waiting", since: at, held_by: [], code: null, detail: "Awaiting approval", next_automatic: false };
+    for (const task of [taskLink, { ...taskLink, worker_waiting: workerWait }]) {
+      payload = { ...view, threads: [{ ...thread, tasks: [task] }] };
+      await expect(client.orchestrationInbox(request)).resolves.toEqual(payload);
+    }
+    for (const invalid of [null, { ...workerWait, cause: "future" }, { ...workerWait, since: "invalid" }, { ...workerWait, extra: true }]) {
+      payload = { ...view, threads: [{ ...thread, tasks: [{ ...taskLink, worker_waiting: invalid }] }] };
+      await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+    payload = { ...view, threads: [{ ...thread, tasks: [{ root_id: "root", task_id: "task" }] }] };
+    await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
     const legacyEntry = { message_id: "message", at, kind: "request", text: "Work", source: { kind: "user" }, outcome: null, images: [], in_reply_to: null };
     const legacy = { ...view, threads: [{ ...thread, timeline: [legacyEntry] }] };
     payload = legacy;
-    await expect(client.orchestrationInbox(request)).resolves.toEqual(legacy);
+    await expect(client.orchestrationInbox(request)).resolves.toEqual({
+      ...view, threads: [{ ...thread, timeline: [{ ...legacyEntry, artifacts: [] }] }],
+    });
     payload = { ...view, threads: [{ ...thread, timeline: [{ ...legacyEntry, unexpected: true }] }] };
     await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
     const { text: _missingText, ...incompleteEntry } = legacyEntry;
     payload = { ...view, threads: [{ ...thread, timeline: [incompleteEntry] }] };
+    await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
+    const interim = { run_id: "worker", message_id: "message", task_id: "task", attempt: 1 };
+    const artifact = { path: "/tmp/report.md", name: "report.md", kind: "markdown", recorded: true };
+    const checkpoint = { ...legacyEntry, kind: "interim", source: { kind: "worker", run_id: "worker" }, interim, artifacts: [artifact] };
+    payload = { ...view, threads: [{ ...thread, unread_interims: [interim, { ...interim, run_id: "another-worker" }], timeline: [checkpoint] }] };
+    await expect(client.orchestrationInbox(request)).resolves.toEqual(payload);
+    for (const badRef of [
+      { ...interim, run_id: "" }, { ...interim, message_id: "" }, { ...interim, task_id: "" },
+      { ...interim, attempt: 0 }, { ...interim, attempt: -1 }, { ...interim, attempt: 1.5 },
+      { ...interim, unexpected: true }, { run_id: "worker", message_id: "message", task_id: "task" },
+    ]) {
+      for (const badThread of [
+        { ...thread, unread_interims: [badRef] },
+        { ...thread, timeline: [{ ...checkpoint, interim: badRef }] },
+      ]) {
+        payload = { ...view, threads: [badThread] };
+        await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
+      }
+    }
+    for (const badArtifact of [
+      { ...artifact, kind: "unknown" }, { ...artifact, recorded: "true" },
+      { ...artifact, unexpected: true }, { path: artifact.path, name: artifact.name, kind: artifact.kind },
+    ]) {
+      payload = { ...view, threads: [{ ...thread, timeline: [{ ...checkpoint, artifacts: [badArtifact] }] }] };
+      await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+    payload = { ...view, threads: [{ ...thread, unread_interims: null }] };
     await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
     for (const bad of [
       { ...view, session_id: "other" },
@@ -2057,6 +2115,7 @@ describe("browser/native orchestration parity", () => {
       { action: "thread_handoff", message_id: assignmentTaskId, thread_id: prerequisiteId, to_run_id: "root", text: "Please investigate" },
       { action: "thread_handoff", message_id: assignmentTaskId, thread_id: prerequisiteId, to_run_id: "root", text: "Please investigate", binding },
       { action: "thread_mark_read", thread_id: prerequisiteId, through_message_id: assignmentTaskId },
+      { action: "thread_mark_read", thread_id: prerequisiteId, through_message_id: assignmentTaskId, run_id: "worker" },
       { action: "thread_link", root_id: "root", task_id: assignmentTaskId, thread_id: prerequisiteId },
     ];
     for (const action of actions) {
@@ -2064,6 +2123,7 @@ describe("browser/native orchestration parity", () => {
       expect(() => parseOrchestrationAction({ ...action, unexpected: true })).toThrow(CockpitClientError);
     }
     expect(() => parseOrchestrationAction({ ...actions[1], binding: { ...binding, unexpected: true } })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ action: "thread_mark_read", thread_id: prerequisiteId, through_message_id: assignmentTaskId, run_id: "" })).toThrow(CockpitClientError);
   });
 
   it.each(["browser", "native"] as const)("preserves W3 integration receipts and resource proof on %s", async transport => {

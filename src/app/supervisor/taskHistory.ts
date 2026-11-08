@@ -6,9 +6,10 @@ export type HistoryEvent =
   | { kind: "started"; at: string; replacement: boolean; facts: HistoryFact[] }
   | { kind: "progress"; at: string; items: { at: string; text: string }[]; earlier: number }
   | { kind: "question"; at: string; answer: { at: string; by: "you" | "liaison" | "agent" | "cockpit" } | null; open: boolean }
+  | { kind: "interim" | "waiting" | "resumed"; at: string; summary: string }
   | { kind: "result"; at: string; outcome: ReportOutcome | null; summary: string; facts: HistoryFact[] }
   | { kind: "unreflected_input"; at: string; sortAt: string; messageId: string; seq: number; inputKind: MessageKind; by: "you" | "the liaison" | "Cockpit" | "another agent"; stage: DeliveryStage; afterResult: boolean; text: string | null; imageCount: number; closed: boolean }
-  | { kind: "merged"; at: string | null; target: string; facts: HistoryFact[] }
+  | { kind: "integrated"; at: string | null; target: string; facts: HistoryFact[] }
   | { kind: "recovery"; at: string; phase: ResumePhase; cause: string | null };
 export type HistoryAttempt = { runId: string; attempt: number; label: string; end: "current" | "accepted" | "replaced" | "failed" | "cancelled"; reason: string | null; events: HistoryEvent[] };
 export type LeftBehindRow = {
@@ -19,7 +20,7 @@ export type LeftBehindRow = {
 export type TaskHistory = {
   taskId: string; identity: "unique" | "ambiguous";
   outcome: { stage: string; scheduled: boolean; accepted: boolean; attempt: number | null; kept: number; stalled: boolean };
-  sub: { kind: "merged"; target: string } | { kind: "no_merge" } | { kind: "merge_not_recorded" } | { kind: "after"; text: string } | { kind: "reconnecting"; phase: ResumePhase } | { kind: "not_started" } | null;
+  sub: { kind: "integrated"; target: string } | { kind: "non_code" } | { kind: "integration_not_recorded" } | { kind: "after"; text: string } | { kind: "reconnecting"; phase: ResumePhase } | { kind: "not_started" } | null;
   scheduledAt: string | null; attempts: HistoryAttempt[]; leftBehind: LeftBehindRow[]; liveUnavailable: boolean; unreflectedNotice: string | null;
 };
 
@@ -27,6 +28,20 @@ const humanize = (code: string) => code.replaceAll("_", " ").replace(/^./, c => 
 const timestamp = (value: string | null) => value ? Date.parse(value) : NaN;
 const compareTime = (a: string | null, b: string | null) => (Number.isFinite(timestamp(a)) ? timestamp(a) : Infinity) - (Number.isFinite(timestamp(b)) ? timestamp(b) : Infinity);
 const branch = (ref: string) => ref.replace(/^refs\/heads\//, "");
+
+function checkpointKind(report: Report | null): "interim" | "waiting" | "resumed" | null {
+  const prefix = "cockpit-worker-checkpoint:v1:";
+  if (report?.kind !== "progress" || !report.plan?.startsWith(prefix)) return null;
+  try {
+    const value: unknown = JSON.parse(report.plan.slice(prefix.length));
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    if (Object.keys(record).length !== 2 || !Array.isArray(record.artifacts) || !record.artifacts.every(item => typeof item === "string")) return null;
+    return record.kind === "interim" || record.kind === "waiting" || record.kind === "resumed" ? record.kind : null;
+  } catch {
+    return null;
+  }
+}
 const cleanupState = (state: CleanupState): LeftBehindRow["state"] => state === "pending" || state === "running" || state === "reconciling" ? "cleaning" : state === "waiting_integration" ? "waiting" : state;
 
 export function unreflectedInputLabel(inputs: readonly UnreflectedInput[]): string | null {
@@ -39,13 +54,14 @@ export function unreflectedInputLabel(inputs: readonly UnreflectedInput[]): stri
 }
 
 function resultFacts(run: Run, report: Report): HistoryFact[] {
-  const source = report.source_output ?? (run.source_output?.result_message_id === report.message_id ? run.source_output : null);
+  const source = report.source_output?.result_message_id === report.message_id ? report.source_output : run.source_output?.result_message_id === report.message_id ? run.source_output : null;
   if (!source) return [];
   const facts: HistoryFact[] = [];
   const checks = new Map<string, number>();
   for (const check of source.focused_checks) checks.set(check.outcome, (checks.get(check.outcome) ?? 0) + 1);
   if (checks.size) facts.push({ label: "Checks", value: [...checks].map(([state, count]) => `${count} ${state.replaceAll("_", " ")}`).join(" · ") });
-  facts.push(source.kind === "code" ? { label: "Commits", value: `${source.commits.length} · head ${source.head_commit.slice(0, 7)}` } : { label: "Artifacts", value: String(source.artifacts.length) });
+  if (source.kind === "code") facts.push({ label: "Commits", value: `${source.commits.length} · head ${source.head_commit.slice(0, 7)}` });
+  else if (source.kind === "non_code") facts.push({ label: "Artifacts", value: String(source.artifacts.length) });
   return facts;
 }
 
@@ -60,8 +76,8 @@ export function taskHistory(snapshot: OrchestrationSnapshot, rootId: string, vie
   const answers = new Map<string, Map<string, Message>>();
   const inputMessages = new Map<string, Map<string, Message>>();
   for (const message of snapshot.messages) {
-    if (message.stale) continue;
-    if (runIds.has(message.to_run_id)) {
+    if (message.stale && !(message.kind === "report" && checkpointKind(message.report))) continue;
+    if (!message.stale && runIds.has(message.to_run_id)) {
       let bucket = inputMessages.get(message.to_run_id);
       if (!bucket) inputMessages.set(message.to_run_id, bucket = new Map());
       bucket.set(message.message_id, message);
@@ -93,7 +109,9 @@ export function taskHistory(snapshot: OrchestrationSnapshot, rootId: string, vie
     const latestQuestionOrResult = [...bucket.values()].filter(report => report.kind === "needs_input" || report.kind === "result").sort((a, b) => compareTime(a.at, b.at)).at(-1);
     const progress: { at: string; text: string }[] = [];
     for (const report of bucket.values()) {
-      if (report.kind === "progress") progress.push({ at: report.at, text: report.summary });
+      const checkpoint = checkpointKind(report);
+      if (checkpoint) events.push({ kind: checkpoint, at: report.at, summary: report.summary });
+      else if (report.kind === "progress") progress.push({ at: report.at, text: report.summary });
       if (report.kind === "result") events.push({ kind: "result", at: report.at, outcome: report.outcome, summary: report.summary, facts: resultFacts(run, report) });
       if (report.kind === "needs_input") {
         const answer = answers.get(run.run_id)?.get(report.message_id);
@@ -113,7 +131,7 @@ export function taskHistory(snapshot: OrchestrationSnapshot, rootId: string, vie
       progress.sort((a, b) => compareTime(a.at, b.at));
       events.push({ kind: "progress", at: progress[0].at, items: progress.slice(-10), earlier: Math.max(0, progress.length - 10) });
     }
-    if (run.integration.state === "integrated") events.push({ kind: "merged", at: run.integration.verified_at || null, target: branch(run.integration.target_ref), facts: [
+    if (run.integration.state === "integrated") events.push({ kind: "integrated", at: run.integration.verified_at || null, target: branch(run.integration.target_ref), facts: [
       { label: "Method", value: humanize(run.integration.method) },
       { label: "Target", value: `${branch(run.integration.target_ref)} · ${run.integration.target_commit.slice(0, 7)}` },
     ] });
@@ -141,7 +159,9 @@ export function taskHistory(snapshot: OrchestrationSnapshot, rootId: string, vie
   history.outcome.kept = history.leftBehind.filter(row => row.state === "kept").length;
   history.scheduledAt = snapshot.task_ownership.find(item => item.root_id === rootId && item.task_id === view.task.task_id)?.schedule?.scheduled_at ?? null;
   const dependency = dependencySummary(view, tasks);
-  history.sub = stage === "done" && newest?.close_reason === "accepted" ? newest.integration.state === "integrated" ? { kind: "merged", target: branch(newest.integration.target_ref) } : { kind: newest.integration.state === "not_applicable" ? "no_merge" : "merge_not_recorded" }
+  const result = newest?.result;
+  const source = result && (result.source_output?.result_message_id === result.message_id ? result.source_output : newest?.source_output?.result_message_id === result.message_id ? newest.source_output : null);
+  history.sub = stage === "done" && newest?.close_reason === "accepted" ? newest.integration.state === "integrated" ? { kind: "integrated", target: branch(newest.integration.target_ref) } : source?.kind === "non_code" && newest.integration.state === "not_applicable" && newest.integration.result_message_id === result?.message_id ? { kind: "non_code" } : source?.kind === "code" && newest.integration.state === "pending" ? { kind: "integration_not_recorded" } : null
     : dependency ? { kind: "after", text: dependency } : newest?.stage !== "closed" && newest?.resume && ["reconciling", "launching"].includes(newest.resume.phase) ? { kind: "reconnecting", phase: newest.resume.phase } : !runs.length ? { kind: "not_started" } : null;
   return history;
 }

@@ -269,6 +269,29 @@ cockpit-cli inbox next --wait 600 --deliverable --json
 
 `--deliverable` omits routine progress/initialized messages. Capture is not proof of model processing, resumed work or an Answer; Answers still link the exact current NeedsInput question. Unknown operations retain original identity/payload for receipt inspection rather than blind replay. The optional OMP hook coalesces queued delivery; extension-free harnesses use the same credential CLI path.
 
+Current working workers can publish a useful intermediate deliverable or declare
+an explicit wait without completing their task:
+
+```sh
+cockpit-cli run checkpoint --interim --summary "Findings and actual report reference"
+cockpit-cli run checkpoint --waiting --summary "Waiting for the external service to become available"
+cockpit-cli run checkpoint --resume --summary "The service is available; work has resumed"
+```
+
+Put meaningful findings and actual artifact or other references in the interim
+summary; waiting takes the real free-text reason. The explicit resume checkpoint
+is the worker's statement that it resumed, not proof it consumed a message.
+Ordinary progress and interim checkpoints do not clear the wait; a final Result
+or replacement of the attempt also ends its current wait. An outstanding
+NeedsInput question remains independent: progress, interim or resume does not
+answer it, and an answer does not itself end a declared wait. Neither interim
+nor waiting is a Result, acceptance or task completion. These checkpoints are
+durable and wake the liaison through normal message delivery; an exact replay
+does not create a second event. A linked task thread can show an interim event
+with unread attention, not as a root-authored result. Only the current working
+attempt can make these checkpoints; current waiting is never inferred from an
+idle observation or a replaced attempt's historical events.
+
 `COCKPIT_INBOX_HOOK=1` marks only effective materialized hook argv; `run context`/`run brief` expose `inbox_hook_configured`. This is configuration/consumer-coordination metadata, never active-runtime proof or semantic authority. Configured-hook agents stay responsive in the terminal and avoid competing manual long waits/capture; a concrete hook-unavailable report permits the full credential CLI baseline. Meaningful OMP busy delivery uses public safe-boundary `sendUserMessage(..., { deliverAs: "steer" })`, not whole-turn deferral, and never aborts tools, kills writers or submits drafts. Queue/capture does not prove model processing or first-response latency.
 
 Only the final child exec drops inherited parent conversation selectors `PI_SESSION_FILE`/`COCKPIT_SESSION_ID`; it preserves resume argv, capabilities/configuration, PATH and actual Herdr IDs. The launcher supplies fresh `COCKPIT_HARNESS` and `COCKPIT_INBOX_HOOK` (`1` only for effective hook argv, otherwise `0`). This is per-child metadata isolation, not global clearing or a new authority requirement. The optional OMP hook supplies its actual public-API session ID without synthesizing/waiting for a journal; its session-file value is spool/incarnation metadata only. The hook itself never clears independent current sources, and normal CLI source conflict/validation still applies.

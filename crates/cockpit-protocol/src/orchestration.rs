@@ -213,6 +213,9 @@ pub struct TaskView {
     pub attempt: Option<AttemptBadge>,
     #[serde(default)]
     pub waiting: Option<TaskWait>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub worker_waiting: Option<TaskWait>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct TaskWait {
@@ -231,7 +234,7 @@ pub struct TaskWaitRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskWaitCause {
-    RecoveryBlocked, Question, Review, Prerequisites, DependencyInput,
+    RecoveryBlocked, Question, WorkerWaiting, Review, Prerequisites, DependencyInput,
     Capacity, Resource, ScheduleHold, Dispatch,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1227,6 +1230,31 @@ pub enum ReportKind {
     Result,
     NeedsInput,
 }
+
+/// A versioned envelope stored in Progress.plan, so older state writers preserve it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerCheckpointKind { Interim, Waiting, Resumed }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct WorkerCheckpoint {
+    pub kind: WorkerCheckpointKind,
+    pub artifacts: Vec<String>,
+}
+
+impl WorkerCheckpoint {
+    pub const PREFIX: &'static str = "cockpit-worker-checkpoint:v1:";
+
+    pub fn encode(&self) -> String {
+        format!("{}{}", Self::PREFIX, serde_json::to_string(self).expect("checkpoint serializes"))
+    }
+
+    pub fn decode(plan: Option<&str>) -> Option<Self> {
+        let payload = plan?.strip_prefix(Self::PREFIX)?;
+        serde_json::from_str(payload).ok()
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ReportOutcome {
@@ -1638,7 +1666,7 @@ pub struct InboxRun {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
-pub enum InboxEntryKind { Request, FollowUp, Answer, Question, Update, Result, Widget, Directive }
+pub enum InboxEntryKind { Request, FollowUp, Answer, Question, Update, Interim, Result, Widget, Directive }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct InboxWidgetEvent {
@@ -1661,6 +1689,11 @@ pub struct InboxEntry {
     pub outcome: Option<ReportOutcome>,
     pub images: Vec<MessageImage>,
     pub in_reply_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub interim: Option<InboxInterimRef>,
+    #[serde(default)]
+    pub artifacts: Vec<InboxArtifact>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub task_title: Option<String>,
@@ -1727,6 +1760,17 @@ pub struct InboxTaskLink {
     pub root_id: String, pub task_id: String, pub title: String,
     pub project: Option<TaskProject>, pub lane: TaskLane, pub run: Option<InboxRun>,
     pub evidence: Option<InboxTaskEvidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub worker_waiting: Option<TaskWait>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct InboxInterimRef {
+    pub run_id: String,
+    pub message_id: String,
+    pub task_id: String,
+    pub attempt: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1744,6 +1788,8 @@ pub struct InboxThread {
     pub recommendation: Option<InboxText>,
     pub reply: Option<InboxText>,
     pub unread_result_message_id: Option<String>,
+    #[serde(default)]
+    pub unread_interims: Vec<InboxInterimRef>,
     pub tasks: Vec<InboxTaskLink>,
     pub receipts: Vec<InboxReceipt>,
     pub facts: Vec<InboxText>,
@@ -2052,6 +2098,8 @@ pub enum OrchestrationAction {
     ThreadMarkRead {
         thread_id: String,
         through_message_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        run_id: Option<String>,
     },
     ThreadLink {
         root_id: String,
@@ -2200,6 +2248,21 @@ pub enum OrchestrationActionResult {
 mod tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn checkpoint_envelope_requires_exact_version_and_shape() {
+        let checkpoint = WorkerCheckpoint { kind: WorkerCheckpointKind::Waiting, artifacts: vec!["/tmp/demo.html".into()] };
+        assert_eq!(WorkerCheckpoint::decode(Some(&checkpoint.encode())), Some(checkpoint));
+        for plan in [
+            "an ordinary plan",
+            "cockpit-worker-checkpoint:v2:{\"kind\":\"waiting\",\"artifacts\":[]}",
+            "cockpit-worker-checkpoint:v1:{\"kind\":\"waiting\"}",
+            "cockpit-worker-checkpoint:v1:{\"kind\":\"waiting\",\"artifacts\":[],\"extra\":true}",
+            "cockpit-worker-checkpoint:v1:{\"kind\":\"unknown\",\"artifacts\":[]}",
+        ] {
+            assert!(WorkerCheckpoint::decode(Some(plan)).is_none());
+        }
+    }
 
     #[test]
     fn directives_and_continuation_round_trip() {

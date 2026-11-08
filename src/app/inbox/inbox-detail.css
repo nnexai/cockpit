@@ -170,6 +170,7 @@
 .inbox-sha .ui-icon{width:12px;height:12px;flex-basis:12px;color:var(--text-muted)}
 .inbox-sha.is-head{border-color:color-mix(in srgb,var(--done) 40%,var(--border))}
 .inbox-shots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.inbox-shots>.inbox-doc{grid-column:1/-1}
 .inbox-shot{position:relative;display:block;aspect-ratio:16/10;overflow:hidden;border:1px solid var(--border);border-radius:var(--radius-control);background:var(--terminal-bg)}
 .inbox-shot:hover{border-color:var(--border-strong)}
 .inbox-shot>svg,.inbox-shot>img{display:block;width:100%;height:100%;object-fit:cover}
@@ -265,6 +266,11 @@
 .inbox-tab-count{margin-left:4px;font-size:var(--font-size-control);color:var(--text-muted)}
 .inbox-draft-badge{display:inline-flex;align-items:center;gap:3px;flex:none;margin-left:auto;padding:0 6px;border:1px solid color-mix(in srgb,var(--accent) 50%,transparent);border-radius:var(--radius-pill);font-size:var(--font-size-control);line-height:16px;font-weight:600;color:var(--accent)}
 .inbox-draft-badge .ui-icon{width:12px;height:12px;flex-basis:12px}
+.inbox-interim .inbox-kind{overflow-wrap:anywhere}
+.inbox-interim>.inbox-shots{margin-top:var(--sp-2)}
+@container detail (max-width:719px){
+  .inbox-interim [data-interim-actions] .inbox-btn{min-height:44px;height:auto}
+}
 
 /* A short phone viewport (on-screen keyboard) keeps only the question, field and send. */
 @media (max-height:520px) and (max-width:700px){

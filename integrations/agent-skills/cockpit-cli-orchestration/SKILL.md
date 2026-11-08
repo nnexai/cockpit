@@ -324,9 +324,10 @@ artifact-publication verb.
 
 `inbox next --wait SECONDS --deliverable --json` waits 0..3600 seconds, durably
 captures its prefix before internal ACK, and returns decision-relevant messages.
-Cleanup holds, scheduled and dispatch progress, endpoint changes, progress and
-initialization reports remain durable but do not wake the conversation. Questions,
-results, instructions, answers, cancellation and failures needing a decision do.
+Cleanup holds, scheduled and dispatch progress, endpoint changes, ordinary
+progress and initialization reports remain durable but do not wake the
+conversation. Worker checkpoints, questions, results, instructions, answers,
+cancellation and failures needing a decision do.
 For a status answer, consult `inbox list --after 0 --limit 100 --json`, paging with
 the returned read-through sequence; it includes housekeeping even after ACK.
 Listing marks stored messages Read, but does not ACK them. Process `messages`
@@ -356,10 +357,35 @@ completion.
 
 ```sh
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run report --kind needs-input --summary "One blocking outcome choice" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run checkpoint --interim --summary "Parser findings and reproduction: /path/to/report.md" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run checkpoint --waiting --summary "Waiting for the external service to become available" --json
+"${COCKPIT_CLI_PATH:-cockpit-cli}" run checkpoint --resume --summary "The service is available; work has resumed" --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run done --summary "Committed parser change" --check 'parser::cargo test parser::passed' --check 'native::native smoke::not_run::No disposable compositor' --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run done --failed --summary "Blocked before producing output" --json
 "${COCKPIT_CLI_PATH:-cockpit-cli}" run done --summary "Delivered research" --artifact "$ACTUAL_ARTIFACT" --json
 ```
+
+While still working, use `run checkpoint --interim` for a meaningful, actionable
+deliverable: include the findings and actual artifact or other references in
+`--summary`, not just a status label. Repeat `--artifact PATH` for actual
+artifact references when appropriate. Use `--waiting` when you are explicitly
+waiting, giving the real free-text reason; do not infer a wait from an idle
+terminal. When you actually resume, send `run checkpoint --resume`. That is your
+statement that work resumed, not proof that you consumed a particular message.
+Ordinary progress and interim checkpoints do not clear the declared wait; a
+final Result or replacement of the attempt also ends its current wait.
+Neither a checkpoint nor a wait is a Result, task completion or acceptance. Use
+`needs-input` for a genuine decision; an outstanding question and a declared wait
+are independent, so progress, interim or resume does not answer the question,
+and answering the question does not itself end a declared wait.
+
+These nonfinal worker checkpoints require the current working attempt. They are
+durable and notify the liaison through normal delivery; an exact replay retains
+the original identity rather than creating another notification. The linked
+task thread can show interim work as a worker event, not a root Result or
+acceptance. Historical events from replaced attempts remain history, not the
+current attempt's waiting state.
+
 
 Workers should put substantive findings, checks and limitations in the
 `run done --summary` body, or the actual decision context in
