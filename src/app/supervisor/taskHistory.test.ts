@@ -12,6 +12,31 @@ function input(overrides: Partial<UnreflectedInput> = {}): UnreflectedInput {
 }
 
 describe("task history evidence", () => {
+  it("distinguishes recorded output and integration without guessing missing or mismatched output", () => {
+    const task = taskFixture("task", { lane: "accepted" });
+    const result = report("result", "result");
+    const code = { kind: "code" as const, repository_key: "repo", checkout_key: "checkout", base_commit: "base", head_commit: "head", commits: ["head"], task_revision: "revision-task", result_message_id: "result", focused_checks: [] };
+    const nonCode = { kind: "non_code" as const, result_message_id: "result", task_revision: "revision-task", artifacts: ["artifact"], focused_checks: [] };
+    const project = (run: Run) => taskHistory(orchestrationFixture([task], [run]), "root", task, [task], true);
+    const accepted = worker({ stage: "closed", close_reason: "accepted", result });
+    expect(project(accepted).sub).toBeNull();
+    expect(project({ ...accepted, source_output: { ...code, result_message_id: "other" } }).sub).toBeNull();
+    expect(project({ ...accepted, source_output: code }).sub).toEqual({ kind: "integration_not_recorded" });
+    expect(project({ ...accepted, source_output: nonCode }).sub).toBeNull();
+    expect(project({ ...accepted, source_output: nonCode, integration: { state: "not_applicable", reason: "non-code", result_message_id: "other" } }).sub).toBeNull();
+    expect(project({ ...accepted, source_output: nonCode, integration: { state: "not_applicable", reason: "non-code", result_message_id: "result" } }).sub).toEqual({ kind: "non_code" });
+    const integration = { state: "integrated" as const, operation_id: "op", accepted_result_message_id: "result", accepted_task_revision: "revision-task", source: code, target_repository_key: "repo", target_ref: "refs/heads/main", target_commit: "target", method: "patch_equivalent" as const, mappings: [], checks: [], integrator_run_id: "root", verified_at: later };
+    const integrated = project({ ...accepted, source_output: code, integration });
+    expect(integrated.sub).toEqual({ kind: "integrated", target: "main" });
+    expect(integrated.attempts[0].events).toContainEqual(expect.objectContaining({ kind: "integrated", target: "main" }));
+  });
+
+  it("does not treat a checked task alone as recorded acceptance", () => {
+    const task = taskFixture("task", { lane: "accepted" });
+    task.task.checked = true;
+    expect(taskHistory(orchestrationFixture([task], []), "root", task, [task], true).outcome.accepted).toBe(false);
+  });
+
   it("isolates root/task attempts and deduplicates reports while preserving superseded attempts", () => {
     const task = taskFixture("task"), result = report("result", "result");
     const first = worker({ run_id: "old", stage: "closed", close_reason: "superseded" });

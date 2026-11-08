@@ -44,8 +44,8 @@ function HistoryEventRow({ event }: { event: HistoryEvent }) {
       detail = <><p className="liaison-result-summary is-full">{event.text ?? "Text isn't available in this view."}</p>{event.imageCount ? <p className="liaison-event-sub">{event.imageCount} image{event.imageCount === 1 ? "" : "s"} attached; not shown here.</p> : null}<p className="liaison-event-sub">{event.closed ? "Nothing is replayed. If it's still wanted, ask the liaison for a follow-up task." : "The liaison can wait for a new Result or send the task back."}</p></>;
       break;
     }
-    case "merged":
-      label = `Merged into ${event.target}`; tone = " is-ok"; detail = <Facts facts={event.facts} />;
+    case "integrated":
+      label = `Integrated into ${event.target}`; tone = " is-ok"; detail = <Facts facts={event.facts} />;
       break;
     case "recovery":
       label = event.phase === "blocked" ? "Recovery blocked" : event.phase === "connected" || event.phase === "reattached" ? "Recovered" : "Recovery in progress";
@@ -63,7 +63,7 @@ export const waitCopy = {
   question: ["A worker question needs an answer.", "The question is answered.", "Answer through the liaison"],
   review: ["The result is waiting for review.", "The liaison accepts or returns the result.", "The liaison reviews it"],
   prerequisites: ["Prerequisite tasks aren't done yet.", "Those tasks are done.", "Starts automatically"],
-  dependency_input: ["A prerequisite's output isn't in the target branch yet.", "That output is merged into the target branch.", "The liaison integrates the prerequisite"],
+  dependency_input: ["A prerequisite's output isn't in the target branch yet.", "That output is integrated into the target branch.", "The liaison integrates the prerequisite"],
   capacity: ["All worker slots for this project are in use.", "A worker slot frees up.", "Starts automatically"],
   resource: ["Waiting for a shared resource.", "The current holder releases it.", "Continues automatically"],
   schedule_hold: ["Scheduling is on hold.", "The hold is resolved.", "The liaison resolves the hold"],
@@ -71,9 +71,9 @@ export const waitCopy = {
 } as const satisfies Record<NonNullable<TaskView["waiting"]>["cause"], readonly [string, string, string]>;
 
 function TaskProgress({ view, history }: { view: TaskView; history: TaskHistory | null }) {
-  const merged = history?.sub?.kind === "merged";
-  const steps = ["Ready", "Working", "Review", "Accepted", ...(history?.sub?.kind === "no_merge" ? [] : ["Merged"])];
-  const current = merged ? 4 : view.lane === "accepted" || view.task.checked ? 3 : view.lane === "review" ? 2 : view.lane === "working" ? 1 : 0;
+  const integrated = history?.sub?.kind === "integrated";
+  const steps = ["Ready", "Working", "Review", "Accepted", ...(integrated ? ["Integrated"] : [])];
+  const current = integrated ? 4 : history?.outcome.accepted ? 3 : view.lane === "accepted" || view.task.checked ? -1 : view.lane === "review" ? 2 : view.lane === "working" ? 1 : 0;
   return <ol className="liaison-task-progress" aria-label="Task progress">{steps.map((step, index) =>
     <li key={step} className={index < current ? "is-complete" : index === current ? "is-current" : undefined} aria-current={index === current ? "step" : undefined}>
       <span className="liaison-progress-mark" aria-hidden="true" /><span>{step}</span>
@@ -102,7 +102,7 @@ export function TaskHistoryDetail({ view, history }: { view: TaskView; history: 
   const outcome = history?.outcome;
   const stage = outcome?.stage ?? (view.task.checked ? "done" : view.lane);
   const sub = history?.sub;
-  const subText = sub?.kind === "merged" ? `Merged into ${sub.target}` : sub?.kind === "no_merge" ? "No merge needed" : sub?.kind === "merge_not_recorded" ? "Merge not recorded" : sub?.kind === "after" ? sub.text : sub?.kind === "reconnecting" ? `Reconnecting worker · ${sub.phase}` : sub?.kind === "not_started" ? "No worker has started yet" : null;
+  const subText = sub?.kind === "integrated" ? `Integrated into ${sub.target}` : sub?.kind === "non_code" ? "Non-code result · no Git integration needed" : sub?.kind === "integration_not_recorded" ? "Integration not recorded" : sub?.kind === "after" ? sub.text : sub?.kind === "reconnecting" ? `Reconnecting worker · ${sub.phase}` : sub?.kind === "not_started" ? "No worker has started yet" : null;
   return <section className="liaison-detail" aria-label={`History of ${view.task.title}`}>
     <div className={`liaison-detail-summary lane-${view.lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}`}>
       <span className="liaison-task-dot" aria-hidden="true" /><h2>{view.task.title}</h2>

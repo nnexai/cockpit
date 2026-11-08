@@ -71,7 +71,7 @@ function TaskCard({ task, client, sessionId, open, liveOpen, initiallyOpen }: { 
   const documents = evidence?.artifacts.filter(artifact => artifact.kind === "markdown" || artifact.kind === "other") ?? [];
   const location = task.run?.presence === "present" ? task.run.location : null;
   return <details className="inbox-task" data-lane={lane} open={initiallyOpen || undefined}>
-    <summary><span className="inbox-lane" /><span className="inbox-task-title" title={task.title}>{task.title}</span><Chevron /><span className="inbox-task-status"><b>{laneLabel}</b>{evidence?.integration && <> · merged into {evidence.integration.target} @<code>{evidence.integration.commit.slice(0, 7)}</code></>}{evidence && evidence.attempts > 1 && <> · attempt {evidence.attempt}</>}</span></summary>
+    <summary><span className="inbox-lane" /><span className="inbox-task-title" title={task.title}>{task.title}</span><Chevron /><span className="inbox-task-status"><b>{laneLabel}</b>{evidence?.integration && <> · integrated into {evidence.integration.target} @<code>{evidence.integration.commit.slice(0, 7)}</code></>}{evidence && evidence.attempts > 1 && <> · attempt {evidence.attempt}</>}</span></summary>
     <div className="inbox-task-body">
       {location && <button type="button" className="inbox-btn" disabled={!liveOpen} onClick={() => open(location)} title={liveOpen ? "Open session" : "Live sessions unavailable"}><UiIcon name="terminal" />Open</button>}
       {evidence?.result?.summary && <Summary text={evidence.result.summary} />}

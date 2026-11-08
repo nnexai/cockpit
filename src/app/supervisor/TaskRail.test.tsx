@@ -97,7 +97,7 @@ it("shows recorded waiting facts and accessible task progress in the shared deta
   if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
   await act(async () => root!.render(<TaskHistoryDetail view={task} history={null} />));
   const rail = host.querySelector('[aria-label="Task progress"]')!;
-  expect([...rail.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Ready", "Working", "Review", "Accepted", "Merged"]);
+  expect([...rail.querySelectorAll("li")].map(item => item.textContent)).toEqual(["Ready", "Working", "Review", "Accepted"]);
   expect(rail.querySelector('[aria-current="step"]')?.textContent).toBe("Ready");
   const wait = host.querySelector('[aria-label="Why is this waiting"]')!;
   expect(wait.textContent).toContain("Predecessor");
@@ -105,7 +105,7 @@ it("shows recorded waiting facts and accessible task progress in the shared deta
   expect(wait.querySelector("time")?.getAttribute("datetime")).toBe("2026-10-01T12:00:00Z");
 });
 
-it("shows liaison-owned waits without invented times and omits merge for non-code work", async () => {
+it("shows liaison-owned waits without invented times and distinguishes non-code work", async () => {
   const task = taskFixture("report", {
     lane: "review",
     waiting: { cause: "review", since: null, held_by: [], code: null, detail: null, next_automatic: false },
@@ -119,16 +119,33 @@ it("shows liaison-owned waits without invented times and omits merge for non-cod
   expect(wait.textContent).not.toContain("Held by");
   expect(wait.textContent).not.toContain("Since");
   expect(wait.querySelector("time")).toBeNull();
-  await act(async () => root!.render(<TaskHistoryDetail view={{ ...task, lane: "accepted", waiting: null }} history={{ ...history, sub: { kind: "no_merge" } }} />));
+  await act(async () => root!.render(<TaskHistoryDetail view={{ ...task, lane: "accepted", waiting: null }} history={{ ...history, outcome: { ...history.outcome, accepted: true }, sub: { kind: "non_code" } }} />));
   expect([...host.querySelectorAll('[aria-label="Task progress"] li')].map(item => item.textContent)).toEqual(["Ready", "Working", "Review", "Accepted"]);
   expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Accepted");
+  expect(host.textContent).toContain("Non-code result · no Git integration needed");
+  await act(async () => root!.render(<TaskHistoryDetail view={{ ...task, lane: "accepted", waiting: null }} history={{ ...history, outcome: { ...history.outcome, accepted: true }, sub: { kind: "integration_not_recorded" } }} />));
+  expect(host.textContent).toContain("Integration not recorded");
+  expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Accepted");
+  expect([...host.querySelectorAll('[aria-label="Task progress"] li')].map(item => item.textContent)).toEqual(["Ready", "Working", "Review", "Accepted"]);
 });
 
-it("marks recorded integration as merged and hides the waiting block when clear", async () => {
+it("marks recorded integration as integrated and hides the waiting block when clear", async () => {
   const task = taskFixture("code", { lane: "accepted", waiting: null });
-  const history: TaskHistory = { taskId: "code", identity: "unique", outcome: { stage: "done", scheduled: false, accepted: true, attempt: 1, kept: 0, stalled: false }, sub: { kind: "merged", target: "main" }, scheduledAt: null, attempts: [], leftBehind: [], liveUnavailable: false, unreflectedNotice: null };
+  const history: TaskHistory = { taskId: "code", identity: "unique", outcome: { stage: "done", scheduled: false, accepted: true, attempt: 1, kept: 0, stalled: false }, sub: { kind: "integrated", target: "main" }, scheduledAt: null, attempts: [{ runId: "worker", attempt: 1, label: "Worker", end: "accepted", reason: null, events: [{ kind: "integrated", at: null, target: "main", facts: [{ label: "Method", value: "Patch equivalent" }] }] }], leftBehind: [], liveUnavailable: false, unreflectedNotice: null };
   if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
   await act(async () => root!.render(<TaskHistoryDetail view={task} history={history} />));
-  expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Merged");
+  expect(host.querySelector('[aria-current="step"]')?.textContent).toBe("Integrated");
+  expect(host.textContent).toContain("Integrated into main");
+  expect(host.querySelector(".liaison-event-title")?.textContent).toContain("Integrated into main");
   expect(host.querySelector('[aria-label="Why is this waiting"]')).toBeNull();
+});
+
+it("does not claim acceptance for checked-only tasks or anticipate integration", async () => {
+  const task = taskFixture("checked", { lane: "accepted" });
+  task.task.checked = true;
+  if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
+  await act(async () => root!.render(<TaskHistoryDetail view={task} history={null} />));
+  expect(host.querySelector('[aria-current="step"]')).toBeNull();
+  expect([...host.querySelectorAll('[aria-label="Task progress"] li')].map(item => item.textContent)).toEqual(["Ready", "Working", "Review", "Accepted"]);
+  expect(host.textContent).not.toContain("Integrated");
 });

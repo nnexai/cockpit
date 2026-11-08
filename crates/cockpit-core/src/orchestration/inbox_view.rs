@@ -17,6 +17,21 @@ fn owner_source(run: &Run, card: bool) -> InboxSource {
 fn text(value: String, source: InboxSource, message: Option<&Message>) -> InboxText {
     InboxText { text: value, source, message_id: message.map(|m| m.message_id.clone()), at: message.map(|m| m.created_at.clone()), images: Vec::new() }
 }
+fn integration_fact(run: &Run) -> Option<InboxText> {
+    let (value, source) = match (&run.integration, &run.source_output) {
+        (Integration::Integrated { .. }, _) => ("Integration: Integrated", InboxSource::Recorded),
+        (Integration::NotApplicable { .. }, _) => ("Integration: Not applicable", InboxSource::Recorded),
+        (Integration::Pending, Some(source @ SourceOutput::Code { result_message_id, .. }))
+            if run.stage == RunStage::Closed && run.close_reason == Some(CloseReason::Accepted)
+                && run.result.as_ref().is_some_and(|result| result.outcome == Some(ReportOutcome::Succeeded)
+                    && &result.message_id == result_message_id && result.source_output.as_ref() == Some(source)) =>
+            ("Integration: Pending", InboxSource::Recorded),
+        (Integration::Pending, Some(SourceOutput::NonCode { .. })) =>
+            ("Git integration not needed for non-code output", InboxSource::Worker { run_id: run.run_id.clone() }),
+        (Integration::Pending, _) => return None,
+    };
+    Some(text(value.into(), source, None))
+}
 fn message_text(value: String, source: InboxSource, message: &Message) -> InboxText {
     let mut result = text(value, source, Some(message));
     result.images = message.images.clone();
@@ -315,8 +330,7 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             if let Some(run) = &t.run {
                 for item in &run.cleanup { if matches!(item.cleanup.state, CleanupState::Removed | CleanupState::Kept) { facts.push(text(format!("Cleanup {:?}: {}", item.cleanup.state, item.cleanup.reason.as_ref().map_or("", |r| r.message.as_str())), InboxSource::Recorded, None)); } }
                 if let Some(worker) = state.runs.iter().find(|r| r.run_id == run.run_id) {
-                    let integration = match &worker.integration { Integration::Pending => "Pending", Integration::NotApplicable { .. } => "Not applicable", Integration::Integrated { .. } => "Integrated" };
-                    facts.push(text(format!("Integration: {integration}"), InboxSource::Recorded, None));
+                    if let Some(fact) = integration_fact(worker) { facts.push(fact); }
                     if let Some(result) = &worker.result { facts.push(text(result.summary.clone(), InboxSource::Worker { run_id: worker.run_id.clone() }, None)); }
                     if let Some(output) = &worker.source_output {
                         let checks = match output { SourceOutput::Code { focused_checks, .. } | SourceOutput::NonCode { focused_checks, .. } => focused_checks };
@@ -374,6 +388,43 @@ mod tests {
             last_report: None, result: None, source_output: None, integration: Integration::Pending,
             annotations: vec![], project: None, checkout: None, attachment: None, checkout_claim_id: None,
             resume: None, retirement: None, created_at: NOW.into(), updated_at: NOW.into() }
+    }
+    #[test]
+    fn integration_facts_distinguish_source_from_recorded_outcomes() {
+        let mut run = root("worker");
+        assert!(integration_fact(&run).is_none());
+        let code = SourceOutput::Code { repository_key: "repo".into(), checkout_key: "checkout".into(),
+            base_commit: "base".into(), head_commit: "head".into(), commits: vec![],
+            task_revision: "rev".into(), result_message_id: "result".into(), focused_checks: vec![] };
+        run.source_output = Some(code.clone());
+        assert!(integration_fact(&run).is_none());
+        run.stage = RunStage::Closed;
+        run.close_reason = Some(CloseReason::Accepted);
+        assert!(integration_fact(&run).is_none());
+        let mut result = report("result", "worker", 1, None, ReportKind::Result).report.unwrap();
+        result.outcome = Some(ReportOutcome::Succeeded);
+        result.source_output = Some(code.clone());
+        run.result = Some(result);
+        let fact = integration_fact(&run).unwrap();
+        assert_eq!(fact.text, "Integration: Pending");
+        assert!(matches!(fact.source, InboxSource::Recorded));
+        run.source_output = Some(SourceOutput::NonCode { result_message_id: "result".into(),
+            task_revision: "rev".into(), artifacts: vec![], focused_checks: vec![] });
+        let fact = integration_fact(&run).unwrap();
+        assert_eq!(fact.text, "Git integration not needed for non-code output");
+        assert!(matches!(fact.source, InboxSource::Worker { ref run_id } if run_id == "worker"));
+        assert!(matches!(run.integration, Integration::Pending));
+        run.integration = Integration::NotApplicable { result_message_id: "result".into(), reason: "accepted".into() };
+        let fact = integration_fact(&run).unwrap();
+        assert_eq!(fact.text, "Integration: Not applicable");
+        assert!(matches!(fact.source, InboxSource::Recorded));
+        run.integration = Integration::Integrated { operation_id: "op".into(), accepted_result_message_id: "result".into(),
+            accepted_task_revision: "rev".into(), source: Box::new(code), target_repository_key: "repo".into(),
+            target_ref: "refs/heads/main".into(), target_commit: "head".into(), method: IntegrationMethod::Ancestor,
+            mappings: Box::new([]), checks: vec![], integrator_run_id: "integrator".into(), verified_at: NOW.into() };
+        let fact = integration_fact(&run).unwrap();
+        assert_eq!(fact.text, "Integration: Integrated");
+        assert!(matches!(fact.source, InboxSource::Recorded));
     }
     fn message(id: &str, root: &str, seq: u64, thread: Option<&str>, kind: MessageKind) -> Message {
         Message { message_id: id.into(), to_run_id: root.into(), seq, from: ActorRef::Operator,
