@@ -1,3 +1,5 @@
+import { limitLocalChangeSubscriptions, localChangeReceiver, localChangeScopeFrame } from "./localChanges";
+import type { LocalChangeEvent, LocalChangeScope } from "../protocol/generated/v1";
 import { widgetEventCursor, widgetReports } from "./widgetTransport";
 import type { WidgetEventHandler, WidgetStream } from "./CockpitClient";
 import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
@@ -261,6 +263,65 @@ function streamId(value: unknown): string {
   if (typeof value === "string" && value.length > 0) return value;
   if (typeof value === "object" && value !== null && "stream_id" in value && typeof value.stream_id === "string" && value.stream_id.length > 0) return value.stream_id;
   throw new CockpitClientError("malformed_response", "Native stream command returned no stream id");
+}
+
+function nativeLocalChanges(
+  factory: NativeChannelFactory, invoke: NativeInvoke, scope: LocalChangeScope,
+  onEvent: (event: LocalChangeEvent) => Promise<void>,
+  onError: (error: CockpitClientError) => void, signal?: AbortSignal,
+): Promise<ClosableStream> {
+  let resolve!: (stream: ClosableStream) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<ClosableStream>((accept, fail) => { resolve = accept; reject = fail; });
+  let closed = false;
+  let ready = false;
+  let seen = false;
+  let activeId: string | undefined;
+  let timer: number | undefined;
+  const cancel = (id: string) => { void invoke("cockpit_stream_cancel", { streamId: id }).catch(() => undefined); };
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
+    if (activeId !== undefined) cancel(activeId);
+  };
+  const fail = (error: CockpitClientError) => {
+    if (closed) return;
+    close();
+    if (ready) onError(error); else reject(error);
+  };
+  const abort = () => {
+    if (closed) return;
+    close();
+    if (!ready) reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+  };
+  const settle = () => {
+    if (!closed && !ready && seen && activeId !== undefined) { clearTimeout(timer); timer = undefined; ready = true; resolve({ close }); }
+  };
+  try {
+    signal?.throwIfAborted();
+    localChangeScopeFrame(scope);
+    signal?.addEventListener("abort", abort, { once: true });
+    timer = window.setTimeout(() => fail(new CockpitClientError("stream_error", "Local changes stream did not become ready")), 30_000);
+    const receive = localChangeReceiver(event => closed ? Promise.resolve() : onEvent(event), async ack => {
+      if (!closed) await invoke("cockpit_local_changes_ack", { ack });
+    }, fail, () => { seen = true; settle(); });
+    const channel = factory<unknown>(raw => { if (!closed) receive(raw); });
+    const errorChannel = factory<unknown>(raw => {
+      const envelope = parseErrorEnvelope(raw);
+      fail(new CockpitClientError("stream_error", envelope?.message ?? "Local changes stream failed", { operationCode: envelope?.code }));
+    });
+    void invokeAndParse(invoke, "cockpit_local_changes_subscribe", { scope, channel, errorChannel }, "local changes subscription", streamId).then(id => {
+      activeId = id;
+      if (closed) cancel(id); else settle();
+    }, cause => fail(cause instanceof CockpitClientError ? cause : new CockpitClientError("native_error", "Local changes subscription failed", { cause })));
+    if (signal?.aborted) abort();
+  } catch (cause) {
+    if (cause instanceof CockpitClientError) fail(cause);
+    else { close(); reject(cause); }
+  }
+  return promise;
 }
 
 function nativeWidgetSubscription(
@@ -557,6 +618,7 @@ function terminalSubscription(channelFactory: NativeChannelFactory, invoke: Nati
 }
 
 export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channelFactory: NativeChannelFactory = defaultChannel): CockpitClient {
+  const subscribeLocalChanges = limitLocalChangeSubscriptions((scope, onEvent, onError, signal) => nativeLocalChanges(channelFactory, invoke, scope, onEvent, onError, signal));
   return {
     ...bindOperations("native", (operation) => invokeAndParse(invoke, operation.tauri.command, operation.tauri.args(), operation.operation, operation.parse)),
     updateAndRelaunch(expectedInstance) {
@@ -566,6 +628,7 @@ export function createNativeClient(invoke: NativeInvoke = defaultInvoke, channel
     subscribeWidgets(onEvent, onError, signal) {
       return nativeWidgetSubscription(channelFactory, invoke, onEvent, onError, signal);
     },
+    subscribeLocalChanges,
     subscribeSession(sessionId, onMessage, onError, signal) { return sessionSubscription(channelFactory, invoke, sessionId, onMessage, onError, signal); },
     openTerminal(request, onMessage, onError, signal) { return terminalSubscription(channelFactory, invoke, request, onMessage, onError, signal); },
     openBrowserView(request, onEvent, onFrame, onError, signal) {

@@ -1,4 +1,5 @@
-import type { CleanupReasonClass, CleanupState, DeliveryStage, Message, MessageKind, OrchestrationSnapshot, OwnedResourceKind, Report, ReportOutcome, ResumePhase, Run, TaskView, UnreflectedInput } from "../../protocol/generated/v1";
+import type { CleanupReasonClass, CleanupState, DeliveryStage, Message, MessageKind, OwnedResourceKind, Report, ReportOutcome, ResumePhase, Run, TaskView, UnreflectedInput } from "../../protocol/generated/v1";
+import type { SupervisorOverview } from "./useSupervisor";
 import { dependencySummary, uniqueTask } from "./dependencies";
 
 export type HistoryFact = { label: string; value: string };
@@ -66,16 +67,16 @@ function resultFacts(run: Run, report: Report): HistoryFact[] {
 }
 
 /** Derive one selected task, not a second lifecycle store. Generic updated_at is never an event time. */
-export function taskHistory(snapshot: OrchestrationSnapshot, rootId: string, view: TaskView, tasks: readonly TaskView[], runtimeFresh: boolean): TaskHistory {
+export function taskHistory(snapshot: SupervisorOverview, rootId: string, view: TaskView, tasks: readonly TaskView[], runtimeFresh: boolean, messages: readonly Message[] | null, taskRuns: readonly Run[] | null): TaskHistory {
   const stage = view.task.checked || view.lane === "accepted" ? "done" : view.attempt?.state === "starting" ? "starting" : view.attempt?.state === "stalled" ? "stalled" : view.lane;
   const history: TaskHistory = { taskId: view.task.task_id, identity: "unique", outcome: { stage, scheduled: view.scheduled, accepted: false, attempt: null, kept: 0, stalled: view.attempt?.state === "stalled" }, sub: null, scheduledAt: null, attempts: [], leftBehind: [], liveUnavailable: !runtimeFresh, unreflectedNotice: null };
   if (!uniqueTask(tasks, view.task.task_id)) return { ...history, identity: "ambiguous" };
-  const runs = snapshot.runs.filter(run => run.root_id === rootId && run.task_id === view.task.task_id && run.kind !== "supervisor").sort((a, b) => a.attempt - b.attempt);
+  const runs = (taskRuns ?? snapshot.runs.filter((run): run is Run => "brief" in run)).filter(run => run.root_id === rootId && run.task_id === view.task.task_id && run.kind !== "supervisor").sort((a, b) => a.attempt - b.attempt);
   const runIds = new Set(runs.map(run => run.run_id));
   const reports = new Map<string, Map<string, Report>>();
   const answers = new Map<string, Map<string, Message>>();
   const inputMessages = new Map<string, Map<string, Message>>();
-  for (const message of snapshot.messages) {
+  for (const message of messages ?? []) {
     if (message.stale && !(message.kind === "report" && checkpointKind(message.report))) continue;
     if (!message.stale && runIds.has(message.to_run_id)) {
       let bucket = inputMessages.get(message.to_run_id);
@@ -167,7 +168,7 @@ export function taskHistory(snapshot: OrchestrationSnapshot, rootId: string, vie
 }
 
 /** Approximate completion ordering only, never displayed as an acceptance timestamp. */
-export function orderDoneTasks(tasks: readonly TaskView[], runs: readonly Run[]): TaskView[] {
+export function orderDoneTasks(tasks: readonly TaskView[], runs: readonly SupervisorOverview["runs"][number][]): TaskView[] {
   const completed = new Map<string, string>();
   for (const run of runs) if (run.task_id && run.stage === "closed" && run.close_reason === "accepted" && (completed.get(run.task_id) ?? "") < run.updated_at) completed.set(run.task_id, run.updated_at);
   return tasks.slice().sort((a, b) => (completed.get(b.task.task_id) ?? "").localeCompare(completed.get(a.task.task_id) ?? "") || b.task.line - a.task.line);

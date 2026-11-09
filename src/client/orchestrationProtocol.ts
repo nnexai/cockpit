@@ -1,13 +1,13 @@
 import type {
   OrchestrationAction, OrchestrationMutationRequest, OrchestrationMutationResponse,
-  OrchestrationSnapshotRequest, OrchestrationSnapshot, OrchestrationWaitRequest, OrchestrationWaitResponse, InboxRequest, InboxView,
+  OrchestrationSnapshotRequest, OrchestrationSnapshot, OrchestrationOverview, TaskHistoryRequest, TaskHistoryMessages, OrchestrationWaitRequest, OrchestrationWaitResponse, InboxRequest, InboxView,
   LiaisonLookupRequest, LiaisonLookupResponse, CheckOutcome, Integration, SourceOutput, CleanupItem, OwnedResourceIdentity, AgentSendTarget,
   OrchestrationImagePut, OrchestrationImageRead, OrchestrationImageMedia, MessageImage,
   OrchestrationArtifactRead, OrchestrationArtifactMedia,
 } from "../protocol/generated/v1";
 import {
   wireOrchestrationAction, wireOrchestrationMutationRequest, wireOrchestrationMutationResponse,
-  wireOrchestrationSnapshotRequest, wireOrchestrationSnapshot, wireOrchestrationWaitRequest, wireOrchestrationWaitResponse, wireInboxRequest, wireInboxView,
+  wireOrchestrationSnapshotRequest, wireOrchestrationSnapshot, wireOrchestrationOverview, wireTaskHistoryRequest, wireTaskHistoryMessages, wireOrchestrationWaitRequest, wireOrchestrationWaitResponse, wireInboxRequest, wireInboxView,
   wireOrchestrationImagePut, wireOrchestrationImageRead, wireOrchestrationImageMedia, wireMessageImage,
   wireOrchestrationArtifactRead, wireOrchestrationArtifactMedia,
   wireLiaisonLookupRequest, wireLiaisonLookupResponse, wireAgentSendTarget, type TypedWirePolicy, type WireOwners,
@@ -115,6 +115,7 @@ function refine(rule: (value: string) => boolean, owners: StringFields): NonNull
 }
 const labels = rootMessage("Invalid orchestration", {
   OrchestrationAction: "action", OrchestrationSnapshotRequest: "snapshot request", OrchestrationSnapshot: "snapshot",
+  OrchestrationOverview: "overview", TaskHistoryRequest: "task history request", TaskHistoryMessages: "task history",
   OrchestrationMutationRequest: "mutation request", OrchestrationMutationResponse: "mutation response",
   OrchestrationActionResult: "mutation result", OrchestrationWaitRequest: "wait request", OrchestrationWaitResponse: "wait response",
   InboxRequest: "inbox request", InboxView: "inbox",
@@ -168,7 +169,7 @@ const POLICY = definePolicy({
       "OrchestrationActionResult[run_resumed]", "OrchestrationActionResult[run_attached]", "OrchestrationActionResult[task_unassigned]"]),
     // Generated required fields plus exact keys allow defaulted or omitted additive fields.
     // complete also requires own optional fields, which Rust may omit.
-    raw: new Set(["OrchestrationSnapshotRequest", "OrchestrationWaitRequest", "OrchestrationWaitResponse",
+    raw: new Set(["OrchestrationSnapshotRequest", "TaskHistoryRequest", "OrchestrationWaitRequest", "OrchestrationWaitResponse",
       "LiaisonLookupRequest", "LiaisonLookupResponse"]),
     absent: new Set(["TaskOwner.conversation", "TaskOwnership.schedule", "TaskOwnership.reopened_after_attempt", "TaskSchedule.hold", "ScheduleHold.dependency_task_id", "ExecutionAttachment.process_scope", "DispatchState.scope_unit",
       "DispatchState.latch", "DispatchState.latch_state", "DispatchState.source_location",
@@ -181,7 +182,7 @@ const POLICY = definePolicy({
       "OrchestrationConfiguration.max_parallel", "OrchestrationConfiguration.quiet_period_seconds", "OrchestrationConfiguration.process_scope",
       "OrchestrationSnapshot.directives", "OrchestrationSnapshot.thread_links", "InboxView.stalls", "InboxEntry.artifacts"]),
     exact: new Set(["OrchestrationAction", "OrchestrationSnapshotRequest", "OrchestrationMutationRequest", "OrchestrationWaitRequest",
-      "OrchestrationSnapshot", "OrchestrationMutationResponse", "OrchestrationActionResult", "OrchestrationWaitResponse",
+      "OrchestrationSnapshot", "OrchestrationOverview", "TaskHistoryRequest", "TaskHistoryMessages", "OverviewRun", "ClosedRunSummary", "RunResultSummary", "RunIntegrationSummary", "OrchestrationMutationResponse", "OrchestrationActionResult", "OrchestrationWaitResponse",
       "DispatchTarget", "WorkspaceSetupRequest", "NativeProcessIdentity", "NativeShellIdentity", "RetirementIdentity",
       "RetirementState", "RunRetirement", "AnswerReceipt", "QuestionReceipt", "QuestionStatus", "UnreflectedInput", "TaskAssignmentIntent",
       "Run", "RunLocation", "ProjectIdentity", "ProjectSource", "CheckoutIdentity", "DirectoryIdentity", "CheckoutGitIdentity",
@@ -231,7 +232,7 @@ const POLICY = definePolicy({
         NativeProcessIdentity: ["kernel_boot_id"], RetirementIdentity: ["launch_tag", "endpoint_identity", "workspace_id", "tab_id", "pane_id", "terminal_id", "herdr_boot_id"],
         RunRetirement: ["result_message_id"],
         ReplacementRetirementAuthority: ["previous_run_id", "replacement_run_id"],
-        Run: ["run_id", "root_id", "parent_run_id", "task_id"], DispatchState: ["launch_tag", "endpoint_identity", "scope_unit", "staging_workspace_id"],
+        Run: ["run_id", "root_id", "parent_run_id", "task_id"], ClosedRunSummary: ["run_id", "root_id", "task_id"], RunResultSummary: ["message_id"], DispatchState: ["launch_tag", "endpoint_identity", "scope_unit", "staging_workspace_id"],
         ProjectIdentity: ["key", "repository_id", "source_workspace_id"], CheckoutIdentity: ["key"],
         ExecutionAttachment: ["machine_id"], ConversationIdentity: ["harness", "session_id"], TaskOwnership: ["root_id", "task_id"], TaskOwner: ["run_id"], "OrchestrationActionResult[run_registered]": ["run_id"], "OrchestrationActionResult[task_unassigned]": ["task_id", "previous_run_id"], ResumeRecord: ["run_id"], ResumeCause: ["code"],
         "LiaisonLookupResponse[unavailable]": ["code"],
@@ -289,7 +290,7 @@ const POLICY = definePolicy({
         "OrchestrationActionResult[run]": ["run_id"], "OrchestrationActionResult[task_assigned]": ["to_run_id"], "OrchestrationActionResult[message]": ["to_run_id"],
       }),
       ...refine(value => id(value) && value.trim().length > 0, {
-        OrchestrationSnapshotRequest: ["root_id"], OrchestrationWaitRequest: ["root_id"],
+        OrchestrationSnapshotRequest: ["root_id"], OrchestrationWaitRequest: ["root_id"], TaskHistoryRequest: ["root_id", "task_id"], TaskHistoryMessages: ["root_id", "task_id"],
       }),
       ...refine(text, {
         ErrorResponse: ["message"], ResumeCause: ["message"], "LiaisonLookupResponse[unavailable]": ["message"],
@@ -348,7 +349,7 @@ const POLICY = definePolicy({
         "SourceOutput[code]": ["task_revision"], "SourceOutput[non_code]": ["task_revision"],
         "Integration[integrated]": ["accepted_task_revision"], IntegrationRecord: ["expected_task_revision"],
         "OrchestrationAction[report]": ["original_task_revision"], "OrchestrationAction[message_send]": ["original_task_revision"],
-        OrchestrationSnapshot: ["tasks_token", "state_store_id"], InboxView: ["tasks_token", "state_store_id"], HandoffRecord: ["task_revision"],
+        OrchestrationSnapshot: ["tasks_token", "state_store_id"], OrchestrationOverview: ["tasks_token", "state_store_id"], TaskHistoryRequest: ["state_store_id"], TaskHistoryMessages: ["state_store_id"], InboxView: ["tasks_token", "state_store_id"], HandoffRecord: ["task_revision"],
         "OrchestrationAction[thread_handoff]": ["expected_task_revision"], OrchestrationWaitRequest: ["after_tasks_token"], OrchestrationWaitResponse: ["tasks_token"],
         "OrchestrationAction[task_create]": ["expected_doc_revision", "source_revision"], "OrchestrationAction[task_assignment_resolve]": ["expected_task_revision"], "OrchestrationAction[task_update]": ["expected_task_revision"],
         "OrchestrationAction[task_dependencies_set]": ["expected_task_revision", "expected_doc_revision"], "OrchestrationAction[task_step_add]": ["expected_task_revision"], "OrchestrationAction[task_step_rename]": ["expected_task_revision"],
@@ -426,7 +427,7 @@ const POLICY = definePolicy({
       "OrchestrationAction[thread_handoff].images": values => values === undefined || (values.every(imageId) && new Set(values).size === values.length),
       "OrchestrationAction[message_send].images": values => values === undefined || (values.every(imageId) && new Set(values).size === values.length),
       "OrchestrationAction[report].images": values => values === undefined || (values.every(imageId) && new Set(values).size === values.length),
-      ...refine(session, { InboxRequest: ["session_id"], InboxView: ["session_id"], OrchestrationSnapshotRequest: ["session_id"], OrchestrationMutationRequest: ["session_id"], OrchestrationSnapshot: ["session_id"], Run: ["session_id"], RunLocation: ["session_id"], RetirementIdentity: ["session_id"], LiaisonLookupRequest: ["session_id"], OwnedSpaceIdentity: ["session_id"] }),
+      ...refine(session, { InboxRequest: ["session_id"], InboxView: ["session_id"], OrchestrationSnapshotRequest: ["session_id"], OrchestrationMutationRequest: ["session_id"], OrchestrationSnapshot: ["session_id"], OrchestrationOverview: ["session_id"], TaskHistoryRequest: ["session_id"], TaskHistoryMessages: ["session_id"], Run: ["session_id"], RunLocation: ["session_id"], RetirementIdentity: ["session_id"], LiaisonLookupRequest: ["session_id"], OwnedSpaceIdentity: ["session_id"] }),
       ...refine(stepTitle, { "OrchestrationAction[task_step_add]": ["title"], "OrchestrationAction[task_step_rename]": ["title"] }),
       ...refine(decimalU64, { NativeShellIdentity: ["executable_device", "executable_inode"], DirectoryIdentity: ["device", "inode"],
         OwnedFilesystemIdentity: ["device", "inode", "manifest_device", "manifest_inode"], OwnedProcessScope: ["cgroup_device", "cgroup_inode"],
@@ -602,6 +603,28 @@ export function matchOrchestrationSnapshot(value: unknown, request: Orchestratio
   const snapshot = parseOrchestrationSnapshot(value);
   if (snapshot.session_id !== request.session_id || (request.root_id !== null && snapshot.board !== null && snapshot.board.root_id !== request.root_id)) malformed("snapshot identity");
   return snapshot;
+}
+export function matchOrchestrationOverview(value: unknown, request: OrchestrationSnapshotRequest): OrchestrationOverview {
+  const overview = parseWire(value, wireOrchestrationOverview, POLICY);
+  if (overview.session_id !== request.session_id || (request.root_id !== null && overview.board !== null && overview.board.root_id !== request.root_id)) malformed("overview identity");
+  if (overview.runs.some(({ kind, run }) => run.session_id !== overview.session_id
+    || (kind === "full" && run.attachment?.location != null && run.attachment.location.session_id !== overview.session_id))) malformed("run session identity");
+  return overview;
+}
+export function parseTaskHistoryRequest(value: unknown): TaskHistoryRequest { return parseWire(value, wireTaskHistoryRequest, POLICY); }
+export function matchTaskHistoryMessages(value: unknown, request: TaskHistoryRequest): TaskHistoryMessages {
+  const history = parseWire(value, wireTaskHistoryMessages, POLICY);
+  if (history.session_id !== request.session_id || history.state_store_id !== request.state_store_id || history.root_id !== request.root_id || history.task_id !== request.task_id) malformed("task history identity");
+  if (!hash(history.digest) || (history.not_modified && (history.digest !== request.known_digest || history.runs.length !== 0 || history.messages.length !== 0 || history.cleanup.length !== 0 || history.task_ownership.length !== 0 || history.unreflected_inputs.length !== 0))) malformed("task history digest");
+  if (history.runs.some(run => run.session_id !== request.session_id || run.root_id !== request.root_id || run.task_id !== request.task_id
+    || (run.attachment?.location != null && run.attachment.location.session_id !== request.session_id))) malformed("task history run identity");
+  const runIds = new Set(history.runs.map(run => run.run_id));
+  if (history.cleanup.some(item => !runIds.has(item.run_id))
+    || history.unreflected_inputs.some(item => !runIds.has(item.run_id))
+    || history.task_ownership.some(item => item.root_id !== request.root_id || item.task_id !== request.task_id)
+    || history.messages.some(message => !runIds.has(message.to_run_id)
+      && !(message.from.type === "run" && runIds.has(message.from.run_id)))) malformed("task history scope");
+  return history;
 }
 export function parseOrchestrationMutationResponse(value: unknown): OrchestrationMutationResponse { return parseWire(value, wireOrchestrationMutationResponse, POLICY); }
 export function parseOrchestrationWaitResponse(value: unknown): OrchestrationWaitResponse { return parseWire(value, wireOrchestrationWaitResponse, POLICY); }

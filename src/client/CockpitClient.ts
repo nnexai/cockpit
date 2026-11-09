@@ -1,3 +1,5 @@
+import type { LocalChangeEvent, LocalChangeScope } from "../protocol/generated/v1";
+export type { LocalChangeEvent, LocalChangeScope, LocalChangeTopic } from "../protocol/generated/v1";
 import * as Wire from "../protocol/generated/validate";
 import { parseWire, tryParseWire } from "./wire";
 import { CLIENT } from "./clientPolicy";
@@ -11,14 +13,14 @@ export type { SpaceCpuPane, SpaceCpuStatusRequest, SpaceCpuProcess, SpaceCpuStat
 import type { AgentAttentionResponse, AgentAttentionChangeRequest } from "../protocol/generated/v1";
 export type { AgentAttentionResponse, AgentAttentionChangeRequest, AgentAttentionObservation, AgentAttentionChange, AgentAttentionMark } from "../protocol/generated/v1";
 import type {
-  OrchestrationSnapshotRequest, OrchestrationSnapshot, InboxRequest, InboxView, AgentSendTarget,
+  OrchestrationSnapshotRequest, OrchestrationOverview, TaskHistoryRequest, TaskHistoryMessages, InboxRequest, InboxView, AgentSendTarget,
   OrchestrationMutationRequest, OrchestrationMutationResponse,
   OrchestrationWaitRequest, OrchestrationWaitResponse,
   LiaisonLookupRequest, LiaisonLookupResponse,
   OrchestrationImagePut, OrchestrationImageRead, OrchestrationImageMedia, MessageImage, OrchestrationArtifactRead, OrchestrationArtifactMedia,
 } from "../protocol/generated/v1";
 export type {
-  OrchestrationSnapshotRequest, OrchestrationSnapshot, InboxRequest, InboxView, AgentSendTarget,
+  OrchestrationSnapshotRequest, OrchestrationSnapshot, OrchestrationOverview, TaskHistoryRequest, TaskHistoryMessages, InboxRequest, InboxView, AgentSendTarget,
   OrchestrationMutationRequest, OrchestrationMutationResponse,
   OrchestrationWaitRequest, OrchestrationWaitResponse,
   LiaisonLookupRequest, LiaisonLookupResponse,
@@ -387,7 +389,8 @@ export interface CockpitClient {
   updateAndRelaunch?(expectedInstance: string): Promise<RestartTicket>;
   updateStatus(): Promise<UpdateStatus>;
   updateInstall(sessionId: string, spaceId: string): Promise<QuickAskLocation>;
-  orchestrationSnapshot(request: OrchestrationSnapshotRequest): Promise<OrchestrationSnapshot>;
+  orchestrationSnapshot(request: OrchestrationSnapshotRequest): Promise<OrchestrationOverview>;
+  orchestrationTaskHistory(request: TaskHistoryRequest, signal?: AbortSignal): Promise<TaskHistoryMessages>;
   orchestrationInbox(request: InboxRequest, signal?: AbortSignal): Promise<InboxView>;
   orchestrationImagePut(request: OrchestrationImagePut, signal?: AbortSignal): Promise<MessageImage>;
   orchestrationImageRead(request: OrchestrationImageRead, signal?: AbortSignal): Promise<OrchestrationImageMedia>;
@@ -482,6 +485,7 @@ export interface CockpitClient {
   spaceGitAction(sessionId: string, request: SpaceGitActionRequest): Promise<SpaceGitActionResponse>;
   focus(sessionId: string, request: FocusRequest): Promise<FocusResponse>;
   mutate(sessionId: string, request: ResourceMutationRequest): Promise<ResourceMutationResponse>;
+  subscribeLocalChanges(scope: LocalChangeScope, onEvent: (event: LocalChangeEvent) => Promise<void>, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<ClosableStream>;
   subscribeSession(sessionId: string, onMessage: (message: SessionStreamMessage) => void, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<ClosableStream>;
   openTerminal(request: TerminalOpenRequest, onMessage: (message: TerminalStreamMessage) => void, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<TerminalStream>;
   openBrowserView(request: BrowserViewOpenRequest, onEvent: BrowserViewEventHandler, onFrame: BrowserViewFrameHandler, onError: (error: CockpitClientError) => void, signal?: AbortSignal): Promise<BrowserViewStream>;

@@ -127,6 +127,7 @@ pub enum SpaceGitUpstream {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 pub struct SpaceGitStatusResponse {
     pub session_id: String,
+    pub server_instance: String,
     pub spaces: Vec<SpaceGitStatus>,
 }
 

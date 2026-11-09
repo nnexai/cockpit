@@ -1,4 +1,5 @@
-import type { Run, TaskView } from "../../protocol/generated/v1";
+import type { TaskView } from "../../protocol/generated/v1";
+import type { SupervisorOverview } from "./useSupervisor";
 import { orderDoneTasks } from "./taskHistory";
 
 export type TaskProject = { key: string; label: string };
@@ -9,7 +10,7 @@ export function projectOf(view: TaskView): TaskProject {
   return view.project ? { key: view.project.key ?? `provisional:${view.project.label}`, label: view.project.label } : { key: "", label: "General" };
 }
 
-export function groupTasks(tasks: readonly TaskView[], runs: readonly Run[]): TaskGroup[] {
+export function groupTasks(tasks: readonly TaskView[], runs: readonly SupervisorOverview["runs"][number][]): TaskGroup[] {
   const groups = new Map<string, TaskGroup>();
   const activity = new Map<string, number>();
   for (const run of runs) {

@@ -879,6 +879,7 @@ dependencies = [
  "cockpit-protocol",
  "libproc",
  "nix",
+ "notify",
  "pty-process",
  "rusqlite",
  "serde",

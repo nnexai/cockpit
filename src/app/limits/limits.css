@@ -94,12 +94,13 @@
 .limits-row-meter .limits-meter { display: block; width: auto; }
 .limits-row-value { text-align: right; }
 .limits-row-credits { grid-column: 1 / -1; color: var(--text-muted); font-size: var(--font-size-2xs); font-variant-numeric: tabular-nums; }
-.limits-runout, .limits-reset { white-space: nowrap; }
+.limits-runout { white-space: nowrap; }
 .limits-row .limits-runout, .limits-row .limits-reset { text-align: right; }
-.limits-reset { color: var(--text-muted); font-size: var(--font-size-2xs); }
+.limits-reset { color: var(--text-muted); font-size: var(--font-size-2xs); line-height: 1.2; }
 .limits-provider p, .limits-offline { margin: 6px 0 0; }
 .limits-error { color: var(--blocked); }
 .limits-offline { padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.limits-notice { margin: 0; padding: 6px 10px; color: var(--text-muted); border-bottom: 1px solid var(--border); }
 @container statusbar (width < 560px) {
   .limits-chips { display: none; }
   .limits-summary { display: flex; }

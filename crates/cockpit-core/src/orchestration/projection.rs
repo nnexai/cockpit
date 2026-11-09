@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use cockpit_protocol::orchestration::*;
 use cockpit_protocol::v1::ErrorResponse;
 use cockpit_protocol::projects::WorkspaceSetupRequest;
+use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::herdr::RuntimeView;
@@ -112,7 +113,7 @@ fn unreflected_inputs(runs: &[&Run], messages: &[&Message]) -> Vec<UnreflectedIn
 
 /// Joins durable intent and canonical Markdown with one fresh runtime observation.
 /// No runtime evidence is written back, and no observation can complete a task.
-pub(crate) fn snapshot(
+fn project_overview(
     request: &OrchestrationSnapshotRequest,
     state: &OrchestrationState,
     tasks_token: String,
@@ -120,7 +121,8 @@ pub(crate) fn snapshot(
     runtime: Result<RuntimeView, InspectionError>,
     now: &str,
     state_store_id: &str,
-) -> Result<OrchestrationSnapshot, InspectionError> {
+    compact_closed: bool,
+) -> Result<OrchestrationOverview, InspectionError> {
     let clock = parse_time(now).ok_or_else(|| {
         InspectionError::new("orchestration_clock", "Snapshot time must be RFC 3339")
     })?;
@@ -197,7 +199,7 @@ pub(crate) fn snapshot(
             *attention_counts.entry(run.root_id.as_str()).or_default() += 1;
         }
     }
-    Ok(OrchestrationSnapshot {
+    Ok(OrchestrationOverview {
         session_id: request.session_id.clone(),
         state_store_id: state_store_id.into(),
         revision: state.revision,
@@ -217,13 +219,25 @@ pub(crate) fn snapshot(
             .collect(),
         board,
         runs: runs.into_iter().map(|run| {
-            let mut projected = run.clone();
-            if let Some(cause) = projected.resume.as_mut().and_then(|r| r.cause.as_mut()) {
-                cause.message = format!("Restoration status: {}.", cause.code);
+            if compact_closed && run.stage == RunStage::Closed && run.kind != RunKind::Supervisor {
+                OverviewRun::Summary { run: ClosedRunSummary {
+                    session_id: run.session_id.clone(), run_id: run.run_id.clone(),
+                    root_id: run.root_id.clone(), task_id: run.task_id.clone(), kind: run.kind,
+                    stage: ClosedRunStage::Closed, close_reason: run.close_reason,
+                    attempt: run.attempt, updated_at: run.updated_at.clone(), label: run.label.clone(),
+                    result: run.result.as_ref().map(|result| RunResultSummary {
+                        message_id: result.message_id.clone(), outcome: result.outcome,
+                    }),
+                    integration: RunIntegrationSummary { state: match &run.integration {
+                        Integration::Pending => RunIntegrationState::Pending,
+                        Integration::NotApplicable { .. } => RunIntegrationState::NotApplicable,
+                        Integration::Integrated { .. } => RunIntegrationState::Integrated,
+                    } },
+                } }
+            } else {
+                OverviewRun::Full { run: project_run(run) }
             }
-            projected
         }).collect(),
-        messages: messages.into_iter().cloned().collect(),
         questions,
         unreflected_inputs,
         task_ownership: state
@@ -249,15 +263,127 @@ pub(crate) fn snapshot(
     })
 }
 
+fn project_run(run: &Run) -> Run {
+    let mut projected = run.clone();
+    if let Some(cause) = projected.resume.as_mut().and_then(|r| r.cause.as_mut()) {
+        cause.message = format!("Restoration status: {}.", cause.code);
+    }
+    projected
+}
+
+pub(crate) fn overview(
+    request: &OrchestrationSnapshotRequest,
+    state: &OrchestrationState,
+    tasks_token: String,
+    boards: Vec<TaskBoard>,
+    runtime: Result<RuntimeView, InspectionError>,
+    now: &str,
+    state_store_id: &str,
+) -> Result<OrchestrationOverview, InspectionError> {
+    project_overview(request, state, tasks_token, boards, runtime, now, state_store_id, true)
+}
+
+pub(crate) fn snapshot(
+    request: &OrchestrationSnapshotRequest,
+    state: &OrchestrationState,
+    tasks_token: String,
+    boards: Vec<TaskBoard>,
+    runtime: Result<RuntimeView, InspectionError>,
+    now: &str,
+    state_store_id: &str,
+) -> Result<OrchestrationSnapshot, InspectionError> {
+    let OrchestrationOverview {
+        session_id, state_store_id, revision, tasks_token, roots, board, runs,
+        questions, unreflected_inputs, task_ownership, directives, thread_links,
+        intents, assignment_intents, cleanup, restoration, runtime, unmanaged_agents, attention,
+    } = project_overview(request, state, tasks_token, boards, runtime, now, state_store_id, false)?;
+    let runs: Vec<Run> = runs.into_iter().map(|run| match run {
+        OverviewRun::Full { run } => run,
+        OverviewRun::Summary { .. } => unreachable!("full snapshot requests full runs"),
+    }).collect();
+    let run_ids: HashSet<&str> = runs.iter().map(|run| run.run_id.as_str()).collect();
+    let messages = state.messages.iter()
+        .filter(|message| run_ids.contains(message.to_run_id.as_str()))
+        .cloned().collect();
+    Ok(OrchestrationSnapshot {
+        session_id, state_store_id, revision, tasks_token, roots, board, runs, messages,
+        questions, unreflected_inputs, task_ownership, directives, thread_links,
+        intents, assignment_intents, cleanup, restoration, runtime, unmanaged_agents, attention,
+    })
+}
+
+pub(crate) fn task_messages(
+    request: &TaskHistoryRequest, state: &OrchestrationState, state_store_id: &str,
+) -> Result<TaskHistoryMessages, InspectionError> {
+    if request.state_store_id != state_store_id {
+        return Err(InspectionError::new("state_store_mismatch", "Task history store identity does not match"));
+    }
+    if !state.runs.iter().any(|run| run.session_id == request.session_id
+        && run.run_id == request.root_id && run.root_id == request.root_id
+        && run.parent_run_id.is_none())
+    {
+        return Err(InspectionError::new("root_not_found", "Root is not in this session"));
+    }
+    let task_runs: Vec<&Run> = state.runs.iter()
+        .filter(|run| run.session_id == request.session_id && run.root_id == request.root_id
+            && run.task_id.as_deref() == Some(request.task_id.as_str())
+            && run.kind != RunKind::Supervisor).collect();
+    let run_ids: HashSet<&str> = task_runs.iter().map(|run| run.run_id.as_str()).collect();
+    let messages: Vec<&Message> = state.messages.iter().filter(|message| {
+        run_ids.contains(message.to_run_id.as_str())
+            || matches!(&message.from, ActorRef::Run { run_id } if run_ids.contains(run_id.as_str()))
+    }).collect();
+    let cleanup: Vec<RunCleanupSummary> = task_runs.iter()
+        .map(|run| super::cleanup::summary_for_run(state, run)).collect();
+    let task_ownership: Vec<&TaskOwnership> = state.task_ownership.iter()
+        .filter(|item| item.root_id == request.root_id && item.task_id == request.task_id).collect();
+    let inputs = unreflected_inputs(&task_runs, &messages);
+    struct HashWriter(Sha256);
+    impl std::io::Write for HashWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.update(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+    let mut hash = HashWriter(Sha256::new());
+    serde_json::to_writer(&mut hash, &(state_store_id, &request.session_id, &request.root_id,
+        &request.task_id, &task_runs, &messages, &cleanup, &task_ownership, &inputs))
+        .map_err(|_| InspectionError::new("orchestration_state_invalid", "Cannot encode task history"))?;
+    let digest = format!("{:x}", hash.0.finalize());
+    let not_modified = request.known_digest.as_deref() == Some(digest.as_str());
+    Ok(TaskHistoryMessages {
+        session_id: request.session_id.clone(), state_store_id: state_store_id.into(),
+        revision: state.revision, root_id: request.root_id.clone(), task_id: request.task_id.clone(),
+        digest, not_modified,
+        messages: if not_modified { Vec::new() } else { messages.into_iter().cloned().collect() },
+        runs: if not_modified { Vec::new() } else { task_runs.into_iter().map(|run| {
+            let mut projected = project_run(run);
+            // History needs dispatch status, not the bearer-capability receipt.
+            if let Some(dispatch) = projected.dispatch.as_mut() {
+                dispatch.latch = None;
+            }
+            projected
+        }).collect() },
+        cleanup: if not_modified { Vec::new() } else { cleanup },
+        task_ownership: if not_modified { Vec::new() } else { task_ownership.into_iter().cloned().collect() },
+        unreflected_inputs: if not_modified { Vec::new() } else { inputs },
+    })
+}
+
 /// Launch nonces are bearer capabilities, including on the caller's own run.
 /// Dispatcher/operator reads use durable state and are intentionally unchanged.
 pub(crate) fn redact_agent_capabilities(snapshot: &mut OrchestrationSnapshot) {
     for run in &mut snapshot.runs {
-        if let Some(latch) = run.dispatch.as_mut().and_then(|dispatch| dispatch.latch.as_mut()) {
-            // The FIFO basename also embeds this nonce in real launch receipts.
-            latch.latch = "[REDACTED]".into();
-            latch.nonce = "[REDACTED]".into();
-        }
+        redact_run_capabilities(run);
+    }
+}
+
+fn redact_run_capabilities(run: &mut Run) {
+    if let Some(latch) = run.dispatch.as_mut().and_then(|dispatch| dispatch.latch.as_mut()) {
+        // The FIFO basename also embeds this nonce in real launch receipts.
+        latch.latch = "[REDACTED]".into();
+        latch.nonce = "[REDACTED]".into();
     }
 }
 
@@ -1567,6 +1693,165 @@ mod tests {
             "test-store",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn overview_matches_snapshot_without_messages() {
+        let mut durable = state(asking());
+        durable.messages.push(answer(DeliveryStage::Read));
+        let request = OrchestrationSnapshotRequest { session_id: "session".into(), root_id: Some(ROOT.into()) };
+        let full = snapshot(&request, &durable, "token".into(), vec![board()],
+            Ok(runtime("working")), NOW, "test-store").unwrap();
+        let lean = overview(&request, &durable, "token".into(), vec![board()],
+            Ok(runtime("working")), NOW, "test-store").unwrap();
+        let mut full_json = serde_json::to_value(full).unwrap();
+        assert!(!full_json["messages"].as_array().unwrap().is_empty());
+        full_json.as_object_mut().unwrap().remove("messages");
+        let mut lean_json = serde_json::to_value(lean).unwrap();
+        let runs = lean_json["runs"].as_array_mut().unwrap();
+        for run in runs {
+            *run = run["run"].take();
+        }
+        assert_eq!(full_json, lean_json);
+    }
+
+    #[test]
+    fn closed_task_runs_are_compact_but_history_and_snapshot_retain_details() {
+        let mut durable = state(worker(RunStage::Closed));
+        durable.runs[0].stage = RunStage::Closed;
+        let request = OrchestrationSnapshotRequest { session_id: "session".into(), root_id: Some(ROOT.into()) };
+        let lean = overview(&request, &durable, "token".into(), vec![board()],
+            Ok(runtime("working")), NOW, "test-store").unwrap();
+        assert!(matches!(&lean.runs[0], OverviewRun::Full { .. }));
+        let OverviewRun::Summary { run: summary } = &lean.runs[1] else { panic!("expected compact worker") };
+        assert_eq!(summary.run_id, WORKER);
+        assert!(serde_json::to_value(summary).unwrap().get("brief").is_none());
+        let full = snapshot(&request, &durable, "token".into(), vec![board()],
+            Ok(runtime("working")), NOW, "test-store").unwrap();
+        assert_eq!(full.runs[1].brief, durable.runs[1].brief);
+        let history = task_messages(&TaskHistoryRequest {
+            session_id: "session".into(), state_store_id: "test-store".into(),
+            root_id: ROOT.into(), task_id: TASK.into(), known_digest: None,
+        }, &durable, "test-store").unwrap();
+        assert_eq!(history.runs.len(), 1);
+        assert_eq!(history.runs[0].brief, durable.runs[1].brief);
+    }
+
+    #[test]
+    fn task_history_is_scoped_to_non_supervisor_task_runs() {
+        let mut durable = state(asking());
+        durable.messages.push(answer(DeliveryStage::Read));
+        let mut other = worker(RunStage::Closed);
+        other.run_id = "other".into();
+        other.task_id = Some("other-task".into());
+        durable.runs.push(other);
+        let mut supervisor = worker(RunStage::Closed);
+        supervisor.run_id = "supervisor".into();
+        supervisor.kind = RunKind::Supervisor;
+        durable.runs.push(supervisor);
+        for (id, to, from) in [
+            ("other-message", "other", ROOT),
+            ("root-directive", ROOT, ROOT),
+            ("supervisor-message", "supervisor", ROOT),
+            ("supervisor-report", ROOT, "supervisor"),
+        ] {
+            let mut message = answer(DeliveryStage::Stored);
+            message.message_id = id.into();
+            message.to_run_id = to.into();
+            message.from = ActorRef::Run { run_id: from.into() };
+            durable.messages.push(message);
+        }
+        let request = TaskHistoryRequest {
+            session_id: "session".into(), state_store_id: "test-store".into(),
+            root_id: ROOT.into(), task_id: TASK.into(), known_digest: None,
+        };
+        let history = task_messages(&request, &durable, "test-store").unwrap();
+        assert_eq!(history.revision, durable.revision);
+        assert_eq!(history.state_store_id, "test-store");
+        assert_eq!(history.messages.len(), 2);
+        assert_eq!(history.cleanup.len(), 1);
+        assert_eq!(history.cleanup[0].run_id, WORKER);
+        assert_eq!(history.task_ownership.len(), 1);
+        assert_eq!(history.task_ownership[0].task_id, TASK);
+        assert!(history.messages.iter().any(|m| m.to_run_id == ROOT
+            && matches!(&m.from, ActorRef::Run { run_id } if run_id == WORKER)));
+        assert!(history.messages.iter().any(|m| m.to_run_id == WORKER));
+        let digest_request = TaskHistoryRequest { known_digest: Some(history.digest.clone()), ..request.clone() };
+        durable.revision += 1;
+        let unchanged = task_messages(&digest_request, &durable, "test-store").unwrap();
+        assert!(unchanged.not_modified);
+        assert_eq!(unchanged.revision, durable.revision);
+        assert!(unchanged.runs.is_empty() && unchanged.messages.is_empty());
+        assert!(unchanged.cleanup.is_empty() && unchanged.task_ownership.is_empty()
+            && unchanged.unreflected_inputs.is_empty());
+        durable.task_ownership[0].generation += 1;
+        let ownership_change = task_messages(&digest_request, &durable, "test-store").unwrap();
+        assert!(!ownership_change.not_modified);
+        assert_eq!(ownership_change.task_ownership[0].generation, durable.task_ownership[0].generation);
+        durable.task_ownership[0].generation -= 1;
+        durable.messages[1].stage = DeliveryStage::Acked;
+        let changed = task_messages(&digest_request, &durable, "test-store").unwrap();
+        assert!(!changed.not_modified);
+        assert_ne!(changed.digest, history.digest);
+        durable.messages[1].stale = true;
+        let stale = task_messages(&TaskHistoryRequest { known_digest: Some(changed.digest.clone()), ..request.clone() }, &durable, "test-store").unwrap();
+        assert!(!stale.not_modified);
+        let wrong_digest = TaskHistoryRequest { known_digest: Some("forged".into()), ..request.clone() };
+        assert!(!task_messages(&wrong_digest, &durable, "test-store").unwrap().not_modified);
+        let wrong_store = TaskHistoryRequest { state_store_id: "forged".into(), ..digest_request.clone() };
+        assert_eq!(task_messages(&wrong_store, &durable, "test-store").unwrap_err().code, "state_store_mismatch");
+        let wrong_task = TaskHistoryRequest { task_id: "other-task".into(), ..digest_request.clone() };
+        assert!(!task_messages(&wrong_task, &durable, "test-store").unwrap().not_modified);
+        let wrong_root_digest = TaskHistoryRequest { root_id: "missing".into(), ..digest_request.clone() };
+        assert_eq!(task_messages(&wrong_root_digest, &durable, "test-store").unwrap_err().code, "root_not_found");
+        let wrong_session_digest = TaskHistoryRequest { session_id: "foreign".into(), ..digest_request };
+        assert_eq!(task_messages(&wrong_session_digest, &durable, "test-store").unwrap_err().code, "root_not_found");
+        let empty = TaskHistoryRequest { task_id: "missing-task".into(), ..request.clone() };
+        assert!(task_messages(&empty, &durable, "test-store").unwrap().messages.is_empty());
+        let wrong_root = TaskHistoryRequest { root_id: "missing".into(), ..request.clone() };
+        assert_eq!(task_messages(&wrong_root, &durable, "test-store").unwrap_err().code, "root_not_found");
+        let wrong_session = TaskHistoryRequest { session_id: "foreign".into(), ..request };
+        assert_eq!(task_messages(&wrong_session, &durable, "test-store").unwrap_err().code, "root_not_found");
+    }
+
+    #[test]
+    fn task_history_unreflected_inputs_match_the_same_durable_snapshot() {
+        let mut durable = reported_state();
+        durable.messages.push(named_input("late", MessageKind::Instruction, DeliveryStage::Stored));
+        let history = task_messages(&TaskHistoryRequest {
+            session_id: "session".into(), state_store_id: "test-store".into(),
+            root_id: ROOT.into(), task_id: TASK.into(), known_digest: None,
+        }, &durable, "test-store").unwrap();
+        let snapshot = project(&durable, Ok(runtime("working")));
+        assert_eq!(serde_json::to_value(&history.unreflected_inputs).unwrap(),
+            serde_json::to_value(&snapshot.unreflected_inputs).unwrap());
+        assert_eq!(history.unreflected_inputs.len(), 1);
+    }
+
+    #[test]
+    fn task_history_redacts_launch_capabilities_without_changing_snapshot() {
+        let mut durable = state(worker(RunStage::Working));
+        durable.runs[1].dispatch.as_mut().unwrap().latch = Some(AgentLaunchReceipt {
+            latch: "secret-fifo-name".into(), nonce: "secret-nonce".into(),
+            latch_device: "device".into(), latch_inode: "inode".into(),
+        });
+        let request = TaskHistoryRequest {
+            session_id: "session".into(), state_store_id: "test-store".into(),
+            root_id: ROOT.into(), task_id: TASK.into(), known_digest: None,
+        };
+        let history = task_messages(&request, &durable, "test-store").unwrap();
+        let encoded = serde_json::to_string(&history).unwrap();
+        assert!(!encoded.contains("secret-fifo-name"));
+        assert!(!encoded.contains("secret-nonce"));
+        assert!(history.runs[0].dispatch.as_ref().unwrap().latch.is_none());
+        let snapshot = project(&durable, Ok(runtime("working")));
+        let latch = snapshot.runs[1].dispatch.as_ref().unwrap().latch.as_ref().unwrap();
+        assert_eq!(latch.latch, "secret-fifo-name");
+        assert_eq!(latch.nonce, "secret-nonce");
+        let unchanged = task_messages(&TaskHistoryRequest {
+            known_digest: Some(history.digest), ..request
+        }, &durable, "test-store").unwrap();
+        assert!(unchanged.not_modified);
     }
 
     #[test]

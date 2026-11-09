@@ -8,6 +8,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use cockpit_core::{HerdrAdapter, SessionChange};
+use cockpit_core::orchestration::herdr::OrchestrationHerdr;
 use cockpit_herdr::{HerdrCliAdapter, HerdrCliConfig};
 use cockpit_protocol::v1::{
     FocusKind, FocusRequest, PaneSplitDirection, PaneSummary, ResourceMutationRequest, SessionSnapshotResponse,
@@ -121,6 +122,136 @@ async fn serve_ping(listener: &UnixListener) {
         .write_all(format!("{response}\n").as_bytes())
         .await
         .unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn orchestration_subscription_avoids_shell_while_session_receives_shell_changes() {
+    use tokio::io::AsyncReadExt;
+    use tokio::sync::mpsc;
+
+    let socket = std::env::temp_dir().join(format!("cockpit-herdr-scope-{}.sock", temp_id()));
+    let client_socket = socket.with_file_name(format!(
+        "{}-client.sock", socket.file_stem().unwrap().to_str().unwrap()
+    ));
+    let api = UnixListener::bind(&socket).unwrap();
+    let shell = UnixListener::bind(&client_socket).unwrap();
+    let snapshots = Arc::new(AtomicUsize::new(0));
+    let server_snapshots = snapshots.clone();
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<mpsc::UnboundedSender<serde_json::Value>>();
+    let api_server = tokio::spawn(async move {
+        loop {
+            let (stream, _) = api.accept().await.unwrap();
+            let event_tx = event_tx.clone();
+            let snapshots = server_snapshots.clone();
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                if reader.read_line(&mut line).await.unwrap() == 0 {
+                    return; // Endpoint identity probes do not send a request.
+                }
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                let mut stream = reader.into_inner();
+                match request["method"].as_str().unwrap() {
+                    "ping" => {
+                        let response = json!({"id": request["id"], "result": {
+                            "type": "pong", "version": "0.9.0", "protocol": 22
+                        }});
+                        stream.write_all(format!("{response}\n").as_bytes()).await.unwrap();
+                    }
+                    "session.snapshot" => {
+                        let mut fixture: serde_json::Value =
+                            serde_json::from_str(include_str!("fixtures/session-snapshot.json")).unwrap();
+                        fixture["result"]["snapshot"]["protocol"] = json!(22);
+                        let response = json!({"id": request["id"], "result": fixture["result"]});
+                        stream.write_all(format!("{response}\n").as_bytes()).await.unwrap();
+                        snapshots.fetch_add(1, Ordering::SeqCst);
+                    }
+                    "events.subscribe" => {
+                        let response = json!({"id": request["id"], "result": {"type": "subscription_started"}});
+                        stream.write_all(format!("{response}\n").as_bytes()).await.unwrap();
+                        let (tx, mut rx) = mpsc::unbounded_channel::<serde_json::Value>();
+                        event_tx.send(tx).unwrap();
+                        while let Some(event) = rx.recv().await {
+                            if stream.write_all(format!("{event}\n").as_bytes()).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    method => panic!("unexpected API method {method}"),
+                }
+            });
+        }
+    });
+    let (shell_tx, mut shell_rx) = mpsc::unbounded_channel::<mpsc::UnboundedSender<()>>();
+    let shell_server = tokio::spawn(async move {
+        loop {
+            let (mut stream, _) = shell.accept().await.unwrap();
+            let shell_tx = shell_tx.clone();
+            tokio::spawn(async move {
+                let mut length = [0; 4];
+                stream.read_exact(&mut length).await.unwrap();
+                let mut hello = vec![0; u32::from_le_bytes(length) as usize];
+                stream.read_exact(&mut hello).await.unwrap();
+                let welcome = json!({
+                    "generation": 1, "snapshot_codec": "shell.snapshot.v1",
+                    "surface_codec": "shell.surface.v1", "input_codec": "shell.input.semantic.v1",
+                    "blob_codec": "shell.blob.v1"
+                });
+                let snapshot = json!({"boot_id": "boot", "revision": 1, "commands": []});
+                let encode = |value| bincode::serde::encode_to_vec(value, bincode::config::standard()).unwrap();
+                let welcome = encode((20_u32, "endpoint.welcome.v1", welcome.to_string()));
+                let snapshot = encode((20_u32, "shell.snapshot.v1", snapshot.to_string()));
+                let mut surface = bincode::serde::encode_to_vec((13_u32, "boot", 1_u64, 1_u64), bincode::config::standard()).unwrap();
+                surface.extend(bincode::serde::encode_to_vec((0_u64, 0_u16, 0_u16, false, 0_u64, 0_u64), bincode::config::standard()).unwrap());
+                surface.extend(bincode::serde::encode_to_vec((0_u64, 0_u64, false, 0_u64, 0_u64, 0_u64), bincode::config::standard()).unwrap());
+                for frame in [welcome, snapshot, surface] {
+                    stream.write_all(&(frame.len() as u32).to_le_bytes()).await.unwrap();
+                    stream.write_all(&frame).await.unwrap();
+                }
+                let (tx, mut rx) = mpsc::unbounded_channel();
+                shell_tx.send(tx).unwrap();
+                if rx.recv().await.is_some() {
+                    let changed = json!({"boot_id": "boot", "revision": 2, "commands": [],
+                        "server_keybindings_toml": "[keys]\nprefix = \"ctrl+x\"\n"});
+                    let frame = encode((20_u32, "shell.snapshot.v1", changed.to_string()));
+                    stream.write_all(&(frame.len() as u32).to_le_bytes()).await.unwrap();
+                    stream.write_all(&frame).await.unwrap();
+                    std::future::pending::<()>().await;
+                }
+            });
+        }
+    });
+    let config = HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap();
+    let adapter = HerdrCliAdapter::new(config);
+    let mut orchestration = adapter.session_changes("default").await.unwrap();
+    let events = event_rx.recv().await.unwrap();
+    events.send(json!({"event": "pane.created", "data": {}})).unwrap();
+    assert_eq!(tokio::time::timeout(Duration::from_secs(2), orchestration.messages.recv()).await.unwrap(), Some(SessionChange::Changed));
+    drop(events); // Force a retry and its structural snapshot.
+    assert!(matches!(tokio::time::timeout(Duration::from_secs(2), orchestration.messages.recv()).await.unwrap(), Some(SessionChange::Disconnected { .. })));
+    let retry_events = tokio::time::timeout(Duration::from_secs(2), event_rx.recv()).await.unwrap().unwrap();
+    assert_eq!(tokio::time::timeout(Duration::from_secs(2), orchestration.messages.recv()).await.unwrap(), Some(SessionChange::Changed));
+    assert!(snapshots.load(Ordering::SeqCst) >= 4); // initial, ACK, topology, retry
+    assert!(tokio::time::timeout(Duration::from_millis(250), shell_rx.recv()).await.is_err());
+    drop(orchestration);
+    drop(retry_events);
+
+    let initial = adapter.session_snapshot("default").await.unwrap();
+    let mut session = adapter.subscribe_session("default", &initial).await.unwrap();
+    let _session_events = event_rx.recv().await.unwrap();
+    let _initial_shell = tokio::time::timeout(Duration::from_secs(2), shell_rx.recv()).await.unwrap().unwrap();
+    let _ack_shell = tokio::time::timeout(Duration::from_secs(2), shell_rx.recv()).await.unwrap().unwrap();
+    let live_shell = tokio::time::timeout(Duration::from_secs(2), shell_rx.recv()).await.unwrap().unwrap();
+    live_shell.send(()).unwrap();
+    assert_eq!(tokio::time::timeout(Duration::from_secs(2), session.messages.recv()).await.unwrap(), Some(SessionChange::Changed));
+    let updated = adapter.session_snapshot("default").await.unwrap();
+    assert_eq!(updated.herdr_shell.unwrap().prefix_bindings, vec!["ctrl+x"]);
+
+    api_server.abort();
+    shell_server.abort();
+    drop(fs::remove_file(socket));
+    drop(fs::remove_file(client_socket));
 }
 
 #[tokio::test]

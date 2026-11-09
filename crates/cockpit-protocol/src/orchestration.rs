@@ -12,6 +12,35 @@ pub struct OrchestrationSnapshotRequest {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+pub struct TaskHistoryRequest {
+    pub session_id: String,
+    pub state_store_id: String,
+    pub root_id: String,
+    pub task_id: String,
+    #[serde(default)]
+    #[ts(optional)]
+    pub known_digest: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct TaskHistoryMessages {
+    pub session_id: String,
+    pub state_store_id: String,
+    #[ts(type = "number")]
+    pub revision: u64,
+    pub root_id: String,
+    pub task_id: String,
+    pub digest: String,
+    pub not_modified: bool,
+    pub messages: Vec<Message>,
+    pub runs: Vec<Run>,
+    pub cleanup: Vec<RunCleanupSummary>,
+    pub task_ownership: Vec<TaskOwnership>,
+    pub unreflected_inputs: Vec<UnreflectedInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 pub struct OrchestrationWaitRequest {
     pub root_id: Option<String>,
     #[ts(type = "number")]
@@ -69,6 +98,81 @@ pub struct OrchestrationSnapshot {
     pub unmanaged_agents: Vec<UnmanagedAgent>,
     pub attention: Vec<Attention>, // Public run list and read-only Overview projection.
 }
+
+/// GUI projection without message bodies; full snapshots remain available to CLI callers.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct OrchestrationOverview {
+    pub session_id: String,
+    pub state_store_id: String,
+    #[ts(type = "number")]
+    pub revision: u64,
+    pub tasks_token: String,
+    pub roots: Vec<RootSummary>,
+    pub board: Option<TaskBoard>,
+    pub runs: Vec<OverviewRun>,
+    pub questions: Vec<QuestionStatus>,
+    pub unreflected_inputs: Vec<UnreflectedInput>,
+    pub task_ownership: Vec<TaskOwnership>,
+    #[serde(default)]
+    pub directives: Vec<Directive>,
+    #[serde(default)]
+    pub thread_links: Vec<ThreadLink>,
+    pub intents: Vec<TaskIntent>,
+    pub assignment_intents: Vec<TaskAssignmentIntent>,
+    pub cleanup: Vec<RunCleanupSummary>,
+    pub restoration: RestorationSummary,
+    pub runtime: RuntimeObservation,
+    pub unmanaged_agents: Vec<UnmanagedAgent>,
+    pub attention: Vec<Attention>,
+}
+
+/// Closed task runs retain only fields needed by the always-on overview.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[ts(tag = "kind", rename_all = "snake_case")]
+pub enum OverviewRun {
+    Full { run: Run },
+    Summary { run: ClosedRunSummary },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct ClosedRunSummary {
+    pub session_id: String,
+    pub run_id: String,
+    pub root_id: String,
+    pub task_id: Option<String>,
+    pub kind: RunKind,
+    pub stage: ClosedRunStage,
+    pub close_reason: Option<CloseReason>,
+    pub attempt: u32,
+    pub updated_at: String,
+    pub label: String,
+    pub result: Option<RunResultSummary>,
+    pub integration: RunIntegrationSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ClosedRunStage { Closed }
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct RunResultSummary {
+    pub message_id: String,
+    pub outcome: Option<ReportOutcome>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct RunIntegrationSummary {
+    pub state: RunIntegrationState,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum RunIntegrationState { Pending, NotApplicable, Integrated }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { SessionSnapshotResponse, SpaceTagsResponse } from "../../protocol/generated/v1";
+import type { SpaceWatch } from "./spaceStateStreams";
 
 export const SPACE_TAGS_POLL_MS = 15_000;
+const FALLBACK: SpaceWatch = { counter: 0, status: "unavailable" };
 
 export type SpaceTagsState = {
   ready: boolean;
@@ -15,7 +17,7 @@ export type SpaceTagsState = {
   change(spaceId: string, tag: string, assigned: boolean): Promise<boolean>;
 };
 
-export function useSpaceTags(client: CockpitClient, sessionId: string | null, snapshot: SessionSnapshotResponse | null, live: boolean): SpaceTagsState {
+export function useSpaceTags(client: CockpitClient, sessionId: string | null, snapshot: SessionSnapshotResponse | null, live: boolean, watch: SpaceWatch = FALLBACK): SpaceTagsState {
   const serverInstance = snapshot?.session_id === sessionId ? snapshot.server_instance : null;
   const [, render] = useState(0);
   const binding = useMemo(() => ({
@@ -25,29 +27,36 @@ export function useSpaceTags(client: CockpitClient, sessionId: string | null, sn
   }), [client, sessionId, serverInstance]);
   const current = useRef({ binding, live, snapshot });
   current.current = { binding, live, snapshot };
+  const counterRef = useRef(watch.counter);
 
   useEffect(() => {
     if (!live || !sessionId || !serverInstance) return;
     ++binding.generation;
     let disposed = false;
     let controller: AbortController | null = null;
-    let timer: number | undefined;
+    let retry: number | undefined;
+    const scheduleRetry = () => {
+      clearTimeout(retry);
+      if (!disposed && document.visibilityState !== "hidden") retry = window.setTimeout(() => poll(), SPACE_TAGS_POLL_MS);
+    };
     const poll = (force = false) => {
-      clearTimeout(timer);
       if (disposed || document.visibilityState === "hidden" || binding.pending.size > 0) return;
       if (controller) {
         if (!force) return;
         controller.abort();
       }
+      clearTimeout(retry);
       const request = new AbortController();
       controller = request;
       const sequence = ++binding.sequence;
       void client.spaceTags(sessionId, request.signal).then(response => {
         if (disposed || request.signal.aborted || sequence <= binding.lastApplied) return;
         if (response.session_id !== sessionId || response.server_instance !== serverInstance) {
+          scheduleRetry();
           if (!binding.ready && !binding.failed) { binding.failed = true; render(value => value + 1); }
           return;
         }
+        clearTimeout(retry);
         binding.lastApplied = sequence;
         const sameCatalog = binding.catalog.length === response.catalog.length
           && response.catalog.every((tag, index) => binding.catalog[index] === tag);
@@ -59,19 +68,20 @@ export function useSpaceTags(client: CockpitClient, sessionId: string | null, sn
         if (!sameSpaces) binding.bySpace = new Map(response.spaces.map(space => [space.space_id, space.tags]));
         if (changed) render(value => value + 1);
       }, () => {
-        if (!disposed && !request.signal.aborted && sequence > binding.lastApplied && !binding.ready && !binding.failed) {
+        if (disposed || request.signal.aborted || sequence <= binding.lastApplied) return;
+        scheduleRetry();
+        if (!binding.ready && !binding.failed) {
           binding.failed = true;
           render(value => value + 1);
         }
       }).finally(() => {
         if (controller !== request) return;
         controller = null;
-        if (!disposed && document.visibilityState !== "hidden") timer = window.setTimeout(poll, SPACE_TAGS_POLL_MS);
       });
     };
     const visibilityChanged = () => {
-      clearTimeout(timer);
       if (document.visibilityState === "hidden") {
+        clearTimeout(retry);
         controller?.abort();
         controller = null;
       } else poll(true);
@@ -86,12 +96,29 @@ export function useSpaceTags(client: CockpitClient, sessionId: string | null, sn
       ++binding.generation;
       binding.refresh = null;
       binding.pending.clear();
-      clearTimeout(timer);
+      clearTimeout(retry);
       controller?.abort();
       document.removeEventListener("visibilitychange", visibilityChanged);
       window.removeEventListener("focus", focused);
     };
   }, [binding, client, sessionId, serverInstance, live]);
+  useEffect(() => {
+    if (counterRef.current !== watch.counter) {
+      counterRef.current = watch.counter;
+      binding.refresh?.(true);
+    }
+  }, [binding, watch.counter]);
+  useEffect(() => {
+    if (watch.status !== "unavailable" || !live || !sessionId || !serverInstance) return;
+    let timer: number | undefined;
+    const updateTimer = () => {
+      clearInterval(timer);
+      timer = document.visibilityState === "hidden" ? undefined : window.setInterval(() => binding.refresh?.(), SPACE_TAGS_POLL_MS);
+    };
+    document.addEventListener("visibilitychange", updateTimer);
+    updateTimer();
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", updateTimer); };
+  }, [binding, watch.status, live, sessionId, serverInstance]);
 
   const editBlocked = !live ? "Herdr is not live" : !binding.ready ? binding.failed ? "Tags unavailable" : "Tags are loading" : null;
   const bySpace = new Map<string, readonly string[]>();

@@ -491,7 +491,7 @@ impl HerdrCliAdapter {
 #[async_trait]
 impl OrchestrationHerdr for HerdrCliAdapter {
     async fn session_changes(&self, session_id: &str) -> Result<cockpit_core::SessionSubscription, InspectionError> {
-        let snapshot = self.read_snapshot(session_id).await?;
+        let snapshot = self.read_event_snapshot(session_id, EventRelevance::Orchestration).await?;
         self.subscribe_socket(session_id.to_owned(), snapshot, EventRelevance::Orchestration).await
     }
     async fn move_pane_to_new_space(

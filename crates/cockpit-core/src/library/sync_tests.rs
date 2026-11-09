@@ -675,6 +675,141 @@ impl Fixture {
     }
 }
 
+async fn scheduler_wait(mut condition: impl FnMut() -> bool) {
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        while !condition() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("scheduler did not reach the expected state");
+}
+
+fn scheduler_policy() -> LibrarySyncConfiguration {
+    LibrarySyncConfiguration {
+        enabled: true,
+        background_min_interval_seconds: 1,
+        ..policy()
+    }
+}
+
+fn scheduler_state(f: &Fixture) -> Option<Value> {
+    serde_json::from_slice(&std::fs::read(f.state_path()).ok()?).ok()
+}
+
+#[tokio::test]
+async fn scheduler_runs_new_follow_after_idle() {
+    let f = Fixture::new();
+    f.jira.query(QUERY, &[]);
+    let store = f.service().open().unwrap();
+    let _runtime = f.service().start_sync_with_timing(
+        scheduler_policy(), std::time::Duration::ZERO, std::time::Duration::from_millis(50),
+    ).unwrap();
+    scheduler_wait(|| store.lease("sync:scheduler").is_err()).await;
+    assert!(!f.state_path().exists());
+    let id = f.add("jira", QUERY, true, Some(LibraryFollowMode::Live)).await.unwrap();
+    scheduler_wait(|| scheduler_state(&f).is_some_and(|state| {
+        state["sources"][&id]["last_success_ms"].as_i64().is_some()
+    })).await;
+}
+
+#[tokio::test]
+async fn scheduler_runs_at_follow_deadline_without_further_mutations() {
+    let f = Fixture::new();
+    f.jira.query(QUERY, &[]);
+    let id = f.add("jira", QUERY, true, Some(LibraryFollowMode::Live)).await.unwrap();
+    f.due(&id, false, false);
+    let current = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    let due = current + 1000;
+    f.edit_state(|state| {
+        state["sources"][&id]["next_delta_ms"] = json!(due);
+        state["sources"][&id]["next_inventory_ms"] = json!(current + 60_000);
+    });
+    f.jira.clear_calls();
+    let _runtime = f.service().start_sync_with_timing(
+        scheduler_policy(), std::time::Duration::ZERO, std::time::Duration::from_millis(50),
+    ).unwrap();
+    scheduler_wait(|| !f.jira.state().calls.is_empty()).await;
+    let after = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as i64;
+    assert!(after >= due);
+    assert!(scheduler_state(&f).unwrap()["sources"][&id]["next_delta_ms"].as_i64().unwrap() > due);
+}
+
+#[tokio::test]
+async fn scheduler_contender_takes_over_after_owner_release() {
+    let f = Fixture::new();
+    f.jira.query(QUERY, &[]);
+    let id = f.add("jira", QUERY, true, Some(LibraryFollowMode::Live)).await.unwrap();
+    let store = f.service().open().unwrap();
+    let owner = store.lease("sync:scheduler").unwrap();
+    let _runtime = f.service().start_sync_with_timing(
+        scheduler_policy(), std::time::Duration::ZERO, std::time::Duration::from_millis(50),
+    ).unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    assert!(!f.state_path().exists());
+    drop(owner);
+    scheduler_wait(|| scheduler_state(&f).is_some_and(|state| {
+        state["sources"][&id]["last_success_ms"].as_i64().is_some()
+    })).await;
+}
+
+#[tokio::test]
+async fn scheduler_watches_empty_store_and_external_changes() {
+    let f = Fixture::new();
+    let store = f.service().open().unwrap();
+    std::fs::create_dir_all(f.state_path().parent().unwrap()).unwrap();
+    let (_watcher, mut events) = super::sync::scheduler_watch(&store).unwrap();
+    assert_eq!(f.service().sync_deadline(&store, now()).unwrap(), None);
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(100), events.changed()).await.is_err());
+
+    let source = SourceRef {
+        provider_id: "jira".into(),
+        provider_instance: JIRA.into(),
+        resource_type: "issue".into(),
+        canonical_id: "OPS-1".into(),
+    };
+    let id = item_id(&source);
+    f.edit_state(|state| {
+        state["queue"][id] = json!({
+            "source": source, "owners": [], "revision": null, "row": null,
+            "page": null, "force": false, "confirm_missing": false,
+            "enqueued_ms": now(), "next_attempt_ms": now() + 3000,
+            "failures": 0, "last_error": null
+        });
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(5), events.changed()).await.unwrap().unwrap();
+    assert!(!*events.borrow_and_update());
+    assert_eq!(f.service().sync_deadline(&store, now()).unwrap(), Some(now() + 3000));
+
+    f.jira.query(QUERY, &[]);
+    let follow = f.add("jira", QUERY, true, Some(LibraryFollowMode::Live)).await.unwrap();
+    assert!(f.index().follows.iter().any(|item| item.follow_id == follow));
+    tokio::time::timeout(std::time::Duration::from_secs(5), events.changed()).await.unwrap().unwrap();
+    assert!(!*events.borrow_and_update());
+    assert_eq!(f.service().sync_deadline(&store, now()).unwrap(), Some(0));
+}
+
+#[tokio::test]
+async fn scheduler_watch_reports_replaced_directory_and_owner_releases() {
+    let f = Fixture::new();
+    let store = f.service().open().unwrap();
+    let sync_dir = f.state_path().parent().unwrap().to_owned();
+    std::fs::create_dir_all(&sync_dir).unwrap();
+    let (_watcher, mut events) = super::sync::scheduler_watch(&store).unwrap();
+    let owner = store.lease("sync:scheduler").unwrap();
+    assert!(store.lease("sync:scheduler").is_err());
+    drop(owner);
+    assert!(store.lease("sync:scheduler").is_ok());
+    std::fs::remove_dir(&sync_dir).unwrap();
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            events.changed().await.unwrap();
+            if *events.borrow_and_update() { break; }
+        }
+    }).await;
+    assert!(event.is_ok());
+    std::fs::create_dir(&sync_dir).unwrap();
+    assert!(super::sync::scheduler_watch(&store).is_ok());
+}
+
 #[tokio::test]
 async fn listing_projects_failed_sync_and_recovery_without_persisting_status() {
     let f = Fixture::new();

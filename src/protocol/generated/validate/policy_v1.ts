@@ -198,6 +198,7 @@ export interface WireFields {
   "SpaceGitStatus.source": (V1.SpaceGitStatus)["source"];
   "SpaceGitStatus.checkout": (V1.SpaceGitStatus)["checkout"];
   "SpaceGitStatusResponse.session_id": (V1.SpaceGitStatusResponse)["session_id"];
+  "SpaceGitStatusResponse.server_instance": (V1.SpaceGitStatusResponse)["server_instance"];
   "SpaceGitStatusResponse.spaces": (V1.SpaceGitStatusResponse)["spaces"];
   "SpaceGitCheckout.root": (V1.SpaceGitCheckout)["root"];
   "SpaceGitCheckout[branch].root": (Extract<V1.SpaceGitCheckout, { "state": "branch" }>)["root"];
@@ -504,7 +505,7 @@ export interface WireFieldNames {
   "ErrorResponse": "code" | "message";
   "SpaceGitSummary": "repository_key" | "repository" | "branch" | "checkout_path" | "is_linked_worktree";
   "SpaceGitStatus": "space_id" | "source" | "checkout";
-  "SpaceGitStatusResponse": "session_id" | "spaces";
+  "SpaceGitStatusResponse": "session_id" | "server_instance" | "spaces";
   "SpaceGitCheckout": "root";
   "SpaceGitCheckout[branch]": "root" | "branch" | "upstream";
   "SpaceGitCheckout[detached]": "root";
@@ -692,7 +693,7 @@ export interface WireCheckpointFieldNames {
   "ErrorResponse": "code" | "message";
   "SpaceGitSummary": "repository_key" | "repository" | "branch" | "checkout_path" | "is_linked_worktree";
   "SpaceGitStatus": "space_id" | "source" | "checkout";
-  "SpaceGitStatusResponse": "session_id" | "spaces";
+  "SpaceGitStatusResponse": "session_id" | "server_instance" | "spaces";
   "SpaceGitCheckout": "branch" | "code" | "message" | "root" | "state" | "upstream";
   "SpaceGitCheckout[branch]": "root" | "branch" | "upstream" | "state";
   "SpaceGitCheckout[detached]": "root" | "state";

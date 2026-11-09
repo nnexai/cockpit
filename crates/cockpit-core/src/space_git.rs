@@ -7,7 +7,7 @@
 //! pane's folder, as Herdr's sidebar shows it.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::Duration;
 
@@ -36,12 +36,15 @@ pub(crate) fn space_folder<'a>(
 }
 
 /// Read once per folder, preserving unavailable metadata rather than inventing empty status.
-pub async fn read(snapshot: &SessionSnapshotResponse) -> SpaceGitStatusResponse {
+pub(crate) async fn read(snapshot: &SessionSnapshotResponse, watch: &crate::space_watch::SpaceWatch, watch_read: Option<crate::space_watch::GitRead>) -> SpaceGitStatusResponse {
     let mut by_checkout: HashMap<&str, SpaceGitCheckout> = HashMap::new();
+    let mut paths = Vec::new();
+    let mut complete = true;
     let mut spaces = Vec::new();
     for space in &snapshot.spaces {
         let Some(folder) = space_folder(snapshot, space) else {
             if space.git.is_some() {
+                complete = false;
                 spaces.push(SpaceGitStatus {
                     space_id: space.id.clone(),
                     source: SpaceGitSource::HerdrCheckout,
@@ -57,7 +60,17 @@ pub async fn read(snapshot: &SessionSnapshotResponse) -> SpaceGitStatusResponse 
         let checkout = match by_checkout.get(folder) {
             Some(status) => status.clone(),
             None => {
-                let status = checkout_status(Path::new(folder)).await;
+                let resolved = resolve_checkout(Path::new(folder)).await;
+                if let Some(pair) = resolved.watch_paths {
+                    paths.push(pair);
+                } else {
+                    complete = false;
+                }
+                let status = resolved.checkout;
+                if matches!(&status, SpaceGitCheckout::Unavailable { .. }
+                    | SpaceGitCheckout::Branch { upstream: SpaceGitUpstream::Unavailable { .. }, .. }) {
+                    complete = false;
+                }
                 by_checkout.insert(folder, status.clone());
                 status
             }
@@ -78,8 +91,10 @@ pub async fn read(snapshot: &SessionSnapshotResponse) -> SpaceGitStatusResponse 
             checkout,
         });
     }
+    if let Some(watch_read) = watch_read { watch.register_git(watch_read, paths, complete); }
     SpaceGitStatusResponse {
         session_id: snapshot.session_id.clone(),
+        server_instance: snapshot.server_instance.clone(),
         spaces,
     }
 }
@@ -134,19 +149,22 @@ pub(crate) fn safe_detail(text: &str) -> String {
 pub(crate) struct ResolvedCheckout {
     pub checkout: SpaceGitCheckout,
     pub metadata: Option<BranchMetadata>,
+    watch_paths: Option<(PathBuf, PathBuf)>,
 }
 
+#[cfg(test)]
 pub(crate) async fn checkout_status(checkout: &Path) -> SpaceGitCheckout {
     resolve_checkout(checkout).await.checkout
 }
 
 pub(crate) async fn resolve_checkout(checkout: &Path) -> ResolvedCheckout {
     let mut metadata = None;
+    let mut watch_paths = None;
     let state = async {
         if !checkout.is_absolute() || !checkout.is_dir() {
             return unavailable(None, "checkout_missing", "Checkout folder is unavailable.");
         }
-        let output = match git_output(checkout, &["rev-parse", "--show-toplevel"]).await {
+        let output = match git_output(checkout, &["rev-parse", "--path-format=absolute", "--show-toplevel", "--absolute-git-dir", "--git-common-dir"]).await {
             Ok(output) => output,
             Err(error) => return unavailable(None, &error.code, &error.message),
         };
@@ -160,8 +178,8 @@ pub(crate) async fn resolve_checkout(checkout: &Path) -> ResolvedCheckout {
             };
             return unavailable(None, code, &text);
         }
-        let root = match output_line(&output) {
-            Some(root) if Path::new(&root).is_absolute() => root,
+        let root = match std::str::from_utf8(&output.stdout).ok().and_then(|text| text.lines().next()) {
+            Some(root) if Path::new(root).is_absolute() => root.to_owned(),
             _ => {
                 return unavailable(
                     None,
@@ -170,6 +188,16 @@ pub(crate) async fn resolve_checkout(checkout: &Path) -> ResolvedCheckout {
                 );
             }
         };
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut lines = text.lines();
+        let _ = lines.next();
+        if let (Some(git_dir), Some(common_dir)) = (lines.next(), lines.next()) {
+            let git_dir = PathBuf::from(git_dir);
+            let common_dir = PathBuf::from(common_dir);
+            if git_dir.is_absolute() && common_dir.is_absolute() {
+                watch_paths = Some((git_dir, common_dir));
+            }
+        }
         let output = match git_output(checkout, &["symbolic-ref", "--quiet", "HEAD"]).await {
             Ok(output) => output,
             Err(error) => return unavailable(Some(root), &error.code, &error.message),
@@ -240,6 +268,7 @@ pub(crate) async fn resolve_checkout(checkout: &Path) -> ResolvedCheckout {
     ResolvedCheckout {
         checkout: state,
         metadata,
+        watch_paths,
     }
 }
 
@@ -448,6 +477,24 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn watch_capacity_failure_does_not_erase_git_status() {
+        use crate::space_watch::{SpaceWatch, SpaceWatchTopic};
+        let (root, _, clone) = fixture();
+        let watch = SpaceWatch::default();
+        let leases: Vec<_> = (0..256).map(|id|
+            watch.subscribe(&format!("session-{id}"), "server", SpaceWatchTopic::Git).unwrap()
+        ).collect();
+        let state = snapshot(vec![space("w1", &clone)]);
+        let generation = watch.next_read();
+        let token = watch.begin_git_for(&state.session_id, &state.server_instance, generation);
+        assert!(matches!(&token, Err(error) if error.code == "watch_limit"));
+        let status = read(&state, &watch, token.ok()).await;
+        assert!(matches!(&status.spaces[0].checkout, SpaceGitCheckout::Branch { branch, .. } if branch == "main"));
+        drop(leases);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[tokio::test]
     async fn counts_commits_ahead_of_and_behind_the_upstream() {
         let (root, _origin, clone) = fixture();
         commit(&clone, "local one");
@@ -460,9 +507,11 @@ pub(crate) mod tests {
         git(&other, &["push", "origin", "main"]);
         git(&clone, &["fetch", "origin"]);
 
-        let status = read(&snapshot(vec![space("w1", &clone)])).await;
+        let watch = crate::space_watch::SpaceWatch::default();
+        let status = read(&snapshot(vec![space("w1", &clone)]), &watch, Some(watch.begin_git("session").unwrap())).await;
 
         assert_eq!(status.session_id, "session");
+        assert_eq!(status.server_instance, "0123456789abcdef");
         assert_eq!(
             status.spaces,
             vec![SpaceGitStatus {
@@ -488,7 +537,8 @@ pub(crate) mod tests {
         git(&clone, &["switch", "--quiet", "-c", "topic"]);
         let missing = root.join("missing");
 
-        let status = read(&snapshot(vec![space("w1", &clone), space("w2", &missing)])).await;
+        let watch = crate::space_watch::SpaceWatch::default();
+        let status = read(&snapshot(vec![space("w1", &clone), space("w2", &missing)]), &watch, Some(watch.begin_git("session").unwrap())).await;
 
         assert!(
             matches!(&status.spaces[0].checkout, SpaceGitCheckout::Branch { branch, upstream: SpaceGitUpstream::None, .. } if branch == "topic")
@@ -528,7 +578,8 @@ pub(crate) mod tests {
         let mut state = snapshot(vec![plain("w1"), plain("w2"), plain("w3")]);
         state.panes = vec![pane("w1", &nested), pane("w2", &outside)];
 
-        let status = read(&state).await;
+        let watch = crate::space_watch::SpaceWatch::default();
+        let status = read(&state, &watch, Some(watch.begin_git(&state.session_id).unwrap())).await;
 
         assert_eq!(
             status.spaces.len(),

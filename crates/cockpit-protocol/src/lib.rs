@@ -8,6 +8,7 @@ pub mod context;
 pub mod credentials;
 pub mod herdr_shell;
 pub mod library;
+pub mod local_changes;
 pub mod notes;
 pub mod context_media;
 pub mod context_search;

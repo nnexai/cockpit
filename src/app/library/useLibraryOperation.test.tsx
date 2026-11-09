@@ -6,6 +6,16 @@ import type { CockpitClient } from "../../client/CockpitClient";
 import type { LibraryItemSummary, LibraryListing, LibraryOperation, SpaceContextListing } from "../../protocol/generated/v1";
 import { LIBRARY_CHANGED_EVENT, useLibraryListing, useLibraryOperation, useSpaceContextListing, type LibraryChangeDetail, type LibraryListingState } from "./useLibraryOperation";
 
+const watches = vi.hoisted(() => new Map<object, { event: (event: { kind: string }) => Promise<void>; error: () => void }>());
+vi.mock("../localChanges", () => ({
+  subscribeLocalChanges: (client: object, _scope: unknown, event: (event: { kind: string }) => Promise<void>, error: () => void) => {
+    const watch = { event, error };
+    watches.set(client, watch);
+    Promise.resolve().then(() => { if (watches.get(client) === watch) void event({ kind: "ready" }); });
+    return { close: () => { if (watches.get(client) === watch) watches.delete(client); }, retry: () => {} };
+  },
+}));
+
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 afterEach(() => { vi.useRealTimers(); });
@@ -235,373 +245,106 @@ describe("background Library listing visibility", () => {
     };
   }
 
-  async function advance(milliseconds = 60_000) {
-    await act(async () => { await vi.advanceTimersByTimeAsync(milliseconds); });
-  }
+  const emit = async (client: CockpitClient, kind = "changed") => {
+    await act(async () => { await watches.get(client)!.event({ kind }); });
+  };
 
-  it("probes only the first page of an unchanged generation without replacing or rerendering the listing", async () => {
+  it("does no work while inactive and no recurring reads after its baseline", async () => {
     const { client, libraryListing } = fixture();
-    const first = page("g1", ["a"], 256);
-    libraryListing.mockResolvedValueOnce(first).mockResolvedValueOnce(page("g1", ["b"])).mockResolvedValue(first);
-    const changed = observeChanges();
-    const display = await view(client);
-    const before = display.state.listing;
-    const renders = display.renders.length;
-    expect(libraryListing.mock.calls).toEqual([[null], [256]]);
-    await advance(59_999);
-    expect(libraryListing).toHaveBeenCalledTimes(2);
-    await advance(1);
-    await advance();
-    expect(libraryListing.mock.calls).toEqual([[null], [256], [null], [null]]);
-    expect(display.state.listing).toBe(before);
-    expect(display.renders).toHaveLength(renders);
-    expect(changed).not.toHaveBeenCalled();
+    libraryListing.mockResolvedValue(page("g1", ["a"]));
+    const display = await view(client, false);
+    expect(watches.has(client)).toBe(false);
+    expect(client.projectConfiguration).not.toHaveBeenCalled();
+    await display.render(client, true);
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(libraryListing.mock.calls).toEqual([[null]]);
   });
 
-  it("updates sync-only follows from one probe without replacing items, pagination or announcing a snapshot", async () => {
+  it("reads all changed pages and announces once without feedback", async () => {
     const { client, libraryListing } = fixture();
-    const first = page("g1", ["selected"], 256);
-    first.follows = [{
+    libraryListing.mockResolvedValueOnce(page("g1", ["old"])).mockResolvedValueOnce(page("g2", ["new"], 256)).mockResolvedValueOnce(page("g2", ["second"]));
+    const changed = observeChanges();
+    const display = await view(client);
+    await emit(client);
+    expect(display.state.listing?.items.map((item) => item.item_id)).toEqual(["new", "second"]);
+    expect(libraryListing.mock.calls).toEqual([[null], [null], [256]]);
+    expect(changed).toHaveBeenCalledOnce();
+  });
+
+  it("updates follow status without rereading remaining pages", async () => {
+    const { client, libraryListing } = fixture();
+    const initial = page("g1", ["one"], 256);
+    initial.follows = [{
       follow_id: "follow:j", provider_id: "jira", provider_instance: "https://jira.test",
       source: { kind: "jira_query", jql: "project = OPS", mode: "live" },
       include_attachments: false, item_count: 2, partial: null, excluded_ids: [], last_refreshed_at: null, state: "fresh",
     }];
-    libraryListing.mockResolvedValueOnce(first).mockResolvedValueOnce(page("g1", ["second"]));
-    const changed = observeChanges();
+    const next = { ...initial, follows: initial.follows.map((follow) => ({ ...follow, sync: { last_success_at: "now", reason: null } })) };
+    libraryListing.mockResolvedValueOnce(initial).mockResolvedValueOnce(page("g1", ["two"])).mockResolvedValueOnce(next);
     const display = await view(client);
-    const before = display.state.listing!;
-    for (const sync of [
-      { last_success_at: null, reason: "Sign-in needed" },
-      { last_success_at: "1790508884043", reason: null },
-    ]) {
-      const probe = { ...first, follows: first.follows.map((follow) => ({ ...follow, sync })) };
-      libraryListing.mockResolvedValueOnce(probe);
-      const calls = libraryListing.mock.calls.length;
-      await advance();
-      expect(libraryListing.mock.calls.slice(calls)).toEqual([[null]]);
-      expect(display.state.listing?.follows).toBe(probe.follows);
-      expect(display.state.listing?.items).toBe(before.items);
-      expect(display.state.listing?.next_offset).toBe(before.next_offset);
-      expect(display.state.listing?.generation).toBe(before.generation);
-      expect(changed).not.toHaveBeenCalled();
-    }
-  });
-
-  it("reuses the changed probe page and atomically publishes all pages with one non-looping notification", async () => {
-    const { client, libraryListing } = fixture();
-    libraryListing.mockResolvedValueOnce(page("g1", ["old", "removed"]));
-    const changed = observeChanges();
-    const display = await view(client);
-    const second = deferred();
-    libraryListing.mockResolvedValueOnce(page("g2", ["new-a"], 256)).mockReturnValueOnce(second.promise)
-      .mockResolvedValueOnce(page("g2", ["new-c"]));
-    await advance();
-    expect(display.state.status).toBe("ready");
-    expect(display.host.querySelector("span")?.getAttribute("data-items")).toBe("old,removed");
-    expect(changed).not.toHaveBeenCalled();
-    await act(async () => second.resolve(page("g2", ["new-b"], 512)));
-    expect(display.host.querySelector("span")?.getAttribute("data-items")).toBe("new-a,new-b,new-c");
-    expect(display.state.listing?.next_offset).toBeNull();
-    expect(libraryListing.mock.calls).toEqual([[null], [null], [256], [512]]);
-    expect(changed).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    { stage: "probe", failure: false },
-    { stage: "probe", failure: true },
-    { stage: "remaining pages", failure: false },
-    { stage: "remaining pages", failure: true },
-  ])("ignores an older $stage response or error after manual reload (failure=$failure)", async ({ stage, failure }) => {
-    const { client, libraryListing } = fixture();
-    libraryListing.mockResolvedValueOnce(page("g1", ["initial"]));
-    const changed = observeChanges();
-    const display = await view(client);
-    const older = deferred();
-    if (stage === "remaining pages") libraryListing.mockResolvedValueOnce(page("g2", ["stale-a"], 256));
-    libraryListing.mockReturnValueOnce(older.promise);
-    await advance();
-    libraryListing.mockResolvedValueOnce(page("g3", ["current"]));
-    await act(async () => display.host.querySelector("button")!.click());
-    const before = display.state.listing;
-    await act(async () => {
-      if (failure) older.reject(new Error("stale failure"));
-      else older.resolve(page("g2", ["stale-b"], 512));
-    });
-    expect(display.state.listing).toBe(before);
-    expect(display.state.listing?.generation).toBe("g3");
-    expect(display.state.status).toBe("ready");
-    expect(display.state.error).toBeNull();
-    expect(libraryListing.mock.calls).toEqual(stage === "probe" ? [[null], [null], [null]] : [[null], [null], [256], [null]]);
-    expect(changed).not.toHaveBeenCalled();
-    // The comparison baseline must also be the newly applied manual listing.
-    libraryListing.mockResolvedValueOnce(page("g3", ["current"], 256));
-    await advance();
-    expect(display.state.listing).toBe(before);
-    expect(libraryListing.mock.calls.at(-1)).toEqual([null]);
-    expect(libraryListing).toHaveBeenCalledTimes(stage === "probe" ? 4 : 5);
-  });
-
-  it("stops an obsolete initial paginated read after a newer manual reload", async () => {
-    const { client, libraryListing } = fixture();
-    const older = deferred();
-    libraryListing.mockResolvedValueOnce(page("g1", ["old-a"], 256)).mockReturnValueOnce(older.promise);
-    const display = await view(client);
-    libraryListing.mockResolvedValueOnce(page("g2", ["current"]));
-    await act(async () => display.host.querySelector("button")!.click());
-    await act(async () => older.resolve(page("g1", ["old-b"], 512)));
-    expect(display.state.listing?.items.map((item) => item.item_id)).toEqual(["current"]);
+    const items = display.state.listing!.items;
+    await emit(client);
     expect(libraryListing.mock.calls).toEqual([[null], [256], [null]]);
+    expect(display.state.listing?.items).toBe(items);
+    expect(display.state.listing?.follows).toBe(next.follows);
   });
 
-  it("restarts once when the generation moves between pages without publishing mixed generations", async () => {
+  it("coalesces changes during pagination and keeps the final snapshot", async () => {
     const { client, libraryListing } = fixture();
-    libraryListing.mockResolvedValueOnce(page("g1", ["old"]));
-    const display = await view(client);
-    const changed = observeChanges();
-    const final = deferred();
-    libraryListing.mockResolvedValueOnce(page("g2", ["discard-a"], 256))
-      .mockResolvedValueOnce(page("g3", ["discard-b"]))
-      .mockResolvedValueOnce(page("g3", ["current-a"], 256))
-      .mockReturnValueOnce(final.promise);
-    await advance();
-    expect(display.host.querySelector("span")?.getAttribute("data-items")).toBe("old");
-    expect(changed).not.toHaveBeenCalled();
-    await act(async () => final.resolve(page("g3", ["current-b"])));
-    expect(display.state.listing?.generation).toBe("g3");
-    expect(display.host.querySelector("span")?.getAttribute("data-items")).toBe("current-a,current-b");
-    expect(libraryListing.mock.calls).toEqual([[null], [null], [256], [null], [256]]);
-    expect(changed).toHaveBeenCalledOnce();
-  });
-
-  it("retains the last coherent listing and reports an error when both pagination attempts move", async () => {
-    const { client, libraryListing } = fixture();
-    libraryListing.mockResolvedValueOnce(page("g1", ["old"]));
-    const display = await view(client);
-    const before = display.state.listing;
-    const changed = observeChanges();
-    libraryListing.mockResolvedValueOnce(page("g2", ["discard-a"], 256))
-      .mockResolvedValueOnce(page("g3", ["discard-b"]))
-      .mockResolvedValueOnce(page("g3", ["discard-c"], 256))
-      .mockResolvedValueOnce(page("g4", ["discard-d"]));
-    await advance();
-    expect(display.state.listing).toBe(before);
-    expect(display.state.status).toBe("error");
-    expect(display.state.error).not.toBeNull();
-    expect(libraryListing.mock.calls).toEqual([[null], [null], [256], [null], [256]]);
-    expect(changed).not.toHaveBeenCalled();
-  });
-
-  it("does not overlap an unfinished initial read or an unfinished probe", async () => {
-    const { client, libraryListing } = fixture();
-    const initial = deferred();
-    libraryListing.mockReturnValueOnce(initial.promise);
-    const display = await view(client);
-    await advance(120_000);
-    expect(libraryListing.mock.calls).toEqual([[null]]);
-    await act(async () => initial.resolve(page("g1", ["old"])));
-    const probe = deferred();
-    libraryListing.mockReturnValueOnce(probe.promise);
-    await advance();
-    await advance(120_000);
-    expect(libraryListing.mock.calls).toEqual([[null], [null]]);
-    await act(async () => probe.resolve(page("g1", ["old"])));
-    expect(display.state.status).toBe("ready");
-    libraryListing.mockResolvedValueOnce(page("g1", ["old"]));
-    await advance();
-    expect(libraryListing.mock.calls).toEqual([[null], [null], [null]]);
-  });
-
-  it("defers a due hidden-window probe until visibility resumes and removes the deferred listener on unmount", async () => {
-    const { client, libraryListing } = fixture();
-    libraryListing.mockResolvedValue(page("g1", ["old"]));
-    const display = await view(client);
-    visibility("hidden");
-    await advance(120_000);
-    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-    expect(libraryListing.mock.calls).toEqual([[null]]);
-    visibility("visible");
-    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-    expect(libraryListing.mock.calls).toEqual([[null], [null]]);
-    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-    expect(libraryListing).toHaveBeenCalledTimes(2);
-    visibility("hidden");
-    await advance();
-    await display.unmount();
-    visibility("visible");
-    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-    await advance(120_000);
-    expect(libraryListing).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not probe early on visibility changes before its minute is due", async () => {
-    const { client, libraryListing } = fixture();
-    libraryListing.mockResolvedValue(page("g1", ["old"]));
-    await view(client);
-    await advance(30_000);
-    visibility("hidden");
-    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-    visibility("visible");
-    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
-    expect(libraryListing).toHaveBeenCalledTimes(1);
-    await advance(30_000);
-    expect(libraryListing).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([
-    { boundary: "inactive", stage: "probe" },
-    { boundary: "inactive", stage: "remaining pages" },
-    { boundary: "unmount", stage: "probe" },
-    { boundary: "unmount", stage: "remaining pages" },
-  ])("stops a pending $stage at the $boundary boundary without requesting further pages", async ({ boundary, stage }) => {
-    const { client, libraryListing } = fixture();
-    libraryListing.mockResolvedValueOnce(page("g1", ["old"]));
-    const display = await view(client);
-    const changed = observeChanges();
     const pending = deferred();
-    if (stage === "remaining pages") libraryListing.mockResolvedValueOnce(page("g2", ["new-a"], 256));
-    libraryListing.mockReturnValueOnce(pending.promise);
-    await advance();
-    if (boundary === "inactive") await display.render(client, false);
-    else await display.unmount();
-    await act(async () => pending.resolve(page("g2", ["new-b"], 512)));
-    await act(async () => window.dispatchEvent(new Event(LIBRARY_CHANGED_EVENT)));
-    await advance(120_000);
-    expect(libraryListing.mock.calls).toEqual(stage === "probe" ? [[null], [null]] : [[null], [null], [256]]);
-    // Only the externally dispatched event was observed, not a stale poll announcement.
-    expect(changed).toHaveBeenCalledOnce();
-    if (boundary === "inactive") {
-      expect(display.state.listing?.generation).toBe("g1");
-      libraryListing.mockResolvedValueOnce(page("g3", ["reactivated"]));
-      await display.render(client, true);
-      expect(display.state.listing?.generation).toBe("g3");
-      libraryListing.mockResolvedValueOnce(page("g3", ["reactivated"]));
-      await advance();
-      expect(libraryListing.mock.calls.at(-1)).toEqual([null]);
-    }
+    libraryListing.mockResolvedValueOnce(page("g1", ["old"])).mockResolvedValueOnce(page("g2", ["a"], 256))
+      .mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page("g3", ["final"]));
+    const display = await view(client);
+    let first!: Promise<void>;
+    await act(async () => { first = watches.get(client)!.event({ kind: "changed" }); });
+    await act(async () => { void watches.get(client)!.event({ kind: "changed" }); });
+    await act(async () => { pending.resolve(page("g2", ["b"])); await first; });
+    expect(display.state.listing?.items.map((item) => item.item_id)).toEqual(["final"]);
+    expect(libraryListing.mock.calls).toEqual([[null], [null], [256], [null]]);
   });
 
-  it("does no work while initially inactive, then loads and probes on activation", async () => {
+  it("restarts pagination when generation moves between pages", async () => {
     const { client, libraryListing } = fixture();
-    const display = await view(client, false);
-    await advance(120_000);
-    await act(async () => window.dispatchEvent(new Event(LIBRARY_CHANGED_EVENT)));
-    expect(libraryListing).not.toHaveBeenCalled();
-    expect(client.projectConfiguration).not.toHaveBeenCalled();
-    libraryListing.mockResolvedValue(page("g1", ["active"]));
-    await display.render(client, true);
-    expect(display.state.status).toBe("ready");
-    await advance();
-    expect(libraryListing.mock.calls).toEqual([[null], [null]]);
+    libraryListing.mockResolvedValueOnce(page("g1", ["old"])).mockResolvedValueOnce(page("g2", ["a"], 256))
+      .mockResolvedValueOnce(page("g3", ["discard"])).mockResolvedValueOnce(page("g3", ["final"]));
+    const display = await view(client);
+    await emit(client);
+    expect(display.state.listing?.generation).toBe("g3");
+    expect(libraryListing.mock.calls).toEqual([[null], [null], [256], [null]]);
   });
 
-  it("drops an old client's pending probe and recovers a new client even if its generation matches the old listing", async () => {
+  it("preserves data and watch failure through manual reload until ready", async () => {
+    const { client, libraryListing } = fixture();
+    libraryListing.mockResolvedValue(page("g1", ["old"]));
+    const display = await view(client);
+    await act(async () => watches.get(client)!.error());
+    expect(display.state.watchUnavailable).toBe(true);
+    await act(async () => display.state.reload());
+    expect(display.state.listing?.items[0].item_id).toBe("old");
+    expect(display.state.watchUnavailable).toBe(true);
+    await emit(client, "ready");
+    expect(display.state.watchUnavailable).toBe(false);
+  });
+
+  it("ignores late responses after client or visibility changes", async () => {
     const old = fixture();
-    old.libraryListing.mockResolvedValueOnce(page("same-generation", ["old-client"]));
+    old.libraryListing.mockResolvedValueOnce(page("old", ["old"]));
     const display = await view(old.client);
     const pending = deferred();
     old.libraryListing.mockReturnValueOnce(pending.promise);
-    await advance();
+    await act(async () => { void watches.get(old.client)!.event({ kind: "changed" }); });
     const next = fixture();
-    next.libraryListing.mockRejectedValueOnce(new Error("new client offline"));
+    next.libraryListing.mockResolvedValue(page("new", ["new"]));
     await display.render(next.client, true);
-    expect(display.state.status).toBe("error");
-    await act(async () => pending.resolve(page("stale-generation", ["stale"], 256)));
-    expect(old.libraryListing.mock.calls).toEqual([[null], [null]]);
-    expect(display.state.error).not.toBeNull();
-    next.libraryListing.mockResolvedValueOnce(page("same-generation", ["new-client"]));
-    await advance();
-    expect(display.state.status).toBe("ready");
-    expect(display.state.error).toBeNull();
-    expect(display.state.listing?.items.map((item) => item.item_id)).toEqual(["new-client"]);
-    expect(next.libraryListing.mock.calls).toEqual([[null], [null]]);
-  });
-
-  it.each(["probe", "remaining pages"])("reports a current $stage failure without erasing good data and recovers on a changed generation", async (stage) => {
-    const { client, libraryListing } = fixture();
-    libraryListing.mockResolvedValueOnce(page("g1", ["old"]));
-    const display = await view(client);
-    const before = display.state.listing;
-    const changed = observeChanges();
-    if (stage === "remaining pages") libraryListing.mockResolvedValueOnce(page("g2", ["incomplete"], 256));
-    libraryListing.mockRejectedValueOnce(new Error("offline"));
-    await advance();
-    expect(display.state.listing).toBe(before);
-    expect(display.state.status).toBe("error");
-    expect(display.host.textContent).toContain("offline");
-    expect(changed).not.toHaveBeenCalled();
-    // An unchanged generation must not erase the error or churn the existing listing.
-    libraryListing.mockResolvedValueOnce(page("g1", ["old"]));
-    const renders = display.renders.length;
-    await advance();
-    expect(display.state.status).toBe("error");
-    expect(display.state.listing).toBe(before);
-    expect(display.renders).toHaveLength(renders);
-    libraryListing.mockResolvedValueOnce(page("g2", ["recovered"], 256)).mockResolvedValueOnce(page("g2", ["rest"]));
-    await advance();
-    expect(display.state.status).toBe("ready");
-    expect(display.state.error).toBeNull();
-    expect(display.host.querySelector("span")?.getAttribute("data-items")).toBe("recovered,rest");
-    expect(changed).toHaveBeenCalledOnce();
-  });
-
-  it("recovers an initial load failure through the generation probe", async () => {
-    const { client, libraryListing } = fixture();
-    libraryListing.mockRejectedValueOnce(new Error("initially offline"));
-    const display = await view(client);
-    expect(display.state.status).toBe("error");
-    expect(display.state.listing).toBeNull();
-    libraryListing.mockResolvedValueOnce(page("g1", ["recovered"], 256)).mockResolvedValueOnce(page("g1", ["rest"]));
-    await advance();
-    expect(display.state.status).toBe("ready");
-    expect(display.state.error).toBeNull();
-    expect(display.host.querySelector("span")?.getAttribute("data-items")).toBe("recovered,rest");
-    expect(libraryListing.mock.calls).toEqual([[null], [null], [256]]);
-  });
-
-  it("keeps external event reloads intact and clears an earlier current error on successful manual reload", async () => {
-    const { client, libraryListing } = fixture();
-    libraryListing.mockResolvedValueOnce(page("g1", ["old"]));
-    const display = await view(client);
-    libraryListing.mockRejectedValueOnce(new Error("offline"));
-    await advance();
-    expect(display.state.status).toBe("error");
-    libraryListing.mockResolvedValueOnce(page("g2", ["manual"]));
-    await act(async () => display.host.querySelector("button")!.click());
-    expect(display.state.status).toBe("ready");
-    expect(display.state.error).toBeNull();
-    libraryListing.mockResolvedValueOnce(page("g3", ["external-a"], 256)).mockResolvedValueOnce(page("g3", ["external-b"]));
-    await act(async () => window.dispatchEvent(new Event(LIBRARY_CHANGED_EVENT)));
-    expect(display.host.querySelector("span")?.getAttribute("data-items")).toBe("external-a,external-b");
-    expect(libraryListing.mock.calls).toEqual([[null], [null], [null], [null], [256]]);
-  });
-
-  it("refreshes another mounted listing once and supersedes its pending probe without a notification loop", async () => {
-    const first = fixture();
-    const second = fixture();
-    first.libraryListing.mockResolvedValueOnce(page("g1", ["old"]));
-    second.libraryListing.mockResolvedValueOnce(page("g1", ["old"]));
-    const firstDisplay = await view(first.client);
-    const secondDisplay = await view(second.client);
-    const firstProbe = deferred();
-    const secondProbe = deferred();
-    first.libraryListing.mockReturnValueOnce(firstProbe.promise);
-    second.libraryListing.mockReturnValueOnce(secondProbe.promise);
-    await advance();
-    const changed = observeChanges();
-    second.libraryListing.mockResolvedValueOnce(page("g2", ["updated"]));
-    await act(async () => firstProbe.resolve(page("g2", ["updated"])));
-    expect(firstDisplay.state.listing?.generation).toBe("g2");
-    expect(secondDisplay.state.listing?.generation).toBe("g2");
-    await act(async () => secondProbe.resolve(page("stale", ["discard"], 256)));
-    expect(secondDisplay.state.listing?.generation).toBe("g2");
-    expect(first.libraryListing.mock.calls).toEqual([[null], [null]]);
-    expect(second.libraryListing.mock.calls).toEqual([[null], [null], [null]]);
-    expect(changed).toHaveBeenCalledOnce();
-    first.libraryListing.mockResolvedValueOnce(page("g2", ["updated"]));
-    second.libraryListing.mockResolvedValueOnce(page("g2", ["updated"]));
-    await advance();
-    expect(first.libraryListing.mock.calls).toEqual([[null], [null], [null]]);
-    expect(second.libraryListing.mock.calls).toEqual([[null], [null], [null], [null]]);
-    expect(changed).toHaveBeenCalledOnce();
+    await act(async () => pending.resolve(page("stale", ["stale"], 256)));
+    expect(display.state.listing?.generation).toBe("new");
+    expect(old.libraryListing).toHaveBeenCalledTimes(2);
+    const hidden = deferred();
+    next.libraryListing.mockReturnValueOnce(hidden.promise);
+    await act(async () => { void watches.get(next.client)!.event({ kind: "changed" }); });
+    visibility("hidden");
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    await act(async () => hidden.resolve(page("hidden", ["hidden"])));
+    expect(display.state.listing?.generation).toBe("new");
   });
 });

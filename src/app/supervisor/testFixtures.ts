@@ -1,4 +1,5 @@
-import type { OrchestrationSnapshot, Run, TaskView } from "../../protocol/generated/v1";
+import type { Run, TaskView } from "../../protocol/generated/v1";
+import type { SupervisorOverview } from "./useSupervisor";
 
 export function taskFixture(id: string, overrides: Partial<TaskView> = {}): TaskView {
   return {
@@ -17,11 +18,11 @@ export function runFixture(overrides: Partial<Run> = {}): Run {
     ...overrides,
   };
 }
-export function orchestrationFixture(tasks: TaskView[] = [], runs: Run[] = [runFixture()]): OrchestrationSnapshot {
+export function orchestrationFixture(tasks: TaskView[] = [], runs: Run[] = [runFixture()]): SupervisorOverview & { runs: Run[] } {
   return {
     session_id: "session-1", state_store_id: "store", revision: 1, tasks_token: "tasks", roots: [],
     board: runs.length ? { root_id: "root", path: "/state/tasks.md", doc_revision: "doc", unidentified_items: 0, diagnostics: [], tasks } : null,
-    runs, messages: [], questions: [], unreflected_inputs: [], task_ownership: [], directives: [], thread_links: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
+    runs, questions: [], unreflected_inputs: [], task_ownership: [], directives: [], thread_links: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [], cleanup: [], restoration: { reattached: 0, total_attachments: 0, cleanup_pending: 0 },
     runtime: { status: "fresh", endpoint_identity: "fixture-endpoint", observed_at: "2026-10-07T12:00:00Z", runs: runs.map(run => ({ run_id: run.run_id, presence: "present", actual_agent: true, workspace_id: "space-1", workspace_label: "Project", tab_id: "tab-2", tab_label: "Liaison", pane_id: "pane-2", agent_status: "working", state_changed_at: null })) },
   };
 }

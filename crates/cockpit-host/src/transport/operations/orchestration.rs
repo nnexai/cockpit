@@ -9,8 +9,8 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use cockpit_protocol::orchestration::{
     AgentSendTarget, InboxRequest, InboxView,
     OperatorOrigin, OrchestrationMutationRequest, OrchestrationMutationResponse,
-    OrchestrationSnapshot, OrchestrationSnapshotRequest, OrchestrationWaitRequest,
-    OrchestrationWaitResponse,
+    OrchestrationOverview, OrchestrationSnapshotRequest, OrchestrationWaitRequest,
+    OrchestrationWaitResponse, TaskHistoryRequest, TaskHistoryMessages,
     LiaisonLookupRequest, LiaisonLookupResponse,
 };
 use cockpit_protocol::orchestration::{MessageImage, OrchestrationImageMedia, OrchestrationImagePut, OrchestrationImageRead};
@@ -56,6 +56,26 @@ pub fn snapshot_input() -> impl FnOnce(SnapshotInput) -> Result<OrchestrationSna
             session_id,
             root_id: query.root_id,
         })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskHistoryQuery {
+    pub root_id: String,
+    pub state_store_id: String,
+    pub known_digest: Option<String>,
+}
+
+type TaskHistoryInput = (Path<(String, String)>, Result<Query<TaskHistoryQuery>, QueryRejection>);
+
+pub fn task_history_input() -> impl FnOnce(TaskHistoryInput) -> Result<TaskHistoryRequest, OperationError> {
+    |(Path((session_id, task_id)), query)| {
+        let session_id = http_input::session(Reject("invalid_session_id", "Session ID is invalid"))((Path(session_id),))?;
+        let query: TaskHistoryQuery = http_input::mapped_query(Reject(
+            "invalid_orchestration_request", "Invalid task history query",
+        ))((query,))?;
+        Ok(TaskHistoryRequest { session_id, root_id: query.root_id, task_id, state_store_id: query.state_store_id, known_digest: query.known_digest })
     }
 }
 
@@ -219,8 +239,19 @@ pub async fn orchestration_snapshot(
     runtime: &OrchestrationRuntime,
     _transport: Transport,
     request: OrchestrationSnapshotRequest,
-) -> Result<OrchestrationSnapshot, OperationError> {
-    runtime.snapshot(&request).await.map_err(Into::into)
+) -> Result<OrchestrationOverview, OperationError> {
+    runtime.overview(&request).await.map_err(Into::into)
+}
+
+pub async fn orchestration_task_history(
+    runtime: &OrchestrationRuntime,
+    _transport: Transport,
+    request: TaskHistoryRequest,
+) -> Result<TaskHistoryMessages, OperationError> {
+    if !crate::transport::guard::valid_session_id(&request.session_id) {
+        return Err(OperationError::rejected("invalid_session_id", "Session ID is invalid"));
+    }
+    runtime.task_history(&request).map_err(Into::into)
 }
 
 fn validate_inbox_session(request: &InboxRequest) -> Result<(), OperationError> {
@@ -311,6 +342,21 @@ pub async fn orchestration_wait(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_history_input_binds_path_and_rejects_unknown_query() {
+        let query = TaskHistoryQuery { root_id: "root".into(), state_store_id: "store".into(), known_digest: Some("digest".into()) };
+        let request = task_history_input()((Path(("session".into(), "task".into())), Ok(Query(query)))).unwrap();
+        assert_eq!((&*request.session_id, &*request.root_id, &*request.task_id, &*request.state_store_id),
+            ("session", "root", "task", "store"));
+        assert_eq!(request.known_digest.as_deref(), Some("digest"));
+        let query = TaskHistoryQuery { root_id: "root".into(), state_store_id: "store".into(), known_digest: None };
+        assert!(task_history_input()((Path(("bad:id".into(), "task".into())), Ok(Query(query)))).is_err());
+        assert!(serde_json::from_value::<TaskHistoryQuery>(serde_json::json!({"root_id":"root", "state_store_id":"store", "session_id":"other"})).is_err());
+        let decode = crate::transport::native_input::value::<TaskHistoryRequest>(
+            crate::transport::limits::MUTATION_BYTES, "orchestration");
+        assert!(decode((serde_json::json!({"session_id":"session", "root_id":"root", "task_id":"task", "state_store_id":"store", "unexpected":true}),)).is_err());
+    }
 
     #[test]
     fn image_inputs_fence_sessions_and_decode_bounded_base64() {

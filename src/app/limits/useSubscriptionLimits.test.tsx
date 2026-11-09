@@ -69,127 +69,148 @@ async function changeVisibility(value: DocumentVisibilityState) {
   });
 }
 
-it.each([
-  { working: false, cadence: 60_000 },
-  { working: true, cadence: 15_000 },
-])("refreshes displayed values every $cadence ms when working=$working, without duplicating the initial request", async ({ working, cadence }) => {
+it.each([false, true])("does not poll idle snapshots with working=%s, including rerenders", async working => {
   const { client, quotaStatus } = fixture();
   const display = view(client);
   await display.render(working);
-  expect(quotaStatus).toHaveBeenCalledTimes(1);
-  expect(display.host.textContent).toBe("1000");
   await display.render(working);
-  await advance(cadence - 1);
+  await advance(3_600_000);
   expect(quotaStatus).toHaveBeenCalledTimes(1);
-  expect(display.host.textContent).toBe("1000");
-  await advance(1);
-  expect(quotaStatus).toHaveBeenCalledTimes(2);
-  expect(display.host.textContent).toBe(String(1000 + cadence));
-  await advance(cadence);
-  expect(quotaStatus).toHaveBeenCalledTimes(3);
-  expect(display.host.textContent).toBe(String(1000 + cadence * 2));
 });
 
-it("refreshes immediately on becoming active and promptly replaces the active timer on becoming idle", async () => {
+it("refreshes on both activity transitions and focus, but not unchanged renders", async () => {
   const { client, quotaStatus } = fixture();
   const display = view(client);
   await display.render(false);
-  await advance(10_000);
   await display.render(true);
-  expect(quotaStatus).toHaveBeenCalledTimes(2);
-  expect(display.host.textContent).toBe("11000");
-  await advance(15_000);
-  expect(quotaStatus).toHaveBeenCalledTimes(3);
-  expect(display.host.textContent).toBe("26000");
-  await advance(1000);
+  await display.render(true);
   await display.render(false);
-  expect(quotaStatus).toHaveBeenCalledTimes(3);
-  await advance(59_999);
-  expect(quotaStatus).toHaveBeenCalledTimes(3);
-  expect(display.host.textContent).toBe("26000");
-  await advance(1);
-  expect(quotaStatus).toHaveBeenCalledTimes(4);
-  expect(display.host.textContent).toBe("87000");
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(quotaStatus.mock.calls.map(([request]) => request.agents_working)).toEqual([false, true, false, false]);
 });
 
-it.each([
-  { working: true, cadence: 15_000 },
-  { working: false, cadence: 60_000 },
-])("keeps an in-flight request intact during transition to working=$working and uses the new cadence after completion", async ({ working, cadence }) => {
+it("coalesces triggers during a request without overlapping and uses the latest activity", async () => {
   const { client, quotaStatus } = fixture();
   let complete!: (response: QuotaStatusResponse) => void;
-  const pending = new Promise<QuotaStatusResponse>(resolve => { complete = resolve; });
-  quotaStatus.mockReturnValueOnce(pending);
+  quotaStatus.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
   const display = view(client);
-  await display.render(!working);
-  const signal = quotaStatus.mock.calls[0][1]!;
-  await display.render(working);
-  await changeVisibility("visible");
+  await display.render(false);
+  await display.render(true);
+  await act(async () => window.dispatchEvent(new Event("focus")));
   await advance(90_000);
   expect(quotaStatus).toHaveBeenCalledTimes(1);
-  expect(signal.aborted).toBe(false);
-  expect(display.host.textContent).toBe("loading");
+  expect(quotaStatus.mock.calls[0][1]?.aborted).toBe(false);
   await act(async () => complete(snapshot()));
-  expect(display.host.textContent).toBe("91000");
-  await advance(cadence - 1);
-  expect(quotaStatus).toHaveBeenCalledTimes(1);
-  await advance(1);
   expect(quotaStatus).toHaveBeenCalledTimes(2);
-  expect(display.host.textContent).toBe(String(91_000 + cadence));
+  expect(quotaStatus.mock.calls[1][0].agents_working).toBe(true);
+  await advance(90_000);
+  expect(quotaStatus).toHaveBeenCalledTimes(2);
 });
 
-it.each([
-  { working: false, cadence: 60_000 },
-  { working: true, cadence: 15_000 },
-])("polls a collecting snapshot after three seconds, then resumes $cadence ms polling", async ({ working, cadence }) => {
+it("polls only while collection is in progress", async () => {
   const { client, quotaStatus } = fixture();
   quotaStatus.mockImplementationOnce(async () => snapshot(true));
+  quotaStatus.mockImplementationOnce(async () => snapshot(true));
   const display = view(client);
-  await display.render(working);
+  await display.render(false);
   await advance(2999);
+  expect(quotaStatus).toHaveBeenCalledTimes(1);
+  await advance(3001);
+  expect(quotaStatus).toHaveBeenCalledTimes(3);
+  await advance(600_000);
+  expect(quotaStatus).toHaveBeenCalledTimes(3);
+});
+
+it("does not repeatedly retry a failed collecting request", async () => {
+  const { client, quotaStatus } = fixture();
+  quotaStatus.mockImplementationOnce(async () => snapshot(true));
+  quotaStatus.mockRejectedValueOnce(new CockpitClientError("transport_error", "Disconnected"));
+  const display = view(client);
+  await display.render(false);
+  await advance(600_000);
+  expect(quotaStatus).toHaveBeenCalledTimes(2);
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(quotaStatus).toHaveBeenCalledTimes(3);
+});
+
+it("refreshes once at a known future quota reset, not repeatedly for a past deadline", async () => {
+  const { client, quotaStatus } = fixture();
+  const response: QuotaStatusResponse = {
+    ...snapshot(),
+    providers: [{ provider: "codex", state: "available", error: null, fetched_at_ms: 1000, stale: false,
+      accounts: [{ fetched_at_ms: 1000, limits: [{ id: "primary", window: null, tier: null, unit: "percent",
+        used_fraction: 0.5, used: null, limit: null, remaining: null, unlimited: false, level: "ok", resets_at_ms: 6000 }] }] }],
+  };
+  quotaStatus.mockResolvedValue(response);
+  const display = view(client);
+  await display.render(false);
+  await advance(4999);
   expect(quotaStatus).toHaveBeenCalledTimes(1);
   await advance(1);
   expect(quotaStatus).toHaveBeenCalledTimes(2);
-  expect(display.host.textContent).toBe("4000");
-  await advance(cadence - 1);
+  await advance(600_000);
   expect(quotaStatus).toHaveBeenCalledTimes(2);
-  await advance(1);
-  expect(quotaStatus).toHaveBeenCalledTimes(3);
-  expect(display.host.textContent).toBe(String(4000 + cadence));
 });
 
-it("sends no requests while hidden, including an active transition, and refreshes immediately when visible", async () => {
+it("suppresses requests while hidden and refreshes when visible", async () => {
   visibility("hidden");
   const { client, quotaStatus } = fixture();
   const display = view(client);
   await display.render(false);
-  await advance(60_000);
   await display.render(true);
-  await advance(45_000);
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  await advance(600_000);
   expect(quotaStatus).not.toHaveBeenCalled();
-  expect(display.host.textContent).toBe("loading");
   await changeVisibility("visible");
   expect(quotaStatus).toHaveBeenCalledTimes(1);
-  expect(display.host.textContent).toBe("106000");
-  await advance(15_000);
-  expect(quotaStatus).toHaveBeenCalledTimes(2);
-  expect(display.host.textContent).toBe("121000");
   await changeVisibility("hidden");
-  await advance(60_000);
-  expect(quotaStatus).toHaveBeenCalledTimes(2);
-  expect(display.host.textContent).toBe("121000");
+  await advance(600_000);
+  expect(quotaStatus).toHaveBeenCalledTimes(1);
   await changeVisibility("visible");
-  expect(quotaStatus).toHaveBeenCalledTimes(3);
-  expect(display.host.textContent).toBe("181000");
+  expect(quotaStatus).toHaveBeenCalledTimes(2);
 });
 
-it("stops unavailable-host polling despite mode and visibility changes", async () => {
+it("pauses collection polling while hidden and refreshes on return", async () => {
+  const { client, quotaStatus } = fixture();
+  quotaStatus.mockImplementationOnce(async () => snapshot(true));
+  const display = view(client);
+  await display.render(false);
+  await changeVisibility("hidden");
+  await advance(30_000);
+  expect(quotaStatus).toHaveBeenCalledTimes(1);
+  await changeVisibility("visible");
+  expect(quotaStatus).toHaveBeenCalledTimes(2);
+  await advance(30_000);
+  expect(quotaStatus).toHaveBeenCalledTimes(2);
+});
+
+it("ignores a late response after switching client", async () => {
+  const first = fixture();
+  const second = fixture();
+  let complete!: (response: QuotaStatusResponse) => void;
+  first.quotaStatus.mockReturnValueOnce(new Promise(resolve => { complete = resolve; }));
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  mounted.push({ root, host });
+  function View({ client }: { client: CockpitClient }) {
+    const state = useSubscriptionLimits(client, false);
+    return <output>{state.snapshot?.generated_at_ms ?? "loading"}</output>;
+  }
+  await act(async () => root.render(<View client={first.client} />));
+  await act(async () => root.render(<View client={second.client} />));
+  expect(first.quotaStatus.mock.calls[0][1]?.aborted).toBe(true);
+  await act(async () => complete({ ...snapshot(), generated_at_ms: 999 }));
+  expect(host.textContent).toBe("1000");
+});
+
+it("stops unavailable-host requests despite activity, focus and visibility changes", async () => {
   const { client, quotaStatus } = fixture();
   quotaStatus.mockRejectedValue(new CockpitClientError("http_error", "Quota unavailable", { operationCode: "quota_unavailable" }));
   const display = view(client);
   await display.render(false);
-  expect(display.host.querySelector("output")?.dataset.absent).toBe("true");
   await display.render(true);
+  await act(async () => window.dispatchEvent(new Event("focus")));
   await changeVisibility("hidden");
   await changeVisibility("visible");
   await advance(360_000);
@@ -197,21 +218,20 @@ it("stops unavailable-host polling despite mode and visibility changes", async (
   expect(display.host.querySelector("output")?.dataset.absent).toBe("true");
 });
 
-it("retains last-good values through offline failures and recovers on the active cadence", async () => {
+it("retains last-good values through failures and recovers on an event", async () => {
   const { client, quotaStatus } = fixture();
   const display = view(client);
   await display.render(false);
   quotaStatus.mockRejectedValueOnce(new CockpitClientError("transport_error", "Disconnected"));
   quotaStatus.mockRejectedValueOnce(new CockpitClientError("transport_error", "Disconnected"));
   await display.render(true);
-  expect(display.host.querySelector("output")?.dataset.link).toBe("live");
-  expect(display.host.textContent).toBe("1000");
-  await advance(15_000);
+  await display.render(false);
   expect(display.host.querySelector("output")?.dataset.link).toBe("offline");
   expect(display.host.textContent).toBe("1000");
-  await advance(15_000);
+  await advance(1000);
+  await act(async () => window.dispatchEvent(new Event("focus")));
   expect(display.host.querySelector("output")?.dataset.link).toBe("live");
-  expect(display.host.textContent).toBe("31000");
+  expect(display.host.textContent).toBe("2000");
 });
 
 it("retains the client snapshot across remounts without sharing it with another host", async () => {

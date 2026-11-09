@@ -6,6 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ContextInvalidationResponse, ContextSearchResponse } from "../../protocol/generated/v1";
 import { ContextSearch } from "./ContextSearch";
 import { CockpitClientError } from "../../client/CockpitClient";
+import type { LocalChangeEvent } from "../../protocol/generated/v1";
+
+const watchFiles = (_root: string, _paths: string[], onEvent: (event: LocalChangeEvent) => Promise<void>) => {
+  void Promise.resolve().then(() => onEvent({ stream_id: "stream", sequence: 1, kind: "ready", topics: ["files"] }));
+  return { close: vi.fn(), retry: vi.fn() };
+};
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void };
 
@@ -46,7 +52,7 @@ describe("ContextSearch", () => {
         rootId="root"
         known={[]}
         search={search}
-        poll={vi.fn()}
+        invalidate={vi.fn()} watchFiles={watchFiles}
         onSelect={vi.fn()}
         onInvalidate={vi.fn()}
       />);
@@ -99,7 +105,7 @@ describe("ContextSearch", () => {
         rootId="root"
         known={known}
         search={vi.fn()}
-        poll={poll}
+        invalidate={poll} watchFiles={watchFiles}
         onSelect={vi.fn()}
         onInvalidate={onInvalidate}
       />);
@@ -116,7 +122,7 @@ describe("ContextSearch", () => {
         rootId="root"
         known={known}
         search={vi.fn()}
-        poll={poll}
+        invalidate={poll} watchFiles={watchFiles}
         onSelect={vi.fn()}
         onInvalidate={onInvalidate}
       />);
@@ -161,7 +167,7 @@ describe("ContextSearch", () => {
       rootId="root"
       known={[]}
       search={search}
-      poll={poll}
+      invalidate={poll} watchFiles={watchFiles}
       onSelect={vi.fn()}
       onInvalidate={vi.fn()}
       onViewerError={onViewerError}
@@ -184,7 +190,7 @@ describe("ContextSearch", () => {
       rootId="root"
       known={[{ path: "visible.md", revision: "r1" }]}
       search={search}
-      poll={poll}
+      invalidate={poll} watchFiles={watchFiles}
       onSelect={vi.fn()}
       onInvalidate={vi.fn()}
       onViewerError={onViewerError}
@@ -193,5 +199,30 @@ describe("ContextSearch", () => {
     expect(onViewerError).toHaveBeenCalledTimes(2);
     expect(container.querySelector(".context-search-poll")?.textContent).toContain("Viewer expired");
     expect(search).toHaveBeenCalledTimes(2);
+  });
+  it("checks again for a change received during an outstanding baseline", async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+    const first = deferred<ContextInvalidationResponse>();
+    let emit!: (event: LocalChangeEvent) => Promise<void>;
+    const invalidate = vi.fn().mockImplementationOnce(() => first.promise).mockImplementation(async (request) => ({
+      binding_id: "binding", root_id: "root", request_generation: request.request_generation,
+      invalidations: [{ path: "visible.md", state: "changed", revision: "r2" }], truncated: false,
+    }));
+    const onInvalidate = vi.fn();
+    const subscribe = (_root: string, _paths: string[], callback: typeof emit) => {
+      emit = callback; return { close: vi.fn(), retry: vi.fn() };
+    };
+    await act(async () => root.render(<ContextSearch identity="viewer" bindingId="binding" rootId="root"
+      known={[{ path: "visible.md", revision: "r1" }]} search={vi.fn()} invalidate={invalidate}
+      watchFiles={subscribe} onSelect={vi.fn()} onInvalidate={onInvalidate} />));
+    const event = (kind: "ready" | "changed", sequence: number): LocalChangeEvent => ({ stream_id: "s", sequence, kind, topics: ["files"] });
+    let baseline!: Promise<void>;
+    await act(async () => { baseline = emit(event("ready", 1)); void emit(event("changed", 2)); });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    const request = invalidate.mock.calls[0][0] as { request_generation: number };
+    await act(async () => { first.resolve({ binding_id: "binding", root_id: "root", request_generation: request.request_generation, invalidations: [], truncated: false }); await baseline; });
+    expect(invalidate).toHaveBeenCalledTimes(2);
+    expect(onInvalidate).toHaveBeenCalledOnce();
   });
 });

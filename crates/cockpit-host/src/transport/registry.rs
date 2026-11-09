@@ -425,13 +425,23 @@ macro_rules! cockpit_operations {
                   limit = $crate::transport::limits::NOTES_BYTES; origin = route;
                   guard = none; status = notes
             }
-            { id: orchestration_snapshot, ctx: orchestration, out: ::cockpit_protocol::orchestration::OrchestrationSnapshot,
+            { id: orchestration_snapshot, ctx: orchestration, out: ::cockpit_protocol::orchestration::OrchestrationOverview,
               call: $crate::transport::operations::orchestration::orchestration_snapshot,
               native: orchestration_snapshot(request: ::serde_json::Value)
                   => $crate::transport::native_input::value($crate::transport::limits::MUTATION_BYTES, "orchestration"),
               http: get "/api/v1/sessions/{session_id}/orchestration"
                   (path: ::axum::extract::Path<::std::string::String>, query: ::std::result::Result<::axum::extract::Query<$crate::transport::operations::orchestration::SnapshotQuery>, ::axum::extract::rejection::QueryRejection>)
                   => $crate::transport::operations::orchestration::snapshot_input();
+                  limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
+                  guard = after(Orchestration); status = service
+            }
+            { id: orchestration_task_history, ctx: orchestration, out: ::cockpit_protocol::orchestration::TaskHistoryMessages,
+              call: $crate::transport::operations::orchestration::orchestration_task_history,
+              native: orchestration_task_history(request: ::serde_json::Value)
+                  => $crate::transport::native_input::value($crate::transport::limits::MUTATION_BYTES, "orchestration"),
+              http: get "/api/v1/sessions/{session_id}/orchestration/tasks/{task_id}/history"
+                  (path: ::axum::extract::Path<(::std::string::String, ::std::string::String)>, query: ::std::result::Result<::axum::extract::Query<$crate::transport::operations::orchestration::TaskHistoryQuery>, ::axum::extract::rejection::QueryRejection>)
+                  => $crate::transport::operations::orchestration::task_history_input();
                   limit = $crate::transport::limits::MUTATION_BYTES; origin = route;
                   guard = after(Orchestration); status = service
             }

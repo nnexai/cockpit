@@ -1,13 +1,14 @@
 use super::*;
 use cockpit_protocol::herdr_shell::{HerdrShellState, HerdrShellStatus};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(super) struct CachedShell {
     server_instance: String,
     state: HerdrShellState,
     listeners: Vec<mpsc::Sender<SessionChange>>,
     running: bool,
     generation: u64,
+    lifetime: tokio::sync::watch::Sender<()>,
 }
 
 fn unavailable(error: &InspectionError, previous: Option<&HerdrShellState>) -> HerdrShellState {
@@ -103,6 +104,7 @@ impl HerdrCliAdapter {
                             listeners: Vec::new(),
                             running: false,
                             generation: 0,
+                            lifetime: tokio::sync::watch::channel(()).0,
                         },
                     );
                 }
@@ -119,6 +121,7 @@ impl HerdrCliAdapter {
                             listeners: Vec::new(),
                             running: false,
                             generation: 0,
+                            lifetime: tokio::sync::watch::channel(()).0,
                         },
                     );
                 }
@@ -151,6 +154,7 @@ impl HerdrCliAdapter {
                         listeners: Vec::new(),
                         running: false,
                         generation: 0,
+                        lifetime: tokio::sync::watch::channel(()).0,
                     });
                 if entry.server_instance != expected_instance {
                     *entry = CachedShell {
@@ -165,6 +169,7 @@ impl HerdrCliAdapter {
                         listeners: Vec::new(),
                         running: false,
                         generation: 0,
+                        lifetime: tokio::sync::watch::channel(()).0,
                     };
                 }
                 entry.listeners.push(sender);
@@ -247,7 +252,7 @@ impl HerdrCliAdapter {
 
     async fn shell_listeners_closed(&self, session_id: &str, generation: u64) {
         loop {
-            {
+            let (listener, mut lifetime) = {
                 let mut cache = self.shell_states.lock().await;
                 let Some(shell) = cache.get_mut(session_id) else {
                     return;
@@ -260,8 +265,12 @@ impl HerdrCliAdapter {
                     shell.running = false;
                     return;
                 }
+                (shell.listeners[0].clone(), shell.lifetime.subscribe())
+            };
+            tokio::select! {
+                _ = listener.closed() => {},
+                _ = lifetime.changed() => {},
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
@@ -440,6 +449,7 @@ mod tests {
                 listeners: vec![slow, fast],
                 running: true,
                 generation: 7,
+                lifetime: tokio::sync::watch::channel(()).0,
             },
         );
         let mut closed = popup_state();
@@ -473,6 +483,7 @@ mod tests {
                 listeners: vec![listener],
                 running: true,
                 generation: 9,
+                lifetime: tokio::sync::watch::channel(()).0,
             },
         );
         let snapshot = adapter.shell_snapshot("default", "instance").await;
@@ -488,5 +499,39 @@ mod tests {
         let snapshot = adapter.shell_snapshot("default", "instance").await;
         assert_eq!(snapshot.status, HerdrShellStatus::Disconnected);
         assert_eq!(snapshot.popup, popup_state().popup);
+    }
+    #[tokio::test]
+    async fn listener_addition_and_generation_replacement_wake_correctly() {
+        let adapter = adapter();
+        let (first, first_rx) = mpsc::channel(1);
+        adapter.shell_states.lock().await.insert("default".into(), CachedShell {
+            server_instance: "instance".into(), state: popup_state(), listeners: vec![first],
+            running: true, generation: 7, lifetime: tokio::sync::watch::channel(()).0,
+        });
+        let waiting_adapter = adapter.clone();
+        let mut waiter = tokio::spawn(async move { waiting_adapter.shell_listeners_closed("default", 7).await });
+        tokio::task::yield_now().await;
+        let (second, second_rx) = mpsc::channel(1);
+        adapter.shell_states.lock().await.get_mut("default").unwrap().listeners.push(second);
+        drop(first_rx);
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished());
+        drop(second_rx);
+        tokio::time::timeout(Duration::from_secs(1), &mut waiter).await.unwrap().unwrap();
+
+        let (old, _old_rx) = mpsc::channel(1);
+        adapter.shell_states.lock().await.insert("default".into(), CachedShell {
+            server_instance: "old".into(), state: popup_state(), listeners: vec![old],
+            running: true, generation: 8, lifetime: tokio::sync::watch::channel(()).0,
+        });
+        let waiting_adapter = adapter.clone();
+        let waiter = tokio::spawn(async move { waiting_adapter.shell_listeners_closed("default", 8).await });
+        tokio::task::yield_now().await;
+        adapter.shell_states.lock().await.insert("default".into(), CachedShell {
+            server_instance: "new".into(), state: popup_state(), listeners: Vec::new(),
+            running: true, generation: 9, lifetime: tokio::sync::watch::channel(()).0,
+        });
+        tokio::time::timeout(Duration::from_secs(1), waiter).await.unwrap().unwrap();
+        assert_eq!(adapter.shell_states.lock().await["default"].generation, 9);
     }
 }

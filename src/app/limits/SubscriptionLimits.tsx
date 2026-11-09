@@ -1,8 +1,7 @@
 import { useEffect, useId, useRef, useState, type CSSProperties, type RefObject } from "react";
 import type { QuotaLimit, QuotaStatusResponse } from "../../protocol/generated/v1";
 import { UiIcon } from "../UiIcon";
-import { formatAgo } from "../library/libraryState";
-import { accessibleLabel, compareWindows, errorText, formatCredits, formatLimitValue, formatReset, formatSpan, limitIsStale, limitPace, providerViews, usedFraction, usageTone, summaryView, windowLabel, type ProviderView } from "./limitsModel";
+import { accessibleLabel, compareWindows, errorText, formatCredits, formatLimitValue, formatReportDate, formatReset, formatSpan, limitIsStale, limitPace, providerViews, usedFraction, usageTone, summaryView, windowLabel, type ProviderView } from "./limitsModel";
 import "./limits.css";
 
 export interface SubscriptionLimitsProps {
@@ -25,7 +24,7 @@ function Meter({ limit, stale, expected }: { limit: QuotaLimit; stale: boolean; 
   </span>;
 }
 
-function Chip({ view, now }: { view: ProviderView; now: number }) {
+function Chip({ view }: { view: ProviderView }) {
   return <span className={`limits-chip${view.stale ? " is-stale" : ""}`}>
     <span className="limits-name">{view.name}</span>
     {view.segments.length ? view.segments.map(segment => {
@@ -38,7 +37,7 @@ function Chip({ view, now }: { view: ProviderView; now: number }) {
         {segment.pace?.runsOutMs != null ? <span className="limits-runout">{formatSpan(segment.pace.runsOutMs)}</span> : null}
       </span>;
     }) : <span className="limits-value">{view.provider.state === "pending" ? "…" : view.provider.state === "unsupported" ? "n/a" : "—"}</span>}
-    {view.stale && view.provider.fetched_at_ms !== null ? <span className="limits-age">{formatAgo(view.provider.fetched_at_ms, now)}</span> : null}
+    {view.stale && view.provider.fetched_at_ms !== null ? <span className="limits-age">Report {formatReportDate(view.provider.fetched_at_ms)}</span> : null}
     {view.provider.error ? <UiIcon name="info" /> : null}
   </span>;
 }
@@ -102,11 +101,11 @@ export function SubscriptionLimits({ snapshot, link, now, open, onOpenChange, su
       onOpenChange(false);
       target?.focus({ preventScroll: true });
     }}>
-    <button type="button" ref={triggerRef} className="limits-trigger" aria-label={accessibleLabel(views, now, link === "offline")}
+    <button type="button" ref={triggerRef} className="limits-trigger" aria-label={accessibleLabel(views, link === "offline")}
       title="Subscription limits" aria-haspopup="dialog" aria-expanded={shown} aria-controls={shown ? id : undefined}
       disabled={suspended} onClick={() => { setHover(false); opener.current = triggerRef.current; onOpenChange(!pinned); }}>
-      <span className="limits-chips" aria-hidden="true">{visible.length ? visible.map(view => <Chip key={view.provider.provider} view={view} now={now} />) : <span>Limits —</span>}</span>
-      <span className="limits-summary" aria-hidden="true">{summary ? <><Chip view={summary} now={now} />{visible.length > 1 ? <span className="limits-more">+{visible.length - 1}</span> : null}</> : <span>Limits —</span>}</span>
+      <span className="limits-chips" aria-hidden="true">{visible.length ? visible.map(view => <Chip key={view.provider.provider} view={view} />) : <span>Limits —</span>}</span>
+      <span className="limits-summary" aria-hidden="true">{summary ? <><Chip view={summary} />{visible.length > 1 ? <span className="limits-more">+{visible.length - 1}</span> : null}</> : <span>Limits —</span>}</span>
     </button>
     {shown ? <div id={id} ref={popupRef} role="dialog" tabIndex={-1} aria-label="Subscription limits" className="limits-popup" onBlur={event => {
       if (!(event.relatedTarget instanceof Node) || !rootRef.current?.contains(event.relatedTarget)) {
@@ -115,10 +114,11 @@ export function SubscriptionLimits({ snapshot, link, now, open, onOpenChange, su
       }
     }}>
       {link === "offline" ? <p className="limits-offline">Offline — showing the last values Cockpit received.</p> : null}
+      <p className="limits-notice">Usage changed elsewhere may not appear until a later check.</p>
       {views.map(view => <section key={view.provider.provider} aria-label={view.name} className="limits-provider">
-        <header><h3>{view.name}</h3><span>{view.provider.fetched_at_ms === null ? "" : `${view.stale ? "stale · " : "updated "}${formatAgo(view.provider.fetched_at_ms, now)}`}</span></header>
+        <header><h3>{view.name}</h3><span>{view.provider.fetched_at_ms === null ? "" : `${view.stale ? "Stale · report from" : "Usage report from"} ${formatReportDate(view.provider.fetched_at_ms)}`}</span></header>
         {view.provider.accounts.map((account, accountIndex) => <div key={accountIndex} className="limits-account">
-          {view.provider.accounts.length > 1 ? <h4>Account {accountIndex + 1} <span>updated {formatAgo(account.fetched_at_ms, now)}</span></h4> : null}
+          {view.provider.accounts.length > 1 ? <h4>Account {accountIndex + 1} <span>Usage report from {formatReportDate(account.fetched_at_ms)}</span></h4> : null}
           <ul>{[...account.limits].sort(compareWindows).map((limit, limitIndex) => {
             const used = usedFraction(limit);
             const stale = view.stale || limitIsStale(limit, account.fetched_at_ms, now);
@@ -130,13 +130,13 @@ export function SubscriptionLimits({ snapshot, link, now, open, onOpenChange, su
               <span className="limits-row-meter"><Meter limit={limit} stale={stale} expected={pace?.expected} /></span>
               <span className="limits-row-value" title={formatLimitValue(limit, true)}>{credits !== null && used === null ? "—" : formatLimitValue(limit)}</span>
               <span className="limits-runout">{pace?.runsOutMs != null ? `out ${formatSpan(pace.runsOutMs)}` : null}</span>
-              <span className="limits-reset" title={reset ?? undefined}>{limit.resets_at_ms === null ? null : limit.resets_at_ms > now ? `in ${formatSpan(limit.resets_at_ms - now)}` : "reset"}</span>
+              <span className="limits-reset" title={reset ?? undefined}>{limit.resets_at_ms === null ? null : limit.resets_at_ms > now ? `in ${formatSpan(limit.resets_at_ms - now)}` : "Reset time passed"}</span>
               {credits !== null ? <span className="limits-row-credits">{credits}</span> : null}
             </li>;
           })}</ul>
         </div>)}
         {view.provider.state === "pending" ? <p>Reading limits…</p> : view.provider.state === "not_signed_in" ? <p>Not signed in to OMP</p> : view.provider.state === "unsupported" ? <p>Not reported for this account</p> : !view.segments.length ? <p>{errorText(view.provider.error)}</p> : null}
-        {view.provider.error && view.segments.length > 0 ? <p className="limits-error">Last check failed: {errorText(view.provider.error)}. {view.provider.fetched_at_ms === null ? "" : `Showing the values from ${formatAgo(view.provider.fetched_at_ms, now)}.`}</p> : null}
+        {view.provider.error && view.segments.length > 0 ? <p className="limits-error">Last check failed: {errorText(view.provider.error)}. {view.provider.fetched_at_ms === null ? "" : `Showing the report from ${formatReportDate(view.provider.fetched_at_ms)}.`}</p> : null}
       </section>)}
     </div> : null}
   </div>;

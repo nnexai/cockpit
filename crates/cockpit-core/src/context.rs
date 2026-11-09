@@ -19,6 +19,10 @@ use tokio::sync::Semaphore;
 use crate::InspectionError;
 use crate::extension_adapter::{SourcePaneAdapter, SourcePaneEvidence};
 use crate::projects::ProjectService;
+#[path = "context_changes.rs"]
+mod changes;
+pub(crate) use changes::index_watch;
+
 const MAX_DIRECTORY_SCAN: usize = 100_000;
 
 #[derive(Clone)]

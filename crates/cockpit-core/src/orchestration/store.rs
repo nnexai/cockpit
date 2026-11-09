@@ -240,6 +240,30 @@ impl OrchestrationStore {
     pub(crate) fn identity(&self) -> &str {
         &self.identity
     }
+    /// A path-derived store ID does not identify a directory incarnation.
+    /// Refuse observation if a watch path no longer names the open read handles.
+    pub(crate) fn revalidate_watch_directories(&self) -> Result<(), InspectionError> {
+        #[cfg(unix)]
+        {
+            use cap_std::fs::MetadataExt;
+            let unavailable = |error: std::io::Error| InspectionError::new("orchestration_watch", error.to_string());
+            let base = crate::project_store::open_dir_nofollow_absolute(&self.base).map_err(unavailable)?;
+            let tasks = base.open_dir_nofollow("tasks").map_err(unavailable)?;
+            let opened_base = self.store.state_dir().dir_metadata().map_err(unavailable)?;
+            let current_base = base.dir_metadata().map_err(unavailable)?;
+            let opened_tasks = self.tasks.dir_metadata().map_err(unavailable)?;
+            let current_tasks = tasks.dir_metadata().map_err(unavailable)?;
+            if (opened_base.dev(), opened_base.ino()) != (current_base.dev(), current_base.ino())
+                || (opened_tasks.dev(), opened_tasks.ino()) != (current_tasks.dev(), current_tasks.ino()) {
+                return Err(InspectionError::new("orchestration_watch", "Orchestration directory identity changed"));
+            }
+            Ok(())
+        }
+        #[cfg(not(unix))]
+        {
+            Err(InspectionError::new("orchestration_watch", "Orchestration directory identity cannot be verified on this platform"))
+        }
+    }
     #[cfg(test)]
     pub(crate) fn tasks_dir(&self) -> &Dir {
         &self.tasks

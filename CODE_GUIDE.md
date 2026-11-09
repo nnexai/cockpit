@@ -93,7 +93,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Change | Current owner |
 | --- | --- |
 | Session liaison lookup/start/reuse/resume/focus | `src/app/supervisor/useLiaison.ts`; `src/app/shell/useLiaisonNavigation.ts`; `crates/cockpit-host/src/orchestration_runtime.rs` |
-| Scoped notification observer and start/resume actions | `src/app/supervisor/useSupervisor.ts` |
+| Scoped notification observer and start/resume actions | `src/app/supervisor/useSupervisor.ts`; `src/app/supervisor/orchestrationChanges.ts`; Inbox shares the persistent stream controller |
 | Optional fullscreen Overview, shared task-history drill-down and conversation return | `src/app/supervisor/SupervisorView.tsx`; `src/app/shell/WorkbenchContent.tsx`; `src/app/shell/useWorkarea.ts` |
 | Compact terminal task rail, task history and read-only board | `src/app/supervisor/SupervisorTasks.tsx`; `TaskHistoryDetail.tsx` (record disclosure); `taskHistory.ts` (selected-task evidence projection); `src/app/layout/LeafHost.tsx`; `src/app/layout/TerminalLeaf.tsx` |
 | Task prerequisite graph and geometry | `src/app/supervisor/SupervisorGraph.tsx`; `src/app/supervisor/dependencies.ts`; `src/app/supervisor/dependencyLayout.ts` |
@@ -124,6 +124,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Browser delivery/drafts | `crates/cockpit-core/src/browser/delivery.rs`; `crates/cockpit-core/src/browser/drafts.rs`; `crates/cockpit-core/src/browser/drafts/service.rs` |
 | Owner startup state guard/feedback | `crates/cockpit-core/src/ephemeral.rs`; `crates/cockpit-core/src/browser_feedback.rs` |
 | Git status/actions | `crates/cockpit-core/src/space_git.rs`; `crates/cockpit-core/src/space_git_action.rs` |
+| Scoped local-change observation | `crates/cockpit-core/src/local_changes.rs`; domain plans in `context_changes.rs`, `notes/changes.rs`, `library/changes.rs`; Git/tag source `space_watch.rs`; `crates/cockpit-host/src/transport/local_changes.rs`; `src/app/localChanges.ts` |
 | Plugin service status | `crates/cockpit-core/src/space_services.rs`; reads `nnex.action-launcher`'s `persistent-panes.json` from Herdr's plugin state dir (`$XDG_STATE_HOME/herdr/plugins/…`, else `~/.local/state/herdr/plugins/…`, else the temporary directory's `herdr-state/plugins/…`; requires the same state-root environment as the Herdr server), caches unchanged registries, drops panes absent from the caller's live set and probes loopback health targets only |
 | Quota cache/services and display | `crates/cockpit-core/src/quota.rs`; `crates/cockpit-core/src/quota/`; `src/app/limits/` |
 | OMP quota parsing | `crates/cockpit-core/src/quota/parse.rs` |
@@ -288,9 +289,11 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 
 Rust DTOs → descriptor-derived domain renderers/validators → generated TypeScript → `src/client/operations.ts` argument/response mapping → browser HTTP or native invoke adapter → shared typed host handler → core service → identity-checked response. Host registry and stable typed errors are shared; adapters retain their transport origin, serialization, lifecycle and cancellation responsibilities.
 
-Four stream methods remain transport-local: `subscribeSession`, `openTerminal`, `subscribeWidgets` and `openBrowserView`. `src/client/browserViewDecoder.ts` shares browser event/frame identity and ordering decode only; release, cancellation and lifecycle stay in `src/client/browser.ts` and `src/client/native.ts`. Session reducer/pump, terminal streams and bounded Browser relay have separate host owners in the map above.
+Stream methods are transport-local: `subscribeSession`, `openTerminal`, `subscribeWidgets`, `openBrowserView` and scoped local-change subscriptions. `src/client/browserViewDecoder.ts` shares browser event/frame identity and ordering decode only; release, cancellation and lifecycle stay in `src/client/browser.ts` and `src/client/native.ts`. Session reducer/pump, terminal streams and bounded Browser relay have separate host owners in the map above.
 
-The shared session pump coalesces at most 32 already-queued `Changed` invalidations before an immediate authoritative snapshot read. It preserves the first stale/disconnected barrier and leaves events arriving during the read queued for the next snapshot; there is no debounce or new latency timer. Sidebar Git/tag polls retain their cadence and refresh/error behavior, but unchanged results do not publish new React state.
+The shared session pump coalesces at most 32 already-queued `Changed` invalidations before an immediate authoritative snapshot read. It preserves the first stale/disconnected barrier and leaves events arriving during the read queued for the next snapshot; there is no debounce or new latency timer. Visible Git/tag, Notes, Library and Context surfaces use scoped change notifications to invalidate their authoritative reads rather than recurring healthy-state polling.
+
+Idle quota, application-update and backend-status surfaces refresh on their relevant local triggers rather than a periodic healthy timer. Quota collection and an active update or open update dialog retain their bounded progress checks; remote quota changes and external installs may remain unseen until the next trigger.
 
 `POST /api/v1/sessions/{session_id}/space-services` is an Origin-checked read with `{ server_instance, pane_ids }` (at most 4096 resource IDs, each bounded by the host's resource-ID guard). It reads the plugin registry without fetching a Herdr snapshot. Returned pane IDs and optional registry tab IDs are joined against the frontend's current snapshot to derive Spaces; the response does not carry a Space ID. Probe history is scoped to server incarnation, pane, tab and launch time. Newly added panes receive at most two settlement reads, about one and three seconds after the debounced discovery read, to cover the plugin publishing its registry after creating the pane. Hidden pages/sidebars cancel pending reads, and empty or unprobed results never start recurring idle polling.
 

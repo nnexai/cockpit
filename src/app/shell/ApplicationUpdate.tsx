@@ -22,26 +22,54 @@ export function useApplicationUpdate(client: CockpitClient): ApplicationUpdateSt
   const [ticket, setTicket] = useState<string | null>(null);
   const mounted = useRef(true);
   const hasStatus = useRef(false);
-  const refresh = useCallback(async () => {
-    const next = await client.backendStatus();
-    if (mounted.current) { hasStatus.current = true; setStatus(next); setError(current => current?.startsWith("Could not refresh service status:") ? null : current); }
-    return next;
+  const pollingMode = useRef({ active: false, dialog: false });
+  const updatePollingMode = useRef<(() => void) | null>(null);
+  const inFlight = useRef<{ client: CockpitClient; promise: Promise<BackendSurfaceStatus> } | null>(null);
+  const currentClient = useRef(client);
+  currentClient.current = client;
+  const refresh = useCallback(() => {
+    if (inFlight.current?.client === client) return inFlight.current.promise;
+    const promise: Promise<BackendSurfaceStatus> = Promise.resolve().then(() => client.backendStatus()).then(next => {
+      if (mounted.current && currentClient.current === client) { hasStatus.current = true; setStatus(next); setError(current => current?.startsWith("Could not refresh service status:") ? null : current); }
+      return next;
+    }).finally(() => {
+      if (inFlight.current?.promise === promise) inFlight.current = null;
+    });
+    inFlight.current = { client, promise };
+    return promise;
   }, [client]);
   const restart = status?.restart;
   const active = pending || Boolean(ticket && restart?.started_at !== ticket) || restart?.result.state === "running";
+  pollingMode.current = { active, dialog };
   useEffect(() => {
     mounted.current = true;
     let timer: number | undefined;
     let stopped = false;
+    let pendingPoll = false, refreshAgain = false;
+    const isPageHidden = () => document.visibilityState === "hidden";
     const poll = async () => {
-      try { await refresh(); } catch (cause) { if (hasStatus.current && !active && !stopped) setError(`Could not refresh service status: ${message(cause)}`); }
-      if (!stopped) timer = window.setTimeout(poll, active ? 1000 : dialog ? 2000 : 600000);
+      if (stopped || isPageHidden()) return;
+      if (pendingPoll) { refreshAgain = true; return; }
+      pendingPoll = true;
+      try { await refresh(); }
+      catch (cause) { if (hasStatus.current && !pollingMode.current.active && !stopped) setError(`Could not refresh service status: ${message(cause)}`); }
+      pendingPoll = false;
+      if (stopped || isPageHidden()) return;
+      if (refreshAgain) { refreshAgain = false; void poll(); }
+      else if (pollingMode.current.active || pollingMode.current.dialog) timer = window.setTimeout(poll, pollingMode.current.active ? 1000 : 2000);
     };
     const focus = () => { clearTimeout(timer); void poll(); };
+    const visibility = () => { clearTimeout(timer); if (isPageHidden()) refreshAgain = false; else void poll(); };
+    updatePollingMode.current = () => {
+      clearTimeout(timer);
+      if ((pollingMode.current.active || pollingMode.current.dialog) && !pendingPoll) void poll();
+    };
     void poll();
     window.addEventListener("focus", focus);
-    return () => { stopped = true; mounted.current = false; clearTimeout(timer); window.removeEventListener("focus", focus); };
-  }, [refresh, active, dialog]);
+    document.addEventListener("visibilitychange", visibility);
+    return () => { stopped = true; mounted.current = false; updatePollingMode.current = null; clearTimeout(timer); window.removeEventListener("focus", focus); document.removeEventListener("visibilitychange", visibility); };
+  }, [refresh]);
+  useEffect(() => { updatePollingMode.current?.(); }, [active, dialog]);
   useEffect(() => {
     if (ticket === null) return;
     if (restart?.started_at === ticket && restart.result.state !== "running") { setTicket(null); return; }

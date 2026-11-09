@@ -26,7 +26,7 @@ function text(value: string) {
 function submit() { host.querySelector(".inbox:not([hidden]) form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); }
 const image = { image_id: "image-1", mime_type: "image/png", width: 1, height: 1, bytes: 3 };
 function imageFixture() {
-  const { client, waits } = fixture();
+  const { client, waits, errors } = fixture();
   client.orchestrationImagePut = vi.fn(async () => image);
   vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
     Object.defineProperty(this, "result", { configurable: true, value: "data:image/png;base64,YWJj" });
@@ -38,7 +38,7 @@ function imageFixture() {
   }
   vi.stubGlobal("URL", TestURL);
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => { callback(0); return 1; });
-  return { client, waits };
+  return { client, waits, errors };
 }
 function pickImages(...files: File[]) {
   const input = host.querySelector<HTMLInputElement>('input[type="file"]')!;
@@ -58,8 +58,9 @@ function pasteImage(file: File, withText: boolean) {
 }
 function fixture() {
   const waits: Array<(value: OrchestrationWaitResponse) => void> = [];
-  const client = { orchestrationInbox: vi.fn(async ({ session_id }: { session_id: string }) => view(session_id)), orchestrationLiaisonLookup: vi.fn(async () => ({ status: "resolved", preferred_root_id: "owner", lookup_revision: 1, roots: [] })), orchestrationWait: vi.fn((_request: unknown, signal?: AbortSignal) => new Promise<OrchestrationWaitResponse>((resolve, reject) => { waits.push(resolve); signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true }); })), orchestrationMutate: vi.fn(), orchestrationAgentSend: vi.fn(async () => {}) } as unknown as CockpitClient;
-  return { client, waits };
+  const errors: Array<(error: CockpitClientError) => void> = [];
+  const client = { orchestrationInbox: vi.fn(async ({ session_id }: { session_id: string }) => view(session_id)), orchestrationLiaisonLookup: vi.fn(async () => ({ status: "resolved", preferred_root_id: "owner", lookup_revision: 1, roots: [] })), orchestrationWait: vi.fn(), subscribeLocalChanges: vi.fn<CockpitClient["subscribeLocalChanges"]>(async (_scope, onEvent, onError) => { errors.push(onError); const deliver = (kind: "ready" | "changed") => { void onEvent({ stream_id: "inbox", sequence: kind === "ready" ? 1 : 2, kind, topics: ["orchestration"] }).catch(error => onError(new CockpitClientError("stream_error", "Read failed", { cause: error }))); }; waits.push(() => deliver("changed")); deliver("ready"); return { close: () => {} }; }), orchestrationMutate: vi.fn(), orchestrationAgentSend: vi.fn(async () => {}) } as unknown as CockpitClient;
+  return { client, waits, errors };
 }
 function directFixture(options?: { attention: AgentAttentionState; onOpenLocation: (location: InboxLocation) => Promise<void> }) {
   const target = (pane: string, name: string, stamp = "now") => ({ endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: pane, terminal_id: `terminal-${pane}`, agent_kind: name, agent_name: name, native_session_id: null, native_session_file: null, state_changed_at: stamp });
@@ -93,6 +94,44 @@ function openSession() {
 }
 
 describe("Inbox", () => {
+  it("backs off failed inbox bootstrap reads", async () => {
+    vi.useFakeTimers();
+    const { client } = fixture(), app = setup(client);
+    const read = vi.mocked(client.orchestrationInbox).mockRejectedValue(new Error("offline"));
+    try {
+      await flush(() => app.render());
+      for (const delay of [1500, 3000, 6000, 12000, 24000, 30000]) {
+        const before = read.mock.calls.length;
+        await act(async () => { await vi.advanceTimersByTimeAsync(delay - 1); });
+        expect(read).toHaveBeenCalledTimes(before);
+        await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+        expect(read).toHaveBeenCalledTimes(before + 1);
+      }
+      expect(client.orchestrationWait).not.toHaveBeenCalled();
+    } finally {
+      await flush(() => root!.unmount()); root = null;
+      vi.useRealTimers();
+    }
+  });
+  it("keeps a draft but blocks delivery when the stream disconnects", async () => {
+    const { client, errors } = fixture(), app = setup(client);
+    await flush(() => app.render());
+    await flush(() => text("Retain this request"));
+    await flush(() => errors[0]!(new CockpitClientError("stream_error", "Disconnected")));
+    expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Retain this request");
+    await flush(submit);
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
+    expect(host.querySelector<HTMLButtonElement>(".inbox-send")!.disabled).toBe(true);
+  });
+  it("refreshes runtime-only changes without reopening the durable stream", async () => {
+    const f = directFixture();
+    await flush(() => f.app.render());
+    expect(f.client.orchestrationInbox).toHaveBeenCalledTimes(2);
+    await flush(() => f.app.render("a", true, f.snapshot("working", 2)));
+    expect(f.client.orchestrationInbox).toHaveBeenCalledTimes(3);
+    expect(f.client.subscribeLocalChanges).toHaveBeenCalledTimes(1);
+    expect(f.client.orchestrationWait).not.toHaveBeenCalled();
+  });
   it("shows the chronological conversation and linked task evidence", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
     const owner = { kind: "owner" as const, run_id: "owner", harness: "omp" };
@@ -257,14 +296,17 @@ describe("Inbox", () => {
     await flush(() => f.choose("Beta")); await flush(() => focus.resolve());
     expect(completion.seen).not.toHaveBeenCalled();
   });
-  it("waits session-wide and refetches only when changed", async () => {
+  it("keeps a session-wide stream quiet and refetches on changes", async () => {
+    vi.useFakeTimers();
     const { client, waits } = fixture(), app = setup(client);
     await flush(() => app.render());
-    expect(client.orchestrationWait).toHaveBeenCalledWith({ root_id: null, after_revision: 1, after_tasks_token: "token", timeout_ms: 30000 }, expect.any(AbortSignal));
-    await flush(() => waits[0]!({ revision: 1, tasks_token: "token", changed: false }));
-    expect(client.orchestrationInbox).toHaveBeenCalledTimes(1);
-    await flush(() => waits[1]!({ revision: 2, tasks_token: "changed", changed: true }));
+    expect(client.subscribeLocalChanges).toHaveBeenCalledWith(expect.objectContaining({ kind: "orchestration", root_id: null, session_id: "a", server_instance: "server", state_store_id: "store-a" }), expect.any(Function), expect.any(Function), expect.any(AbortSignal));
     expect(client.orchestrationInbox).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(100_000); });
+    expect(client.orchestrationInbox).toHaveBeenCalledTimes(2);
+    await flush(() => waits[0]!({ revision: 2, tasks_token: "changed", changed: true }));
+    expect(client.orchestrationInbox).toHaveBeenCalledTimes(3);
+    expect(client.orchestrationWait).not.toHaveBeenCalled();
   });
   it("uses full projected titles and sizes the restored draft", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
@@ -372,7 +414,7 @@ describe("Inbox", () => {
     ];
     const lookup = deferredLookup();
     vi.mocked(client.orchestrationLiaisonLookup).mockReturnValue(lookup.promise);
-    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2 });
+    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2 });
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 3, result: { result: "message", to_run_id: "unknown", seq: 1, duplicate: false, stale: false } });
     await flush(() => app.render());
     const select = host.querySelector<HTMLSelectElement>('select[aria-label="Owner"]')!;
@@ -394,7 +436,7 @@ describe("Inbox", () => {
       { ...inbox.owners[0]!, root_id: "starting", availability: "starting" },
       { ...inbox.owners[0]!, root_id: "worker", kind: "worker" },
     ];
-    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, owners: inbox.owners.map(o => o.root_id === "unknown" ? { ...o, availability: "absent" as const } : o) });
+    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, owners: inbox.owners.map(o => o.root_id === "unknown" ? { ...o, availability: "absent" as const } : o) });
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 3, result: { result: "message", to_run_id: "starting", seq: 1, duplicate: false, stale: false } });
     await flush(() => app.render());
     const select = host.querySelector<HTMLSelectElement>('select[aria-label="Owner"]')!;
@@ -550,7 +592,7 @@ describe("Inbox", () => {
     const { client, waits } = fixture(), app = setup(client), inbox = view("a");
     const question = { run_id: "owner", question_message_id: "q", asked_at: "now", text: { text: "Choose", source: { kind: "owner" as const, run_id: "owner", harness: "omp" }, message_id: "q", at: "now", images: [] }, choices: ["Blue"], receipt: { status: "unresolved" as const } };
     inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [question], recommendation: null, reply: null, unread_interims: [], unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
-    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, state: "handled", need: null, questions: [] }] });
+    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, state: "handled", need: null, questions: [] }] });
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 2, result: { result: "message", to_run_id: "owner", seq: 1, duplicate: false, stale: false } });
     await flush(() => app.render());
     await flush(() => host.querySelector<HTMLButtonElement>(".inbox-row")!.click());
@@ -566,7 +608,7 @@ describe("Inbox", () => {
     const question = (run: string) => ({ run_id: run, question_message_id: "shared", asked_at: "now", text: { text: `Question from ${run}`, source: { kind: "owner" as const, run_id: run, harness: "omp" }, message_id: "shared", at: "now", images: [] }, choices: [], receipt: { status: "unresolved" as const } });
     const first = question("owner"), second = question("other");
     inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner", "other"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [first, second], recommendation: null, reply: null, unread_interims: [], unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
-    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, questions: [second, first] }] });
+    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, questions: [second, first] }] });
     vi.mocked(client.orchestrationMutate).mockResolvedValue({ revision: 3, result: { result: "message", to_run_id: "other", seq: 1, duplicate: false, stale: false } });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Work"))!.click());
@@ -590,7 +632,7 @@ describe("Inbox", () => {
     const question = (run: string) => ({ run_id: run, question_message_id: "shared", asked_at: "now", text: { text: `Question from ${run}`, source: { kind: "owner" as const, run_id: run, harness: "omp" }, message_id: "shared", at: "now", images: [] }, choices: [], receipt: { status: "unresolved" as const } });
     const first = question("owner"), second = question("other");
     inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner", "other"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [first, second], recommendation: null, reply: null, unread_interims: [], unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
-    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, questions: [first] }] });
+    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce(inbox).mockResolvedValue({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, questions: [first] }] });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Work"))!.click());
     await flush(() => host.querySelectorAll<HTMLButtonElement>('[role="radio"]')[1]!.click());
@@ -607,7 +649,7 @@ describe("Inbox", () => {
     const inbox = view("a");
     const question = { run_id: "owner", question_message_id: "old", asked_at: "now", text: { text: "Which one?", source: { kind: "owner" as const, run_id: "owner", harness: "omp" }, message_id: "old", at: "now", images: [] }, choices: [], receipt: { status: "unresolved" as const } };
     inbox.threads = [{ thread_id: "thread", state: "needs_you", need: "decision", owner_root_ids: ["owner"], title: { text: "Work", source: { kind: "recorded" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [question], recommendation: null, reply: null, unread_interims: [], unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "now" }];
-    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, questions: [] }] });
+    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce({ ...inbox, revision: 2, threads: [{ ...inbox.threads[0]!, questions: [] }] });
     await flush(() => app.render());
     await flush(() => Array.from(host.querySelectorAll("button")).find(b => b.textContent?.includes("Work"))!.click());
     expect(host.querySelector('textarea[aria-label="Answer to the selected question"]')).not.toBeNull();
@@ -709,6 +751,7 @@ describe("Inbox", () => {
     expect(acknowledge().textContent).toBe("Acknowledge");
     expect(acknowledge().disabled).toBe(true);
     expect(vi.mocked(client.orchestrationMutate).mock.calls[0]![0].action).toMatchObject({ action: "thread_handoff", thread_id: "first" });
+    vi.mocked(client.orchestrationInbox).mockResolvedValue({ ...inbox, revision: 2 });
     await flush(() => finishFollowup({ revision: 2, result: { result: "message", to_run_id: "owner", seq: 1, duplicate: false, stale: false } }));
     await flush(() => acknowledge().click());
     expect(acknowledge().textContent).toBe("Acknowledging…");
@@ -822,7 +865,7 @@ describe("Inbox", () => {
     const target = { endpoint_identity: "endpoint", workspace_id: "space", tab_id: "tab", pane_id: "pane", terminal_id: "terminal", agent_kind: "Agent", agent_name: "Agent", native_session_id: null, native_session_file: null, state_changed_at: "now" };
     const agent = { workspace_id: "space", workspace_label: "Space", tab_id: "tab", tab_label: "Tab", pane_id: "pane", agent_name: "Agent", agent_status: "idle", state_changed_at: "now", expected_target: target };
     const inbox = view("a"); inbox.unmanaged_agents = [agent];
-    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce({ ...inbox, revision: 2, unmanaged_agents: [{ ...agent, expected_target: { ...target, native_session_id: "replacement" } }] });
+    vi.mocked(client.orchestrationInbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce(inbox).mockResolvedValueOnce({ ...inbox, revision: 2, unmanaged_agents: [{ ...agent, expected_target: { ...target, native_session_id: "replacement" } }] });
     const snapshot = { session_id: "a", server_instance: "server", panes: [{ id: "pane", terminal_id: "terminal" }], agents: [{ pane_id: "pane", space_id: "space", tab_id: "tab", name: "Agent", status: "idle", state_change_seq: 1, focused: false }] } as unknown as SessionSnapshotResponse;
     const app = setup(client, "a", snapshot);
     await flush(() => app.render());

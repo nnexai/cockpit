@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
 import type { InboxEntry, InboxLocation, InboxQuestion, InboxText, InboxThread, InboxView, OrchestrationAction, SessionSnapshotResponse, UnmanagedAgent } from "../../protocol/generated/v1";
 import type { AgentAttentionState } from "../session/agentAttention";
+import { orchestrationChanges } from "../supervisor/orchestrationChanges";
 import { agentContext, type AgentContext } from "../session/agentContext";
 import { deriveAgentQueue } from "../sidebar/agentAttentionModel";
 import { InboxQuestionCard } from "./InboxQuestionCard";
@@ -76,9 +77,14 @@ export function Inbox(props: InboxProps) {
 }
 
 function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpenLocation, onAttentionChange, attention, snapshot }: Omit<InboxProps, "active" | "sessionId"> & { sessionId: string; visible: boolean; current: boolean }) {
-  const [view, setView] = useState<InboxView | null>(null);
+  const [storedView, setView] = useState<InboxView | null>(null);
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [observing, setObserving] = useState(false);
+  const [observedServer, setObservedServer] = useState<string | null>(null);
+  const view: InboxView | null = storedView && (!observing || !current || snapshot?.session_id !== sessionId || snapshot.server_instance !== observedServer) && storedView.observation.status === "fresh"
+    ? { ...storedView, observation: { status: "unavailable", error: { code: "stream_unavailable", message: loadError || "Inbox observation is not current" } } }
+    : storedView;
   const [selected, setSelected] = useState<string | null>(null);
   const [mobileDetail, setMobileDetail] = useState(false);
   const [wideDetail, setWideDetail] = useState(false);
@@ -123,16 +129,15 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const wake = useRef<(() => void) | null>(null);
   const refreshVersion = useRef(0);
   const revisionFloor = useRef(0);
-  const pendingRead = useRef<Promise<InboxView> | null>(null);
   const mounted = useRef(true);
   const lock = useRef(false);
-  const liveScope = useRef({ current, snapshot, view, attention });
+  const liveScope = useRef({ current, snapshot, view, attention, observing });
   const backRef = useRef<HTMLButtonElement>(null);
   const newRef = useRef<HTMLButtonElement>(null);
   const originRef = useRef<HTMLButtonElement | null>(null);
   const detailRef = useRef<HTMLElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  liveScope.current = { current, snapshot, view, attention };
+  liveScope.current = { current, snapshot, view, attention, observing };
   const runtimeIdentity = snapshot?.session_id === sessionId ? JSON.stringify([snapshot.server_instance, snapshot.spaces?.map(space => [space.id, space.label]), snapshot.tabs?.map(tab => [tab.id, tab.label]), snapshot.panes.map(pane => [pane.id, pane.terminal_id, pane.space_id, pane.tab_id, pane.agent, pane.agent_status]), snapshot.agents.map(agent => [agent.pane_id, agent.name, agent.status, agent.state_change_seq, agent.native_session_id])]) : null;
   const runtimeIdentityRef = useRef(runtimeIdentity);
   runtimeIdentityRef.current = runtimeIdentity;
@@ -151,49 +156,34 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     if (mobileDetail && backRef.current?.offsetParent !== null) backRef.current?.focus();
   }, [mobileDetail]);
   useEffect(() => { if (!current) { selectionVersion.current++; setDirectOutcome(null); } }, [current]);
+  const serverInstance = snapshot?.session_id === sessionId ? snapshot.server_instance : null;
   useEffect(() => {
-    if (!current) return;
-    let live = true, timer: number | undefined;
-    const sleep = () => new Promise<void>(resolve => { timer = window.setTimeout(resolve, 1500); });
-    const loop = async () => {
-      let floor = revisionFloor.current;
-      while (live) {
-        try {
-          const started = refreshVersion.current;
-          const readRuntimeIdentity = pendingRead.current ? null : runtimeIdentityRef.current;
-          const read = pendingRead.current ?? client.orchestrationInbox({ session_id: sessionId });
-          pendingRead.current = read;
-          let next: InboxView;
-          try { next = await read; } finally { if (pendingRead.current === read) pendingRead.current = null; }
-          if (!live) return;
-          if (next.session_id !== sessionId || next.revision < Math.max(floor, revisionFloor.current)) { await sleep(); continue; }
-          if (started !== refreshVersion.current) continue;
-          floor = next.revision; revisionFloor.current = floor; setView(next); setObservedRuntimeIdentity(readRuntimeIdentity); setLoadError("");
-          let revision = next.revision, token = next.tasks_token;
-          while (live) {
-            const controller = new AbortController();
-            const interrupt = () => controller.abort();
-            wake.current = interrupt;
-            try {
-              const result = await client.orchestrationWait({ root_id: null, after_revision: revision, after_tasks_token: token, timeout_ms: 30_000 }, controller.signal);
-              if (!live) return;
-              if (controller.signal.aborted) break;
-              revision = result.revision; token = result.tasks_token; floor = Math.max(floor, revision);
-              if (result.changed) break;
-            } catch (error) {
-              if (!live) return;
-              if (controller.signal.aborted) break;
-              throw error;
-            } finally {
-              if (wake.current === interrupt) wake.current = null;
-            }
-          }
-        } catch (e) { if (!live) return; setLoadError(e instanceof Error ? e.message : "Inbox unavailable"); await sleep(); }
-      }
+    setObserving(false);
+    if (!current || !serverInstance) return;
+    let live = true, store = view?.state_store_id;
+    const read = async (valid: () => boolean, authoritative: boolean) => {
+      if (authoritative && live && valid()) { liveScope.current.observing = false; setObserving(false); }
+      const started = refreshVersion.current;
+      const readRuntimeIdentity = runtimeIdentityRef.current;
+      const next = await client.orchestrationInbox({ session_id: sessionId });
+      if (!live || !valid()) return;
+      if (next.session_id !== sessionId || next.revision < revisionFloor.current || (store !== undefined && next.state_store_id !== store)) throw new Error("Inbox observation identity or revision changed");
+      store ??= next.state_store_id;
+      if (started !== refreshVersion.current) return;
+      revisionFloor.current = next.revision; setView(next); setObservedRuntimeIdentity(readRuntimeIdentity);
+      if (authoritative) { setLoadError(""); setObservedServer(serverInstance); setObserving(true); }
     };
-    void loop();
-    return () => { live = false; wake.current?.(); clearTimeout(timer); };
-  }, [client, sessionId, current]);
+    const changes = orchestrationChanges(client, async () => {
+      await read(() => live, false);
+      if (!live || !store) throw new Error("Inbox observation cancelled");
+      return { kind: "orchestration", session_id: sessionId, server_instance: serverInstance, state_store_id: store, root_id: null };
+    }, valid => read(valid, true), error => {
+      if (live) { liveScope.current.observing = false; setObserving(false); setLoadError(error instanceof Error ? error.message : "Inbox unavailable"); }
+    });
+    const refresh = () => { void changes.refresh().catch(() => {}); };
+    wake.current = refresh;
+    return () => { live = false; setObserving(false); changes.close(); if (wake.current === refresh) wake.current = null; };
+  }, [client, sessionId, current, serverInstance]);
   useEffect(() => { let live = true; void client.orchestrationLiaisonLookup({ session_id: sessionId, selected_root_id: null }).then(result => { if (live && result.status === "resolved" && result.preferred_root_id) setPreferredOwner(result.preferred_root_id); }).catch(() => {}); return () => { live = false; }; }, [client, sessionId]);
   const previousRuntime = useRef<string | null>(null);
   useEffect(() => {
@@ -335,7 +325,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     }).catch(e => { if (mounted.current && selectionVersion.current === attempt) setError(e instanceof Error ? e.message : "Could not open session"); });
   };
   const execute = async (operation: Pending) => {
-    if (lock.current || !view || operation.store !== view.state_store_id) { if (view && operation.store !== view.state_store_id) setError("Session state changed. The original request has been retained and cannot be retried here."); return; }
+    if (!current || !observing || view?.observation.status !== "fresh" || snapshot?.session_id !== sessionId || lock.current || !view || operation.store !== view.state_store_id) { if (view && operation.store !== view.state_store_id) setError("Session state changed. The original request has been retained and cannot be retried here."); return; }
     lock.current = true; setBusy(true); setError(""); setPending(operation);
     try {
       const response = await client.orchestrationMutate({ session_id: sessionId, expected_revision: null, action: operation.action });
@@ -412,7 +402,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
           taskRevision = found.task.task_revision;
         } catch (e) { lock.current = false; setError(e instanceof Error ? e.message : "Task revision unavailable"); setBusy(false); return; }
         lock.current = false; setBusy(false);
-        if (!liveScope.current.current || liveScope.current.snapshot?.session_id !== sessionId) { setError("Session changed. Your draft is preserved."); return; }
+        if (!liveScope.current.current || !liveScope.current.observing || liveScope.current.snapshot?.session_id !== sessionId || liveScope.current.snapshot.server_instance !== serverInstance) { setError("Session changed. Your draft is preserved."); return; }
       }
       const binding = !thread && (attachedSpace || repository.trim() || branch.trim() || base.trim()) ? { repository_id: repository.trim() || null, workspace_id: attachedSpace?.id ?? null, branch: branch.trim() || null, base_ref: base.trim() || null } : undefined;
       action = { action: "thread_handoff", message_id: crypto.randomUUID(), thread_id: thread?.thread_id ?? crypto.randomUUID(), to_run_id: target, text, ...(recipient ? { recipient: "task_worker" as const } : {}), ...(images.ids.length ? { images: images.ids } : {}), ...(task && taskRevision ? { task_id: task.task_id, expected_task_revision: taskRevision } : {}), ...(binding ? { binding } : {}) };
@@ -521,7 +511,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     </div>;
   };
   const recommendationNote = thread?.recommendation && !recommendationIsChoice ? <div className="inbox-recommendation" role="note"><UiIcon name="spark" /><InboxFeedback text={thread.recommendation.text} /></div> : null;
-  const sendControl = pending ? <button type="button" className="inbox-send is-retry" disabled={busy || snapshot?.session_id !== sessionId} onClick={() => void execute(pending)}>Retry original request</button> : <button type="submit" className="inbox-send" disabled={!view || snapshot?.session_id !== sessionId || mode === "choose" || (!text.trim() && ((mode !== "new" && mode !== "followup") || images.ids.length === 0)) || ((mode === "new" || mode === "followup") && !images.ready) || busy || view.observation.status !== "fresh" || (!!direct && (!directReady || !!visibleOutcome))}><UiIcon name="send" />{mode === "answer" ? "Answer" : mode === "new" ? "Start" : mode === "direct" ? "Send direct" : "Send"}</button>;
+  const sendControl = pending ? <button type="button" className="inbox-send is-retry" disabled={!observing || view?.observation.status !== "fresh" || busy || snapshot?.session_id !== sessionId} onClick={() => void execute(pending)}>Retry original request</button> : <button type="submit" className="inbox-send" disabled={!view || snapshot?.session_id !== sessionId || mode === "choose" || (!text.trim() && ((mode !== "new" && mode !== "followup") || images.ids.length === 0)) || ((mode === "new" || mode === "followup") && !images.ready) || busy || view.observation.status !== "fresh" || (!!direct && (!directReady || !!visibleOutcome))}><UiIcon name="send" />{mode === "answer" ? "Answer" : mode === "new" ? "Start" : mode === "direct" ? "Send direct" : "Send"}</button>;
   const composer = (
       <form className="inbox-compose" data-mode={mode} data-result-followup={!!thread?.unread_result_message_id && !followupOpen && !questions.length && !pending && !error || undefined} data-dragging={dragging || undefined} onDragOver={e => { if ((mode === "new" || mode === "followup") && current && view?.image_limits && !pending && !busy && Array.from(e.dataTransfer.types).includes("Files")) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; setDragging(true); } }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false); }} onDrop={e => { setDragging(false); if ((mode === "new" || mode === "followup") && current && view?.image_limits && !pending && !busy && e.dataTransfer.files.length) { e.preventDefault(); images.add(e.dataTransfer.files); } }} onSubmit={e => { e.preventDefault(); void send(); }}>
         <div className="inbox-compose-head">

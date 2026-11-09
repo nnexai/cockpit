@@ -2177,7 +2177,8 @@ describe("browser/native orchestration parity", () => {
       await expect(client.orchestrationMutate({ session_id: "session", expected_revision: null, action })).resolves.toEqual(response);
       expect(transport === "browser" ? browserCall : nativeCall).toHaveBeenCalledOnce();
     }
-    const bad = { ...snapshot, runs: [{ ...codeRun, integration: { ...integrated, accepted_result_message_id: "wrong-result" } }] };
+    const { messages: _messages, ...withoutMessages } = snapshot;
+    const bad = { ...withoutMessages, runs: [{ kind: "full", run: { ...codeRun, integration: { ...integrated, accepted_result_message_id: "wrong-result" } } }] };
     const client = transport === "browser" ? createBrowserClient(vi.fn(async () => new Response(JSON.stringify(bad))))
       : createNativeClient(vi.fn(async () => bad));
     await expect(client.orchestrationSnapshot({ session_id: "session", root_id: "root" })).rejects.toMatchObject({ code: "malformed_response" });
@@ -2216,9 +2217,51 @@ describe("browser/native orchestration parity", () => {
   const mutationRequest = { session_id: "session", expected_revision: 2, action: { action: "cancel_run" as const, run_id: "run" } };
   const waitRequest = { root_id: "root", after_revision: 2, after_tasks_token: hash, timeout_ms: 30_000 };
 
+  it.each(["browser", "native"] as const)("uses a strict lean overview and scoped history on %s", async transport => {
+    const { messages: _messages, ...withoutMessages } = snapshot;
+    const overview = { ...withoutMessages, runs: withoutMessages.runs.map(run => ({ kind: "full", run })) };
+    const request = { session_id: "session", root_id: "root", task_id: assignmentTaskId, state_store_id: snapshot.state_store_id };
+    const history = { session_id: request.session_id, root_id: request.root_id, task_id: request.task_id, state_store_id: snapshot.state_store_id, revision: snapshot.revision, digest: hash, not_modified: false, runs: [], messages: [], cleanup: [], task_ownership: [], unreflected_inputs: [] };
+    let payload: unknown = overview;
+    const browserCall = vi.fn(async () => new Response(JSON.stringify(payload)));
+    const nativeCall = vi.fn(async () => payload);
+    const client = transport === "browser" ? createBrowserClient(browserCall) : createNativeClient(nativeCall);
+    await expect(client.orchestrationSnapshot(snapshotRequest)).resolves.toEqual(overview);
+    payload = { ...overview, messages: snapshot.messages };
+    await expect(client.orchestrationSnapshot(snapshotRequest)).rejects.toMatchObject({ code: "malformed_response" });
+    payload = history;
+    await expect(client.orchestrationTaskHistory(request)).resolves.toEqual(history);
+    payload = { ...history, not_modified: true };
+    await expect(client.orchestrationTaskHistory(request)).rejects.toMatchObject({ code: "malformed_response" });
+    await expect(client.orchestrationTaskHistory({ ...request, known_digest: hash })).resolves.toEqual(payload);
+    payload = { ...history, not_modified: true, runs: [codeRun] };
+    await expect(client.orchestrationTaskHistory({ ...request, known_digest: hash })).rejects.toMatchObject({ code: "malformed_response" });
+    for (const bad of [{ ...history, task_id: "other" }, { ...history, root_id: "other" },
+      { ...history, session_id: "other" }, { ...history, messages: "bad" }, { ...history, unexpected: true }]) {
+      payload = bad;
+      await expect(client.orchestrationTaskHistory(request)).rejects.toMatchObject({ code: "malformed_response" });
+    }
+  });
+
+  it.each(["browser", "native"] as const)("decodes launched task history with the capability receipt omitted on %s", async transport => {
+    const request = { session_id: "session", state_store_id: hash, root_id: "root", task_id: "task" };
+    const launchedRun = { ...snapshot.runs[0]!, dispatch: { ...snapshot.runs[0]!.dispatch!, latch: null, latch_state: "released" } };
+    const history = { ...request, revision: snapshot.revision, digest: hash, not_modified: false,
+      runs: [launchedRun], messages: [message], cleanup: [], task_ownership: snapshot.task_ownership, unreflected_inputs: [] };
+    const client = transport === "browser"
+      ? createBrowserClient(vi.fn(async () => new Response(JSON.stringify(history))))
+      : createNativeClient(vi.fn(async () => history));
+    const decoded = await client.orchestrationTaskHistory(request);
+    expect(decoded.runs[0]!.dispatch?.latch).toBeNull();
+    expect(decoded.runs[0]!.dispatch?.latch_state).toBe("released");
+    expect(decoded.messages).toEqual([message]);
+  });
+
   it.each(["browser", "native"] as const)("rejects malformed responses and foreign sessions on %s", async transport => {
-    for (const badSnapshot of [{ ...snapshot, session_id: "foreign" },
-      replaceField(snapshot, ["runs", 0, "stage"], "ready")]) {
+    const { messages: _messages, ...withoutMessages } = snapshot;
+    const overview = { ...withoutMessages, runs: withoutMessages.runs.map(run => ({ kind: "full", run })) };
+    for (const badSnapshot of [{ ...overview, session_id: "foreign" },
+      replaceField(overview, ["runs", 0, "run", "stage"], "ready")]) {
       const client = transport === "browser" ? createBrowserClient(vi.fn(async () => new Response(JSON.stringify(badSnapshot)))) : createNativeClient(vi.fn(async () => badSnapshot));
       await expect(client.orchestrationSnapshot(snapshotRequest)).rejects.toMatchObject({ code: "malformed_response" });
     }

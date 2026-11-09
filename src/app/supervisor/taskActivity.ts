@@ -1,9 +1,10 @@
-import type { OrchestrationSnapshot, TaskView } from "../../protocol/generated/v1";
+import type { TaskView } from "../../protocol/generated/v1";
+import type { SupervisorOverview } from "./useSupervisor";
 
 export type TaskActivity = { kind: string; word: string; detail: string };
 
 /** Durable lane and live observation are independent; never infer activity from a lane. */
-export function taskActivity(view: TaskView, snapshot: OrchestrationSnapshot | null, rootId: string | null, fresh: boolean): TaskActivity | null {
+export function taskActivity(view: TaskView, snapshot: SupervisorOverview | null, rootId: string | null, fresh: boolean): TaskActivity | null {
   if (view.task.checked) return null;
   const unique = snapshot?.board?.root_id === rootId && snapshot.board.tasks.filter(item => item.task.task_id === view.task.task_id).length === 1;
   const run = snapshot && rootId && unique && view.current_run_id

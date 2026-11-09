@@ -1,7 +1,7 @@
 import { parseVoiceConnectRequest, parseVoiceConnectResponse, parseVoiceEventsRequest, parseVoiceEventsResponse, parseVoiceControlRequest } from "./voiceProtocol";
 import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./notesProtocol";
 import {
-  matchOrchestrationSnapshot, parseOrchestrationSnapshotRequest, parseOrchestrationMutationRequest, 
+  matchOrchestrationOverview, matchTaskHistoryMessages, parseTaskHistoryRequest, parseOrchestrationSnapshotRequest, parseOrchestrationMutationRequest,
   parseOrchestrationMutationResponse, parseOrchestrationWaitRequest, parseOrchestrationWaitResponse,
   parseLiaisonLookupRequest, parseLiaisonLookupResponse, parseInboxRequest, matchInboxView, parseAgentSendTarget,
   parseOrchestrationImagePut, parseOrchestrationImageRead, parseMessageImage, matchOrchestrationImageMedia,
@@ -80,7 +80,7 @@ import type { FocusRequest, ResourceMutationRequest, SpaceGitActionRequest, Spac
 import { widgetAbortable } from "./widgetTransport";
 
 type Backend = "browser" | "native";
-type StreamOperation = "subscribeWidgets" | "subscribeSession" | "openTerminal" | "openBrowserView" | "updateAndRelaunch";
+type StreamOperation = "subscribeWidgets" | "subscribeSession" | "subscribeLocalChanges" | "openTerminal" | "openBrowserView" | "updateAndRelaunch";
 type OperationName = Exclude<keyof CockpitClient, StreamOperation>;
 export type RequestOperations = Pick<CockpitClient, OperationName>;
 
@@ -188,7 +188,19 @@ const operations: OperationTable = {
         operation: "orchestration snapshot",
         http: { method: "GET", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration${query}` },
         tauri: { command: "orchestration_snapshot", args: () => ({ request: body }) },
-        parse: response => matchOrchestrationSnapshot(response, body),
+        parse: response => matchOrchestrationOverview(response, body),
+      };
+    },
+  },
+  orchestrationTaskHistory: { nativeAbort: "read",
+    encode(_backend, value, signal) {
+      signal?.throwIfAborted();
+      const body = parseTaskHistoryRequest(value);
+      return {
+        operation: "orchestration task history",
+        http: { method: "GET", route: () => `/api/v1/sessions/${encodeURIComponent(body.session_id)}/orchestration/tasks/${encodeURIComponent(body.task_id)}/history?root_id=${encodeURIComponent(body.root_id)}&state_store_id=${encodeURIComponent(body.state_store_id)}${body.known_digest ? `&known_digest=${encodeURIComponent(body.known_digest)}` : ""}`, signal: () => signal },
+        tauri: { command: "orchestration_task_history", args: () => ({ request: body }) },
+        parse: response => { signal?.throwIfAborted(); return matchTaskHistoryMessages(response, body); },
       };
     },
   },

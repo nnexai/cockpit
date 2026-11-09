@@ -108,7 +108,7 @@ function WaitingDetail({ waiting }: { waiting: NonNullable<TaskView["waiting"]> 
   </section>;
 }
 
-export function TaskHistoryDetail({ view, history, activity = null }: { view: TaskView; history: TaskHistory | null; activity?: TaskActivity | null }) {
+export function TaskHistoryDetail({ view, history, activity = null, historyTransfer }: { view: TaskView; history: TaskHistory | null; activity?: TaskActivity | null; historyTransfer?: { data: unknown | null; pending: boolean; error: boolean; retrying: boolean; disconnected: boolean; retry(): void } }) {
   const outcome = history?.outcome;
   const rawStage = outcome?.stage ?? (view.task.checked ? "done" : view.lane);
   const stage = view.lane === "working" ? "assigned" : rawStage === "working" ? "assigned" : rawStage;
@@ -126,7 +126,12 @@ export function TaskHistoryDetail({ view, history, activity = null }: { view: Ta
     {activity && (activity.kind === "hold" || activity.kind === "idle" || activity.kind === "not-observed" || activity.kind === "runtime-blocked") ? <p className="liaison-history-notice">{activity.detail}</p> : null}
     {history?.liveUnavailable ? <p className="liaison-history-notice" role="status">Live worker state unavailable — showing recorded history.</p> : null}
     {history?.unreflectedNotice ? <p className="liaison-history-notice">{history.unreflectedNotice}. See History below.</p> : null}
-    {!history ? <p className="liaison-empty">History unavailable — no task snapshot is available.</p> : history.identity === "ambiguous" ? <p className="liaison-empty">History unavailable — this task's ID appears more than once in the task file.</p> : <>
+    {history?.identity !== "ambiguous" && historyTransfer ? <>
+      <p className="liaison-history-notice" role="status" aria-live="polite" aria-atomic="true">{historyTransfer.disconnected ? historyTransfer.data ? "Disconnected — showing previously loaded history." : "History unavailable while disconnected." : historyTransfer.error ? historyTransfer.data ? "Couldn’t update history — showing previously loaded history." : "Couldn’t load history." : historyTransfer.pending ? historyTransfer.data ? "Updating history…" : "Loading history…" : `History loaded for ${view.task.title}.`}
+        {historyTransfer.error || historyTransfer.disconnected ? <> <button type="button" aria-label={`Retry history for ${view.task.title}`} aria-disabled={historyTransfer.retrying || historyTransfer.disconnected} onClick={historyTransfer.retrying || historyTransfer.disconnected ? undefined : historyTransfer.retry}>Retry history</button>{historyTransfer.retrying ? " Retrying history…" : null}</> : null}
+      </p>
+    </> : null}
+    {!history ? historyTransfer ? null : <p className="liaison-empty">History unavailable — no task snapshot is available.</p> : history.identity === "ambiguous" ? <p className="liaison-empty">History unavailable — this task's ID appears more than once in the task file.</p> : <>
       {!history.attempts.length && !history.scheduledAt ? <p className="liaison-empty"><strong>{view.task.checked ? "No history to show" : "No attempts yet"}</strong>{view.task.checked ? "Only the task's checked state was found; no attempts or results are recorded for it." : "History appears here once a worker starts."}</p> : <>
         <h3>History</h3>
         {history.attempts.map((attempt, i) => {

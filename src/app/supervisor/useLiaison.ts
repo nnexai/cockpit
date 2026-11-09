@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { CockpitClientError } from "../../client/CockpitClient";
-import type { OrchestrationSnapshot, LiaisonLookupResponse, Run, TaskView } from "../../protocol/generated/v1";
+import type { LiaisonLookupResponse, Run, TaskView } from "../../protocol/generated/v1";
+import type { SupervisorOverview } from "./useSupervisor";
 import type { WorkbenchProps } from "../shell/Workbench";
 import { plainError } from "../shell/plainErrors";
 import { useSupervisor, type LiaisonAction, type MutationRequestScope } from "./useSupervisor";
@@ -13,16 +14,17 @@ export interface ConfirmedRecovery {
   confirm(): Promise<void>; retryResume(): Promise<void>; startNew(): Promise<void>; close(): void;
 }
 export interface LiaisonController {
-  snapshot: OrchestrationSnapshot | null; root: Run | null; tasks: TaskView[];
-  waiting: boolean; fresh: boolean; connected: boolean; status: string | null; actionLabel: string | null; actionEnabled: boolean; actionReason: string | null; startAvailable: boolean; error: string | null;
+  snapshot: SupervisorOverview | null; root: Run | null; tasks: TaskView[];
+  waiting: boolean; fresh: boolean; connected: boolean; observationConnected: boolean; status: string | null; actionLabel: string | null; actionEnabled: boolean; actionReason: string | null; startAvailable: boolean; error: string | null;
   paneId: string | null; tabId: string | null; freshConversationVisible: boolean; freshConversationReason: string | null; start(): Promise<void>; activate(): Promise<void>; activateFresh(): void; recovery: ConfirmedRecovery | null;
 }
-export function useLiaison(props: WorkbenchProps, openConversation: () => void, navigate: (paneId: string, run: Run, snapshot: OrchestrationSnapshot) => Promise<void>, conversationVisible: boolean): LiaisonController {
+export function useLiaison(props: WorkbenchProps, openConversation: () => void, navigate: (paneId: string, run: Run, snapshot: SupervisorOverview) => Promise<void>, conversationVisible: boolean): LiaisonController {
   const { client, state, selection, onReconnect } = props;
   const [project, setProject] = useState<{ sessionId: string; lookup: LiaisonLookupResponse; token: number; preferredRootId: string | null } | null>(null);
   const [rootSelection, setRootSelection] = useState<{ sessionId: string; rootId: string; token: number } | null>(null);
   const [lookupToken, setLookupToken] = useState(0);
   const lookupGeneration = useRef(0);
+  const lookupRetryMs = useRef(1500);
   const [navigationError, setNavigationError] = useState<string | null>(null);
   useEffect(() => { setNavigationError(null); }, [client, state.sessionId, selection.spaceId]);
   const retained = useRef<RetainedOperation | null>(null);
@@ -36,25 +38,37 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
   const selectedValid = selected && (lookup?.status !== "resolved" || lookup.roots.some(item => item.root_id === selected) || project!.token < rootSelection!.token);
   const preferredRootId = project?.sessionId === state.sessionId ? project.preferredRootId : null;
   const rootId = selectedValid ? selected : preferredRootId;
-  const observer = useSupervisor(client, state.sessionId ?? "", rootId, !!state.sessionId, state.sync === "live");
+  const observer = useSupervisor(client, state.sessionId ?? "", rootId, !!state.sessionId, state.sync === "live", state.snapshot?.server_instance ?? null);
   useEffect(() => {
-    let cancelled = false, timer = 0;
+    let cancelled = false, timer = 0, retrying = false;
     if (!state.sessionId || state.sync !== "live") return;
     const sessionId = state.sessionId;
+    const retry = () => {
+      retrying = true;
+      if (document.visibilityState !== "hidden") timer = window.setTimeout(() => { retrying = false; void load(); }, lookupRetryMs.current);
+      lookupRetryMs.current = Math.min(lookupRetryMs.current * 2, 30_000);
+    };
     const load = async () => {
       try {
         const next = await client.orchestrationLiaisonLookup({ session_id: sessionId, selected_root_id: null });
         if (!cancelled) {
           setProject(previous => ({ sessionId, lookup: next, token: lookupToken, preferredRootId: next.status === "resolved" ? next.preferred_root_id : previous?.sessionId === sessionId ? previous.preferredRootId : null }));
-          if (next.status === "unavailable") timer = window.setTimeout(() => void load(), 1500);
+          if (next.status === "unavailable") retry();
+          else lookupRetryMs.current = 1500;
         }
-      } catch { if (!cancelled) timer = window.setTimeout(() => void load(), 1500); }
+      } catch { if (!cancelled) retry(); }
     };
+    const visibility = () => {
+      if (!retrying) return;
+      window.clearTimeout(timer);
+      if (document.visibilityState !== "hidden") { retrying = false; void load(); }
+    };
+    document.addEventListener("visibilitychange", visibility);
     void load();
-    return () => { cancelled = true; window.clearTimeout(timer); };
+    return () => { cancelled = true; window.clearTimeout(timer); document.removeEventListener("visibilitychange", visibility); };
   }, [client, state.sessionId, state.sync, lookupToken, observer.snapshot]);
   const snapshot = observer.snapshot;
-  const root = rootId ? snapshot?.runs.find(run => run.run_id === rootId && run.root_id === rootId) ?? null : null;
+  const root = rootId ? snapshot?.runs.find((run): run is Run => run.run_id === rootId && run.root_id === rootId && "brief" in run) ?? null : null;
   const candidate = lookup?.status === "resolved" ? lookup.roots.find(item => item.root_id === rootId) : undefined;
   const fresh = observer.connected && state.sync === "live" && snapshot?.runtime.status === "fresh";
   const observation = fresh && snapshot?.runtime.status === "fresh" && root ? snapshot.runtime.runs.find(item => item.run_id === root.run_id) : undefined;
@@ -207,7 +221,7 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
   }, [root, snapshot, observation, state.sessionId, state.snapshot, selection.paneId, conversationVisible, navigate]);
   const savedLocation = root?.session_id === state.sessionId ? root.attachment?.location : null;
   const recoveryMessage = observer.busy ? "Working…" : !actionable ? actionReason : recovery?.message ?? null;
-  return { snapshot, root, tasks, waiting, fresh, connected: !!live && candidate?.connection === "connected", status, actionLabel, actionEnabled, actionReason, startAvailable, start, activate, activateFresh, freshConversationVisible, freshConversationReason,
+  return { snapshot, root, tasks, waiting, fresh, connected: !!live && candidate?.connection === "connected", observationConnected: observer.connected, status, actionLabel, actionEnabled, actionReason, startAvailable, start, activate, activateFresh, freshConversationVisible, freshConversationReason,
     recovery: recovery && recoveryScopeMatches ? { source: recovery.source, waiting, busy: observer.busy, unavailable: recovery.unavailable || !actionable, retry: recovery.retry, message: recoveryMessage, error: !observer.busy && actionable && !!recovery.message, stopConfirmable: !!candidate?.stop_confirmable, freshAvailable: !!candidate?.fresh_available, pendingAction: recovery.retry ? retained.current?.action.action === "run_start_fresh_supervisor" ? "fresh" : "resume" : null, confirm: () => recover(false, true), retryResume: () => recover(false), startNew: () => recover(true), close: () => { if (!observer.busy && !confirming.current) setRecovery(null); } } : null,
     error: navigationError ?? observer.error ?? (fresh && candidate?.resume === "blocked" && candidate.cause ? plainError(candidate.cause.code, candidate.cause.message).text : null), paneId: observation?.presence === "present" ? observation.pane_id : savedLocation?.pane_id ?? null, tabId: observation?.presence === "present" ? observation.tab_id : savedLocation?.tab_id ?? null };
 }

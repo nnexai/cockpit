@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import type { Run, OrchestrationSnapshot } from "../../protocol/generated/v1";
+import type { Run } from "../../protocol/generated/v1";
+import type { SupervisorOverview } from "../supervisor/useSupervisor";
 import type { WorkbenchProps } from "./Workbench";
 export interface LiaisonNavigation {
-  supervisorTerminal(paneId: string, run?: Run, orchestration?: OrchestrationSnapshot): Promise<void>;
+  supervisorTerminal(paneId: string, run?: Run, orchestration?: SupervisorOverview): Promise<void>;
   supervisorNavigationError: string | null;
 }
 export function useLiaisonNavigation({ state, selection, onFocus }: WorkbenchProps, openConversation: () => void): LiaisonNavigation {
@@ -10,7 +11,7 @@ export function useLiaisonNavigation({ state, selection, onFocus }: WorkbenchPro
   const [supervisorNavigation, setSupervisorNavigation] = useState<string | null>(null);
   const [supervisorNavigationError, setSupervisorNavigationError] = useState<string | null>(null);
   const supervisorNavigationAck = useRef<{ sessionId: string | null; token: number; resolve(): void; reject(error: Error): void } | null>(null);
-  const supervisorTerminal = async (paneId: string, run?: Run, orchestration?: OrchestrationSnapshot) => {
+  const supervisorTerminal = async (paneId: string, run?: Run, orchestration?: SupervisorOverview) => {
     const pane = snapshot?.panes.find(candidate => candidate.id === paneId);
     if (state.sync !== "live" || !pane || !snapshot?.tabs.some(tab => tab.id === pane.tab_id && tab.space_id === pane.space_id)) throw new Error("Terminal membership is no longer current.");
     // Session server_instance is a SHA-256 prefix, not the raw endpoint identity.

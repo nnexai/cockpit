@@ -95,6 +95,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     updateInstall: vi.fn(async () => { throw new Error("Unexpected update install in terminal fixture"); }),
     orchestrationAgentSend: vi.fn(async () => { throw new Error("Unexpected agent send in terminal fixture"); }),
     orchestrationSnapshot: vi.fn(async () => { throw new Error("Unexpected orchestration snapshot in terminal fixture"); }),
+    orchestrationTaskHistory: vi.fn(async () => { throw new Error("Unexpected task history in terminal fixture"); }),
     orchestrationInbox: vi.fn(async () => { throw new Error("Unexpected orchestration inbox in terminal fixture"); }),
     voiceConnect: vi.fn(async () => { throw new Error("Unexpected voice connect in terminal fixture"); }),
     voiceEvents: vi.fn(async () => { throw new Error("Unexpected voice events in terminal fixture"); }),
@@ -176,7 +177,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     libraryMedia: vi.fn(async () => { throw new Error("Unexpected Library operation in terminal fixture"); }),
     sessions: vi.fn(async () => sessions),
     sessionSnapshot: vi.fn(async () => snapshot),
-    spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
+    spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: snapshot.server_instance, spaces: [] })),
     spaceServiceStatus: vi.fn(async (sessionId: string, _request: SpaceServiceStatusRequest, _signal?: AbortSignal) => ({ session_id: sessionId, services: [] })),
     spaceCpuStatus: vi.fn<CockpitClient["spaceCpuStatus"]>(async (sessionId, request) => ({ session_id: sessionId, server_instance: request.server_instance, available: false, spaces: [] })),
     spaceTags: vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: snapshot.server_instance, catalog: [], spaces: [] })),
@@ -186,6 +187,7 @@ function completeClient(overrides: Partial<CockpitClient> = {}): CockpitClient {
     spaceGitAction: vi.fn(async () => { throw new Error("Unexpected Git action in terminal fixture"); }),
     focus: vi.fn(async () => ({ session_id: snapshot.session_id, kind: "pane" as const, target_id: "pane-1", accepted: true })),
     mutate: vi.fn(async () => ({ session_id: snapshot.session_id, snapshot, created: null })),
+    subscribeLocalChanges: vi.fn(async () => ({ close: vi.fn() })),
     subscribeSession: vi.fn(async () => ({ close: vi.fn() })),
     openTerminal: vi.fn(async () => ({ send: vi.fn(), close: vi.fn() })),
     openBrowserView: vi.fn(async () => ({ command: vi.fn(), close: vi.fn() })),
@@ -286,10 +288,10 @@ describe("Space Git contracts", () => {
       ].map(upstream => ({ ...checkout, upstream })),
     ];
     for (const item of checkouts) {
-      expect(parseSpaceGitStatusResponse({ session_id: "session-1", spaces: [{ ...space, checkout: { ...item, extra: 1 }, extra: 1 }] }))
-        .toEqual({ session_id: "session-1", spaces: [{ ...space, checkout: item }] });
+      expect(parseSpaceGitStatusResponse({ session_id: "session-1", server_instance: snapshot.server_instance, spaces: [{ ...space, checkout: { ...item, extra: 1 }, extra: 1 }] }))
+        .toEqual({ session_id: "session-1", server_instance: snapshot.server_instance, spaces: [{ ...space, checkout: item }] });
     }
-    expect(parseSpaceGitStatusResponse({ session_id: "session-1", spaces: [{ ...space, checkout: { ...checkout, upstream: { ...tracked, extra: 1 } } }] }).spaces[0].checkout)
+    expect(parseSpaceGitStatusResponse({ session_id: "session-1", server_instance: snapshot.server_instance, spaces: [{ ...space, checkout: { ...checkout, upstream: { ...tracked, extra: 1 } } }] }).spaces[0].checkout)
       .toEqual(checkout);
   });
 
@@ -308,10 +310,12 @@ describe("Space Git contracts", () => {
       }
     }
     for (const item of invalidSpaces) {
-      expect(() => parseSpaceGitStatusResponse({ session_id: "session-1", spaces: [item] })).toThrow(CockpitClientError);
+      expect(() => parseSpaceGitStatusResponse({ session_id: "session-1", server_instance: snapshot.server_instance, spaces: [item] })).toThrow(CockpitClientError);
     }
     const boundary = { ...checkout, upstream: { ...tracked, ahead: 0, behind: 0xffff_ffff } };
-    expect(parseSpaceGitStatusResponse({ session_id: "session-1", spaces: [{ ...space, checkout: boundary }] }).spaces[0].checkout).toEqual(boundary);
+    expect(parseSpaceGitStatusResponse({ session_id: "session-1", server_instance: snapshot.server_instance, spaces: [{ ...space, checkout: boundary }] }).spaces[0].checkout).toEqual(boundary);
+    expect(() => parseSpaceGitStatusResponse({ session_id: "session-1", spaces: [] })).toThrow(CockpitClientError);
+    expect(() => parseSpaceGitStatusResponse({ session_id: "session-1", server_instance: "invalid", spaces: [] })).toThrow(CockpitClientError);
   });
 
   it("validates all action outcomes and nullable u32 commit counts", () => {
@@ -347,7 +351,7 @@ describe("Space Git contracts", () => {
     });
 
     it(`${transport} rejects status from another session and preserves action operation codes`, async () => {
-      await expect(clientFor({ session_id: "other", spaces: [space] }).spaceGitStatus("session-1")).rejects.toMatchObject({ code: "malformed_response" });
+      await expect(clientFor({ session_id: "other", server_instance: snapshot.server_instance, spaces: [space] }).spaceGitStatus("session-1")).rejects.toMatchObject({ code: "malformed_response" });
       for (const code of ["space_git_target_changed", "space_git_action_ineligible", "space_git_action_in_progress", "space_git_not_run", "space_git_outcome_unknown"]) {
         const error = { code, message: "Git operation failed" };
         const client = transport === "browser"
@@ -1719,17 +1723,19 @@ describe("Orchestration attachment transport cutover", () => {
       messages: [], questions: [], unreflected_inputs: [], task_ownership: [], directives: [], thread_links: [], intents: [], assignment_intents: [], attention: [], unmanaged_agents: [],
       runtime: { status: "unavailable", error: { code: "offline", message: "Observation unavailable" } },
     };
-    let payload: unknown = saved;
+    const { messages: _messages, ...snapshotWithoutMessages } = saved;
+    const overview = { ...snapshotWithoutMessages, runs: [{ kind: "full" as const, run }] };
+    let payload: unknown = overview;
     const client = transport === "browser" ? createBrowserClient(vi.fn(async () => jsonResponse(payload))) : createNativeClient(vi.fn(async () => payload));
     const request = { session_id: "session-1", root_id: null };
     const decoded = await client.orchestrationSnapshot(request);
-    expect(decoded.runs[0]!.attachment).toEqual(attachment);
+    expect(decoded.runs[0]?.kind === "full" ? decoded.runs[0].run.attachment : null).toEqual(attachment);
     expect(decoded.runtime.status).toBe("unavailable");
     for (const extra of [{ location: attachment.location }, { bound_omp_session: "old-mirror" }, { credential: "private" }]) {
-      payload = { ...saved, runs: [{ ...run, ...extra }] };
+      payload = { ...overview, runs: [{ kind: "full", run: { ...run, ...extra } }] };
       await expect(client.orchestrationSnapshot(request)).rejects.toMatchObject({ code: "malformed_response" });
     }
-    payload = { ...saved, runs: [{ ...run, attachment: { ...attachment, secret: "private" } }] };
+    payload = { ...overview, runs: [{ kind: "full", run: { ...run, attachment: { ...attachment, secret: "private" } } }] };
     await expect(client.orchestrationSnapshot(request)).rejects.toMatchObject({ code: "malformed_response" });
   });
 });

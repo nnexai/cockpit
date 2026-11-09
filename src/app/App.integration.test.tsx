@@ -7,14 +7,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type * as TauriCore from "@tauri-apps/api/core";
 import type { CockpitClient, TerminalStream } from "../client/CockpitClient";
 import { CockpitClientError } from "../client/CockpitClient";
+import type { SupervisorOverview } from "./supervisor/useSupervisor";
 import type { TerminalPaneProps } from "./TerminalPane";
 import type * as ContextViewerModule from "./context/ContextViewer";
 import type { ContextViewerProps } from "./context/ContextViewer";
 import type {
   BrowserAssociation,
   CommentBatch,
-  OrchestrationSnapshot,
-  OrchestrationWaitResponse,
+  OrchestrationOverview,
   LiaisonCandidate,
   LiaisonLookupResponse,
   ResourceMutationRequest,
@@ -204,6 +204,15 @@ type Subscription = {
   closed: boolean;
 };
 
+type LocalSubscription = {
+  scope: Parameters<CockpitClient["subscribeLocalChanges"]>[0];
+  onEvent: Parameters<CockpitClient["subscribeLocalChanges"]>[1];
+  onError: Parameters<CockpitClient["subscribeLocalChanges"]>[2];
+  closed: boolean;
+  sequence: number;
+  pending: Promise<void>;
+};
+
 class AppFixture {
   readonly snapshotCalls = vi.fn<(sessionId: string) => Promise<SessionSnapshotResponse>>();
   readonly mutateCalls = vi.fn<(sessionId: string, request: ResourceMutationRequest) => Promise<ResourceMutationResponse>>();
@@ -212,6 +221,7 @@ class AppFixture {
   readonly viewerSources = vi.fn<CockpitClient["viewerSources"]>();
   readonly viewerOpen = vi.fn<CockpitClient["viewerOpen"]>();
   readonly subscriptions: Subscription[] = [];
+  readonly localSubscriptions: LocalSubscription[] = [];
   widgetEvent: ((event: WidgetEvent) => void) | null = null;
   readonly liveWidgetSubscriptions = new Set<(event: WidgetEvent) => void>();
   readonly mutationResponses: Array<Deferred<ResourceMutationResponse>> = [];
@@ -257,6 +267,7 @@ class AppFixture {
     orchestrationImageRead: vi.fn(async () => { throw new Error("Unexpected image read in terminal fixture"); }),
     orchestrationArtifactRead: vi.fn(async () => { throw new Error("Unexpected artifact read in terminal fixture"); }),
     orchestrationSnapshot: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
+    orchestrationTaskHistory: vi.fn(async () => { throw new Error("Unexpected task history in terminal fixture"); }),
     orchestrationMutate: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
     orchestrationWait: vi.fn(async () => { throw new Error("Unexpected supervisor operation in terminal fixture"); }),
     orchestrationLiaisonLookup: vi.fn(async () => { throw new Error("Unexpected liaison lookup in terminal fixture"); }),
@@ -312,7 +323,16 @@ class AppFixture {
     voiceConnect: vi.fn(async () => { throw new Error("Unexpected voice connect in terminal fixture"); }),
     voiceEvents: vi.fn(async () => { throw new Error("Unexpected voice events in terminal fixture"); }),
     voiceControl: vi.fn(async () => { throw new Error("Unexpected voice control in terminal fixture"); }),
-    spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [] })),
+    spaceGitStatus: vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: snapshot(sessionId).server_instance, spaces: [] })),
+    subscribeLocalChanges: vi.fn<CockpitClient["subscribeLocalChanges"]>(async (scope, onEvent, onError, signal) => {
+      const subscription: LocalSubscription = { scope, onEvent, onError, closed: false, sequence: 0, pending: Promise.resolve() };
+      this.localSubscriptions.push(subscription);
+      const close = () => { subscription.closed = true; };
+      signal?.addEventListener("abort", close, { once: true });
+      if (signal?.aborted) close();
+      void this.deliverLocalChange(subscription, "ready").catch(() => {});
+      return { close };
+    }),
     spaceServiceStatus: vi.fn<CockpitClient["spaceServiceStatus"]>(async (sessionId, _request, _signal) => ({ session_id: sessionId, services: [] })),
     spaceCpuStatus: vi.fn<CockpitClient["spaceCpuStatus"]>(async (sessionId, request) => ({ session_id: sessionId, server_instance: request.server_instance, available: false, spaces: [] })),
     orchestrationAgentSend: vi.fn(async () => { throw new Error("Unexpected agent send"); }),
@@ -350,6 +370,27 @@ class AppFixture {
     this.focusCalls.mockImplementation(async (sessionId, request) => ({ session_id: sessionId, kind: request.kind, target_id: request.target_id, accepted: true }));
     this.viewerSources.mockImplementation(async (sessionId, paneId) => viewerSources(sessionId, paneId));
     this.viewerOpen.mockImplementation(async (sessionId, request) => viewerContext(sessionId, request));
+  }
+
+  private deliverLocalChange(subscription: LocalSubscription, kind: "ready" | "changed"): Promise<void> {
+    const delivery = subscription.pending.then(async () => {
+      if (subscription.closed) return;
+      await subscription.onEvent({
+        stream_id: "fixture-local", sequence: ++subscription.sequence, kind,
+        topics: kind === "changed" ? ["orchestration"] : [],
+      });
+    });
+    subscription.pending = delivery.catch(error => {
+      subscription.closed = true;
+      subscription.onError(error instanceof CockpitClientError ? error : new CockpitClientError("stream_error", "Local change consumer failed", { cause: error }));
+    });
+    return delivery;
+  }
+
+  async emitOrchestrationChange(): Promise<void> {
+    const subscriptions = this.localSubscriptions.filter(subscription => !subscription.closed && subscription.scope.kind === "orchestration");
+    if (!subscriptions.length) throw new Error("No active orchestration subscription");
+    await Promise.all(subscriptions.map(subscription => this.deliverLocalChange(subscription, "changed")));
   }
 
   queueSnapshot(sessionId: string, result: Promise<SessionSnapshotResponse>): void {
@@ -635,7 +676,7 @@ describe("mounted App mutation and session ordering", () => {
 
   it("prefers Git's current branch and upstream position over outdated Herdr metadata", async () => {
     const fixture = new AppFixture();
-    vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", spaces: [{ space_id: "space-1", source: "pane_folder", checkout: { state: "branch", root: "/repo", branch: "main", upstream: { state: "tracked", name: "origin/main", ahead: 2, behind: 1 } } }] });
+    vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", server_instance: snapshot("session-1").server_instance, spaces: [{ space_id: "space-1", source: "pane_folder", checkout: { state: "branch", root: "/repo", branch: "main", upstream: { state: "tracked", name: "origin/main", ahead: 2, behind: 1 } } }] });
     await mount(fixture);
     const next = snapshot("session-1");
     next.spaces[0].git = { repository_key: "/repo", repository: "repo", branch: "outdated", checkout_path: "/repo", is_linked_worktree: false };
@@ -651,7 +692,7 @@ describe("mounted App mutation and session ordering", () => {
   it("runs a nonselected row's push without changing Herdr focus and refreshes its result", async () => {
     const fixture = new AppFixture();
     const git = { space_id: "space-2", source: "pane_folder" as const, checkout: { state: "branch" as const, root: "/child", branch: "feature", upstream: { state: "tracked" as const, name: "origin/main", ahead: 1, behind: 0 } } };
-    vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", spaces: [git] });
+    vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", server_instance: snapshot("session-1").server_instance, spaces: [git] });
     const action = deferred<SpaceGitActionResponse>();
     vi.mocked(fixture.client.spaceGitAction).mockReturnValue(action.promise);
     await mount(fixture);
@@ -678,7 +719,7 @@ describe("mounted App mutation and session ordering", () => {
   it("Commands pulls the selected checkout while a row menu targets its own checkout", async () => {
     const fixture = new AppFixture();
     const status = (space_id: string, root: string, branch: string) => ({ space_id, source: "pane_folder" as const, checkout: { state: "branch" as const, root, branch, upstream: { state: "tracked" as const, name: `origin/${branch}`, ahead: 1, behind: 0 } } });
-    vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", spaces: [status("space-1", "/parent", "main"), status("space-2", "/child", "feature")] });
+    vi.mocked(fixture.client.spaceGitStatus).mockResolvedValue({ session_id: "session-1", server_instance: snapshot("session-1").server_instance, spaces: [status("space-1", "/parent", "main"), status("space-2", "/child", "feature")] });
     vi.mocked(fixture.client.spaceGitAction).mockImplementation(async (sessionId, request) => ({ session_id: sessionId, space_id: request.space_id, action: request.action, root: request.expected_root, branch: request.expected_branch, upstream: request.expected_upstream, outcome: { result: "up_to_date" } }));
     await mount(fixture);
     const next = snapshot("session-1");
@@ -1326,9 +1367,8 @@ describe("Library view presentation lifecycle", () => {
 });
 
 describe("liaison conversation and compact task rail", () => {
-  function bindLiaison(fixture: AppFixture, current: () => OrchestrationSnapshot, candidate: () => Partial<LiaisonCandidate> = () => ({})) {
-    vi.mocked(fixture.client.orchestrationSnapshot).mockImplementation(async () => current());
-    vi.mocked(fixture.client.orchestrationWait).mockReturnValue(deferred<OrchestrationWaitResponse>().promise);
+  function bindLiaison(fixture: AppFixture, current: () => SupervisorOverview, candidate: () => Partial<LiaisonCandidate> = () => ({})) {
+    vi.mocked(fixture.client.orchestrationSnapshot).mockImplementation(async (): Promise<OrchestrationOverview> => ({ ...current(), runs: current().runs.map(run => "brief" in run ? { kind: "full" as const, run } : { kind: "summary" as const, run }) }));
     vi.mocked(fixture.client.orchestrationLiaisonLookup).mockImplementation(async () => ({
       status: "resolved",
       lookup_revision: current().revision, preferred_root_id: current().runs.length ? "root" : null,
@@ -1444,17 +1484,16 @@ describe("liaison conversation and compact task rail", () => {
     expect(container.querySelector('[role="status"][aria-live="polite"]')?.textContent).not.toContain("waiting for you");
   });
   it("shows and clears only the root NeedsInput hint without moving focus or sending an Answer", async () => {
-    const fixture = new AppFixture(), pending: Deferred<OrchestrationWaitResponse>[] = [];
+    const fixture = new AppFixture();
     let current = orchestrationFixture([], [runFixture({ last_report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Human decision", plan: null, source_output: null, at: "2026-10-07T12:00:00Z" } })]);
     current.questions = [{ run_id: "root", question_message_id: "question", asked_at: "2026-10-07T12:00:00Z", receipt: { status: "unresolved" } }];
     bindLiaison(fixture, () => current);
-    vi.mocked(fixture.client.orchestrationWait).mockImplementation(() => { const wait = deferred<OrchestrationWaitResponse>(); pending.push(wait); return wait.promise; });
     await mount(fixture);
     const input = document.activeElement;
     expect(container.querySelector(".liaison-tab-dot")).not.toBeNull();
     expect(container.querySelector('[aria-label="Tasks"]')).toBeNull();
     current = { ...current, revision: 2, tasks_token: "cleared", questions: [{ ...current.questions[0], receipt: { status: "answer_acknowledged", answer: { sender: { type: "run", run_id: "root" }, message_id: "answer", seq: 2, stage: "acked", created_at: "2026-10-07T12:00:01Z", acked_at: "2026-10-07T12:00:01Z" } } }] };
-    await act(async () => pending.at(-1)!.resolve({ revision: 2, tasks_token: "cleared", changed: true }));
+    await act(async () => fixture.emitOrchestrationChange());
     await settle();
     expect(container.querySelector(".liaison-tab-dot")).toBeNull();
     expect(document.activeElement).toBe(input);
@@ -1485,9 +1524,7 @@ describe("liaison conversation and compact task rail", () => {
       cause: { code: "root_unproven", message: "The root attachment cannot be proven", class: "recover" },
     };
     current.runs[0].resume = { operation_id: "blocked-resume", run_id: "root", previous_attachment_epoch: 1, phase: "blocked", cause: candidate.cause!, decision_id: null, replacement_attachment_epoch: null, updated_at: "2026-10-07T12:00:00Z" };
-    const waits: Deferred<OrchestrationWaitResponse>[] = [];
     bindLiaison(fixture, () => current, () => candidate);
-    vi.mocked(fixture.client.orchestrationWait).mockImplementation(() => { const wait = deferred<OrchestrationWaitResponse>(); waits.push(wait); return wait.promise; });
     await mount(fixture);
     await openCommand("Show overview");
     expect(container.textContent).toContain("The root attachment cannot be proven");
@@ -1502,7 +1539,7 @@ describe("liaison conversation and compact task rail", () => {
     candidate = { ...candidate, cause: { code: "checkout_identity_changed", message: "Saved physical checkout no longer matches", class: "decision" } };
     for (const stage of ["closed", "reported"] as const) {
       current = { ...current, revision: current.revision + 1, runs: [{ ...current.runs[0], stage }] };
-      await act(async () => waits.at(-1)!.resolve({ revision: current.revision, tasks_token: current.tasks_token, changed: true }));
+      await act(async () => fixture.emitOrchestrationChange());
       await settle();
       expect(container.textContent).not.toContain("Resume in this folder");
       expect(container.textContent).not.toContain("Resume supervisor");
@@ -1545,6 +1582,7 @@ describe("liaison conversation and compact task rail", () => {
       if (request.action.action !== "run_resume") throw new Error("Expected resume");
       candidate = { connection: "disconnected", resume: "blocked", cause };
       current.runs[0].resume = { operation_id: request.action.operation_id, run_id: "root", previous_attachment_epoch: 1, phase: "blocked", cause, decision_id: null, replacement_attachment_epoch: null, updated_at: "2026-10-07T12:00:00Z" };
+      current.revision = 2;
       if (calls === 1) throw new Error("Response lost");
       return { revision: 2, result: { result: "run_resumed", resume: { run_id: "root", duplicate: true, resume: current.runs[0].resume! } } };
     });
@@ -1796,12 +1834,11 @@ describe("liaison conversation and compact task rail", () => {
     });
   });
   it("does not dispatch a Resume that only joins an effect-free refused launch", async () => {
-    const fixture = new AppFixture(), waits: Deferred<OrchestrationWaitResponse>[] = [];
+    const fixture = new AppFixture();
     const cause = { code: "launch_configuration_invalid", message: "Supervisor command is invalid", class: "recover" as const };
     let current = orchestrationFixture();
     current.runs[0].resume = { operation_id: "reserved", run_id: "root", previous_attachment_epoch: 1, phase: "launching", cause: null, decision_id: null, replacement_attachment_epoch: 2, updated_at: "2026-10-07T12:00:00Z" };
     bindLiaison(fixture, () => current, () => ({ connection: "disconnected", resume: "blocked", cause }));
-    vi.mocked(fixture.client.orchestrationWait).mockImplementation(() => { const wait = deferred<OrchestrationWaitResponse>(); waits.push(wait); return wait.promise; });
     vi.mocked(fixture.client.orchestrationMutate).mockRejectedValue(new Error("Inspection not confirmed"));
     await mount(fixture);
     expect(button("Resume supervisor").disabled).toBe(true);
@@ -1809,7 +1846,7 @@ describe("liaison conversation and compact task rail", () => {
     click(button("Resume supervisor")); await settle();
     expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
     current = { ...current, revision: 2, runs: [{ ...current.runs[0], resume: { ...current.runs[0].resume!, phase: "blocked", cause } }] };
-    await act(async () => waits.at(-1)!.resolve({ revision: 2, tasks_token: current.tasks_token, changed: true }));
+    await act(async () => fixture.emitOrchestrationChange());
     await settle();
     expect(button("Resume supervisor").disabled).toBe(false);
     click(button("Resume supervisor")); await settle();
@@ -1834,10 +1871,9 @@ describe("liaison conversation and compact task rail", () => {
     expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
   });
   it("falls back to Start when a selected root disappears from a newer lookup", async () => {
-    const fixture = new AppFixture(), waits: Deferred<OrchestrationWaitResponse>[] = [];
+    const fixture = new AppFixture();
     let current = orchestrationFixture([], []);
     bindLiaison(fixture, () => current, () => ({ connection: "unknown", resume: "available" }));
-    vi.mocked(fixture.client.orchestrationWait).mockImplementation(() => { const wait = deferred<OrchestrationWaitResponse>(); waits.push(wait); return wait.promise; });
     vi.mocked(fixture.client.orchestrationMutate).mockImplementation(async request => {
       if (request.action.action !== "supervisor_start") throw new Error("Expected supervisor start");
       current = { ...orchestrationFixture(), revision: 2 };
@@ -1850,7 +1886,7 @@ describe("liaison conversation and compact task rail", () => {
     await settle();
     expect(button("Resume supervisor").disabled).toBe(false);
     current = { ...orchestrationFixture([], []), revision: 3 };
-    await act(async () => waits.at(-1)!.resolve({ revision: 3, tasks_token: current.tasks_token, changed: true }));
+    await act(async () => fixture.emitOrchestrationChange());
     await settle();
     expect(button("Start supervisor").disabled).toBe(false);
     click(button("Start supervisor")); await settle();
@@ -1870,15 +1906,14 @@ describe("liaison conversation and compact task rail", () => {
     expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
   });
   it("preserves the known Resume action when a later root lookup becomes unavailable", async () => {
-    const fixture = new AppFixture(), waits: Deferred<OrchestrationWaitResponse>[] = [];
+    const fixture = new AppFixture();
     let current = orchestrationFixture();
     bindLiaison(fixture, () => current, () => ({ connection: "unknown", resume: "available" }));
-    vi.mocked(fixture.client.orchestrationWait).mockImplementation(() => { const wait = deferred<OrchestrationWaitResponse>(); waits.push(wait); return wait.promise; });
     await mount(fixture);
     const action = button("Resume supervisor");
     vi.mocked(fixture.client.orchestrationLiaisonLookup).mockResolvedValue({ status: "unavailable", code: "session_unavailable", message: "Session state cannot be resolved" });
     current = { ...current, revision: 2 };
-    await act(async () => waits.at(-1)!.resolve({ revision: 2, tasks_token: current.tasks_token, changed: true }));
+    await act(async () => fixture.emitOrchestrationChange());
     await settle();
     expect(button("Resume supervisor")).toBe(action);
     expect(action.disabled).toBe(true);

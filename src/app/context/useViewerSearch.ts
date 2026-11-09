@@ -15,8 +15,8 @@ export function useViewerSearch({ root, reader, value, onChange, selectedPath, d
   const [invalidationGeneration, setInvalidationGeneration] = useState(0);
   const searchContext = useCallback((request: Parameters<CockpitClient["contextSearch"]>[2], signal: AbortSignal) =>
     reader?.search ? reader.search(request, signal) : Promise.reject(new Error("Search is unavailable for this root.")), [reader]);
-  const pollContext = useCallback((request: Parameters<CockpitClient["contextInvalidate"]>[2], signal: AbortSignal) =>
-    reader?.invalidate ? reader.invalidate(request, signal) : Promise.reject(new Error("Change polling is unavailable for this root.")), [reader]);
+  const checkContext = useCallback((request: Parameters<CockpitClient["contextInvalidate"]>[2], signal: AbortSignal) =>
+    reader?.invalidate ? reader.invalidate(request, signal) : Promise.reject(new Error("Change checking is unavailable for this root.")), [reader]);
   const invalidateVisibleFiles = useCallback((invalidations: ContextInvalidation[]) => {
     if (!root || invalidations.length === 0) return;
     const invalidated = new Set(invalidations.map((item) => item.path));
@@ -57,5 +57,5 @@ export function useViewerSearch({ root, reader, value, onChange, selectedPath, d
     if (changed) onChange({ ...value, files });
     setInvalidationGeneration((generation) => generation + 1);
   }, [directoryPathForFile, loadDirectory, onChange, root, selectedPath, value]);
-  return { invalidationGeneration, searchContext, pollContext, invalidateVisibleFiles };
+  return { invalidationGeneration, searchContext, checkContext, invalidateVisibleFiles };
 }

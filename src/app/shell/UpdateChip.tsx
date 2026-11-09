@@ -5,10 +5,11 @@ export function UpdateChip({ client, onUpdate }: { client: CockpitClient; onUpda
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   useEffect(() => {
     let stopped = false;
-    let timer: number;
     let pending = false;
     let refresh = false;
+    const isPageHidden = () => document.visibilityState === "hidden";
     const poll = async () => {
+      if (stopped || isPageHidden()) return;
       if (pending) { refresh = true; return; }
       pending = true;
       try {
@@ -18,14 +19,15 @@ export function UpdateChip({ client, onUpdate }: { client: CockpitClient; onUpda
         if (!stopped) setStatus(null);
       } finally {
         pending = false;
-        if (!stopped && refresh) { refresh = false; void poll(); }
-        else if (!stopped) timer = window.setTimeout(poll, 600_000);
+        if (!stopped && !isPageHidden() && refresh) { refresh = false; void poll(); }
       }
     };
     void poll();
-    const onFocus = () => { clearTimeout(timer); void poll(); };
+    const onFocus = () => { void poll(); };
+    const visibility = () => { if (isPageHidden()) refresh = false; else void poll(); };
     window.addEventListener("focus", onFocus);
-    return () => { stopped = true; clearTimeout(timer); window.removeEventListener("focus", onFocus); };
+    document.addEventListener("visibilitychange", visibility);
+    return () => { stopped = true; window.removeEventListener("focus", onFocus); document.removeEventListener("visibilitychange", visibility); };
   }, [client]);
 
   if (!status?.commits_behind_main || !status.source_path) return null;

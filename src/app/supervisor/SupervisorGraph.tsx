@@ -1,5 +1,6 @@
 import { useId, useMemo, useState } from "react";
-import type { OrchestrationSnapshot, TaskView } from "../../protocol/generated/v1";
+import type { TaskView } from "../../protocol/generated/v1";
+import type { SupervisorOverview } from "./useSupervisor";
 import { dependencyLayout } from "./dependencyLayout";
 import { dependencySummary, uniqueTask } from "./dependencies";
 import { TaskRow, taskStage } from "./SupervisorTasks";
@@ -7,7 +8,7 @@ import { projectOf } from "./taskProjects";
 import { taskActivity } from "./taskActivity";
 
 /** Task prerequisites only: no agent topology or provenance relationships. */
-export function SupervisorGraph({ tasks, onOpen, selectedKey, snapshot = null, rootId = null, fresh = false }: { tasks: readonly TaskView[]; onOpen(view: TaskView, rowKey: string): void; selectedKey?: string | null; snapshot?: OrchestrationSnapshot | null; rootId?: string | null; fresh?: boolean }) {
+export function SupervisorGraph({ tasks, onOpen, selectedKey, snapshot = null, rootId = null, fresh = false }: { tasks: readonly TaskView[]; onOpen(view: TaskView, rowKey: string): void; selectedKey?: string | null; snapshot?: SupervisorOverview | null; rootId?: string | null; fresh?: boolean }) {
   const marker = useId().replaceAll(":", ""), [pointer, setHover] = useState<string | null>(null), [focused, setFocused] = useState<string | null>(null);
   const hover = focused ?? pointer;
   const open = useMemo(() => tasks.filter(view => !view.task.checked), [tasks]);

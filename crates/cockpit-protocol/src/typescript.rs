@@ -41,6 +41,7 @@ mod context_search;
 mod credentials;
 mod herdr_shell;
 mod library;
+mod local_changes;
 mod notes;
 mod orchestration;
 mod project_defaults;
@@ -66,6 +67,7 @@ pub(crate) const SECTIONS: &[&Section] = &[
     &v1::SESSION_TERMINAL,
     &projects::CONFIGURATION,
     &library::LIBRARY,
+    &local_changes::LOCAL_CHANGES,
     &notes::NOTES,
     &projects::REPOSITORIES,
     &project_defaults::DEFAULTS,
@@ -96,7 +98,7 @@ pub fn render_v1() -> String {
     for section in SECTIONS {
         (section.decls)(&config, &mut declarations);
     }
-    declarations.truncate(declarations.len() - 2);
+    declarations.truncate(declarations.len() - 1);
 
     let mut output = String::with_capacity(HEADER.len() + declarations.len() + 3);
     output.push_str(HEADER);
@@ -114,7 +116,7 @@ pub fn render_v1() -> String {
 fn append_declaration(declarations: &mut String, declaration: &str) {
     declarations.push_str("export ");
     declarations.push_str(declaration);
-    declarations.push_str("\n\n");
+    declarations.push('\n');
 }
 
 /// Replace `path` with `contents` using a same-directory temporary file and rename.

@@ -11,8 +11,14 @@ import type {
   ContextSearchRequest,
   ContextSearchResponse,
   ViewerContext,
+  LocalChangeEvent,
 } from "../../protocol/generated/v1";
 import { viewerErrorCode } from "../layout/viewerLifecycle";
+import { subscribeLocalChanges } from "../localChanges";
+
+type ChangeHandler = (event: LocalChangeEvent) => Promise<void>;
+type ChangeErrorHandler = (error: unknown) => void;
+type ChangeSubscription = { close(): void; retry(): void };
 
 /** Client-side id for the session-independent Library; bound Context roots keep the core-issued id. */
 export const LIBRARY_ROOT_ID = "library";
@@ -34,6 +40,8 @@ export interface ContextReader {
   media(request: ContextMediaRead, signal?: AbortSignal): Promise<ContextMedia>;
   search?(request: ContextSearchRequest, signal: AbortSignal): Promise<ContextSearchResponse>;
   invalidate?(request: ContextInvalidationRequest, signal: AbortSignal): Promise<ContextInvalidationResponse>;
+  watchFiles?(rootId: string, paths: string[], onEvent: ChangeHandler, onError: ChangeErrorHandler): ChangeSubscription;
+  watchIndex(rootId: string, onEvent: ChangeHandler, onError: ChangeErrorHandler): ChangeSubscription;
 }
 
 export function viewerReader(client: CockpitClient, context: ViewerContext, onViewerError?: (error: unknown) => void): ContextReader {
@@ -54,6 +62,12 @@ export function viewerReader(client: CockpitClient, context: ViewerContext, onVi
     media: (request, signal) => read(client.contextMedia(sessionId, viewerId, { binding_id: bindingId, ...request }, signal), signal),
     search: (request, signal) => read(client.contextSearch(sessionId, viewerId, request, signal), signal),
     invalidate: (request, signal) => read(client.contextInvalidate(sessionId, viewerId, request, signal), signal),
+    watchFiles: (rootId, paths, onEvent, onError) => subscribeLocalChanges(client, {
+      kind: "context_files", session_id: sessionId, viewer_id: viewerId, binding_id: bindingId, root_id: rootId, paths,
+    }, onEvent, onError),
+    watchIndex: (rootId, onEvent, onError) => subscribeLocalChanges(client, {
+      kind: "context_index", session_id: sessionId, viewer_id: viewerId, binding_id: bindingId, root_id: rootId,
+    }, onEvent, onError),
   };
 }
 
@@ -61,7 +75,7 @@ export function viewerReader(client: CockpitClient, context: ViewerContext, onVi
  * Reads the Library root returned by the listing. Responses must come from
  * that same server root; they are presented under `LIBRARY_ROOT_ID` so the
  * viewer's per-root state does not depend on the Library's filesystem identity.
- * Library roots have no search or change polling.
+ * Library roots have no content search or known-file invalidation.
  */
 export function libraryReader(client: CockpitClient, root: ContextRoot): ContextReader {
   const own = <T extends { root_id: string }>(value: T): T => {
@@ -74,5 +88,8 @@ export function libraryReader(client: CockpitClient, root: ContextRoot): Context
     fileIndex: async (_rootId, mode, signal) => own(await client.libraryFileIndex({ mode }, signal)),
     document: async ({ path, expected_revision, offset }, signal) => own(await client.libraryDocument({ path, expected_revision, offset: offset ?? null }, signal)),
     media: async ({ path, expected_revision }, signal) => own(await client.libraryMedia({ path, expected_revision }, signal)),
+    watchIndex: (_rootId, onEvent, onError) => subscribeLocalChanges(client, {
+      kind: "library_index", root_id: root.root_id,
+    }, onEvent, onError),
   };
 }

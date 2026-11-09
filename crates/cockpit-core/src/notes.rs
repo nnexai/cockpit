@@ -1,5 +1,6 @@
 //! Durable ordinary-Markdown Notes. UUID targets intentionally need no Herdr or registry.
 mod comments;
+mod changes;
 mod decisions;
 mod fs;
 mod registry;

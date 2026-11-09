@@ -20,7 +20,7 @@ import { useViewerComments } from "./useViewerComments";
 import { useViewerSearch } from "./useViewerSearch";
 import { useDocumentLinks } from "./useDocumentLinks";
 import { DocumentView, type DocumentViewProps } from "./DocumentView";
-import { ContextViewerFrame, type ViewerToolbarProps } from "./ContextViewerFrame";
+import { ContextViewerFrame, type ViewerModeSlots, type ViewerToolbarProps } from "./ContextViewerFrame";
 import { ContextDirectoryRows } from "./ContextDirectoryRows";
 import { filesViewSlots } from "./ContextFilesView";
 import { useLibraryPrimarySelection, useLibrarySelectionFreshness, useLibraryViewerSource } from "../library/useLibraryViewerSource";
@@ -276,6 +276,12 @@ export function ContextViewer(props: ContextViewerProps) {
     if (root && value.rootId !== root.root_id) onChange({ ...value, rootId: root.root_id, path: null });
   }, [identityKey, onChange, root, value]);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const [watchNotice, setWatchNotice] = useState<string | null>(null);
+  const retryContextWatch = useRef<() => void>(() => {});
+  const onWatchStatus = useCallback((message: string | null, retry: () => void) => {
+    retryContextWatch.current = retry;
+    setWatchNotice(message);
+  }, []);
   const revalidate = useCallback(() => setRefreshGeneration((generation) => generation + 1), []);
   const loader = useDocumentLoader({ cache, reader, root, bindingId, identityKey, selectedPath,
     selectedKey, selectedRevision, selectedSnapshotRevision, refreshGeneration });
@@ -332,16 +338,21 @@ export function ContextViewer(props: ContextViewerProps) {
     rootEmpty: directory.rootEmpty, refresh, updateFile, openMarkdownLink: links.openMarkdownLink,
     commentsEnabled: source.commentsEnabled, invalidationGeneration: search.invalidationGeneration,
     refreshGeneration, ...comments, allowRaster: source.allowRaster, libraryItems: library.libraryItems };
-  const view = source.isLibrary
+  const view: ViewerModeSlots = source.isLibrary
     ? libraryViewSlots({ source, controller: library, toolbar, document: documentProps, narrow: overview.narrow })
     : filesViewSlots({ toolbar, document: <DocumentView {...documentProps} />, onTreeKeyDown: directory.onTreeKeyDown });
+  if (watchNotice) view.watchNotice = <>{view.watchNotice}<div className="context-notice context-notice-warning">
+    <span role={picker.pickerOpen ? undefined : "status"} aria-live={picker.pickerOpen ? undefined : "polite"}>{watchNotice}</span>
+    <button type="button" onClick={refresh}>Refresh files</button>
+    <button type="button" onClick={() => retryContextWatch.current()}>Retry automatic updates</button>
+  </div></>;
   return <ContextViewerFrame view={view} root={root} roots={roots} chooseRoot={chooseRoot}
     viewerRef={viewerRef} treeRef={treeRef} documentRef={documentRef} overview={overview} overviewId={overviewId}
     tree={tree} layout={source.layout} discoveryDiagnostics={discoveryDiagnostics} linkNotice={links.linkNotice}
-    search={reader?.search ? <details className="viewer-tree-search"><summary><UiIcon name="search" /> Search contents</summary><ContextSearch
+    search={reader?.search && reader.watchFiles ? <ContextSearch
       identity={identityKey} bindingId={bindingId} rootId={root.root_id} known={loader.knownRevisions}
-      search={search.searchContext} poll={search.pollContext} onSelect={files.selectSearchResult}
-      onInvalidate={search.invalidateVisibleFiles} /></details> : null}
+      search={search.searchContext} invalidate={search.checkContext} watchFiles={reader.watchFiles} onSelect={files.selectSearchResult}
+      onInvalidate={search.invalidateVisibleFiles} onViewerError={onViewerError} onWatchStatus={onWatchStatus} /> : null}
     directoryRows={<ContextDirectoryRows root={root} selectedPath={selectedPath} {...directory} />}
     onShortcut={(action) => {
       if (action === "open-file-picker") openFilePicker();
@@ -356,6 +367,7 @@ export function ContextViewer(props: ContextViewerProps) {
     {picker.pickerOpen ? <FilePicker candidates={picker.pickerCandidates} preparedCandidates={picker.preparedPickerCandidates}
       loading={picker.pickerIndex.loading} incomplete={picker.pickerIndex.incomplete}
       mayBeOutOfDate={picker.pickerIndex.mayBeOutOfDate} failed={picker.pickerIndex.failed}
+      watchUnavailable={picker.pickerIndex.watchUnavailable} onRefresh={picker.refreshPicker} onRetryWatch={picker.retryPickerWatch}
       onChoose={(candidate) => { openFile(candidate.path, null); closeFilePicker(); focusContent(); }}
       onDismiss={() => { closeFilePicker(); focusContent(); }} /> : null}
   </ContextViewerFrame>;

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { SessionSnapshotResponse, SpaceTagChangeRequest, SpaceTagsResponse } from "../../protocol/generated/v1";
 import { SPACE_TAGS_POLL_MS, useSpaceTags, type SpaceTagsState } from "./spaceTags";
+import type { SpaceWatch } from "./spaceStateStreams";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const roots: Root[] = [];
@@ -41,10 +42,10 @@ function response(spaces: SpaceTagsResponse["spaces"] = [], catalog: string[] = 
 function fixture() {
   const read = vi.fn((_session: string, _signal?: AbortSignal): Promise<SpaceTagsResponse> => Promise.resolve(response()));
   const write = vi.fn((_session: string, _request: SpaceTagChangeRequest): Promise<SpaceTagsResponse> => Promise.resolve(response()));
-  const props = { client: { spaceTags: read, changeSpaceTag: write } as unknown as CockpitClient, sessionId: "session" as string | null, snapshot: snapshot() as SessionSnapshotResponse | null, live: true };
+  const props = { client: { spaceTags: read, changeSpaceTag: write } as unknown as CockpitClient, sessionId: "session" as string | null, snapshot: snapshot() as SessionSnapshotResponse | null, live: true, watch: { counter: 0, status: "unavailable" } as SpaceWatch };
   let state!: SpaceTagsState;
   let renders = 0;
-  function Probe() { state = useSpaceTags(props.client, props.sessionId, props.snapshot, props.live); ++renders; return null; }
+  function Probe() { state = useSpaceTags(props.client, props.sessionId, props.snapshot, props.live, props.watch); ++renders; return null; }
   const root = createRoot(document.createElement("div"));
   roots.push(root);
   return { props, read, write, get state() { return state; }, get renders() { return renders; }, async render() { await act(async () => root.render(createElement(Probe))); } };
@@ -177,6 +178,39 @@ it("does not let a read started before an acknowledged write undo it", async () 
   expect(f.state.bySpace.get("s1")).toEqual(["My check"]);
   await act(async () => reconciliation.resolve(response([{ space_id: "s1", tags: ["My check"] }])));
   expect(f.state.bySpace.get("s1")).toEqual(["My check"]);
+});
+
+it("restarts an in-flight tag read on watch invalidation and ignores its stale result", async () => {
+  const f = fixture();
+  f.props.watch = { counter: 0, status: "watching" };
+  const old = deferred<SpaceTagsResponse>();
+  const fresh = deferred<SpaceTagsResponse>();
+  f.read.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+  await f.render();
+  f.props.watch = { counter: 1, status: "watching" };
+  await f.render();
+  expect(f.read).toHaveBeenCalledTimes(2);
+  expect(f.read.mock.calls[0][1]?.aborted).toBe(true);
+  await act(async () => fresh.resolve(response([{ space_id: "s2", tags: ["Needs testing"] }])));
+  await act(async () => old.resolve(response()));
+  expect(f.state.bySpace.get("s2")).toEqual(["Needs testing"]);
+});
+
+it("reconciles watch changes received during a pending mutation", async () => {
+  const f = fixture();
+  f.props.watch = { counter: 0, status: "watching" };
+  await f.render();
+  const pending = deferred<SpaceTagsResponse>();
+  f.write.mockReturnValueOnce(pending.promise);
+  let outcome!: Promise<boolean>;
+  await act(async () => { outcome = f.state.change("s1", "My check", true); });
+  f.props.watch = { counter: 1, status: "watching" };
+  await f.render();
+  expect(f.read).toHaveBeenCalledTimes(1);
+  f.read.mockResolvedValueOnce(response([{ space_id: "s1", tags: ["My check"] }, { space_id: "s2", tags: ["Needs testing"] }]));
+  await act(async () => { pending.resolve(response([{ space_id: "s1", tags: ["My check"] }])); await outcome; });
+  expect(f.read).toHaveBeenCalledTimes(2);
+  expect(f.state.bySpace.get("s2")).toEqual(["Needs testing"]);
 });
 
 it("keeps two distinct concurrently acknowledged Spaces when full write responses arrive out of order", async () => {
@@ -351,4 +385,26 @@ it("suppresses repeated initial failures but publishes recovery even when tag da
   await act(async () => window.dispatchEvent(new Event("focus")));
   expect(f.renders).toBe(failedRenders + 1);
   expect(f.state).toBe(recovered);
+});
+
+it("retries read failures while watching without losing last-known tags", async () => {
+  const f = fixture();
+  f.props.watch = { counter: 0, status: "watching" };
+  f.read.mockResolvedValueOnce(response([{ space_id: "s1", tags: ["My check"] }]));
+  await f.render();
+  f.read.mockRejectedValueOnce(new Error("offline")).mockRejectedValueOnce(new Error("offline"));
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(f.state.bySpace.get("s1")).toEqual(["My check"]);
+  await act(async () => vi.advanceTimersByTime(SPACE_TAGS_POLL_MS));
+  expect(f.read).toHaveBeenCalledTimes(3);
+  expect(f.state.bySpace.get("s1")).toEqual(["My check"]);
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+  await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+  expect(vi.getTimerCount()).toBe(0);
+  f.read.mockResolvedValueOnce(response([{ space_id: "s2", tags: ["Needs testing"] }]));
+  vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+  await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+  expect(f.state.bySpace.get("s2")).toEqual(["Needs testing"]);
+  await act(async () => vi.advanceTimersByTime(SPACE_TAGS_POLL_MS * 2));
+  expect(f.read).toHaveBeenCalledTimes(4);
 });

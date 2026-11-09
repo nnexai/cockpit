@@ -1,5 +1,8 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { OrchestrationSnapshot, Run, TaskLane, TaskView } from "../../protocol/generated/v1";
+import type { TaskLane, TaskView } from "../../protocol/generated/v1";
+import type { SupervisorOverview } from "./useSupervisor";
+import type { CockpitClient } from "../../client/CockpitClient";
+import { useTaskHistoryMessages } from "./useTaskHistoryMessages";
 import { dependencySummary } from "./dependencies";
 import { TaskHistoryDetail } from "./TaskHistoryDetail";
 import { orderDoneTasks, taskHistory } from "./taskHistory";
@@ -25,11 +28,11 @@ export function TaskRow({ view, tasks, onOpen, rowKey, selected, projectLabel, a
   const className = `liaison-task-row lane-${view.lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}${activity ? ` activity-${activity.kind}` : ""}`;
   return onOpen ? <button type="button" className={className} data-row-key={rowKey} aria-current={selected ? "true" : undefined} onClick={onOpen} aria-label={`${view.task.title}, ${taskStage(view, activity)}. Open history`}>{content}</button> : <div className={className}>{content}</div>;
 }
-export function TaskRail({ tasks, waiting, status, onOverview, snapshot, rootId, fresh }: {
-  tasks: readonly TaskView[]; waiting: boolean; status: string | null; onOverview(): void;
-  snapshot: OrchestrationSnapshot | null; rootId: string | null; fresh: boolean;
+export function TaskRail({ client, tasks, waiting, status, onOverview, snapshot, rootId, fresh, connected = true, active = true }: {
+  client: CockpitClient; connected?: boolean; active?: boolean; tasks: readonly TaskView[]; waiting: boolean; status: string | null; onOverview(): void;
+  snapshot: SupervisorOverview | null; rootId: string | null; fresh: boolean;
 }) {
-  const [selected, setSelected] = useState<{ taskId: string; rowKey: string } | null>(null);
+  const [selected, setSelected] = useState<{ taskId: string; rowKey: string; client: CockpitClient; scope: string } | null>(null);
   const [doneOpen, setDoneOpen] = useState(false), [doneLimit, setDoneLimit] = useState(5);
   const rail = useRef<HTMLElement>(null), backButton = useRef<HTMLButtonElement>(null);
   const focusIntent = useRef<"back" | "row" | null>(null);
@@ -39,15 +42,22 @@ export function TaskRail({ tasks, waiting, status, onOverview, snapshot, rootId,
   const rootRuns = useMemo(() => snapshot?.runs.filter(run => run.root_id === rootId) ?? [], [snapshot, rootId]);
   const done = useMemo(() => orderDoneTasks(tasks.filter(view => view.task.checked), rootRuns), [tasks, rootRuns]);
   const groups = useMemo(() => groupTasks(tasks, rootRuns), [tasks, rootRuns]);
-  const view = selected ? tasks.find((task, index) => `${task.task.task_id}:${index}` === selected.rowKey) ?? tasks.find(task => task.task.task_id === selected.taskId) : null;
-  const history = useMemo(() => snapshot && rootId && view ? taskHistory(snapshot, rootId, view, tasks, fresh) : null, [snapshot, rootId, view, tasks, fresh]);
+  const selectionScope = JSON.stringify([snapshot?.session_id, snapshot?.state_store_id, rootId]);
+  const view = active && selected && selected.client === client && selected.scope === selectionScope ? tasks.find((task, index) => `${task.task.task_id}:${index}` === selected.rowKey) ?? tasks.find(task => task.task.task_id === selected.taskId) : null;
+  const historyMessages = useTaskHistoryMessages(client, snapshot && rootId && view && tasks.filter(task => task.task.task_id === view.task.task_id).length === 1 ? { sessionId: snapshot.session_id, stateStoreId: snapshot.state_store_id, rootId, taskId: view.task.task_id } : null, snapshot?.revision ?? 0, connected, snapshot?.tasks_token);
+  const history = useMemo(() => {
+    if (!snapshot || !rootId || !view) return null;
+    const data = historyMessages.data;
+    if (!data && tasks.filter(task => task.task.task_id === view.task.task_id).length === 1) return null;
+    return taskHistory(data ? { ...snapshot, cleanup: data.cleanup, task_ownership: data.task_ownership, unreflected_inputs: data.unreflected_inputs } : snapshot, rootId, view, tasks, fresh, data?.messages ?? null, data?.runs ?? null);
+  }, [snapshot, rootId, view, tasks, fresh, historyMessages.data]);
   const allDone = open.length === 0;
   useLayoutEffect(() => {
     if (allDone) setDoneOpen(false);
     if (selected && !view) {
       const hadFocus = rail.current?.contains(document.activeElement);
       setSelected(null);
-      if (hadFocus) rail.current?.focus({ preventScroll: true });
+      if (hadFocus && active) rail.current?.focus({ preventScroll: true });
       return;
     }
     if (focusIntent.current === "back") backButton.current?.focus({ preventScroll: true });
@@ -56,7 +66,7 @@ export function TaskRail({ tasks, waiting, status, onOverview, snapshot, rootId,
       (row ?? rail.current)?.focus({ preventScroll: true });
     }
     focusIntent.current = null;
-  }, [selected, view, tasks, allDone]);
+  }, [selected, view, tasks, allDone, active]);
   if (!tasks.length) return null;
   const goBack = () => {
     returnRow.current = selected?.rowKey ?? null;
@@ -65,7 +75,7 @@ export function TaskRail({ tasks, waiting, status, onOverview, snapshot, rootId,
   };
   const rows = (items: readonly TaskView[]) => items.map(item => {
     const index = tasks.indexOf(item), rowKey = `${item.task.task_id}:${index}`;
-    return <li key={rowKey}><TaskRow view={item} tasks={tasks} rowKey={rowKey} activity={taskActivity(item, snapshot, rootId, fresh)} onOpen={() => { focusIntent.current = "back"; setSelected({ taskId: item.task.task_id, rowKey }); }} /></li>;
+    return <li key={rowKey}><TaskRow view={item} tasks={tasks} rowKey={rowKey} activity={taskActivity(item, snapshot, rootId, fresh)} onOpen={() => { focusIntent.current = "back"; setSelected({ taskId: item.task.task_id, rowKey, client, scope: selectionScope }); }} /></li>;
   });
   const summary = taskLanes.filter(({ lane }) => lane !== "accepted").flatMap(({ lane, label }) => {
     const count = open.filter(view => view.lane === lane).length;
@@ -79,7 +89,7 @@ export function TaskRail({ tasks, waiting, status, onOverview, snapshot, rootId,
     onKeyDown={event => { if (event.key === "Escape" && selected) { event.preventDefault(); event.stopPropagation(); goBack(); } }}>
     <header>{selected && view ? <button ref={backButton} type="button" className="liaison-detail-back" aria-label="Back to tasks" onClick={goBack}>‹ Tasks</button>
       : <><strong>Tasks</strong><span className={waiting ? "liaison-waiting" : "liaison-task-status"}>{hint}</span></>}{overview}</header>
-    {selected && view ? <TaskHistoryDetail view={view} history={history} activity={taskActivity(view, snapshot, rootId, fresh)} /> : <>
+    {selected && view ? <TaskHistoryDetail view={view} history={history} activity={taskActivity(view, snapshot, rootId, fresh)} historyTransfer={historyMessages} /> : <>
       <ul id={listId} className="liaison-project-list">{groups.map((group, index) => {
         const visible = group.tasks.filter(item => !item.task.checked || shownDone.has(item));
         if (!visible.length) return null;
@@ -91,7 +101,7 @@ export function TaskRail({ tasks, waiting, status, onOverview, snapshot, rootId,
     </>}
   </aside>;
 }
-export function SupervisorTasks({ tasks, runs, onOpen, selectedKey, project, snapshot, rootId, fresh }: { tasks: readonly TaskView[]; runs: readonly Run[]; onOpen(view: TaskView, rowKey: string): void; selectedKey?: string | null; project: string | null; snapshot: OrchestrationSnapshot | null; rootId: string | null; fresh: boolean }) {
+export function SupervisorTasks({ tasks, runs, onOpen, selectedKey, project, snapshot, rootId, fresh }: { tasks: readonly TaskView[]; runs: readonly SupervisorOverview["runs"][number][]; onOpen(view: TaskView, rowKey: string): void; selectedKey?: string | null; project: string | null; snapshot: SupervisorOverview | null; rootId: string | null; fresh: boolean }) {
   const [doneLimit, setDoneLimit] = useState(12);
   const filtered = project === null ? tasks : tasks.filter(view => projectOf(view).key === project);
   const completed = orderDoneTasks(filtered.filter(view => view.lane === "accepted"), runs);

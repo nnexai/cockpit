@@ -9,8 +9,8 @@ import type {
   ContextSearchResult,
 } from "../../protocol/generated/v1";
 import { viewerErrorCode } from "../layout/viewerLifecycle";
-
-const POLL_INTERVAL_MS = 3_000;
+import type { ContextReader } from "./contextSource";
+import { UiIcon } from "../UiIcon";
 
 export type ContextSearchProps = {
   identity: string;
@@ -18,9 +18,11 @@ export type ContextSearchProps = {
   rootId: string;
   known: readonly ContextKnownRevision[];
   search: (request: ContextSearchRequest, signal: AbortSignal) => Promise<ContextSearchResponse>;
-  poll: (request: ContextInvalidationRequest, signal: AbortSignal) => Promise<ContextInvalidationResponse>;
+  invalidate: (request: ContextInvalidationRequest, signal: AbortSignal) => Promise<ContextInvalidationResponse>;
+  watchFiles: NonNullable<ContextReader["watchFiles"]>;
   onSelect: (result: ContextSearchResult) => void;
   onInvalidate: (invalidations: ContextInvalidation[]) => void;
+  onWatchStatus?: (message: string | null, retry: () => void) => void;
   onViewerError?: (error: unknown) => void;
 };
 
@@ -36,9 +38,11 @@ export function ContextSearch({
   rootId,
   known,
   search,
-  poll,
+  invalidate,
+  watchFiles,
   onSelect,
   onInvalidate,
+  onWatchStatus,
   onViewerError,
 }: ContextSearchProps) {
   const queryId = useId();
@@ -50,11 +54,12 @@ export function ContextSearch({
   const [partialReason, setPartialReason] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [pollError, setPollError] = useState<string | null>(null);
+  const [checkError, setCheckError] = useState<string | null>(null);
   const searchGenerationRef = useRef(0);
-  const pollGenerationRef = useRef(0);
+  const checkGenerationRef = useRef(0);
   const searchAbortRef = useRef<AbortController | null>(null);
   const identityRef = useRef(identity);
+  const retryWatchRef = useRef<(() => void) | null>(null);
   const onInvalidateRef = useRef(onInvalidate);
   const onViewerErrorRef = useRef(onViewerError);
   onViewerErrorRef.current = onViewerError;
@@ -73,9 +78,9 @@ export function ContextSearch({
     searchGenerationRef.current = searchGenerationRef.current === 0xffff_ffff ? 1 : searchGenerationRef.current + 1;
     return searchGenerationRef.current;
   }, []);
-  const nextPollGeneration = useCallback(() => {
-    pollGenerationRef.current = pollGenerationRef.current === 0xffff_ffff ? 1 : pollGenerationRef.current + 1;
-    return pollGenerationRef.current;
+  const nextCheckGeneration = useCallback(() => {
+    checkGenerationRef.current = checkGenerationRef.current === 0xffff_ffff ? 1 : checkGenerationRef.current + 1;
+    return checkGenerationRef.current;
   }, []);
 
   const validSearchResponse = useCallback((response: ContextSearchResponse, generation: number, requestQuery: string) => (
@@ -133,7 +138,7 @@ export function ContextSearch({
     setSearchRevision(null);
     setPartialReason(null);
     setSearchError(null);
-    setPollError(null);
+    setCheckError(null);
     setSearching(false);
   }, [identity, nextSearchGeneration, rootId]);
 
@@ -142,52 +147,75 @@ export function ContextSearch({
     searchAbortRef.current = null;
     nextSearchGeneration();
   }, [nextSearchGeneration]);
+  useEffect(() => {
+    onWatchStatus?.(checkError, () => retryWatchRef.current?.());
+    return () => onWatchStatus?.(null, () => {});
+  }, [checkError, onWatchStatus]);
 
   useEffect(() => {
     if (knownSnapshot.length === 0) return undefined;
     let cancelled = false;
-    let timeout: number | undefined;
     let activeController: AbortController | null = null;
-    const runPoll = async () => {
-      const controller = new AbortController();
-      activeController = controller;
-      const generation = nextPollGeneration();
-      try {
-        const response = await poll({
-          binding_id: bindingId,
-          root_id: rootId,
-          request_generation: generation,
-          known: knownSnapshot,
-        }, controller.signal);
-        if (cancelled || activeController !== controller || controller.signal.aborted
-          || generation !== pollGenerationRef.current || identityRef.current !== identity
-          || response.binding_id !== bindingId || response.root_id !== rootId
-          || response.request_generation !== generation) return;
-        setPollError(null);
-        if (response.invalidations.length > 0) onInvalidateRef.current(response.invalidations);
-      } catch (error) {
-        if (!cancelled && activeController === controller && !controller.signal.aborted
-          && generation === pollGenerationRef.current && identityRef.current === identity) {
-          setPollError(errorText(error));
-          if (viewerErrorCode(error) === "viewer_not_found") onViewerErrorRef.current?.(error);
-        }
-      } finally {
-        if (activeController === controller) activeController = null;
-        if (!cancelled && identityRef.current === identity) {
-          timeout = window.setTimeout(() => { void runPoll(); }, POLL_INTERVAL_MS);
-        }
-      }
+    let running: Promise<void> | null = null;
+    let dirty = false;
+    let watching = false;
+    const visibilityChanged = () => {
+      if (document.visibilityState === "hidden") { dirty = false; activeController?.abort(); }
     };
-    void runPoll();
+    document.addEventListener("visibilitychange", visibilityChanged);
+    const check = () => {
+      dirty = true;
+      if (running) return running;
+      running = (async () => {
+        while (dirty && !cancelled) {
+          dirty = false;
+          const controller = new AbortController();
+          activeController = controller;
+          const generation = nextCheckGeneration();
+          try {
+            const response = await invalidate({ binding_id: bindingId, root_id: rootId,
+              request_generation: generation, known: knownSnapshot }, controller.signal);
+            if (cancelled || controller.signal.aborted || generation !== checkGenerationRef.current
+              || identityRef.current !== identity || response.binding_id !== bindingId
+              || response.root_id !== rootId || response.request_generation !== generation) continue;
+            setCheckError(response.truncated || response.invalidations.some((item) => item.state === "unavailable")
+              ? "Not all visible files could be checked; refresh to retry."
+              : watching ? null : "Automatic updates unavailable; displayed data may be stale.");
+            if (response.invalidations.length > 0) onInvalidateRef.current(response.invalidations);
+          } catch (error) {
+            if (!cancelled && !controller.signal.aborted && identityRef.current === identity) {
+              setCheckError(errorText(error));
+              if (viewerErrorCode(error) === "viewer_not_found") onViewerErrorRef.current?.(error);
+            }
+          } finally {
+            if (activeController === controller) activeController = null;
+          }
+        }
+      })().finally(() => { running = null; });
+      return running;
+    };
+    const subscription = watchFiles(rootId, [...new Set(knownSnapshot.map((entry) => entry.path))], async (event) => {
+      if (event.kind === "unavailable") { watching = false; setCheckError("Automatic updates unavailable; displayed data may be stale."); return; }
+      if (event.kind === "ready") watching = true;
+      await check();
+    }, () => {
+      watching = false;
+      if (!cancelled) setCheckError("Automatic updates unavailable; displayed data may be stale.");
+    });
+    retryWatchRef.current = () => { watching = false; subscription.retry(); };
     return () => {
       cancelled = true;
-      if (timeout !== undefined) window.clearTimeout(timeout);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      retryWatchRef.current = null;
+      subscription.close();
       activeController?.abort();
     };
-  }, [bindingId, identity, knownSnapshot, nextPollGeneration, poll, rootId]);
+  }, [bindingId, identity, knownSnapshot, nextCheckGeneration, invalidate, rootId, watchFiles]);
 
   return (
     <section className="context-search" aria-label="Search Context">
+      {!onWatchStatus && checkError ? <div><p className="context-search-poll" role="status" aria-live="polite">{checkError}</p><button type="button" onClick={() => retryWatchRef.current?.()}>Retry automatic updates</button></div> : null}
+      <details className="viewer-tree-search"><summary><UiIcon name="search" /> Search contents</summary>
       <form className="context-search-form" onSubmit={(event) => { event.preventDefault(); void runSearch(); }}>
         <label htmlFor={queryId}>Search contents</label>
         <input
@@ -211,7 +239,6 @@ export function ContextSearch({
         <button type="submit" disabled={searching || !query.trim()}>{searching ? "Searching…" : nextOffset !== null ? "Load more" : "Search"}</button>
       </form>
       {searchError ? <p className="context-search-error" role="status">{searchError}</p> : null}
-      {pollError ? <p className="context-search-poll" role="status">Visible-file refresh: {pollError}</p> : null}
       {truncated ? <p className="context-search-truncated" role="status">Search is partial{partialReason ? `: ${partialReason}` : ""}{nextOffset !== null ? "; load more to continue" : ""}.</p> : null}
       {results.length > 0 ? <ol className="context-search-results">{results.map((result) => (
         <li key={`${result.path}\u0000${result.line}\u0000${result.revision}`}>
@@ -221,6 +248,7 @@ export function ContextSearch({
           </button>
         </li>
       ))}</ol> : null}
+      </details>
     </section>
   );
 }

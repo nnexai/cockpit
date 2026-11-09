@@ -2,19 +2,29 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import type { TaskView } from "../../protocol/generated/v1";
+import type { TaskHistoryRequest, TaskView } from "../../protocol/generated/v1";
 import { TaskRail } from "./SupervisorTasks";
 import { TaskHistoryDetail } from "./TaskHistoryDetail";
 import type { TaskHistory } from "./taskHistory";
 import { orchestrationFixture, taskFixture } from "./testFixtures";
+import type { CockpitClient } from "../../client/CockpitClient";
+const client = { orchestrationTaskHistory: vi.fn(async (request: TaskHistoryRequest) => ({ ...request, revision: 1, digest: "fixture", not_modified: false, messages: [], runs: [], cleanup: [], task_ownership: [], unreflected_inputs: [] })) } as unknown as CockpitClient;
 
 let root: Root | null = null, host: HTMLDivElement;
 afterEach(() => { if (root) act(() => root!.unmount()); root = null; host?.remove(); });
 async function render(tasks: TaskView[]) {
   if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
   const snapshot = orchestrationFixture(tasks);
-  await act(async () => root!.render(<TaskRail tasks={tasks} snapshot={snapshot} rootId="root" fresh waiting={false} status={null} onOverview={vi.fn()} />));
+  await act(async () => root!.render(<TaskRail client={client} tasks={tasks} snapshot={snapshot} rootId="root" fresh waiting={false} status={null} onOverview={vi.fn()} />));
 }
+it("loads message history only after opening a task", async () => {
+  vi.mocked(client.orchestrationTaskHistory).mockClear();
+  await render([taskFixture("task")]);
+  expect(client.orchestrationTaskHistory).not.toHaveBeenCalled();
+  await act(async () => host.querySelector<HTMLButtonElement>("[data-row-key]")!.click());
+  expect(client.orchestrationTaskHistory).toHaveBeenCalledTimes(1);
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Back to tasks"]')!.click());
+});
 it("retains full task titles and stage words in rail rows", async () => {
   const title = "Experiment with agent steering and busy delivery across a long-running task";
   const task = taskFixture("task", { lane: "working" });

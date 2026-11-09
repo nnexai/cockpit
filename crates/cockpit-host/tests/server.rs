@@ -1718,6 +1718,27 @@ async fn operation_inputs_preserve_path_body_and_runtime_rejection_precedence() 
 }
 
 #[tokio::test]
+async fn task_history_route_rejects_bad_scope_and_unknown_query() {
+    let root = fixture_root();
+    let authority = test_authority();
+    let router = build_router(service(), &root, authority).expect("router");
+    for (path, code) in [
+        ("/api/v1/sessions/bad%3Aid/orchestration/tasks/task/history?root_id=root&state_store_id=store", "invalid_session_id"),
+        ("/api/v1/sessions/session/orchestration/tasks/task/history?root_id=root&state_store_id=store&session_id=other", "invalid_orchestration_request"),
+        ("/api/v1/sessions/session/orchestration/tasks/task/history?root_id=root", "invalid_orchestration_request"),
+    ] {
+        let response = router.clone().oneshot(Request::builder().method("GET").uri(path)
+            .header("host", authority.to_string())
+            .body(axum::body::Body::empty()).expect("request")).await.expect("response");
+        assert_eq!(response.status(), 400, "{path}");
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024).await.expect("body");
+        let error: serde_json::Value = serde_json::from_slice(&bytes).expect("error JSON");
+        assert_eq!(error["code"], code, "{path}");
+    }
+    std::fs::remove_dir_all(root).expect("cleanup");
+}
+
+#[tokio::test]
 async fn image_routes_require_origin_and_enforce_body_budgets() {
     let root = fixture_root();
     let authority = test_authority();

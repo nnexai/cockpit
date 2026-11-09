@@ -6,6 +6,21 @@ import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { CockpitClientError, type CockpitClient } from "../../client/CockpitClient";
 import type { NotesCatalogEntry, NotesComment, NotesRequest, NotesResponse, NotesTargetInfo, NotesTodo } from "../../protocol/generated/v1";
 import type { LibrarySpace } from "../library/libraryState";
+type WatchHandler = (event: { kind: "ready" | "changed" | "unavailable"; topics: ("scratchpad" | "todos" | "decisions" | "comments" | "binding")[] }) => Promise<void>;
+const watches = new WeakMap<object, Map<string, WatchHandler>>();
+vi.mock("../localChanges", () => ({
+  subscribeLocalChanges: (client: object, scope: { kind: string }, onEvent: WatchHandler) => {
+    let handlers = watches.get(client);
+    if (!handlers) { handlers = new Map(); watches.set(client, handlers); }
+    handlers.set(scope.kind, onEvent);
+    void Promise.resolve().then(() => onEvent({ kind: "ready", topics: [] }));
+    return { close: () => handlers!.delete(scope.kind), retry: () => {} };
+  },
+}));
+async function notify(current: Fixture, scope: string, topics: ("scratchpad" | "todos" | "decisions" | "comments" | "binding")[], kind: "changed" | "unavailable" = "changed") {
+  await act(async () => { await watches.get(current.client)?.get(scope)?.({ kind, topics }); });
+  await settle();
+}
 
 // Keep the real NotesView, useNotes, TaskDetail and TodoTitle consumers. Only
 // CodeMirror/Markdown rendering is replaced; no guard or mutation logic lives here.
@@ -181,6 +196,64 @@ afterEach(async () => {
 });
 
 describe("NotesView consumer safety", () => {
+  it("refreshes on content and comment invalidations without periodic reads and keeps drafts", async () => {
+    vi.useFakeTimers();
+    const current = fixture();
+    await mount(current);
+    await openTask(current);
+    // Decisions mounts even on other tabs and performs its one-shot 160 ms
+    // search debounce. Finish that initial read before measuring idle activity.
+    await act(async () => { await vi.advanceTimersByTimeAsync(160); });
+    await settle();
+    expect(current.notes.mock.calls.some(([request]) => request.operation.op === "decision_list" && request.operation.status === "current")).toBe(true);
+    const before = current.notes.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(current.notes.mock.calls.length).toBe(before);
+    current.replaceTodos([{ ...current.task, text: "Changed externally", revision: "item2" }]);
+    await notify(current, "notes_content", ["todos", "comments"]);
+    expect(host!.textContent).toContain("Changed externally");
+    expect(query<HTMLTextAreaElement>('[aria-label="New comment Markdown"]').value).toBe("Comment draft to preserve");
+    await notify(current, "notes_content", [], "unavailable");
+    expect(host!.textContent).toContain("Automatic updates unavailable");
+    expect(query<HTMLTextAreaElement>('[aria-label="New comment Markdown"]').value).toBe("Comment draft to preserve");
+  });
+  it("retains a content invalidation arriving during a read", async () => {
+    const current = fixture();
+    await mount(current);
+    const held = deferred<NotesResponse>();
+    const original = current.notes.getMockImplementation()!;
+    let heldOnce = false;
+    current.notes.mockImplementation(request => {
+      if (request.operation.op === "scratchpad_read" && !heldOnce) { heldOnce = true; return held.promise; }
+      return original(request);
+    });
+    let first!: Promise<void>;
+    await act(async () => { first = watches.get(current.client)!.get("notes_content")!({ kind: "changed", topics: ["scratchpad"] }); await Promise.resolve(); });
+    current.replaceTodos([{ ...current.task, text: "Final external state", revision: "item2" }]);
+    let second!: Promise<void>;
+    await act(async () => { second = watches.get(current.client)!.get("notes_content")!({ kind: "changed", topics: ["todos"] }); await Promise.resolve(); });
+    await act(async () => {
+      held.resolve(current.response({ kind: "scratchpad", document: { content: "Saved notes", revision: "scratch-1" } }));
+      await Promise.all([first, second]);
+    });
+    await click(query<HTMLButtonElement>("#f-todos"));
+    expect(host!.textContent).toContain("Final external state");
+    expect(current.notes.mock.calls.filter(([request]) => request.operation.op === "scratchpad_read").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("defers binding invalidation until the attachment picker closes", async () => {
+    const current = fixture();
+    current.resolveTarget.mockRejectedValue(problem("notes_unbound", "Space has no association"));
+    await mount(current);
+    await click(button("Attach existing notes…"));
+    const before = current.resolveTarget.mock.calls.length;
+    await notify(current, "notes_binding", ["binding"]);
+    expect(current.resolveTarget).toHaveBeenCalledTimes(before);
+    await click(button("Cancel"));
+    expect(current.resolveTarget).toHaveBeenCalledTimes(before + 1);
+  });
+
+
   it("requires explicit acknowledgment after saved-state reads without replaying an uncertain comment or enabling other writes", async () => {
     const current = fixture();
     current.addComment.mockRejectedValueOnce(new TypeError("Connection lost after sending comment"));

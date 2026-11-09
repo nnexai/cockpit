@@ -18,6 +18,114 @@ fn root_wait_request(fixture: &Fixture, root_id: &str, timeout_ms: u32) -> Orche
         after_tasks_token: snapshot.tasks_token, timeout_ms,
     }
 }
+#[tokio::test]
+async fn change_lease_filters_roots_and_keeps_edges_across_checkpoints() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let other = fixture.root();
+    fixture.create_task(&root, "Selected document");
+    fixture.create_task(&other, "Other document");
+    let service = std::sync::Arc::new(OrchestrationService::open(&fixture.configuration).unwrap());
+    let lease = service.change_lease(SESSION, service.store_identity(), Some(&root)).unwrap();
+    let mut receiver = lease.receiver();
+    let mut filesystem = service.changes().unwrap();
+    let other_path = service.base().join("tasks").join(format!("{other}.md"));
+    std::fs::write(other_path, "unrelated replacement").unwrap();
+    tokio::time::timeout(Duration::from_secs(1), filesystem.changed()).await.unwrap().unwrap();
+    assert!(tokio::time::timeout(Duration::from_millis(100), receiver.changed()).await.is_err());
+    let path = service.base().join("tasks").join(format!("{root}.md"));
+    let replacement = path.with_extension("tmp");
+    let before_revision = fixture.state().revision;
+    std::fs::write(&replacement, "first replacement").unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), receiver.changed()).await.unwrap().unwrap();
+    let first = lease.checkpoint().generation;
+    assert_eq!(before_revision, fixture.state().revision);
+    std::fs::write(&replacement, "second replacement").unwrap();
+    std::fs::rename(&replacement, &path).unwrap();
+    tokio::time::timeout(Duration::from_secs(1), receiver.changed()).await.unwrap().unwrap();
+    assert!(lease.checkpoint().generation > first);
+}
+
+#[tokio::test(start_paused = true)]
+async fn change_lease_is_idle_without_deadline_and_drop_stops_task() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let service = std::sync::Arc::new(OrchestrationService::open(&fixture.configuration).unwrap());
+    let lease = service.change_lease(SESSION, service.store_identity(), Some(&root)).unwrap();
+    let mut receiver = lease.receiver();
+    tokio::time::advance(Duration::from_secs(95)).await;
+    tokio::task::yield_now().await;
+    assert_eq!(lease.checkpoint().generation, 0);
+    assert!(!receiver.has_changed().unwrap());
+    drop(lease);
+    tokio::task::yield_now().await;
+    assert!(receiver.changed().await.is_err());
+}
+
+#[tokio::test]
+async fn change_lease_rejects_foreign_authority_and_wakes_on_external_commit() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let foreign = fixture.root();
+    // Fixture::root deliberately reseeds additional roots into SESSION.
+    fixture.seed_run(&foreign, |run| run.session_id = "foreign-session".into());
+    let service = std::sync::Arc::new(OrchestrationService::open(&fixture.configuration).unwrap());
+    assert!(service.change_lease(SESSION, "wrong", Some(&root)).is_err());
+    assert!(service.change_lease(SESSION, service.store_identity(), Some(&foreign)).is_err());
+    assert!(service.change_lease("wrong-session", service.store_identity(), Some(&root)).is_err());
+    let lease = service.change_lease(SESSION, service.store_identity(), Some(&root)).unwrap();
+    let mut receiver = lease.receiver();
+    fixture.create_task(&root, "External service commit");
+    tokio::time::timeout(Duration::from_secs(1), receiver.changed()).await.unwrap().unwrap();
+    assert!(lease.checkpoint().generation > 0);
+}
+
+#[tokio::test]
+async fn change_lease_reports_closed_old_watcher_after_sibling_recreates_it() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let service = std::sync::Arc::new(OrchestrationService::open(&fixture.configuration).unwrap());
+    let a = service.change_lease(SESSION, service.store_identity(), Some(&root)).unwrap();
+    let b = service.change_lease(SESSION, service.store_identity(), Some(&root)).unwrap();
+    let mut first = a.receiver();
+    let mut second = b.receiver();
+    *service.notifications.lock().unwrap() = None;
+    let _replacement = service.changes().unwrap();
+    tokio::time::timeout(Duration::from_secs(1), first.changed()).await.unwrap().unwrap();
+    tokio::time::timeout(Duration::from_secs(1), second.changed()).await.unwrap().unwrap();
+    assert!(a.checkpoint().unavailable.is_some());
+    assert!(b.checkpoint().unavailable.is_some());
+    let fresh = service.change_lease(SESSION, service.store_identity(), Some(&root)).unwrap();
+    assert!(fresh.checkpoint().unavailable.is_none());
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn change_lease_rejects_replaced_base_and_tasks_after_watcher_recreation() {
+    for replace_base in [false, true] {
+        let fixture = Fixture::new();
+        let root = fixture.root();
+        let service = std::sync::Arc::new(OrchestrationService::open(&fixture.configuration).unwrap());
+        let lease = service.change_lease(SESSION, service.store_identity(), Some(&root)).unwrap();
+        let mut receiver = lease.receiver();
+        let base = service.base().to_owned();
+        let replaced = if replace_base { base.clone() } else { base.join("tasks") };
+        let old = replaced.with_extension("old");
+        std::fs::rename(&replaced, &old).unwrap();
+        std::fs::create_dir(&replaced).unwrap();
+        if replace_base { std::fs::create_dir(replaced.join("tasks")).unwrap(); }
+        // Simulate a sibling consuming the watcher failure and reopening at the
+        // same pathname before this lease gets its turn.
+        *service.notifications.lock().unwrap() = None;
+        let _replacement = service.changes().unwrap();
+        assert!(service.authorize_change_scope(SESSION, service.store_identity(), Some(&root)).is_err());
+        assert!(service.change_lease(SESSION, service.store_identity(), Some(&root)).is_err());
+        tokio::time::timeout(Duration::from_secs(1), receiver.changed()).await.unwrap().unwrap();
+        assert!(lease.checkpoint().unavailable.is_some());
+    }
+}
+
+
 
 #[tokio::test]
 async fn cleanup_ref_watch_delivers_external_head_packed_and_loose_ref_replacements() {

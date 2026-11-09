@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import type { DocumentViewProps } from "../context/DocumentView";
 import type { ViewerModeSlots, ViewerToolbarProps } from "../context/ContextViewerFrame";
 import type { LibraryViewerController } from "./useLibraryViewerController";
@@ -9,6 +10,22 @@ import { ErrorSlot } from "../ErrorSlot";
 import { LibraryTree } from "./LibraryTree";
 import { AttachmentReport } from "./LibraryItemHeader";
 import { RefreshReport } from "./RefreshReport";
+function LibraryWatchNotice({ refresh, retry }: { refresh: () => void; retry: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => () => {
+    const notice = ref.current;
+    if (!notice?.contains(document.activeElement)) return;
+    const viewer = notice.closest(".context-viewer");
+    const target = viewer?.querySelector<HTMLElement>(".context-tree [aria-current='true']") ??
+      viewer?.querySelector<HTMLElement>(".context-document");
+    target?.focus();
+  }, []);
+  return <div ref={ref} className="context-notice context-notice-warning">
+    <span role="status" aria-live="polite" aria-atomic="true">Automatic updates unavailable. Local Library data may be out of date.</span>{" "}
+    <button type="button" onClick={refresh}>Reload local Library</button>{" "}
+    <button type="button" onClick={retry}>Retry automatic updates</button>
+  </div>;
+}
 function LibraryTreePane({ source, controller }: { source: LibraryViewerSource; controller: LibraryViewerController }) {
   const { library } = source;
   const { setLibraryAdd, selectedLibraryItem, selectedAttachmentId, pendingItemIds, libraryActions, setLibraryTreeNotice } = controller;
@@ -56,6 +73,7 @@ export function libraryViewSlots({ source, controller, toolbar, document, narrow
 }): ViewerModeSlots {
   return { className: " is-library", treeLabel: "Library items",
     toolbar: <LibraryToolbar {...toolbar} controller={controller} />,
+    watchNotice: source.library.watchUnavailable ? <LibraryWatchNotice refresh={toolbar.refresh} retry={source.library.retryWatch} /> : null,
     treeLead: <LibraryTreePane source={source} controller={controller} />,
     document: <LibraryDocumentView {...document} source={source} controller={controller} narrow={narrow} />,
     status: <LibraryStatusArea source={source} controller={controller} /> };

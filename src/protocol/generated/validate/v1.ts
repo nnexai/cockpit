@@ -59,6 +59,7 @@ export const wireSpaceGitStatus: WireDescriptor<V1.SpaceGitStatus> = struct<V1.S
 
 export const wireSpaceGitStatusResponse: WireDescriptor<V1.SpaceGitStatusResponse> = struct<V1.SpaceGitStatusResponse>("SpaceGitStatusResponse", {
   "session_id": req(str),
+  "server_instance": req(str),
   "spaces": req(list(named(() => wireSpaceGitStatus))),
 });
 

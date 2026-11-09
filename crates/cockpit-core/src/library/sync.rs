@@ -20,6 +20,7 @@ use cockpit_protocol::{
     projects::{ProjectDiagnostic, ProviderKind},
 };
 use serde::{Deserialize, Serialize};
+use notify::{EventKind, RecursiveMode, Watcher};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::{self, Read},
@@ -44,6 +45,101 @@ const HOUR: i64 = 60 * MINUTE;
 const ABSENCE_DELAY: i64 = 30 * MINUTE;
 const DRAIN_ITEMS: usize = 100;
 const DRAIN_SECONDS: u64 = 600;
+const SCHEDULER_RETRY: Duration = Duration::from_secs(60);
+
+// The watch channel coalesces bursts while retaining a sticky failure until
+// the watcher is rearmed. Even an unchanged healthy value signals a mutation.
+fn scheduler_signal(tx: &tokio::sync::watch::Sender<bool>, failure: bool) {
+    tx.send_modify(|failed| *failed |= failure);
+}
+
+// Register before reading the durable state so a concurrent atomic replacement
+// cannot be lost between the snapshot and going to sleep.
+pub(super) fn scheduler_watch(store: &Store) -> notify::Result<(notify::RecommendedWatcher, tokio::sync::watch::Receiver<bool>)> {
+    let meta = store.path.join(".cockpit");
+    let sync = meta.join("sync");
+    let index = meta.join("index.json");
+    let state = sync.join("state.json");
+    let watched_sync = sync.clone();
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+        match event {
+            Err(_) => scheduler_signal(&tx, true),
+            Ok(event) => {
+                if matches!(event.kind, EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_)))
+                    && event.paths.iter().any(|path| path == &watched_sync) {
+                    scheduler_signal(&tx, true);
+                    return;
+                }
+                let mutation = matches!(event.kind, EventKind::Any | EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) | EventKind::Other);
+                if event.need_rescan() || mutation && event.paths.iter().any(|path| path == &index || path == &state || path == &watched_sync) {
+                    scheduler_signal(&tx, false);
+                }
+            }
+        }
+    })?;
+    watcher.watch(&meta, RecursiveMode::NonRecursive)?;
+    watcher.watch(&sync, RecursiveMode::NonRecursive)?;
+    Ok((watcher, rx))
+}
+
+fn scheduler_identity(store: &Store) -> [(Option<std::time::SystemTime>, u64); 2] {
+    let meta = store.path.join(".cockpit");
+    [meta.join("index.json"), meta.join("sync/state.json")].map(|path| {
+        std::fs::metadata(path).map_or((None, 0), |m| (m.modified().ok(), m.len()))
+    })
+}
+
+fn scheduler_wake_at(due: i64, now: i64, retry: Option<(Duration, i64)>) -> i64 {
+    let retry_ms = retry.filter(|(_, attempted)| due <= *attempted)
+        .map_or(0, |(remaining, _)| {
+            if remaining.is_zero() { 0 } else { remaining.as_millis().saturating_add(1).min(i64::MAX as u128) as i64 }
+        });
+    due.max(now.saturating_add(retry_ms))
+}
+
+#[cfg(target_os = "linux")]
+fn realtime_timer(due: i64) -> Option<tokio::io::unix::AsyncFd<std::os::fd::OwnedFd>> {
+    use rustix::time::{Itimerspec, TimerfdClockId, TimerfdFlags, TimerfdTimerFlags, Timespec, timerfd_create, timerfd_settime};
+    let fd = timerfd_create(TimerfdClockId::Realtime, TimerfdFlags::CLOEXEC | TimerfdFlags::NONBLOCK).ok()?;
+    // Zero disarms a timerfd; an overdue deadline must instead fire immediately.
+    let due = due.max(1);
+    let timer = Itimerspec {
+        it_interval: Timespec { tv_sec: 0, tv_nsec: 0 },
+        it_value: Timespec { tv_sec: due / 1000, tv_nsec: (due % 1000) * 1_000_000 },
+    };
+    timerfd_settime(&fd, TimerfdTimerFlags::ABSTIME | TimerfdTimerFlags::CANCEL_ON_SET, &timer).ok()?;
+    // The owned fd stays open and unchanged until AsyncFd drops it. Tokio's
+    // replacement registration API is unsafe, forbidden by workspace policy.
+    tokio::io::unix::AsyncFd::new(fd).ok()
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn clock_discontinuous(before_ms: i64, elapsed: Duration, after_ms: i64) -> bool {
+    let expected = before_ms.saturating_add(elapsed.as_millis().min(i64::MAX as u128) as i64);
+    expected.abs_diff(after_ms) > 100
+}
+
+async fn wait_for_scheduler_deadline(due: i64, now: i64, observed: Instant) {
+    #[cfg(not(target_os = "linux"))]
+    let _ = observed;
+    #[cfg(target_os = "linux")]
+    if let Some(timer) = realtime_timer(due) {
+        // A clock step between the snapshot and arming the fd would precede
+        // CANCEL_ON_SET. Detect it after arming and recompute rather than miss it.
+        if clock_discontinuous(now, observed.elapsed(), wall_ms()) {
+            return;
+        }
+        // Expiration and ECANCELED after a discontinuous clock change both
+        // make the fd readable; dropping it is sufficient before recomputing.
+        let _ = timer.readable().await;
+        return;
+    }
+    // Platforms without timerfd, and failures to create/arm it, retain bounded
+    // recovery from wall-clock changes rather than an unbounded monotonic wait.
+    let delay = Duration::from_millis(due.saturating_sub(now).max(0) as u64);
+    tokio::time::sleep(delay.min(SCHEDULER_RETRY)).await;
+}
 
 /// Lifetime guard. Construction of LibraryService never starts background work.
 pub struct LibrarySyncRuntime {
@@ -462,9 +558,80 @@ impl LibraryService {
         }
         state.origins.get(&origin).is_some_and(|until| *until > now)
     }
+    pub(super) fn sync_deadline(&self, store: &Store, now: i64) -> Result<Option<i64>, InspectionError> {
+        let state = load(store)?;
+        let snapshot = index(store)?;
+        let mut audit_due: Option<i64> = None;
+        let mut deadline = state.active_operation.as_ref().map(|_| now);
+        let mut include = |due: i64, provider: &str| {
+            let blocked = self.sync_origin(provider)
+                .and_then(|origin| state.origins.get(&origin).copied())
+                .unwrap_or(0)
+                .max(self.sources.blocked_until_ms(provider).unwrap_or(0));
+            let due = due.max(blocked);
+            deadline = Some(deadline.map_or(due, |old| old.min(due)));
+        };
+        for work in state.queue.values() {
+            include(work.next_attempt_ms, &work.source.provider_id);
+        }
+        for follow in &snapshot.follows {
+            let source = state.sources.get(&follow.follow_id);
+            include(source.map_or(0, |s| s.next_delta_ms.min(s.next_inventory_ms)), &follow.provider_id);
+            if follow.reference_depth.unwrap_or(0) > 0 {
+                include(source.map_or(0, |s| s.next_related_ms), &follow.provider_id);
+            }
+        }
+        for entry in &snapshot.items {
+            if entry.summary.refs.is_empty() {
+                continue;
+            }
+            let Some(provider) = self.configuration.providers.iter().find(|p| {
+                Some(&p.id) == entry.summary.provider_id.as_ref()
+                    && matches!(p.kind, ProviderKind::Jira | ProviderKind::Confluence)
+            }) else { continue };
+            let instance = entry.summary.provider_instance.as_deref().unwrap_or_default();
+            let group = format!("{}:{}", provider.id, instance);
+            let due = state.audits.get(&group).map_or(0, |a| a.next_due_ms);
+            audit_due = Some(audit_due.map_or(due, |old| old.min(due)));
+            let seed = snapshot.follows.iter().any(|follow| {
+                refs::has_follow(&entry.summary, &follow.follow_id)
+                    && !refs::related_of(&entry.summary, &follow.follow_id)
+                    && follow.provider_id == provider.id
+                    && Some(&follow.provider_instance) == entry.summary.provider_instance.as_ref()
+            });
+            if !seed {
+                let key = format!("standalone:{group}");
+                include(state.sources.get(&key).map_or(0, |s| s.next_inventory_ms), &provider.id);
+            }
+            if entry.summary.reference_depth.unwrap_or(0) > 0
+                && entry.summary.provider_instance.is_some()
+                && entry.summary.resource_type.is_some()
+                && entry.summary.canonical_id.is_some()
+                && entry.references.is_some()
+                && !super::related::stale_state(entry.summary.state)
+            {
+                let key = format!("item:{}", entry.summary.item_id);
+                include(state.sources.get(&key).map_or(0, |s| s.next_related_ms), &provider.id);
+            }
+        }
+        Ok(match (deadline, audit_due) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        })
+    }
+
     pub fn start_sync(
         &self,
         config: LibrarySyncConfiguration,
+    ) -> Result<LibrarySyncRuntime, InspectionError> {
+        self.start_sync_with_timing(config, SCHEDULER_RETRY, SCHEDULER_RETRY)
+    }
+
+    pub(super) fn start_sync_with_timing(
+        &self,
+        config: LibrarySyncConfiguration,
+        startup_delay: Duration,
+        retry_delay: Duration,
     ) -> Result<LibrarySyncRuntime, InspectionError> {
         if !config.enabled {
             return Ok(LibrarySyncRuntime { task: None });
@@ -473,22 +640,72 @@ impl LibraryService {
         let handle = operations::runtime()?;
         let service = self.clone();
         let task = handle.spawn(async move {
-            // Give startup/manual work priority. Overdue windows coalesce; no replay loop.
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            // Preserve startup priority for manual operations.
+            tokio::time::sleep(startup_delay).await;
             loop {
-                if let Ok(store) = service.open()
-                    && let Ok(owner) = store.lease("sync:scheduler") {
-                        let _owner = owner;
-                        loop {
+                if let Ok(store) = service.open() {
+                    // Flock release has no filesystem event; contenders retry.
+                    if let Ok(_owner) = store.lease("sync:scheduler") {
+                        let mut watched = false;
+                        if state_dir(&store).is_ok() {
+                            if let Ok((_watcher, mut events)) = scheduler_watch(&store) {
+                                watched = true;
+                                let mut identity = scheduler_identity(&store);
+                                let mut retry_after: Option<(Instant, i64)> = None;
+                                loop {
+                                    let observed = Instant::now();
+                                    let now = wall_ms();
+                                    let due = match service.sync_deadline(&store, now) {
+                                        Ok(due) => due,
+                                        Err(_) => break,
+                                    };
+                                    if due.is_some_and(|due| due <= now
+                                        && retry_after.is_none_or(|(until, attempted)| due > attempted || Instant::now() >= until))
+                                    {
+                                        let result = lane::scope_background(
+                                            policy(&config),
+                                            service.sync_tick_owned(&store, &config, now),
+                                        ).await;
+                                        // Due work can be held by another operation.
+                                        retry_after = Some((Instant::now() + retry_delay, now));
+                                        identity = scheduler_identity(&store);
+                                        if result.is_err() { break; }
+                                        continue;
+                                    }
+                                    let wake = due.map(|due| scheduler_wake_at(
+                                        due, now,
+                                        retry_after.map(|(retry, attempted)|
+                                            (retry.saturating_duration_since(Instant::now()), attempted)),
+                                    ));
+                                    tokio::select! {
+                                        event = events.changed() => {
+                                            if event.is_err() || *events.borrow_and_update() { break; }
+                                            let current = scheduler_identity(&store);
+                                            if current != identity {
+                                                identity = current;
+                                                retry_after = None;
+                                            }
+                                        },
+                                        _ = async {
+                                            match wake {
+                                                Some(wake) => wait_for_scheduler_deadline(wake, now, observed).await,
+                                                None => std::future::pending::<()>().await,
+                                            }
+                                        } => {},
+                                    }
+                                }
+                            }
+                        }
+                        if !watched {
+                            // Watching is unavailable: retain bounded periodic recovery.
                             let _ = lane::scope_background(
                                 policy(&config),
                                 service.sync_tick_owned(&store, &config, wall_ms()),
-                            )
-                            .await;
-                            tokio::time::sleep(Duration::from_secs(60)).await;
+                            ).await;
                         }
                     }
-                tokio::time::sleep(Duration::from_secs(60)).await;
+                }
+                tokio::time::sleep(retry_delay).await;
             }
         });
         Ok(LibrarySyncRuntime { task: Some(task) })
@@ -943,5 +1160,60 @@ pub(super) async fn manual_lease(store: &Store, id: &str) -> Result<Lease, Inspe
             }
             Err(e) => return Err(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod scheduler_clock_tests {
+    use super::{clock_discontinuous, scheduler_wake_at};
+    use std::time::Duration;
+
+    #[test]
+    fn backward_step_waits_for_both_wall_deadline_and_retry() {
+        let attempted = 10_000;
+        // Retry expired, but the wall deadline is still in the future.
+        assert_eq!(scheduler_wake_at(9_000, 1_000, Some((Duration::ZERO, attempted))), 9_000);
+        // Retry still pending and later than the wall deadline.
+        assert_eq!(scheduler_wake_at(9_000, 8_900, Some((Duration::from_millis(200), attempted))), 9_101);
+        assert!(clock_discontinuous(10_000, Duration::from_millis(20), 1_000));
+    }
+
+    #[test]
+    fn forward_step_recomputes_overdue_deadline() {
+        assert_eq!(scheduler_wake_at(10_000, 1_000, None), 10_000);
+        // A timer cancellation causes the scheduler to sample the new clock.
+        assert!(clock_discontinuous(1_000, Duration::from_millis(20), 12_000));
+        assert_eq!(scheduler_wake_at(10_000, 12_000, None), 12_000);
+        assert!(!clock_discontinuous(1_000, Duration::from_millis(20), 1_020));
+    }
+}
+
+#[cfg(test)]
+mod scheduler_notification_tests {
+    use super::scheduler_signal;
+
+    #[tokio::test]
+    async fn bursts_coalesce_and_failure_remains_sticky() {
+        let (sender, mut receiver) = tokio::sync::watch::channel(false);
+        // Model mutations arriving while a provider tick is in progress.
+        for _ in 0..10_000 {
+            scheduler_signal(&sender, false);
+        }
+        receiver.changed().await.unwrap();
+        assert!(!*receiver.borrow_and_update());
+        assert!(!receiver.has_changed().unwrap());
+
+        scheduler_signal(&sender, false);
+        assert!(receiver.has_changed().unwrap());
+        receiver.changed().await.unwrap();
+        scheduler_signal(&sender, true);
+        for _ in 0..10_000 {
+            scheduler_signal(&sender, false);
+        }
+        receiver.changed().await.unwrap();
+        assert!(*receiver.borrow_and_update());
+        scheduler_signal(&sender, false);
+        receiver.changed().await.unwrap();
+        assert!(*receiver.borrow_and_update());
     }
 }

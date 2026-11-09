@@ -37,6 +37,7 @@ pub(crate) mod claims;
 pub mod credentials;
 mod tasks_md;
 mod wait_notifications;
+pub(crate) mod changes;
 pub(crate) mod resource_queue;
 pub mod cleanup;
 pub(crate) mod fixture_resources;
@@ -460,6 +461,24 @@ impl OrchestrationService {
         let (state, boards, token) = self.snapshot_records(request)?;
         let runtime = herdr.runtime(&request.session_id).await;
         projection::snapshot(request, &state, token, boards, runtime, &now(), self.store.identity())
+    }
+
+    pub async fn overview(
+        &self, herdr: &dyn OrchestrationHerdr, request: &OrchestrationSnapshotRequest,
+    ) -> Result<OrchestrationOverview, InspectionError> {
+        let (state, boards, token) = self.snapshot_records(request)?;
+        let runtime = herdr.runtime(&request.session_id).await;
+        projection::overview(request, &state, token, boards, runtime, &now(), self.store.identity())
+    }
+
+    pub fn task_history(&self, request: &TaskHistoryRequest) -> Result<TaskHistoryMessages, InspectionError> {
+        validate_identity(&request.session_id)?;
+        if request.state_store_id != self.store.identity() {
+            return Err(error("state_store_mismatch", "Task history store identity does not match"));
+        }
+        let locked = self.store.lock()?;
+        let state = locked.read_shared()?;
+        projection::task_messages(request, &state, self.store.identity())
     }
 
     pub async fn inbox(

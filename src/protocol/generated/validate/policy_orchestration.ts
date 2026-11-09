@@ -3,6 +3,8 @@ import type * as V1 from "../v1";
 
 export interface WireTypes {
   "OrchestrationSnapshotRequest": V1.OrchestrationSnapshotRequest;
+  "TaskHistoryRequest": V1.TaskHistoryRequest;
+  "TaskHistoryMessages": V1.TaskHistoryMessages;
   "InboxRequest": V1.InboxRequest;
   "MessageImage": V1.MessageImage;
   "ImageLimits": V1.ImageLimits;
@@ -54,6 +56,13 @@ export interface WireTypes {
   "OrchestrationMutationRequest": V1.OrchestrationMutationRequest;
   "OrchestrationMutationResponse": V1.OrchestrationMutationResponse;
   "OrchestrationSnapshot": V1.OrchestrationSnapshot;
+  "OrchestrationOverview": V1.OrchestrationOverview;
+  "OverviewRun": V1.OverviewRun;
+  "ClosedRunSummary": V1.ClosedRunSummary;
+  "ClosedRunStage": V1.ClosedRunStage;
+  "RunResultSummary": V1.RunResultSummary;
+  "RunIntegrationSummary": V1.RunIntegrationSummary;
+  "RunIntegrationState": V1.RunIntegrationState;
   "ThreadLink": V1.ThreadLink;
   "AgentSendTarget": V1.AgentSendTarget;
   "UnmanagedAgent": V1.UnmanagedAgent;
@@ -124,20 +133,12 @@ export interface WireTypes {
   "AttachmentReference": V1.AttachmentReference;
   "CheckStatus": V1.CheckStatus;
   "CheckOutcome": V1.CheckOutcome;
-  "SourceOutput": V1.SourceOutput;
-  "IntegrationMethod": V1.IntegrationMethod;
-  "IntegrationMapping": V1.IntegrationMapping;
-  "Integration": V1.Integration;
-  "IntegrationRecord": V1.IntegrationRecord;
-  "IntegrationRecordResult": V1.IntegrationRecordResult;
-  "ResourceSourceIdentity": V1.ResourceSourceIdentity;
-  "ResourceRequest": V1.ResourceRequest;
-  "ResourceRequestState": V1.ResourceRequestState;
-  "ResourceRequestRecord": V1.ResourceRequestRecord;
 }
 
 export interface WireOwners {
   "OrchestrationSnapshotRequest": V1.OrchestrationSnapshotRequest;
+  "TaskHistoryRequest": V1.TaskHistoryRequest;
+  "TaskHistoryMessages": V1.TaskHistoryMessages;
   "InboxRequest": V1.InboxRequest;
   "MessageImage": V1.MessageImage;
   "ImageLimits": V1.ImageLimits;
@@ -192,6 +193,13 @@ export interface WireOwners {
   "OrchestrationMutationRequest": V1.OrchestrationMutationRequest;
   "OrchestrationMutationResponse": V1.OrchestrationMutationResponse;
   "OrchestrationSnapshot": V1.OrchestrationSnapshot;
+  "OrchestrationOverview": V1.OrchestrationOverview;
+  "OverviewRun": V1.OverviewRun;
+  "OverviewRun[full]": Extract<V1.OverviewRun, { "kind": "full" }>;
+  "OverviewRun[summary]": Extract<V1.OverviewRun, { "kind": "summary" }>;
+  "ClosedRunSummary": V1.ClosedRunSummary;
+  "RunResultSummary": V1.RunResultSummary;
+  "RunIntegrationSummary": V1.RunIntegrationSummary;
   "ThreadLink": V1.ThreadLink;
   "AgentSendTarget": V1.AgentSendTarget;
   "UnmanagedAgent": V1.UnmanagedAgent;
@@ -248,24 +256,28 @@ export interface WireOwners {
   "NativeProcessIdentity": V1.NativeProcessIdentity;
   "AttachmentReference": V1.AttachmentReference;
   "CheckOutcome": V1.CheckOutcome;
-  "SourceOutput": V1.SourceOutput;
-  "SourceOutput[code]": Extract<V1.SourceOutput, { "kind": "code" }>;
-  "SourceOutput[non_code]": Extract<V1.SourceOutput, { "kind": "non_code" }>;
-  "IntegrationMapping": V1.IntegrationMapping;
-  "Integration": V1.Integration;
-  "Integration[pending]": Extract<V1.Integration, { "state": "pending" }>;
-  "Integration[not_applicable]": Extract<V1.Integration, { "state": "not_applicable" }>;
-  "Integration[integrated]": Extract<V1.Integration, { "state": "integrated" }>;
-  "IntegrationRecord": V1.IntegrationRecord;
-  "IntegrationRecordResult": V1.IntegrationRecordResult;
-  "ResourceSourceIdentity": V1.ResourceSourceIdentity;
-  "ResourceRequest": V1.ResourceRequest;
-  "ResourceRequestRecord": V1.ResourceRequestRecord;
 }
 
 export interface WireFields {
   "OrchestrationSnapshotRequest.session_id": (V1.OrchestrationSnapshotRequest)["session_id"];
   "OrchestrationSnapshotRequest.root_id": (V1.OrchestrationSnapshotRequest)["root_id"];
+  "TaskHistoryRequest.session_id": (V1.TaskHistoryRequest)["session_id"];
+  "TaskHistoryRequest.state_store_id": (V1.TaskHistoryRequest)["state_store_id"];
+  "TaskHistoryRequest.root_id": (V1.TaskHistoryRequest)["root_id"];
+  "TaskHistoryRequest.task_id": (V1.TaskHistoryRequest)["task_id"];
+  "TaskHistoryRequest.known_digest": (V1.TaskHistoryRequest)["known_digest"];
+  "TaskHistoryMessages.session_id": (V1.TaskHistoryMessages)["session_id"];
+  "TaskHistoryMessages.state_store_id": (V1.TaskHistoryMessages)["state_store_id"];
+  "TaskHistoryMessages.revision": (V1.TaskHistoryMessages)["revision"];
+  "TaskHistoryMessages.root_id": (V1.TaskHistoryMessages)["root_id"];
+  "TaskHistoryMessages.task_id": (V1.TaskHistoryMessages)["task_id"];
+  "TaskHistoryMessages.digest": (V1.TaskHistoryMessages)["digest"];
+  "TaskHistoryMessages.not_modified": (V1.TaskHistoryMessages)["not_modified"];
+  "TaskHistoryMessages.messages": (V1.TaskHistoryMessages)["messages"];
+  "TaskHistoryMessages.runs": (V1.TaskHistoryMessages)["runs"];
+  "TaskHistoryMessages.cleanup": (V1.TaskHistoryMessages)["cleanup"];
+  "TaskHistoryMessages.task_ownership": (V1.TaskHistoryMessages)["task_ownership"];
+  "TaskHistoryMessages.unreflected_inputs": (V1.TaskHistoryMessages)["unreflected_inputs"];
   "InboxRequest.session_id": (V1.InboxRequest)["session_id"];
   "MessageImage.image_id": (V1.MessageImage)["image_id"];
   "MessageImage.mime_type": (V1.MessageImage)["mime_type"];
@@ -512,6 +524,43 @@ export interface WireFields {
   "OrchestrationSnapshot.runtime": (V1.OrchestrationSnapshot)["runtime"];
   "OrchestrationSnapshot.unmanaged_agents": (V1.OrchestrationSnapshot)["unmanaged_agents"];
   "OrchestrationSnapshot.attention": (V1.OrchestrationSnapshot)["attention"];
+  "OrchestrationOverview.session_id": (V1.OrchestrationOverview)["session_id"];
+  "OrchestrationOverview.state_store_id": (V1.OrchestrationOverview)["state_store_id"];
+  "OrchestrationOverview.revision": (V1.OrchestrationOverview)["revision"];
+  "OrchestrationOverview.tasks_token": (V1.OrchestrationOverview)["tasks_token"];
+  "OrchestrationOverview.roots": (V1.OrchestrationOverview)["roots"];
+  "OrchestrationOverview.board": (V1.OrchestrationOverview)["board"];
+  "OrchestrationOverview.runs": (V1.OrchestrationOverview)["runs"];
+  "OrchestrationOverview.questions": (V1.OrchestrationOverview)["questions"];
+  "OrchestrationOverview.unreflected_inputs": (V1.OrchestrationOverview)["unreflected_inputs"];
+  "OrchestrationOverview.task_ownership": (V1.OrchestrationOverview)["task_ownership"];
+  "OrchestrationOverview.directives": (V1.OrchestrationOverview)["directives"];
+  "OrchestrationOverview.thread_links": (V1.OrchestrationOverview)["thread_links"];
+  "OrchestrationOverview.intents": (V1.OrchestrationOverview)["intents"];
+  "OrchestrationOverview.assignment_intents": (V1.OrchestrationOverview)["assignment_intents"];
+  "OrchestrationOverview.cleanup": (V1.OrchestrationOverview)["cleanup"];
+  "OrchestrationOverview.restoration": (V1.OrchestrationOverview)["restoration"];
+  "OrchestrationOverview.runtime": (V1.OrchestrationOverview)["runtime"];
+  "OrchestrationOverview.unmanaged_agents": (V1.OrchestrationOverview)["unmanaged_agents"];
+  "OrchestrationOverview.attention": (V1.OrchestrationOverview)["attention"];
+  "OverviewRun.run": (V1.OverviewRun)["run"];
+  "OverviewRun[full].run": (Extract<V1.OverviewRun, { "kind": "full" }>)["run"];
+  "OverviewRun[summary].run": (Extract<V1.OverviewRun, { "kind": "summary" }>)["run"];
+  "ClosedRunSummary.session_id": (V1.ClosedRunSummary)["session_id"];
+  "ClosedRunSummary.run_id": (V1.ClosedRunSummary)["run_id"];
+  "ClosedRunSummary.root_id": (V1.ClosedRunSummary)["root_id"];
+  "ClosedRunSummary.task_id": (V1.ClosedRunSummary)["task_id"];
+  "ClosedRunSummary.kind": (V1.ClosedRunSummary)["kind"];
+  "ClosedRunSummary.stage": (V1.ClosedRunSummary)["stage"];
+  "ClosedRunSummary.close_reason": (V1.ClosedRunSummary)["close_reason"];
+  "ClosedRunSummary.attempt": (V1.ClosedRunSummary)["attempt"];
+  "ClosedRunSummary.updated_at": (V1.ClosedRunSummary)["updated_at"];
+  "ClosedRunSummary.label": (V1.ClosedRunSummary)["label"];
+  "ClosedRunSummary.result": (V1.ClosedRunSummary)["result"];
+  "ClosedRunSummary.integration": (V1.ClosedRunSummary)["integration"];
+  "RunResultSummary.message_id": (V1.RunResultSummary)["message_id"];
+  "RunResultSummary.outcome": (V1.RunResultSummary)["outcome"];
+  "RunIntegrationSummary.state": (V1.RunIntegrationSummary)["state"];
   "ThreadLink.thread_id": (V1.ThreadLink)["thread_id"];
   "ThreadLink.root_id": (V1.ThreadLink)["root_id"];
   "ThreadLink.task_id": (V1.ThreadLink)["task_id"];
@@ -752,73 +801,12 @@ export interface WireFields {
   "CheckOutcome.outcome": (V1.CheckOutcome)["outcome"];
   "CheckOutcome.evidence": (V1.CheckOutcome)["evidence"];
   "CheckOutcome.limitation": (V1.CheckOutcome)["limitation"];
-  "SourceOutput.task_revision": (V1.SourceOutput)["task_revision"];
-  "SourceOutput.result_message_id": (V1.SourceOutput)["result_message_id"];
-  "SourceOutput.focused_checks": (V1.SourceOutput)["focused_checks"];
-  "SourceOutput[code].repository_key": (Extract<V1.SourceOutput, { "kind": "code" }>)["repository_key"];
-  "SourceOutput[code].checkout_key": (Extract<V1.SourceOutput, { "kind": "code" }>)["checkout_key"];
-  "SourceOutput[code].base_commit": (Extract<V1.SourceOutput, { "kind": "code" }>)["base_commit"];
-  "SourceOutput[code].head_commit": (Extract<V1.SourceOutput, { "kind": "code" }>)["head_commit"];
-  "SourceOutput[code].commits": (Extract<V1.SourceOutput, { "kind": "code" }>)["commits"];
-  "SourceOutput[code].task_revision": (Extract<V1.SourceOutput, { "kind": "code" }>)["task_revision"];
-  "SourceOutput[code].result_message_id": (Extract<V1.SourceOutput, { "kind": "code" }>)["result_message_id"];
-  "SourceOutput[code].focused_checks": (Extract<V1.SourceOutput, { "kind": "code" }>)["focused_checks"];
-  "SourceOutput[non_code].result_message_id": (Extract<V1.SourceOutput, { "kind": "non_code" }>)["result_message_id"];
-  "SourceOutput[non_code].task_revision": (Extract<V1.SourceOutput, { "kind": "non_code" }>)["task_revision"];
-  "SourceOutput[non_code].artifacts": (Extract<V1.SourceOutput, { "kind": "non_code" }>)["artifacts"];
-  "SourceOutput[non_code].focused_checks": (Extract<V1.SourceOutput, { "kind": "non_code" }>)["focused_checks"];
-  "IntegrationMapping.source_commits": (V1.IntegrationMapping)["source_commits"];
-  "IntegrationMapping.target_commits": (V1.IntegrationMapping)["target_commits"];
-  "IntegrationMapping.source_paths": (V1.IntegrationMapping)["source_paths"];
-  "IntegrationMapping.target_paths": (V1.IntegrationMapping)["target_paths"];
-  "IntegrationMapping.explanation": (V1.IntegrationMapping)["explanation"];
-  "Integration[not_applicable].reason": (Extract<V1.Integration, { "state": "not_applicable" }>)["reason"];
-  "Integration[not_applicable].result_message_id": (Extract<V1.Integration, { "state": "not_applicable" }>)["result_message_id"];
-  "Integration[integrated].operation_id": (Extract<V1.Integration, { "state": "integrated" }>)["operation_id"];
-  "Integration[integrated].accepted_result_message_id": (Extract<V1.Integration, { "state": "integrated" }>)["accepted_result_message_id"];
-  "Integration[integrated].accepted_task_revision": (Extract<V1.Integration, { "state": "integrated" }>)["accepted_task_revision"];
-  "Integration[integrated].source": (Extract<V1.Integration, { "state": "integrated" }>)["source"];
-  "Integration[integrated].target_repository_key": (Extract<V1.Integration, { "state": "integrated" }>)["target_repository_key"];
-  "Integration[integrated].target_ref": (Extract<V1.Integration, { "state": "integrated" }>)["target_ref"];
-  "Integration[integrated].target_commit": (Extract<V1.Integration, { "state": "integrated" }>)["target_commit"];
-  "Integration[integrated].method": (Extract<V1.Integration, { "state": "integrated" }>)["method"];
-  "Integration[integrated].mappings": (Extract<V1.Integration, { "state": "integrated" }>)["mappings"];
-  "Integration[integrated].checks": (Extract<V1.Integration, { "state": "integrated" }>)["checks"];
-  "Integration[integrated].integrator_run_id": (Extract<V1.Integration, { "state": "integrated" }>)["integrator_run_id"];
-  "Integration[integrated].verified_at": (Extract<V1.Integration, { "state": "integrated" }>)["verified_at"];
-  "IntegrationRecord.operation_id": (V1.IntegrationRecord)["operation_id"];
-  "IntegrationRecord.run_id": (V1.IntegrationRecord)["run_id"];
-  "IntegrationRecord.expected_result_message_id": (V1.IntegrationRecord)["expected_result_message_id"];
-  "IntegrationRecord.expected_task_revision": (V1.IntegrationRecord)["expected_task_revision"];
-  "IntegrationRecord.integration": (V1.IntegrationRecord)["integration"];
-  "IntegrationRecordResult.operation_id": (V1.IntegrationRecordResult)["operation_id"];
-  "IntegrationRecordResult.run_id": (V1.IntegrationRecordResult)["run_id"];
-  "IntegrationRecordResult.integration": (V1.IntegrationRecordResult)["integration"];
-  "IntegrationRecordResult.checks": (V1.IntegrationRecordResult)["checks"];
-  "IntegrationRecordResult.duplicate": (V1.IntegrationRecordResult)["duplicate"];
-  "ResourceSourceIdentity.checkout_key": (V1.ResourceSourceIdentity)["checkout_key"];
-  "ResourceSourceIdentity.source_commit": (V1.ResourceSourceIdentity)["source_commit"];
-  "ResourceSourceIdentity.source_tree": (V1.ResourceSourceIdentity)["source_tree"];
-  "ResourceSourceIdentity.input_configuration": (V1.ResourceSourceIdentity)["input_configuration"];
-  "ResourceSourceIdentity.toolchain_fingerprint": (V1.ResourceSourceIdentity)["toolchain_fingerprint"];
-  "ResourceRequest.operation_id": (V1.ResourceRequest)["operation_id"];
-  "ResourceRequest.resource_key": (V1.ResourceRequest)["resource_key"];
-  "ResourceRequest.source_identity": (V1.ResourceRequest)["source_identity"];
-  "ResourceRequest.holder": (V1.ResourceRequest)["holder"];
-  "ResourceRequestRecord.request_id": (V1.ResourceRequestRecord)["request_id"];
-  "ResourceRequestRecord.sequence": (V1.ResourceRequestRecord)["sequence"];
-  "ResourceRequestRecord.resource_key": (V1.ResourceRequestRecord)["resource_key"];
-  "ResourceRequestRecord.source_identity": (V1.ResourceRequestRecord)["source_identity"];
-  "ResourceRequestRecord.holder": (V1.ResourceRequestRecord)["holder"];
-  "ResourceRequestRecord.state": (V1.ResourceRequestRecord)["state"];
-  "ResourceRequestRecord.build_processes": (V1.ResourceRequestRecord)["build_processes"];
-  "ResourceRequestRecord.machine_id": (V1.ResourceRequestRecord)["machine_id"];
-  "ResourceRequestRecord.blocked_reason": (V1.ResourceRequestRecord)["blocked_reason"];
-  "ResourceRequestRecord.updated_at": (V1.ResourceRequestRecord)["updated_at"];
 }
 
 export interface WireFieldNames {
   "OrchestrationSnapshotRequest": "session_id" | "root_id";
+  "TaskHistoryRequest": "session_id" | "state_store_id" | "root_id" | "task_id" | "known_digest";
+  "TaskHistoryMessages": "session_id" | "state_store_id" | "revision" | "root_id" | "task_id" | "digest" | "not_modified" | "messages" | "runs" | "cleanup" | "task_ownership" | "unreflected_inputs";
   "InboxRequest": "session_id";
   "MessageImage": "image_id" | "mime_type" | "width" | "height" | "bytes";
   "ImageLimits": "max_bytes" | "max_count" | "mime_types";
@@ -873,6 +861,13 @@ export interface WireFieldNames {
   "OrchestrationMutationRequest": "session_id" | "expected_revision" | "action";
   "OrchestrationMutationResponse": "revision" | "result";
   "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "unreflected_inputs" | "task_ownership" | "directives" | "thread_links" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
+  "OrchestrationOverview": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "questions" | "unreflected_inputs" | "task_ownership" | "directives" | "thread_links" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
+  "OverviewRun": "run";
+  "OverviewRun[full]": "run";
+  "OverviewRun[summary]": "run";
+  "ClosedRunSummary": "session_id" | "run_id" | "root_id" | "task_id" | "kind" | "stage" | "close_reason" | "attempt" | "updated_at" | "label" | "result" | "integration";
+  "RunResultSummary": "message_id" | "outcome";
+  "RunIntegrationSummary": "state";
   "ThreadLink": "thread_id" | "root_id" | "task_id";
   "AgentSendTarget": "endpoint_identity" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "agent_kind" | "agent_name" | "native_session_id" | "native_session_file" | "state_changed_at";
   "UnmanagedAgent": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_name" | "agent_status" | "state_changed_at" | "expected_target";
@@ -929,19 +924,6 @@ export interface WireFieldNames {
   "NativeProcessIdentity": "pid" | "start_ticks" | "kernel_boot_id";
   "AttachmentReference": "run_id" | "attachment_id" | "attachment_epoch";
   "CheckOutcome": "contract" | "command_or_scenario" | "outcome" | "evidence" | "limitation";
-  "SourceOutput": "task_revision" | "result_message_id" | "focused_checks";
-  "SourceOutput[code]": "repository_key" | "checkout_key" | "base_commit" | "head_commit" | "commits" | "task_revision" | "result_message_id" | "focused_checks";
-  "SourceOutput[non_code]": "result_message_id" | "task_revision" | "artifacts" | "focused_checks";
-  "IntegrationMapping": "source_commits" | "target_commits" | "source_paths" | "target_paths" | "explanation";
-  "Integration": never;
-  "Integration[pending]": never;
-  "Integration[not_applicable]": "reason" | "result_message_id";
-  "Integration[integrated]": "operation_id" | "accepted_result_message_id" | "accepted_task_revision" | "source" | "target_repository_key" | "target_ref" | "target_commit" | "method" | "mappings" | "checks" | "integrator_run_id" | "verified_at";
-  "IntegrationRecord": "operation_id" | "run_id" | "expected_result_message_id" | "expected_task_revision" | "integration";
-  "IntegrationRecordResult": "operation_id" | "run_id" | "integration" | "checks" | "duplicate";
-  "ResourceSourceIdentity": "checkout_key" | "source_commit" | "source_tree" | "input_configuration" | "toolchain_fingerprint";
-  "ResourceRequest": "operation_id" | "resource_key" | "source_identity" | "holder";
-  "ResourceRequestRecord": "request_id" | "sequence" | "resource_key" | "source_identity" | "holder" | "state" | "build_processes" | "machine_id" | "blocked_reason" | "updated_at";
 }
 
 export interface WireChildNames {
@@ -984,6 +966,14 @@ export interface WireChildNames {
   "OrchestrationSnapshot.board": "TaskBoard";
   "OrchestrationSnapshot.restoration": "RestorationSummary";
   "OrchestrationSnapshot.runtime": "RuntimeObservation";
+  "OrchestrationOverview.board": "TaskBoard";
+  "OrchestrationOverview.restoration": "RestorationSummary";
+  "OrchestrationOverview.runtime": "RuntimeObservation";
+  "OverviewRun.run": "ClosedRunSummary" | "Run";
+  "OverviewRun[full].run": "Run";
+  "OverviewRun[summary].run": "ClosedRunSummary";
+  "ClosedRunSummary.result": "RunResultSummary";
+  "ClosedRunSummary.integration": "RunIntegrationSummary";
   "UnmanagedAgent.expected_target": "AgentSendTarget";
   "Task.step_progress": "TaskStepProgress";
   "TaskOwnership.owner": "TaskOwner";
@@ -1014,14 +1004,6 @@ export interface WireChildNames {
   "RunResumeResult.resume": "ResumeRecord";
   "RunAttachResult.attachment": "ExecutionAttachment";
   "RunLocation.peer_process": "NativeProcessIdentity";
-  "Integration.source": "SourceOutput";
-  "Integration[integrated].source": "SourceOutput";
-  "IntegrationRecord.integration": "Integration";
-  "IntegrationRecordResult.integration": "Integration";
-  "ResourceRequest.source_identity": "ResourceSourceIdentity";
-  "ResourceRequest.holder": "AttachmentReference";
-  "ResourceRequestRecord.source_identity": "ResourceSourceIdentity";
-  "ResourceRequestRecord.holder": "AttachmentReference";
 }
 
 export interface WireTagNames {
@@ -1040,6 +1022,9 @@ export interface WireTagNames {
   "ContinueRoute": "route";
   "ContinueRoute[same_worker]": "route";
   "ContinueRoute[successor]": "route";
+  "OverviewRun": "kind";
+  "OverviewRun[full]": "kind";
+  "OverviewRun[summary]": "kind";
   "ReplacementPlacement": "placement";
   "ReplacementPlacement[same_checkout]": "placement";
   "ReplacementPlacement[isolated_worktree]": "placement";
@@ -1055,17 +1040,12 @@ export interface WireTagNames {
   "LiaisonLookupResponse": "status";
   "LiaisonLookupResponse[resolved]": "status";
   "LiaisonLookupResponse[unavailable]": "status";
-  "SourceOutput": "kind";
-  "SourceOutput[code]": "kind";
-  "SourceOutput[non_code]": "kind";
-  "Integration": "state";
-  "Integration[pending]": "state";
-  "Integration[not_applicable]": "state";
-  "Integration[integrated]": "state";
 }
 
 export interface WireCheckpointFieldNames {
   "OrchestrationSnapshotRequest": "session_id" | "root_id";
+  "TaskHistoryRequest": "session_id" | "state_store_id" | "root_id" | "task_id" | "known_digest";
+  "TaskHistoryMessages": "session_id" | "state_store_id" | "revision" | "root_id" | "task_id" | "digest" | "not_modified" | "messages" | "runs" | "cleanup" | "task_ownership" | "unreflected_inputs";
   "InboxRequest": "session_id";
   "MessageImage": "image_id" | "mime_type" | "width" | "height" | "bytes";
   "ImageLimits": "max_bytes" | "max_count" | "mime_types";
@@ -1120,6 +1100,13 @@ export interface WireCheckpointFieldNames {
   "OrchestrationMutationRequest": "session_id" | "expected_revision" | "action";
   "OrchestrationMutationResponse": "revision" | "result";
   "OrchestrationSnapshot": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "messages" | "questions" | "unreflected_inputs" | "task_ownership" | "directives" | "thread_links" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
+  "OrchestrationOverview": "session_id" | "state_store_id" | "revision" | "tasks_token" | "roots" | "board" | "runs" | "questions" | "unreflected_inputs" | "task_ownership" | "directives" | "thread_links" | "intents" | "assignment_intents" | "cleanup" | "restoration" | "runtime" | "unmanaged_agents" | "attention";
+  "OverviewRun": "kind" | "run";
+  "OverviewRun[full]": "run" | "kind";
+  "OverviewRun[summary]": "run" | "kind";
+  "ClosedRunSummary": "session_id" | "run_id" | "root_id" | "task_id" | "kind" | "stage" | "close_reason" | "attempt" | "updated_at" | "label" | "result" | "integration";
+  "RunResultSummary": "message_id" | "outcome";
+  "RunIntegrationSummary": "state";
   "ThreadLink": "thread_id" | "root_id" | "task_id";
   "AgentSendTarget": "endpoint_identity" | "workspace_id" | "tab_id" | "pane_id" | "terminal_id" | "agent_kind" | "agent_name" | "native_session_id" | "native_session_file" | "state_changed_at";
   "UnmanagedAgent": "workspace_id" | "workspace_label" | "tab_id" | "tab_label" | "pane_id" | "agent_name" | "agent_status" | "state_changed_at" | "expected_target";
@@ -1176,23 +1163,11 @@ export interface WireCheckpointFieldNames {
   "NativeProcessIdentity": "pid" | "start_ticks" | "kernel_boot_id";
   "AttachmentReference": "run_id" | "attachment_id" | "attachment_epoch";
   "CheckOutcome": "contract" | "command_or_scenario" | "outcome" | "evidence" | "limitation";
-  "SourceOutput": "artifacts" | "base_commit" | "checkout_key" | "commits" | "focused_checks" | "head_commit" | "kind" | "repository_key" | "result_message_id" | "task_revision";
-  "SourceOutput[code]": "repository_key" | "checkout_key" | "base_commit" | "head_commit" | "commits" | "task_revision" | "result_message_id" | "focused_checks" | "kind";
-  "SourceOutput[non_code]": "result_message_id" | "task_revision" | "artifacts" | "focused_checks" | "kind";
-  "IntegrationMapping": "source_commits" | "target_commits" | "source_paths" | "target_paths" | "explanation";
-  "Integration": "accepted_result_message_id" | "accepted_task_revision" | "checks" | "integrator_run_id" | "mappings" | "method" | "operation_id" | "reason" | "result_message_id" | "source" | "state" | "target_commit" | "target_ref" | "target_repository_key" | "verified_at";
-  "Integration[pending]": "state";
-  "Integration[not_applicable]": "reason" | "result_message_id" | "state";
-  "Integration[integrated]": "operation_id" | "accepted_result_message_id" | "accepted_task_revision" | "source" | "target_repository_key" | "target_ref" | "target_commit" | "method" | "mappings" | "checks" | "integrator_run_id" | "verified_at" | "state";
-  "IntegrationRecord": "operation_id" | "run_id" | "expected_result_message_id" | "expected_task_revision" | "integration";
-  "IntegrationRecordResult": "operation_id" | "run_id" | "integration" | "checks" | "duplicate";
-  "ResourceSourceIdentity": "checkout_key" | "source_commit" | "source_tree" | "input_configuration" | "toolchain_fingerprint";
-  "ResourceRequest": "operation_id" | "resource_key" | "source_identity" | "holder";
-  "ResourceRequestRecord": "request_id" | "sequence" | "resource_key" | "source_identity" | "holder" | "state" | "build_processes" | "machine_id" | "blocked_reason" | "updated_at";
 }
 
 export type WireOmittableField =
   | "OrchestrationSnapshotRequest.root_id"
+  | "TaskHistoryRequest.known_digest"
   | "JobImage.thread_id"
   | "InboxView.stalls"
   | "InboxOwner.attachment_id"
@@ -1258,6 +1233,13 @@ export type WireOmittableField =
   | "OrchestrationSnapshot.board"
   | "OrchestrationSnapshot.directives"
   | "OrchestrationSnapshot.thread_links"
+  | "OrchestrationOverview.board"
+  | "OrchestrationOverview.directives"
+  | "OrchestrationOverview.thread_links"
+  | "ClosedRunSummary.task_id"
+  | "ClosedRunSummary.close_reason"
+  | "ClosedRunSummary.result"
+  | "RunResultSummary.outcome"
   | "AgentSendTarget.agent_name"
   | "AgentSendTarget.native_session_id"
   | "AgentSendTarget.native_session_file"
@@ -1335,11 +1317,10 @@ export type WireOmittableField =
   | "NativeProcessIdentity.kernel_boot_id"
   | "CheckOutcome.evidence"
   | "CheckOutcome.limitation"
-  | "IntegrationMapping.explanation"
-  | "ResourceRequestRecord.blocked_reason"
   | never;
 
 export type WireOptionalField =
+  | "TaskHistoryRequest.known_digest"
   | "InboxEntry.interim"
   | "InboxEntry.task_title"
   | "InboxEntry.widget"
@@ -1360,6 +1341,11 @@ export type WireOptionalField =
   | never;
 
 export type WireListField =
+  | "TaskHistoryMessages.messages"
+  | "TaskHistoryMessages.runs"
+  | "TaskHistoryMessages.cleanup"
+  | "TaskHistoryMessages.task_ownership"
+  | "TaskHistoryMessages.unreflected_inputs"
   | "ImageLimits.mime_types"
   | "InboxView.owners"
   | "InboxView.threads"
@@ -1400,6 +1386,18 @@ export type WireListField =
   | "OrchestrationSnapshot.cleanup"
   | "OrchestrationSnapshot.unmanaged_agents"
   | "OrchestrationSnapshot.attention"
+  | "OrchestrationOverview.roots"
+  | "OrchestrationOverview.runs"
+  | "OrchestrationOverview.questions"
+  | "OrchestrationOverview.unreflected_inputs"
+  | "OrchestrationOverview.task_ownership"
+  | "OrchestrationOverview.directives"
+  | "OrchestrationOverview.thread_links"
+  | "OrchestrationOverview.intents"
+  | "OrchestrationOverview.assignment_intents"
+  | "OrchestrationOverview.cleanup"
+  | "OrchestrationOverview.unmanaged_agents"
+  | "OrchestrationOverview.attention"
   | "TaskBoard.diagnostics"
   | "TaskBoard.tasks"
   | "Task.steps"
@@ -1410,18 +1408,5 @@ export type WireListField =
   | "SetupSummary.effects"
   | "SetupSummary.warnings"
   | "LiaisonLookupResponse[resolved].roots"
-  | "SourceOutput.focused_checks"
-  | "SourceOutput[code].commits"
-  | "SourceOutput[code].focused_checks"
-  | "SourceOutput[non_code].artifacts"
-  | "SourceOutput[non_code].focused_checks"
-  | "IntegrationMapping.source_commits"
-  | "IntegrationMapping.target_commits"
-  | "IntegrationMapping.source_paths"
-  | "IntegrationMapping.target_paths"
-  | "Integration[integrated].mappings"
-  | "Integration[integrated].checks"
-  | "IntegrationRecordResult.checks"
-  | "ResourceRequestRecord.build_processes"
   | never;
 

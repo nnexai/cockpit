@@ -276,10 +276,27 @@ mod tests {
         let summary = summaries(&state, &fixture.run.session_id);
         assert_eq!(summary[0].kept_count, 1);
         assert_eq!(state.owned_resources[0].cleanup.reason.as_ref().unwrap().code, "outputs_kept");
+        let retained_revision = state.revision;
+        for _ in 0..2 {
+            let resource = fixture.resource();
+            let evaluation = inspect(fixture.service.base(), &resource, &fixture.run).unwrap();
+            fixture.service.save_evaluation(&resource, evaluation).unwrap();
+            let unchanged = fixture.service.store.lock().unwrap().read().unwrap();
+            assert_eq!(unchanged.revision, retained_revision);
+            assert_eq!(unchanged.owned_resources[0].cleanup.state, CleanupState::Kept);
+            assert_eq!(unchanged.owned_resources[0].cleanup.reason, state.owned_resources[0].cleanup.reason);
+        }
         assert_eq!(apply(fixture.service.base(), &resource, &fixture.run).unwrap().state, CleanupEffectState::Refused);
         assert_eq!(std::fs::read_to_string(fixture.directory.join("output.txt")).unwrap(), "unique accepted artifact\n");
         assert_eq!(std::fs::read_to_string(fixture.directory.join("nested/data")).unwrap(), "nested output preserved\n");
         std::fs::rename(fixture.directory.join("output.txt"), fixture.source.join("published-output.txt")).unwrap();
+        let resource = fixture.resource();
+        let evaluation = inspect(fixture.service.base(), &resource, &fixture.run).unwrap();
+        fixture.service.save_evaluation(&resource, evaluation).unwrap();
+        let changed = fixture.service.store.lock().unwrap().read().unwrap();
+        assert!(changed.revision > retained_revision);
+        assert_eq!(changed.owned_resources[0].cleanup.state, CleanupState::Kept);
+        assert!(changed.owned_resources[0].cleanup.reason.as_ref().unwrap().message.contains("1 output entries"));
         std::fs::rename(fixture.directory.join("nested"), fixture.source.join("published-nested")).unwrap();
         let resource = fixture.resource();
         assert_eq!(inspect(fixture.service.base(), &resource, &fixture.run).unwrap(), CleanupEvaluation::Ready);

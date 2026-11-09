@@ -7,7 +7,7 @@ import { viewerShortcutAction, type ShortcutId } from "../input/shortcuts";
 export interface ViewerModeSlots {
   className: string; treeLabel: string; toolbar: ReactNode; treeLead?: ReactNode;
   onTreeKeyDown?: (event: KeyboardEvent<HTMLElement>) => void;
-  document: ReactNode; status?: ReactNode;
+  document: ReactNode; status?: ReactNode; watchNotice?: ReactNode;
 }
 export interface ViewerToolbarProps {
   overview: { open: boolean; toggle: () => void }; overviewId: string;
@@ -37,6 +37,7 @@ export function ContextViewerFrame({ view, root, roots, chooseRoot, viewerRef, t
         {roots.length > 1 ? <label className="context-root-select"><span className="sr-only">Context root</span><select value={root.root_id} onChange={(event) => { const next = roots.find((candidate) => candidate.root_id === event.target.value); if (next) chooseRoot(next); }}>{roots.map((candidate) => <option value={candidate.root_id} key={candidate.root_id}>{candidate.label}</option>)}</select></label> : null}
       {view.toolbar}
     </header>
+      {view.watchNotice}
       {discoveryDiagnostics.length > 0 ? <div className="context-notice context-notice-warning" role="status">{discoveryDiagnostics.map((diagnostic) => <span key={`${diagnostic.code}:${diagnostic.message}`}>{diagnostic.message}</span>)}</div> : null}
       {linkNotice ? <div className="context-notice context-notice-warning" role="status">{linkNotice}</div> : null}
       <div className={`context-body${overview.open ? " has-file-overview" : ""}`} style={tree.style}>

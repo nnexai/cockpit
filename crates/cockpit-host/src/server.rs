@@ -52,6 +52,7 @@ struct ListenerSockets {
 use tower_http::services::{ServeDir, ServeFile};
 
 mod operations;
+mod local_changes;
 mod session_socket;
 mod widgets;
 
@@ -237,6 +238,7 @@ fn build_router_with_validated_root(
 
     let router = operations::operation_routes()
         .route("/api/v1/sessions/{session_id}/events", get(session_events))
+        .route("/api/v1/local-changes/events", get(local_changes::events))
         .route(
             "/api/v1/sessions/{session_id}/panes/{pane_id}/terminal",
             get(terminal_ws),

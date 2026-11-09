@@ -1,8 +1,13 @@
 import type { QuotaErrorCode, QuotaLimit, QuotaProvider, QuotaProviderStatus, QuotaStatusResponse } from "../../protocol/generated/v1";
-import { formatAgo, formatDate } from "../library/libraryState";
+import { formatDate } from "../library/libraryState";
 
 export const PROVIDER_ORDER: readonly QuotaProvider[] = ["codex", "claude", "copilot"];
 const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+const reportDate = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+export function formatReportDate(ms: number): string {
+  return reportDate.format(ms);
+}
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
 export function providerName(provider: string): string {
@@ -69,7 +74,7 @@ export function errorText(error: QuotaErrorCode | null): string {
 
 export function formatReset(ms: number | null, now: number): string | null {
   if (ms === null) return null;
-  if (ms <= now) return `reset ${formatAgo(ms, now)}`;
+  if (ms <= now) return `Reset time passed (${formatReportDate(ms)})`;
   const minutes = Math.max(1, Math.ceil((ms - now) / 60_000));
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor(minutes / 60);
@@ -189,12 +194,12 @@ export function summaryView(views: readonly ProviderView[]): ProviderView | null
     !best || maxUsed(view, fresh.length > 0) > maxUsed(best, fresh.length > 0) ? view : best, null);
 }
 
-export function accessibleLabel(views: readonly ProviderView[], now: number, offline: boolean): string {
+export function accessibleLabel(views: readonly ProviderView[], offline: boolean): string {
   const parts = views.filter(view => view.provider.state !== "not_signed_in").map(view => {
     const value = view.segments.length
       ? view.segments.map(segment => `${segment.label} ${formatLimitValue(segment.limit, true)}${segment.pace?.runsOutMs != null ? `, runs out in ${formatSpan(segment.pace.runsOutMs)}` : ""}${segment.stale ? ", stale" : ""}`).join(", ")
       : view.provider.state === "unsupported" ? "not reported" : view.provider.state === "pending" ? "reading limits" : "not reported";
-    const age = view.provider.fetched_at_ms === null ? "" : `, updated ${formatAgo(view.provider.fetched_at_ms, now)}`;
+    const age = view.provider.fetched_at_ms === null ? "" : `, usage report from ${formatReportDate(view.provider.fetched_at_ms)}`;
     return `${view.name}: ${value}${view.stale ? ", stale" : ""}${view.provider.error ? `, ${errorText(view.provider.error)}` : ""}${age}`;
   });
   return `Subscription limits${offline ? ", offline" : ""}: ${parts.join("; ") || "not signed in"}`;

@@ -3,8 +3,6 @@ use std::{future::Future, time::Duration};
 use cockpit_core::{CockpitService, InspectionError, SessionChange, SessionSubscription};
 use cockpit_protocol::{SessionSnapshotResponse, SessionStreamMessage};
 
-// OMP journal metadata can change independently of Herdr's event stream.
-const OMP_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 use super::error::OperationError;
 
@@ -33,7 +31,6 @@ pub enum Event {
     Change(Option<SessionChange>),
     Delivered(bool),
     BackoffElapsed,
-    RefreshElapsed,
     Client(Incoming),
 }
 
@@ -52,7 +49,6 @@ enum Fetch {
     Initial,
     Boundary,
     Live,
-    Refresh,
 }
 
 #[derive(Debug)]
@@ -84,7 +80,6 @@ pub struct SessionStream {
     sequence: u32,
     retry: u32,
     last_snapshot: Option<SessionSnapshotResponse>,
-    refresh_omp: bool,
     phase: Phase,
 }
 
@@ -97,22 +92,19 @@ impl SessionStream {
             sequence: 1,
             retry: 0,
             last_snapshot: None,
-            refresh_omp: false,
             phase: Phase::Fetch(Fetch::Initial),
         };
         (stream, Command::FetchSnapshot { race_client: true })
     }
 
     pub fn native(session_id: String, initial: SessionSnapshotResponse) -> (Self, Command) {
-        let refresh_omp = initial.agents.iter().any(|agent| agent.name == "omp");
         let stream = Self {
             session_id,
             policy: SessionStreamPolicy::Native,
             generation: 1,
             sequence: 1,
             retry: 0,
-            last_snapshot: refresh_omp.then(|| initial.clone()),
-            refresh_omp,
+            last_snapshot: Some(initial.clone()),
             phase: Phase::Sending(AfterDelivery::Boundary),
         };
         let first = stream.snapshot_message(initial);
@@ -137,7 +129,6 @@ impl SessionStream {
                 AfterDelivery::GatewayFailure,
             ),
             (Phase::Live, Event::Change(change)) => self.change(change),
-            (Phase::Live, Event::RefreshElapsed) => self.fetch(Fetch::Refresh),
             (Phase::Backoff, Event::BackoffElapsed) => self.fetch(Fetch::Initial),
             (phase, Event::Client(Incoming::Activity))
                 if self.policy == SessionStreamPolicy::Gateway =>
@@ -171,16 +162,18 @@ impl SessionStream {
             }
             Err(error) => return self.snapshot_failure(fetch, error.code, error.message),
         };
-        self.refresh_omp = snapshot.agents.iter().any(|agent| agent.name == "omp");
-        if matches!(fetch, Fetch::Refresh) && self.last_snapshot.as_ref() == Some(snapshot.as_ref()) {
+        if matches!(fetch, Fetch::Live)
+            && self.sequence != 1
+            && self.last_snapshot.as_ref() == Some(snapshot.as_ref())
+        {
             return self.await_change();
         }
-        self.last_snapshot = self.refresh_omp.then(|| (*snapshot).clone());
+        self.last_snapshot = Some((*snapshot).clone());
         let after = match fetch {
             // Only this snapshot is retained for Subscribe after its frame is sent.
             Fetch::Initial => AfterDelivery::Subscribe(snapshot.clone()),
             Fetch::Boundary => AfterDelivery::BoundarySnapshot,
-            Fetch::Live | Fetch::Refresh => AfterDelivery::LiveSnapshot,
+            Fetch::Live => AfterDelivery::LiveSnapshot,
         };
         self.phase = Phase::Sending(after);
         Command::Emit(self.snapshot_message(*snapshot))
@@ -190,7 +183,7 @@ impl SessionStream {
         let after = match self.policy {
             SessionStreamPolicy::Gateway => AfterDelivery::GatewayFailure,
             SessionStreamPolicy::Native => match fetch {
-                Fetch::Live | Fetch::Refresh => AfterDelivery::NativeFailure,
+                Fetch::Live => AfterDelivery::NativeFailure,
                 Fetch::Initial | Fetch::Boundary => AfterDelivery::End,
             },
         };
@@ -289,6 +282,7 @@ impl SessionStream {
         };
         self.generation = generation;
         self.sequence = 1;
+        self.last_snapshot = None;
         true
     }
 
@@ -367,7 +361,6 @@ pub async fn pump<S: SessionSink>(
 ) {
     let mut command = first;
     let mut pending_change = None;
-    let mut refresh_at = tokio::time::Instant::now() + OMP_REFRESH_INTERVAL;
     loop {
         let event = match command {
             Command::Emit(message) => Event::Delivered(sink.send(message).await),
@@ -411,32 +404,19 @@ pub async fn pump<S: SessionSink>(
                 // Never take a queued barrier inside a select branch: a simultaneous
                 // timer or client event could otherwise cancel and lose it.
                 let pending = pending_change.take();
-                let refresh_omp = stream.refresh_omp;
-                let refresh = async move {
-                    if refresh_omp {
-                        tokio::time::sleep_until(refresh_at).await;
-                    } else {
-                        std::future::pending::<()>().await;
-                    }
-                };
                 let event = if let Some(change) = pending {
                     Event::Change(Some(change))
                 } else {
                     match stream.policy {
                         SessionStreamPolicy::Gateway => tokio::select! {
                             change = subscription.messages.recv() => Event::Change(change),
-                            _ = refresh => Event::RefreshElapsed,
                             incoming = sink.incoming() => Event::Client(incoming),
                         },
                         SessionStreamPolicy::Native => tokio::select! {
                             change = subscription.messages.recv() => Event::Change(change),
-                            _ = refresh => Event::RefreshElapsed,
                         },
                     }
                 };
-                if matches!(event, Event::RefreshElapsed) {
-                    refresh_at = tokio::time::Instant::now() + OMP_REFRESH_INTERVAL;
-                }
                 if matches!(event, Event::Change(Some(SessionChange::Changed))) {
                     // Only queued invalidations are covered by the imminent snapshot.
                     // Cap each batch, and retain the first barrier for the reducer.
@@ -730,7 +710,7 @@ mod tests {
     async fn pump_limits_each_queued_batch() {
         let (fetches, messages) = pump_changes(vec![SessionChange::Changed; 65]).await;
         assert_eq!(fetches, 3, "at most 32 invalidations per immediate fetch");
-        assert_eq!(messages.len(), 4, "three snapshots followed by feed closure");
+        assert_eq!(messages.len(), 2, "one changed snapshot followed by feed closure");
     }
 
     #[tokio::test]
@@ -753,10 +733,10 @@ mod tests {
         )
         .await;
         assert_eq!(adapter.snapshots.load(Ordering::Relaxed), 2);
-        assert_eq!(sink.messages.len(), 3);
+        assert_eq!(sink.messages.len(), 2);
         assert!(matches!(
-            &sink.messages[1],
-            SessionStreamMessage::Snapshot { sequence: 4, snapshot, .. }
+            &sink.messages[0],
+            SessionStreamMessage::Snapshot { sequence: 3, snapshot, .. }
                 if **snapshot == membership_snapshot()
         ));
     }
@@ -785,19 +765,17 @@ mod tests {
         )
         .await;
         assert_eq!(adapter.snapshots.load(Ordering::Relaxed), 2);
-        assert_eq!(sink.messages.len(), 4);
+        assert_eq!(sink.messages.len(), 3);
         assert!(matches!(
             &sink.messages[0],
             SessionStreamMessage::Snapshot { generation: 1, sequence: 1, snapshot: initial, .. }
                 if **initial == snapshot()
         ));
-        for (index, sequence) in [(1, 2), (2, 3)] {
-            assert!(matches!(
-                &sink.messages[index],
-                SessionStreamMessage::Snapshot { generation: 1, sequence: actual, snapshot, .. }
-                    if *actual == sequence && **snapshot == membership_snapshot()
-            ));
-        }
+        assert!(matches!(
+            &sink.messages[1],
+            SessionStreamMessage::Snapshot { generation: 1, sequence: 2, snapshot, .. }
+                if **snapshot == membership_snapshot()
+        ));
     }
 
     #[tokio::test(start_paused = true)]
@@ -889,93 +867,24 @@ mod tests {
     }
 
     #[test]
-    fn refresh_suppresses_unchanged_snapshots_and_preserves_sequence() {
+    fn live_snapshots_dedupe_and_failure_reopens_delivery() {
         let initial = omp_snapshot();
         let (mut stream, _) = SessionStream::native("session".into(), initial.clone());
         assert_fetch(stream.step(Event::Delivered(true)), false);
         assert!(matches!(stream.step(Event::Snapshot(Ok(Box::new(initial.clone())))), Command::Emit(_)));
         assert!(matches!(stream.step(Event::Delivered(true)), Command::AwaitChange));
-        assert!(stream.refresh_omp, "journal identity need not exist yet");
-
-        assert_fetch(stream.step(Event::RefreshElapsed), false);
+        assert_fetch(stream.step(Event::Change(Some(SessionChange::Changed))), false);
         assert!(matches!(stream.step(Event::Snapshot(Ok(Box::new(initial.clone())))), Command::AwaitChange));
         assert_eq!(stream.sequence, 3);
-
-        let mut changed = initial;
-        changed.agents[0].idle_summary = Some("Finished".into());
-        assert_fetch(stream.step(Event::RefreshElapsed), false);
-        assert!(matches!(
-            stream.step(Event::Snapshot(Ok(Box::new(changed.clone())))),
-            Command::Emit(SessionStreamMessage::Snapshot { sequence: 3, snapshot, .. })
-                if *snapshot == changed
-        ));
-        assert!(matches!(stream.step(Event::Delivered(true)), Command::AwaitChange));
-        assert_eq!(stream.sequence, 4);
-
-        changed.agents.clear();
-        assert_fetch(stream.step(Event::RefreshElapsed), false);
-        assert!(matches!(stream.step(Event::Snapshot(Ok(Box::new(changed)))), Command::Emit(_)));
-        assert!(!stream.refresh_omp);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn pump_refreshes_omp_without_a_herdr_event() {
-        let initial = omp_snapshot();
         let mut changed = initial.clone();
-        changed.agents[0].session_title = Some("New context".into());
-        let (sender, messages) = tokio::sync::mpsc::channel(1);
-        let adapter = Arc::new(PumpAdapter {
-            snapshots: AtomicUsize::new(0),
-            snapshot: changed.clone(),
-            during_snapshot: std::sync::Mutex::new(Some(sender)),
-            subscription: std::sync::Mutex::new(None),
-        });
-        let (mut stream, _) = SessionStream::native("session".into(), initial.clone());
-        assert_fetch(stream.step(Event::Delivered(true)), false);
-        assert!(matches!(stream.step(Event::Snapshot(Ok(Box::new(initial)))), Command::Emit(_)));
+        changed.agents[0].idle_summary = Some("Finished".into());
+        assert_fetch(stream.step(Event::Change(Some(SessionChange::Changed))), false);
+        assert!(matches!(stream.step(Event::Snapshot(Ok(Box::new(changed)))), Command::Emit(_)));
         assert!(matches!(stream.step(Event::Delivered(true)), Command::AwaitChange));
-        let mut sink = PumpSink { messages: Vec::new(), stop_after: Some(2) };
-        pump(
-            CockpitService::new(CockpitMode::Normal, adapter.clone()),
-            stream,
-            Command::AwaitChange,
-            Some(SessionSubscription { messages }),
-            &mut sink,
-        ).await;
-        assert_eq!(adapter.snapshots.load(Ordering::Relaxed), 2);
-        assert!(matches!(
-            &sink.messages[0],
-            SessionStreamMessage::Snapshot { sequence: 3, snapshot, .. } if **snapshot == changed
-        ));
-        assert!(matches!(
-            &sink.messages[1],
-            SessionStreamMessage::Snapshot { sequence: 4, snapshot, .. } if **snapshot == changed
-        ), "a Herdr invalidation arriving during refresh must not be lost");
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn pump_does_not_poll_without_an_omp_agent() {
-        let adapter = Arc::new(PumpAdapter {
-            snapshots: AtomicUsize::new(0),
-            snapshot: snapshot(),
-            during_snapshot: std::sync::Mutex::new(None),
-            subscription: std::sync::Mutex::new(None),
-        });
-        let (_sender, messages) = tokio::sync::mpsc::channel(1);
-        let mut sink = PumpSink::default();
-        let result = tokio::time::timeout(
-            OMP_REFRESH_INTERVAL * 3,
-            pump(
-                CockpitService::new(CockpitMode::Normal, adapter.clone()),
-                native_live(),
-                Command::AwaitChange,
-                Some(SessionSubscription { messages }),
-                &mut sink,
-            ),
-        ).await;
-        assert!(result.is_err());
-        assert_eq!(adapter.snapshots.load(Ordering::Relaxed), 0);
-        assert!(sink.messages.is_empty());
+        assert!(matches!(stream.step(stale()), Command::Emit(_)));
+        assert!(matches!(stream.step(Event::Delivered(true)), Command::AwaitChange));
+        assert_fetch(stream.step(Event::Change(Some(SessionChange::Changed))), false);
+        assert!(matches!(stream.step(Event::Snapshot(Ok(Box::new(initial)))), Command::Emit(SessionStreamMessage::Snapshot { generation: 2, sequence: 1, .. })));
     }
 
     fn assert_snapshot(command: Command, generation: u32, sequence: u32) {
@@ -1114,6 +1023,7 @@ mod tests {
         for mut stream in [gateway, native] {
             stream.generation = 7;
             stream.sequence = u32::MAX;
+            stream.last_snapshot = None;
             assert_fetch(
                 stream.step(Event::Change(Some(SessionChange::Changed))),
                 false,
@@ -1183,6 +1093,7 @@ mod tests {
         for mut stream in [gateway, native] {
             stream.generation = u32::MAX;
             stream.sequence = u32::MAX;
+            stream.last_snapshot = None;
             assert_fetch(
                 stream.step(Event::Change(Some(SessionChange::Changed))),
                 false,

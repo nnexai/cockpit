@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { NotesOperation, NotesTargetInfo, NotesTodo, NotesDecisionSummary, NotesResponse, NotesDocument } from "../../protocol/generated/v1";
+import { subscribeLocalChanges } from "../localChanges";
 import { readDrafts, reconcileDraft, storeDrafts, subscribeDrafts, type NotesDrafts } from "./drafts";
 
 const pendingWrites = new Set<string>();
@@ -18,6 +19,11 @@ export interface NotesModel {
   busy: boolean;
   request(operation: NotesOperation): Promise<NotesResponse>;
   mutate(operation: NotesOperation, onSuccess?: (response: NotesResponse) => void): Promise<boolean>;
+  commentsRevision: number;
+  refreshComments(): Promise<void>;
+  registerCommentsRefresh(refresh: () => Promise<void>): () => void;
+  watchUnavailable: boolean;
+  retryWatch(): void;
   refresh(): Promise<void>;
 }
 export function notesError(error: unknown): { code: string; message: string } {
@@ -51,7 +57,16 @@ export function useNotes(client: CockpitClient, info: NotesTargetInfo): NotesMod
   const outcomeUnknown = useRef(Boolean(drafts.unknownOutcome));
   const alive = useRef(true);
   const latest = useRef(0);
-  const tokens = useRef(info.change_tokens);
+  const [commentsRevision, setCommentsRevision] = useState(0);
+  const [watchUnavailable, setWatchUnavailable] = useState(false);
+  const watch = useRef<{ retry(): void } | null>(null);
+  const commentsRefresh = useRef<(() => Promise<void>) | null>(null);
+  const registerCommentsRefresh = useCallback((refresh: () => Promise<void>) => {
+    commentsRefresh.current = refresh;
+    return () => { if (commentsRefresh.current === refresh) commentsRefresh.current = null; };
+  }, []);
+  const refreshing = useRef<Promise<void> | null>(null);
+  const dirty = useRef(false);
   const updateDrafts = useCallback((update: (current: NotesDrafts) => NotesDrafts) => {
     const next = update(readDrafts(info.notes_id));
     setDrafts(next);
@@ -71,7 +86,7 @@ export function useNotes(client: CockpitClient, info: NotesTargetInfo): NotesMod
     return () => { subscribers.delete(setBusy); if (!subscribers.size) writeListeners.delete(info.notes_id); };
   }, [info.notes_id]);
   const request = useCallback((operation: NotesOperation) => client.notes({ target: { kind: "notes", notes_id: info.notes_id }, operation }), [client, info.notes_id]);
-  const refresh = useCallback(async () => {
+  const readContent = useCallback(async () => {
     const epoch = ++latest.current;
     const [scratch, tasks, records] = await Promise.all([
       request({ op: "scratchpad_read" }), request({ op: "todo_list", filter: "all" }), request({ op: "decision_list", status: "all", query: null }),
@@ -95,6 +110,19 @@ export function useNotes(client: CockpitClient, info: NotesTargetInfo): NotesMod
       return { ...current, scratchpad: reconcileDraft(current.scratchpad, document.content, document.revision), todos: editedTodos, decisionEdits: edits };
     });
   }, [request, updateDrafts]);
+  const refresh = useCallback((): Promise<void> => {
+    dirty.current = true;
+    if (refreshing.current) return refreshing.current;
+    const run = async () => {
+      do {
+        dirty.current = false;
+        await readContent();
+      } while (dirty.current);
+    };
+    const promise = run().finally(() => { refreshing.current = null; });
+    refreshing.current = promise;
+    return promise;
+  }, [readContent]);
   const mutate = useCallback(async (operation: NotesOperation, onSuccess?: (response: NotesResponse) => void): Promise<boolean> => {
     if (pendingWrites.has(info.notes_id) || outcomeUnknown.current) return false;
     pendingWrites.add(info.notes_id); setBusy(true); setError(null);
@@ -137,27 +165,26 @@ export function useNotes(client: CockpitClient, info: NotesTargetInfo): NotesMod
   }, [request, refresh, updateDrafts, info.notes_id]);
   useEffect(() => {
     alive.current = true;
-    let polling = false;
-    const poll = async (force = false) => {
-      if (polling || document.visibilityState === "hidden") return;
-      polling = true;
+    const subscription = subscribeLocalChanges(client, { kind: "notes_content", notes_id: info.notes_id }, async event => {
+      if (event.kind === "unavailable") { if (alive.current) setWatchUnavailable(true); return; }
       try {
-        const response = await request({ op: "target_resolve" });
-        if (!alive.current || response.result.kind !== "target") return;
-        const next = response.result.info.change_tokens;
-        if (force || Object.keys(next).some(key => next[key as keyof typeof next] !== tokens.current[key as keyof typeof next])) {
-          await refresh();
-          tokens.current = next;
+        if (event.kind === "ready" || event.topics.some(topic => topic !== "comments")) await refresh();
+        if (event.kind === "ready" || event.topics.includes("comments")) {
+          if (alive.current) setCommentsRevision(value => value + 1);
+          await commentsRefresh.current?.();
         }
-      } catch (failure) { if (alive.current && !outcomeUnknown.current) setError(notesError(failure)); }
-      finally { polling = false; }
+        if (alive.current && event.kind === "ready") setWatchUnavailable(false);
+      } catch (failure) { if (alive.current) { setWatchUnavailable(true); if (!outcomeUnknown.current) setError(notesError(failure)); } }
+    }, () => { if (alive.current) setWatchUnavailable(true); });
+    watch.current = subscription;
+    const focus = () => {
+      if (document.visibilityState === "hidden") return;
+      void refresh().catch(failure => { if (alive.current && !outcomeUnknown.current) setError(notesError(failure)); });
+      void commentsRefresh.current?.();
     };
-    void refresh().catch(failure => { if (alive.current && !outcomeUnknown.current) setError(notesError(failure)); });
-    const timer = window.setInterval(() => void poll(), 3000);
-    const focus = () => { void poll(true); };
-    window.addEventListener("focus", focus); document.addEventListener("visibilitychange", focus);
-    return () => { alive.current = false; ++latest.current; window.clearInterval(timer); window.removeEventListener("focus", focus); document.removeEventListener("visibilitychange", focus); };
-  }, [request, refresh]);
+    window.addEventListener("focus", focus);
+    return () => { alive.current = false; ++latest.current; watch.current = null; subscription.close(); window.removeEventListener("focus", focus); };
+  }, [client, info.notes_id, refresh]);
   const acknowledgeError = (problem: { code: string; message: string } | null) => {
     if (problem === null) {
       outcomeUnknown.current = false;
@@ -165,5 +192,5 @@ export function useNotes(client: CockpitClient, info: NotesTargetInfo): NotesMod
     }
     setError(problem);
   };
-  return { drafts, updateDrafts, scratchpad, todos, decisions, error, setError: acknowledgeError, storageError, busy, request, mutate, refresh };
+  return { drafts, updateDrafts, scratchpad, todos, decisions, error, setError: acknowledgeError, storageError, busy, request, mutate, refresh, commentsRevision, registerCommentsRefresh, refreshComments: async () => { setCommentsRevision(value => value + 1); await commentsRefresh.current?.(); }, watchUnavailable, retryWatch: () => watch.current?.retry() };
 }

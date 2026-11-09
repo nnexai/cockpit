@@ -344,6 +344,7 @@ const wire: TypedWirePolicy = {
     "BrowserFeedbackAck.remaining": (v) => v <= 0xffffffff,
     "TerminalStreamMessage[frame].encoding": (v) => v === "ansi",
     "SessionSnapshotResponse.server_instance": (v) => /^[0-9a-f]{16}$/.test(v),
+    "SpaceGitStatusResponse.server_instance": (v) => /^[0-9a-f]{16}$/.test(v),
     "PaneMoveDestination[existing_tab].ratio": ratio, "ResourceMutationRequest[pane_split].ratio": ratio,
     "CreatedPane.pane_id": id, "CreatedPane.terminal_id": id, "CreatedPane.space_id": id, "CreatedPane.tab_id": id,
     "TerminalOpenRequest.cols": positive, "TerminalOpenRequest.rows": positive,

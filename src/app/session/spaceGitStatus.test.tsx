@@ -14,15 +14,64 @@ function deferred<T>() {
 
 afterEach(() => { vi.useRealTimers(); });
 
+it("restarts an in-flight Git read when the watch invalidates it", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  const old = deferred<{ session_id: string; server_instance: string; spaces: SpaceGitStatus[] }>();
+  const fresh = deferred<{ session_id: string; server_instance: string; spaces: SpaceGitStatus[] }>();
+  const spaceGitStatus = vi.fn((_session: string, _signal?: AbortSignal) => old.promise).mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+  const client = { spaceGitStatus } as unknown as CockpitClient;
+  let counter = 0;
+  let spaces: ReadonlyMap<string, SpaceGitStatus> = new Map();
+  function Probe() { spaces = useSpaceGitStatus(client, "session", "w1", 1000, { counter, status: "watching" }, "server").spaces; return null; }
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => root.render(createElement(Probe)));
+    counter++; await act(async () => root.render(createElement(Probe)));
+    expect(spaceGitStatus).toHaveBeenCalledTimes(2);
+    expect(spaceGitStatus.mock.calls[0][1]?.aborted).toBe(true);
+    const status: SpaceGitStatus = { space_id: "w1", source: "herdr_checkout", checkout: { state: "detached", root: "/new" } };
+    await act(async () => fresh.resolve({ session_id: "session", server_instance: "server", spaces: [status] }));
+    await act(async () => old.resolve({ session_id: "session", server_instance: "server", spaces: [] }));
+    expect(spaces.get("w1")).toEqual(status);
+  } finally { await act(async () => root.unmount()); }
+});
+
+it("requires the active incarnation and rejects mismatched Git responses", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.useFakeTimers();
+  const status: SpaceGitStatus = { space_id: "w1", source: "herdr_checkout", checkout: { state: "detached", root: "/repo" } };
+  const spaceGitStatus = vi.fn()
+    .mockResolvedValueOnce({ session_id: "session", server_instance: "old", spaces: [status] })
+    .mockResolvedValueOnce({ session_id: "other", server_instance: "new", spaces: [status] })
+    .mockResolvedValueOnce({ session_id: "session", server_instance: "new", spaces: [status] });
+  const client = { spaceGitStatus } as unknown as CockpitClient;
+  let instance: string | null = null;
+  let current!: { spaces: ReadonlyMap<string, SpaceGitStatus>; error?: string; refresh(): void };
+  function Probe() { current = useSpaceGitStatus(client, "session", "w1", 1000, { counter: 0, status: "watching" }, instance); return null; }
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => root.render(createElement(Probe)));
+    expect(spaceGitStatus).not.toHaveBeenCalled();
+    instance = "new"; await act(async () => root.render(createElement(Probe)));
+    expect(current.spaces.size).toBe(0);
+    expect(current.error).toBe("Git status response does not match the active session");
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(current.spaces.size).toBe(0);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(current.error).toBeUndefined();
+    expect(current.spaces.get("w1")).toEqual(status);
+  } finally { await act(async () => root.unmount()); }
+});
+
 
 it("polls while visible and skips polls while the page is hidden", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.useFakeTimers();
-  const spaceGitStatus = vi.fn(async (sessionId: string) => ({ session_id: sessionId, spaces: [{ space_id: "w1", source: "herdr_checkout" as const, checkout: { state: "branch" as const, root: "/repo", branch: "main", upstream: { state: "tracked" as const, name: "origin/main", ahead: 1, behind: 0 } } }] }));
+  const spaceGitStatus = vi.fn(async (sessionId: string) => ({ session_id: sessionId, server_instance: "server", spaces: [{ space_id: "w1", source: "herdr_checkout" as const, checkout: { state: "branch" as const, root: "/repo", branch: "main", upstream: { state: "tracked" as const, name: "origin/main", ahead: 1, behind: 0 } } }] }));
   const client = { spaceGitStatus } as unknown as CockpitClient;
   const seen: string[] = [];
   function Probe() {
-    const status = useSpaceGitStatus(client, "session", "w1", 1000);
+    const status = useSpaceGitStatus(client, "session", "w1", 1000, undefined, "server");
     seen.push(aheadBehindLabel(status.spaces.get("w1")));
     return null;
   }
@@ -60,7 +109,7 @@ it("rereads a plain Space when its first pane moves to another folder, and ignor
 it.each(["session", "checkout"] as const)("retains last-known status on a failed read, refreshes while hidden, and never carries it across %s changes", async identity => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const status: SpaceGitStatus = { space_id: "w1", source: "herdr_checkout", checkout: { state: "detached", root: "/repo" } };
-  const spaceGitStatus = vi.fn().mockResolvedValueOnce({ session_id: "session", spaces: [status] }).mockRejectedValueOnce(new Error("ACL denied"));
+  const spaceGitStatus = vi.fn().mockResolvedValueOnce({ session_id: "session", server_instance: "server", spaces: [status] }).mockRejectedValueOnce(new Error("ACL denied"));
   const client = { spaceGitStatus } as unknown as CockpitClient;
   let refresh!: () => void;
   let error: string | undefined;
@@ -68,7 +117,7 @@ it.each(["session", "checkout"] as const)("retains last-known status on a failed
   let sessionId = "session";
   let checkoutKey = "w1";
   function Probe() {
-    const poll = useSpaceGitStatus(client, sessionId, checkoutKey);
+    const poll = useSpaceGitStatus(client, sessionId, checkoutKey, undefined, undefined, "server");
     refresh = poll.refresh; error = poll.error; spaces = poll.spaces;
     return null;
   }
@@ -82,7 +131,7 @@ it.each(["session", "checkout"] as const)("retains last-known status on a failed
     expect(error).toBe("ACL denied");
     expect(spaces.get("w1")).toEqual(status);
     expect(spaceGitStatus).toHaveBeenCalledTimes(2);
-    spaceGitStatus.mockResolvedValueOnce({ session_id: "session", spaces: [status] });
+    spaceGitStatus.mockResolvedValueOnce({ session_id: "session", server_instance: "server", spaces: [status] });
     await act(async () => refresh());
     expect(error).toBeUndefined();
     expect(spaces.get("w1")).toEqual(status);
@@ -98,18 +147,18 @@ it.each(["session", "checkout"] as const)("retains last-known status on a failed
 
 it("discards stale status when the same session's Space moves to another checkout", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  const pending = deferred<{ session_id: string; spaces: SpaceGitStatus[] }>();
-  const spaceGitStatus = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue({ session_id: "session", spaces: [{ space_id: "w1", source: "pane_folder", checkout: { state: "detached", root: "/new" } }] });
+  const pending = deferred<{ session_id: string; server_instance: string; spaces: SpaceGitStatus[] }>();
+  const spaceGitStatus = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue({ session_id: "session", server_instance: "server", spaces: [{ space_id: "w1", source: "pane_folder", checkout: { state: "detached", root: "/new" } }] });
   const client = { spaceGitStatus } as unknown as CockpitClient;
   let checkoutKey = "old";
   let spaces: ReadonlyMap<string, SpaceGitStatus> = new Map();
-  function Probe() { spaces = useSpaceGitStatus(client, "session", checkoutKey).spaces; return null; }
+  function Probe() { spaces = useSpaceGitStatus(client, "session", checkoutKey, undefined, undefined, "server").spaces; return null; }
   const root = createRoot(document.createElement("div"));
   try {
     await act(async () => root.render(createElement(Probe)));
     checkoutKey = "new";
     await act(async () => root.render(createElement(Probe)));
-    await act(async () => pending.resolve({ session_id: "session", spaces: [{ space_id: "w1", source: "pane_folder", checkout: { state: "detached", root: "/old" } }] }));
+    await act(async () => pending.resolve({ session_id: "session", server_instance: "server", spaces: [{ space_id: "w1", source: "pane_folder", checkout: { state: "detached", root: "/old" } }] }));
     expect(spaces.get("w1")?.checkout).toEqual({ state: "detached", root: "/new" });
   } finally { await act(async () => root.unmount()); }
 });
@@ -118,11 +167,11 @@ it("reuses unchanged poll results without rendering, but publishes failures and 
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.useFakeTimers();
   const value: SpaceGitStatus = { space_id: "w1", source: "herdr_checkout", checkout: { state: "detached", root: "/repo" } };
-  const spaceGitStatus = vi.fn(async () => ({ session_id: "session", spaces: [structuredClone(value)] }));
+  const spaceGitStatus = vi.fn(async () => ({ session_id: "session", server_instance: "server", spaces: [structuredClone(value)] }));
   const client = { spaceGitStatus } as unknown as CockpitClient;
   let current!: { spaces: ReadonlyMap<string, SpaceGitStatus>; error?: string; refresh(): void };
   let renders = 0;
-  function Probe() { current = useSpaceGitStatus(client, "session", "w1", 1000); ++renders; return null; }
+  function Probe() { current = useSpaceGitStatus(client, "session", "w1", 1000, undefined, "server"); ++renders; return null; }
   const root = createRoot(document.createElement("div"));
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   try {
@@ -190,11 +239,11 @@ it("publishes every Git status field, union transition and Space order change", 
     [next], [base, next], [next, base], [base], [],
   ];
   let response = [base];
-  const spaceGitStatus = vi.fn(async () => ({ session_id: "session", spaces: structuredClone(response) }));
+  const spaceGitStatus = vi.fn(async () => ({ session_id: "session", server_instance: "server", spaces: structuredClone(response) }));
   const client = { spaceGitStatus } as unknown as CockpitClient;
   let current!: { spaces: ReadonlyMap<string, SpaceGitStatus>; error?: string; refresh(): void };
   let renders = 0;
-  function Probe() { current = useSpaceGitStatus(client, "session", "w1"); ++renders; return null; }
+  function Probe() { current = useSpaceGitStatus(client, "session", "w1", undefined, undefined, "server"); ++renders; return null; }
   const root = createRoot(document.createElement("div"));
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   try {
@@ -210,4 +259,32 @@ it("publishes every Git status field, union transition and Space order change", 
       expect(current.spaces).toBe(spaces);
     }
   } finally { await act(async () => root.unmount()); visibility.mockRestore(); }
+});
+
+it("retries failed reads while watching, cancels hidden retries, and clears them on recovery", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.useFakeTimers();
+  let visibility: DocumentVisibilityState = "visible";
+  const visible = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+  const spaceGitStatus = vi.fn().mockRejectedValueOnce(new Error("offline")).mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue({ session_id: "session", server_instance: "server", spaces: [] });
+  const client = { spaceGitStatus } as unknown as CockpitClient;
+  let error: string | undefined;
+  function Probe() { error = useSpaceGitStatus(client, "session", "w1", 1000, { counter: 0, status: "watching" }, "server").error; return null; }
+  const root = createRoot(document.createElement("div"));
+  try {
+    await act(async () => root.render(createElement(Probe)));
+    expect(error).toBe("offline");
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(spaceGitStatus).toHaveBeenCalledTimes(2);
+    visibility = "hidden";
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(vi.getTimerCount()).toBe(0);
+    visibility = "visible";
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    expect(spaceGitStatus).toHaveBeenCalledTimes(3);
+    expect(error).toBeUndefined();
+    await act(async () => vi.advanceTimersByTime(3000));
+    expect(spaceGitStatus).toHaveBeenCalledTimes(3);
+  } finally { await act(async () => root.unmount()); visible.mockRestore(); }
 });

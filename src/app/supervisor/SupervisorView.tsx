@@ -1,5 +1,8 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { OrchestrationSnapshot, Run, TaskView } from "../../protocol/generated/v1";
+import type { TaskView } from "../../protocol/generated/v1";
+import type { SupervisorOverview } from "./useSupervisor";
+import type { CockpitClient } from "../../client/CockpitClient";
+import { useTaskHistoryMessages } from "./useTaskHistoryMessages";
 import { SupervisorTasks, taskLanes } from "./SupervisorTasks";
 import { SupervisorGraph } from "./SupervisorGraph";
 import { TaskHistoryDetail, waitCopy } from "./TaskHistoryDetail";
@@ -20,7 +23,7 @@ const attentionLabels = {
   retirement_unconfirmed: "Retirement unconfirmed",
 } as const;
 
-function taskAttention(snapshot: OrchestrationSnapshot | null, rootId: string | null, tasks: readonly TaskView[], fresh: boolean) {
+function taskAttention(snapshot: SupervisorOverview | null, rootId: string | null, tasks: readonly TaskView[], fresh: boolean) {
   if (!snapshot || !rootId || snapshot.board?.root_id !== rootId) return [];
   return tasks.flatMap((view, index) => {
     if (!uniqueTask(tasks, view.task.task_id)) return [];
@@ -63,22 +66,29 @@ function taskAttention(snapshot: OrchestrationSnapshot | null, rootId: string | 
 }
 
 /** Optional overview; the normal terminal remains mounted as the conversation. */
-export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot, rootId, fresh, onFreshConversation, freshConversationReason }: {
-  tasks: readonly TaskView[]; runs: readonly Run[]; waiting: boolean; status: string | null; onClose(): void;
-  snapshot: OrchestrationSnapshot | null; rootId: string | null; fresh: boolean; onFreshConversation?(): void; freshConversationReason?: string | null;
+export function SupervisorView({ client, tasks, runs, waiting, status, onClose, snapshot, rootId, fresh, connected = true, onFreshConversation, freshConversationReason }: {
+  client: CockpitClient; connected?: boolean; tasks: readonly TaskView[]; runs: readonly SupervisorOverview["runs"][number][]; waiting: boolean; status: string | null; onClose(): void;
+  snapshot: SupervisorOverview | null; rootId: string | null; fresh: boolean; onFreshConversation?(): void; freshConversationReason?: string | null;
 }) {
   const [mode, setMode] = useState<"tasks" | "graph">("tasks");
   const [project, setProject] = useState<string | null>(null);
   const groups = useMemo(() => groupTasks(tasks, runs), [tasks, runs]);
   const activeProject = project !== null && groups.some(group => group.key === project) ? project : null;
   const attention = useMemo(() => taskAttention(snapshot, rootId, tasks, fresh), [snapshot, rootId, tasks, fresh]);
-  const [selected, setSelected] = useState<{ taskId: string; rowKey: string } | null>(null);
+  const [selected, setSelected] = useState<{ taskId: string; rowKey: string; client: CockpitClient; scope: string } | null>(null);
   const overview = useRef<HTMLElement>(null), conversation = useRef<HTMLButtonElement>(null), closeDetail = useRef<HTMLButtonElement>(null);
   const focusIntent = useRef<"back" | "origin" | "conversation" | null>("conversation");
   const origin = useRef<HTMLElement | null>(null), returnRow = useRef<string | null>(null);
   const lastFocused = useRef<HTMLElement | null>(null);
-  const view = selected ? tasks.find((task, index) => `${task.task.task_id}:${index}` === selected.rowKey) ?? tasks.find(task => task.task.task_id === selected.taskId) : null;
-  const history = useMemo(() => snapshot && rootId && view ? taskHistory(snapshot, rootId, view, tasks, fresh) : null, [snapshot, rootId, view, tasks, fresh]);
+  const selectionScope = JSON.stringify([snapshot?.session_id, snapshot?.state_store_id, rootId]);
+  const view = selected && selected.client === client && selected.scope === selectionScope ? tasks.find((task, index) => `${task.task.task_id}:${index}` === selected.rowKey) ?? tasks.find(task => task.task.task_id === selected.taskId) : null;
+  const historyMessages = useTaskHistoryMessages(client, snapshot && rootId && view && uniqueTask(tasks, view.task.task_id) ? { sessionId: snapshot.session_id, stateStoreId: snapshot.state_store_id, rootId, taskId: view.task.task_id } : null, snapshot?.revision ?? 0, connected, snapshot?.tasks_token);
+  const history = useMemo(() => {
+    if (!snapshot || !rootId || !view) return null;
+    const data = historyMessages.data;
+    if (!data && uniqueTask(tasks, view.task.task_id)) return null;
+    return taskHistory(data ? { ...snapshot, cleanup: data.cleanup, task_ownership: data.task_ownership, unreflected_inputs: data.unreflected_inputs } : snapshot, rootId, view, tasks, fresh, data?.messages ?? null, data?.runs ?? null);
+  }, [snapshot, rootId, view, tasks, fresh, historyMessages.data]);
   const selectedKey = view ? `${view.task.task_id}:${tasks.indexOf(view)}` : null;
   const visible = (element: HTMLElement) => {
     for (let ancestor: HTMLElement | null = element; ancestor && ancestor !== overview.current; ancestor = ancestor.parentElement) {
@@ -116,7 +126,7 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
     const active = document.activeElement;
     origin.current = active instanceof HTMLElement && overview.current?.contains(active) && active.dataset.rowKey === rowKey ? active : findRow(rowKey) ?? null;
     focusIntent.current = "back";
-    setSelected({ taskId: task.task.task_id, rowKey });
+    setSelected({ taskId: task.task.task_id, rowKey, client, scope: selectionScope });
   };
   const goBack = () => {
     returnRow.current = view ? `${view.task.task_id}:${tasks.indexOf(view)}` : selected?.rowKey ?? null;
@@ -150,7 +160,7 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
       </div>
       {selected && view ? <aside className="liaison-overview-detail" aria-label="Task history">
         <header><button type="button" className="liaison-detail-back" ref={closeDetail} aria-label="Close task history" onClick={goBack}>✕ Close</button></header>
-        <TaskHistoryDetail view={view} history={history} activity={taskActivity(view, snapshot, rootId, fresh)} />
+        <TaskHistoryDetail view={view} history={history} activity={taskActivity(view, snapshot, rootId, fresh)} historyTransfer={snapshot && rootId ? historyMessages : undefined} />
       </aside> : null}
     </div>
   </section>;

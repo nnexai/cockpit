@@ -4,6 +4,7 @@ pub mod error;
 pub mod guard;
 pub mod http_input;
 pub mod limits;
+pub mod local_changes;
 pub mod native_input;
 pub mod operations;
 pub mod registry;

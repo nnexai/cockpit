@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { Message, Report, Run, UnreflectedInput } from "../../protocol/generated/v1";
-import { formatEventTime, formatGap, taskHistory } from "./taskHistory";
-import { orchestrationFixture, runFixture, taskFixture } from "./testFixtures";
+import type { Message, Report, Run, TaskView, UnreflectedInput } from "../../protocol/generated/v1";
+import type { SupervisorOverview } from "./useSupervisor";
+import { formatEventTime, formatGap, taskHistory as projectHistory } from "./taskHistory";
+import { orchestrationFixture as overviewFixture, runFixture, taskFixture } from "./testFixtures";
+
+function orchestrationFixture(...args: Parameters<typeof overviewFixture>) {
+  return { ...overviewFixture(...args), messages: [] as Message[] };
+}
+function taskHistory(snapshot: SupervisorOverview & { messages: Message[]; runs: Run[] }, rootId: string, view: TaskView, tasks: readonly TaskView[], fresh: boolean) {
+  return projectHistory(snapshot, rootId, view, tasks, fresh, snapshot.messages, snapshot.runs);
+}
 
 const at = "2026-10-07T12:00:00Z", later = "2026-10-07T12:02:00Z";
 function worker(overrides: Partial<Run> = {}) { return runFixture({ kind: "worker", run_id: "worker", root_id: "root", task_id: "task", stage: "working", ...overrides }); }
@@ -14,6 +22,11 @@ function input(overrides: Partial<UnreflectedInput> = {}): UnreflectedInput {
   return { run_id: "worker", result_message_id: "result", message_id: "input", seq: 3, kind: "instruction", from: { type: "operator" }, stage: "acked", after_result: true, created_at: at, acked_at: later, ...overrides };
 }
 
+  it("keeps run-derived events while message bodies are loading", () => {
+    const task = taskFixture("task"), run = worker();
+    const history = projectHistory(overviewFixture([task], [run]), "root", task, [task], true, null, [run]);
+    expect(history.attempts[0].events.map(event => event.kind)).toEqual(["started"]);
+  });
 describe("task history evidence", () => {
   it("distinguishes recorded output and integration without guessing missing or mismatched output", () => {
     const task = taskFixture("task", { lane: "accepted" });

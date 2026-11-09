@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { NotesCatalogEntry, NotesTargetInfo, NotesTodo } from "../../protocol/generated/v1";
+import { subscribeLocalChanges } from "../localChanges";
 import type { LibrarySpace } from "../library/libraryState";
 import { UiIcon } from "../UiIcon";
 import { MarkdownEditor, MarkdownPreview, NotesEditorScope } from "./MarkdownEditor";
@@ -33,7 +34,7 @@ function readSurface(notesId: string): ViewState {
   } catch { /* Session state remains available when persistent browser storage is disabled. */ }
   return fallback;
 }
-function NotesContent({ client, info, onClose }: { client: CockpitClient; info: NotesTargetInfo; onClose(): void }) {
+function NotesContent({ client, info, onClose, verifyAssociation }: { client: CockpitClient; info: NotesTargetInfo; onClose(): void; verifyAssociation(notesId: string): Promise<boolean> }) {
   const model = useNotes(client, info);
   const [surface, setSurface] = useState(() => readSurface(info.notes_id));
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -44,6 +45,16 @@ function NotesContent({ client, info, onClose }: { client: CockpitClient; info: 
   const detailVisible = useRef(showDetail); detailVisible.current = showDetail;
   const [checkedUnknown, setCheckedUnknown] = useState<string | null>(null);
   const [checkingSaved, setCheckingSaved] = useState(false);
+  const [watchRefreshed, setWatchRefreshed] = useState(false);
+  const [watchRefreshing, setWatchRefreshing] = useState(false);
+  const watchNotice = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    if (!model.watchUnavailable) return;
+    const notice = watchNotice.current;
+    return () => {
+      if (notice?.contains(document.activeElement)) document.getElementById(`f-${surface.tab}`)?.focus({ preventScroll: true });
+    };
+  }, [model.watchUnavailable, surface.tab]);
   const checkEpoch = useRef(0);
   useLayoutEffect(() => { contentMounted.current = true; return () => { contentMounted.current = false; }; }, []);
   useEffect(() => {
@@ -67,7 +78,7 @@ function NotesContent({ client, info, onClose }: { client: CockpitClient; info: 
     };
     void refreshCounts();
     return () => { active = false; };
-  }, [model.request, info.change_tokens.comments, countedIds, showDetail, surface.selectedTodo]);
+  }, [model.request, model.commentsRevision, countedIds, showDetail, surface.selectedTodo]);
   const checkSavedState = async () => {
     const problem = model.error;
     const epoch = ++checkEpoch.current;
@@ -179,6 +190,7 @@ function NotesContent({ client, info, onClose }: { client: CockpitClient; info: 
         {reviewedUnknown ? <li><span>Saved state was read. Review it first: the next write may duplicate the unconfirmed change.</span><button type="button" disabled={model.busy || checkingSaved} onClick={acknowledgeUnknown}>I checked saved state; allow next write</button></li> : null}
       </ol> : <><span>{unknown ? "Could not confirm whether the change was saved. Your drafts are kept. Check saved state before choosing any next write; posting again may duplicate." : model.error.code === "notes_conflict" ? "Changed elsewhere. Your text is kept; use the editor's Reload or Keep mine controls." : model.error.message}</span><code>{model.error.code}</code><button type="button" disabled={model.busy || checkingSaved} onClick={() => void checkSavedState()}>{checkingSaved ? "Checking saved state…" : "Check saved state"}</button>{reviewedUnknown ? <><span>Saved state was read. Review it first: the next write may duplicate the unconfirmed change.</span><button type="button" disabled={model.busy || checkingSaved} onClick={acknowledgeUnknown}>I checked saved state; allow next write</button></> : null}</>}</div> : null}
       {model.storageError ? <p className="notes-error" role="alert"><UiIcon name="info" /><span>{model.storageError}</span></p> : null}
+      {model.watchUnavailable ? <div ref={watchNotice} className="notes-error"><span role="status" aria-live="polite" aria-atomic="true">{watchRefreshed ? "Refreshed. Automatic updates are still unavailable." : "Automatic updates unavailable. Saved notes may be out of date."}</span><button type="button" aria-disabled={watchRefreshing} onClick={() => { if (watchRefreshing) return; setWatchRefreshing(true); void verifyAssociation(info.notes_id).then(valid => valid ? Promise.all([model.refresh(), model.refreshComments()]) : Promise.reject(new Error("Notes association changed"))).then(() => setWatchRefreshed(true), () => setWatchRefreshed(false)).finally(() => setWatchRefreshing(false)); }}>{watchRefreshing ? "Refreshing…" : "Refresh notes"}</button><button type="button" aria-label="Retry automatic updates for Notes" onClick={() => { setWatchRefreshed(false); model.retryWatch(); }}>Retry automatic updates</button></div> : null}
       </div>
     </div>
     <RetainedDrafts model={model} />
@@ -204,6 +216,11 @@ export function NotesView({ client, space, onClose }: { client: CockpitClient; s
   const catalogRetry = useRef<HTMLButtonElement>(null);
   const pickerCancel = useRef<HTMLButtonElement>(null);
   const pickerVisible = useRef(picker); pickerVisible.current = picker;
+  const [bindingUnavailable, setBindingUnavailable] = useState(false);
+  const bindingWatch = useRef<{ retry(): void } | null>(null);
+  const flushBinding = useRef<() => void>(() => {});
+  const resolvedNotes = useRef<string | null>(null);
+  const bindingIdentity = useRef("");
   const resolveRef = useRef<() => Promise<void>>(async () => {});
   const target = space?.target;
   useEffect(() => {
@@ -235,31 +252,72 @@ export function NotesView({ client, space, onClose }: { client: CockpitClient; s
   }, [confirmTransfer]);
   useEffect(() => {
     let active = true;
-    setInfo(null); setError(null); setLoading(true); setPicker(false); setSelected(null); setConfirmTransfer(false);
-    const resolve = async () => {
+    let dirty = false;
+    let needsBaseline = false;
+    let reading: Promise<void> | null = null;
+    const identity = `${target?.session_id ?? ""}\0${target?.space_id ?? ""}`;
+    if (bindingIdentity.current !== identity) {
+      bindingIdentity.current = identity;
+      resolvedNotes.current = null;
+      setInfo(null); setPicker(false); setSelected(null); setConfirmTransfer(false);
+    }
+    setError(null); setLoading(true); setBindingUnavailable(false);
+    const read = async () => {
       if (!target) { if (active) setLoading(false); return; }
-      if (!space?.live) { if (active) { setError({ code: "notes_space_unavailable", message: "The Space association needs a live Herdr connection. Drafts are kept; reconnect before resolving it." }); setLoading(false); } return; }
+      if (!space?.live) { if (active) { setBindingUnavailable(true); setError({ code: "notes_space_unavailable", message: "The Space association needs a live Herdr connection. Drafts are kept; reconnect before resolving it." }); setLoading(false); } return; }
       try {
         const response = await client.notes({ target: { kind: "space", ...target }, operation: { op: "target_resolve" } });
-        if (active && response.result.kind === "target") { setInfo(response.result.info); setError(null); }
-      } catch (failure) { if (active) { setError(notesError(failure)); setInfo(null); } }
-      finally { if (active) setLoading(false); }
+        if (response.result.kind !== "target") throw new Error("Notes returned an unexpected target result");
+        if (pending.current || pickerVisible.current) { dirty = true; return; }
+        if (active) { resolvedNotes.current = response.result.info.notes_id; setInfo(response.result.info); setError(null); if (needsBaseline) { needsBaseline = false; setBindingUnavailable(false); } }
+      } catch (failure) {
+        if (pending.current || pickerVisible.current) { dirty = true; return; }
+        if (active) {
+          const problem = notesError(failure);
+          setError(problem);
+          if (problem.code === "notes_unbound") { resolvedNotes.current = null; setInfo(null); }
+          if (problem.code === "notes_unbound" && needsBaseline) { needsBaseline = false; setBindingUnavailable(false); }
+          else if (needsBaseline) setBindingUnavailable(true);
+        }
+      } finally { if (active) setLoading(false); }
+    };
+    const resolve = (): Promise<void> => {
+      dirty = true;
+      if (reading) return reading;
+      if (pending.current || pickerVisible.current) return Promise.resolve();
+      const run = async () => {
+        do {
+          dirty = false;
+          await read();
+        } while (active && dirty && !pending.current && !pickerVisible.current);
+      };
+      reading = run().finally(() => { reading = null; });
+      return reading;
     };
     resolveRef.current = resolve;
-    void resolve();
-    const onFocus = () => { if (!pending.current && !pickerVisible.current && document.visibilityState !== "hidden") void resolve(); };
-    const timer = window.setInterval(onFocus, 5000);
+    flushBinding.current = () => { if (dirty) void resolve(); };
+    let subscription: { close(): void; retry(): void } | null = null;
+    if (target && space?.live) {
+      subscription = subscribeLocalChanges(client, { kind: "notes_binding", session_id: target.session_id, space_id: target.space_id }, async event => {
+        if (event.kind === "unavailable") { if (active) setBindingUnavailable(true); return; }
+        if (event.kind === "ready") needsBaseline = true;
+        await resolve();
+      }, () => { if (active) { setBindingUnavailable(true); setLoading(false); } });
+      bindingWatch.current = subscription;
+    } else void resolve();
+    const onFocus = () => { if (document.visibilityState !== "hidden") void resolve(); };
     window.addEventListener("focus", onFocus);
-    return () => { active = false; window.clearInterval(timer); window.removeEventListener("focus", onFocus); };
+    return () => { active = false; bindingWatch.current = null; flushBinding.current = () => {}; subscription?.close(); window.removeEventListener("focus", onFocus); };
   }, [client, target?.session_id, target?.space_id, space?.live]);
+  useEffect(() => { if (!picker) flushBinding.current(); }, [picker]);
   const bind = async (notesId?: string) => {
     if (!target || pending.current) return;
     pending.current = true; setBusy(true); setError(null);
     try {
       const response = await client.notes({ target: { kind: "space", ...target }, operation: notesId ? { op: "target_attach", notes_id: notesId } : { op: "target_create" } });
-      if (response.result.kind === "target") { setInfo(response.result.info); setPicker(false); }
+      if (response.result.kind === "target") { resolvedNotes.current = response.result.info.notes_id; setInfo(response.result.info); setPicker(false); }
     } catch (failure) { setError(notesError(failure)); }
-    finally { pending.current = false; setBusy(false); }
+    finally { pending.current = false; setBusy(false); flushBinding.current(); }
   };
   const loadCatalog = async () => {
     if (!pickerVisible.current) pickerInvoker.current = document.activeElement instanceof HTMLElement ? document.activeElement : attachOpener.current;
@@ -298,7 +356,8 @@ export function NotesView({ client, space, onClose }: { client: CockpitClient; s
     else onClose();
   }}>
     {!info ? <header className="notes-view-header"><div className="notes-view-context"><h2>Notes</h2><span className="notes-space-label">{space?.label ?? "Select a Space"}</span></div><button className="notes-icon-button" type="button" aria-label="Close Notes" onClick={onClose}><UiIcon name="close" /></button></header> : null}
-    {info ? <NotesContent key={info.notes_id} client={client} info={info} onClose={onClose} /> : <div className={`notes-binding${picker ? " notes-binding-picker" : " notes-binding-empty"}`}>
+    {bindingUnavailable ? <div className="notes-error"><span role="status" aria-live="polite" aria-atomic="true">Automatic association updates unavailable. Displayed Notes may be out of date.</span><button type="button" onClick={() => void resolveRef.current()}>Refresh association</button><button type="button" aria-label="Retry automatic association updates for Notes" onClick={() => bindingWatch.current?.retry()}>Retry automatic updates</button></div> : null}
+    {info ? <NotesContent key={info.notes_id} client={client} info={info} onClose={onClose} verifyAssociation={async notesId => { resolvedNotes.current = null; await resolveRef.current(); return resolvedNotes.current === notesId; }} /> : <div className={`notes-binding${picker ? " notes-binding-picker" : " notes-binding-empty"}`}>
       {!target ? <p>Select a Space to open its notes.</p> : picker ? <>
         <h3>Attach existing notes</h3><p>Choose the exact Notes ID. Files stay outside the repository.</p>
         {catalog.status === "loading" ? <p>Finding existing notes…</p> : catalog.status === "error" ? <div className="notes-error" role="alert"><span>{catalog.problem.message} <code>{catalog.problem.code}</code></span><button ref={catalogRetry} type="button" onClick={() => void loadCatalog()}>Retry reading catalog</button></div> : catalog.status === "ready" ? catalog.entries.length ? <div className="notes-catalog">{catalog.entries.map(entry => <label key={entry.notes_id}><input type="radio" name="notes-attach" checked={selected === entry.notes_id} onChange={() => { setSelected(entry.notes_id); setConfirmTransfer(false); }} /><span>{entry.label ? `Last called ${entry.label}` : "Untitled notes"}<code>{entry.notes_id}</code><small>{entry.bound ? "Attached elsewhere" : "Not attached"}</small></span></label>)}</div> : <p>No existing notes found.</p> : null}

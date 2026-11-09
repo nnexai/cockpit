@@ -139,6 +139,12 @@ impl OrchestrationRuntime {
     ) -> Result<OrchestrationSnapshot, InspectionError> {
         self.service.snapshot(self.herdr.as_ref(), request).await
     }
+    pub async fn overview(&self, request: &OrchestrationSnapshotRequest) -> Result<OrchestrationOverview, InspectionError> {
+        self.service.overview(self.herdr.as_ref(), request).await
+    }
+    pub fn task_history(&self, request: &TaskHistoryRequest) -> Result<TaskHistoryMessages, InspectionError> {
+        self.service.task_history(request)
+    }
     /// Resolve explicit Voice scope from fresh, independently bound Herdr observations.
     pub async fn resolve_voice_scope(
         &self, request: &VoiceScopeRequest,

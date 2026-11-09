@@ -13,11 +13,13 @@ use cockpit_host::{
         browser_relay::{self, BrowserViewSubscribeResponse},
         error::OperationError,
         limits,
+        local_changes::{self, LocalChangeSink},
         session_stream::{self, Incoming, SessionSink, SessionStream},
         terminal,
     },
 };
 use cockpit_protocol::{
+    local_changes::{LocalChangeAck, LocalChangeEvent, LocalChangeScope},
     v1::{
         ErrorResponse, SessionStreamMessage, TerminalCommand, TerminalOpenRequest,
         TerminalStreamMessage, TerminalTargetKind,
@@ -121,6 +123,11 @@ enum StreamEntry {
     BrowserView {
         control: Arc<StreamControl>,
     },
+    LocalChanges {
+        control: Arc<StreamControl>,
+        owner: String,
+        acknowledgements: mpsc::Sender<LocalChangeAck>,
+    },
     Widget {
         control: Arc<StreamControl>,
         window_id: String,
@@ -166,6 +173,44 @@ impl StreamRegistry {
         Ok(id)
     }
 
+    fn allocate_local_changes(
+        &self,
+        owner: &str,
+        generation: u64,
+        control: Arc<StreamControl>,
+        acknowledgements: mpsc::Sender<LocalChangeAck>,
+    ) -> Result<String, ErrorResponse> {
+        let mut state = self.state.lock().expect("stream registry lock poisoned");
+        if *state.page_generations.get(owner).unwrap_or(&0) != generation {
+            return Err(OperationError::rejected("page_reloaded", "The webview navigated while the stream was opening").into());
+        }
+        if state.entries.len() >= MAX_STREAMS || state.entries.values().filter(|entry| {
+            matches!(entry, StreamEntry::LocalChanges { owner: entry_owner, .. } if entry_owner == owner)
+        }).count() >= 32 {
+            return Err(OperationError::rejected("stream_limit", "The maximum number of active streams has been reached").into());
+        }
+        let id = loop {
+            let candidate = Uuid::new_v4().simple().to_string();
+            if !state.entries.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+        state.entries.insert(id.clone(), StreamEntry::LocalChanges {
+            control,
+            owner: owner.to_owned(),
+            acknowledgements,
+        });
+        Ok(id)
+    }
+
+    fn local_acknowledgements(&self, stream_id: &str, owner: &str) -> Option<mpsc::Sender<LocalChangeAck>> {
+        let state = self.state.lock().expect("stream registry lock poisoned");
+        match state.entries.get(stream_id) {
+            Some(StreamEntry::LocalChanges { owner: entry_owner, acknowledgements, .. }) if entry_owner == owner => Some(acknowledgements.clone()),
+            _ => None,
+        }
+    }
+
     fn terminal_commands(&self, stream_id: &str) -> Option<mpsc::Sender<TerminalCommand>> {
         let state = self.state.lock().expect("stream registry lock poisoned");
         let entries = &state.entries;
@@ -195,6 +240,7 @@ impl StreamRegistry {
                 StreamEntry::Session { control }
                 | StreamEntry::Terminal { control, .. }
                 | StreamEntry::BrowserView { control }
+                | StreamEntry::LocalChanges { control, .. }
                 | StreamEntry::Widget { control, .. } => {
                     control.cancelled.store(true, Ordering::Release);
                 }
@@ -202,17 +248,20 @@ impl StreamRegistry {
         }
     }
 
-    async fn cancel(&self, stream_id: &str) {
-        let entry = self
-            .state
-            .lock()
-            .expect("stream registry lock poisoned")
-            .entries.remove(stream_id);
+    async fn cancel(&self, stream_id: &str, owner: &str) {
+        let entry = {
+            let mut state = self.state.lock().expect("stream registry lock poisoned");
+            if matches!(state.entries.get(stream_id), Some(StreamEntry::LocalChanges { owner: entry_owner, .. }) if entry_owner != owner) {
+                return;
+            }
+            state.entries.remove(stream_id)
+        };
         if let Some(entry) = entry {
             match entry {
                 StreamEntry::Session { control }
                 | StreamEntry::Terminal { control, .. }
                 | StreamEntry::BrowserView { control }
+                | StreamEntry::LocalChanges { control, .. }
                 | StreamEntry::Widget { control, .. } => control.cancel().await,
             }
         }
@@ -264,9 +313,16 @@ impl StreamRegistry {
             *generation = generation.checked_add(1).expect("page generation exhausted");
             let mut controls = Vec::new();
             state.entries.retain(|_, entry| {
-                if let StreamEntry::Terminal { control, scratch_owner: Some(entry_owner), .. } = entry
-                    && entry_owner == owner
-                {
+                let owned = match entry {
+                    StreamEntry::Terminal { scratch_owner: Some(entry_owner), .. } => entry_owner == owner,
+                    StreamEntry::LocalChanges { owner: entry_owner, .. } => entry_owner == owner,
+                    _ => false,
+                };
+                if owned {
+                    let control = match entry {
+                        StreamEntry::Terminal { control, .. } | StreamEntry::LocalChanges { control, .. } => control,
+                        _ => unreachable!(),
+                    };
                     controls.push(Arc::clone(control));
                     false
                 } else {
@@ -304,6 +360,75 @@ impl SessionSink for ChannelSink {
     fn cancelled(&self) -> bool {
         self.control.cancelled.load(Ordering::Acquire)
     }
+}
+
+struct LocalChannelSink {
+    channel: Channel<LocalChangeEvent>,
+    acknowledgements: mpsc::Receiver<LocalChangeAck>,
+}
+
+impl LocalChangeSink for LocalChannelSink {
+    async fn send(&mut self, event: LocalChangeEvent) -> bool {
+        self.channel.send(event).is_ok()
+    }
+
+    async fn incoming(&mut self) -> Option<LocalChangeAck> {
+        self.acknowledgements.recv().await
+    }
+}
+
+#[tauri::command]
+pub async fn cockpit_local_changes_subscribe<R: tauri::Runtime>(
+    scope: LocalChangeScope,
+    channel: Channel<LocalChangeEvent>,
+    error_channel: Channel<ErrorResponse>,
+    service: State<'_, CockpitService>,
+    registry: State<'_, StreamRegistry>,
+    webview: tauri::Webview<R>,
+) -> Result<String, ErrorResponse> {
+    let owner = webview.label().to_owned();
+    if owner != "main" {
+        return Err(OperationError::rejected("stream_forbidden", "Local changes are available only to the main webview").into());
+    }
+    let generation = registry.page_generation(&owner);
+    scope.validate().map_err(|message| ErrorResponse::from(OperationError::rejected("invalid_scope", message)))?;
+    let permit = local_changes::admit().ok_or_else(|| ErrorResponse::from(OperationError::rejected("stream_limit", "The maximum number of active streams has been reached")))?;
+    let subscription = service.subscribe_local_changes(&scope).await
+        .map_err(|_| ErrorResponse::from(OperationError::rejected("watch_unavailable", "Automatic updates are unavailable")))?;
+    let control = StreamControl::new(None);
+    let (acknowledgements, receiver) = mpsc::channel(1);
+    let stream_id = registry.allocate_local_changes(&owner, generation, Arc::clone(&control), acknowledgements)?;
+    let returned_id = stream_id.clone();
+    let task_registry = registry.inner().clone();
+    let task_control = Arc::clone(&control);
+    let task = tokio::spawn(async move {
+        let _permit = permit;
+        let mut sink = LocalChannelSink { channel, acknowledgements: receiver };
+        local_changes::pump(subscription, stream_id.clone(), &mut sink).await;
+        if !task_control.cancelled.load(Ordering::Acquire) {
+            let _ = error_channel.send(OperationError::rejected("stream_closed", "Automatic updates are unavailable").into());
+        }
+        task_registry.complete(&stream_id);
+    });
+    control.set_abort(task.abort_handle());
+    Ok(returned_id)
+}
+
+#[tauri::command]
+pub async fn cockpit_local_changes_ack<R: tauri::Runtime>(
+    ack: LocalChangeAck,
+    registry: State<'_, StreamRegistry>,
+    webview: tauri::Webview<R>,
+) -> Result<(), ErrorResponse> {
+    let owner = webview.label();
+    let sender = registry.local_acknowledgements(&ack.stream_id, owner).ok_or_else(|| {
+        ErrorResponse::from(OperationError::rejected("stream_not_found", "The local changes stream is not active"))
+    })?;
+    if ack.validate().is_err() || sender.try_send(ack.clone()).is_err() {
+        registry.cancel(&ack.stream_id, owner).await;
+        return Err(OperationError::rejected("invalid_ack", "The local changes acknowledgement was rejected").into());
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -521,11 +646,12 @@ pub async fn cockpit_terminal_command(
 }
 
 #[tauri::command]
-pub async fn cockpit_stream_cancel(
+pub async fn cockpit_stream_cancel<R: tauri::Runtime>(
     stream_id: String,
     registry: State<'_, StreamRegistry>,
+    webview: tauri::Webview<R>,
 ) -> Result<(), ErrorResponse> {
-    registry.cancel(&stream_id).await;
+    registry.cancel(&stream_id, webview.label()).await;
     Ok(())
 }
 
@@ -622,6 +748,35 @@ pub async fn cockpit_widget_subscribe(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn local_changes_are_owned_and_navigation_fences_open() {
+        let registry = StreamRegistry::new();
+        let generation = registry.page_generation("main");
+        let (tx, _rx) = mpsc::channel(1);
+        let control = StreamControl::new(None);
+        let id = registry.allocate_local_changes("main", generation, Arc::clone(&control), tx).unwrap();
+        assert!(registry.local_acknowledgements(&id, "other").is_none());
+        registry.cancel(&id, "other").await;
+        assert!(registry.local_acknowledgements(&id, "main").is_some());
+        registry.page_started("main");
+        assert!(registry.local_acknowledgements(&id, "main").is_none());
+        let (late_tx, _late_rx) = mpsc::channel(1);
+        assert!(registry.allocate_local_changes("main", generation, StreamControl::new(None), late_tx).is_err());
+    }
+
+    #[test]
+    fn local_changes_admission_is_bounded_per_owner() {
+        let registry = StreamRegistry::new();
+        for _ in 0..32 {
+            let (tx, _rx) = mpsc::channel(1);
+            registry.allocate_local_changes("main", 0, StreamControl::new(None), tx).unwrap();
+        }
+        let (tx, _rx) = mpsc::channel(1);
+        assert!(registry.allocate_local_changes("main", 0, StreamControl::new(None), tx).is_err());
+        let (tx, _rx) = mpsc::channel(1);
+        assert!(registry.allocate_local_changes("other", 0, StreamControl::new(None), tx).is_ok());
+    }
 
     #[tokio::test]
     async fn navigation_releases_only_owned_scratch_and_fences_inflight_open() {

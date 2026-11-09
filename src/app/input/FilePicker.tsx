@@ -2,13 +2,16 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, type KeyboardEv
 import { filePathParts, prepareFileCandidates, rankPreparedFileMatches, type FileNavigationCandidate, type FileNavigationMatch, type PreparedFileCandidate } from "./fileNavigation";
 import "./fileNavigation.css";
 
-export function FilePicker({ candidates, preparedCandidates, loading = false, incomplete = false, mayBeOutOfDate = false, failed = false, onChoose, onDismiss }: {
+export function FilePicker({ candidates, preparedCandidates, loading = false, incomplete = false, mayBeOutOfDate = false, failed = false, watchUnavailable = false, onRefresh, onRetryWatch, onChoose, onDismiss }: {
   candidates: readonly FileNavigationCandidate[];
   preparedCandidates?: readonly PreparedFileCandidate[];
   loading?: boolean;
   incomplete?: boolean;
   mayBeOutOfDate?: boolean;
   failed?: boolean;
+  watchUnavailable?: boolean;
+  onRefresh?: () => void;
+  onRetryWatch?: () => void;
   onChoose: (candidate: FileNavigationCandidate) => void;
   onDismiss: () => void;
 }) {
@@ -35,6 +38,10 @@ export function FilePicker({ candidates, preparedCandidates, loading = false, in
   useEffect(() => {
     pickerRef.current?.querySelector<HTMLElement>(`[data-file-picker-result-index="${active}"]`)?.scrollIntoView?.({ block: "nearest" });
   }, [active, activeId]);
+  useEffect(() => {
+    if (!watchUnavailable && pickerRef.current?.contains(document.activeElement)
+      && (document.activeElement as HTMLElement | null)?.dataset.pickerRecovery) inputRef.current?.focus();
+  }, [watchUnavailable]);
   const choose = () => {
     if (rankingPending) return;
     const candidate = matches[active];
@@ -43,6 +50,7 @@ export function FilePicker({ candidates, preparedCandidates, loading = false, in
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (event.nativeEvent.isComposing) return;
     if (event.key === "Escape") { event.preventDefault(); onDismiss(); return; }
+    if (event.key !== "Tab" && (event.target as HTMLElement).closest("[data-picker-recovery]")) return;
     if (event.key === "Enter") { event.preventDefault(); choose(); return; }
     if (event.key === "ArrowDown" || (event.ctrlKey && event.key.toLowerCase() === "n")) {
       event.preventDefault(); selectIndex(Math.min(Math.max(0, matches.length - 1), active + 1)); return;
@@ -64,10 +72,14 @@ export function FilePicker({ candidates, preparedCandidates, loading = false, in
   };
   return <section className="file-picker" role="dialog" aria-label="Go to file" aria-modal="true" ref={pickerRef} onKeyDown={onKeyDown}>
     <input ref={inputRef} type="search" aria-label="Find file" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Type to find a file" autoComplete="off" />
-    <p className="file-picker-status">{failed ? candidates.length > 0 ? "May be out of date" : "Could not load files" : loading ? candidates.length > 0 ? "Refreshing…" : "Indexing files…" : `${candidates.length} files`}{mayBeOutOfDate && !loading && !failed ? " · may be out of date" : ""}{incomplete ? " · index incomplete" : ""}</p>
+    <p className="file-picker-status" role="status" aria-live="polite" aria-atomic="true">{failed ? candidates.length > 0 ? "May be out of date" : "Could not load files" : loading ? candidates.length > 0 ? "Refreshing…" : "Indexing files…" : `${candidates.length} files`}{mayBeOutOfDate && !loading && !failed ? " · may be out of date" : ""}{incomplete ? " · index incomplete" : ""}{watchUnavailable ? " · automatic updates unavailable" : ""}</p>
+    {watchUnavailable || failed ? <div className="file-picker-recovery">
+      <button type="button" data-picker-recovery="refresh" onClick={onRefresh} aria-label="Refresh files in picker">Refresh files</button>
+      {watchUnavailable ? <button type="button" data-picker-recovery="retry" onClick={onRetryWatch} aria-label="Retry automatic updates for file picker">Retry automatic updates</button> : null}
+    </div> : null}
     <div role="listbox" aria-label="Matching files" className="file-picker-results">
       {matches.map((candidate, index) => <button key={candidate.id} data-file-picker-result-index={index} type="button" role="option" aria-selected={index === active} className={index === active ? "is-active" : ""} title={candidate.path} disabled={rankingPending} onFocus={() => selectIndex(index)} onMouseMove={() => selectIndex(index)} onClick={() => onChoose(candidate)}><FileLabel candidate={candidate} />{candidate.detail ? <span className="file-picker-detail">{candidate.detail}</span> : null}</button>)}
-      {!loading && matches.length === 0 ? <p>No matching files.</p> : null}
+      {!loading && !failed && matches.length === 0 ? <p>No matching files.</p> : null}
     </div>
     <p className="file-picker-help">↑↓ or Ctrl+N/P to choose · Enter to open · Esc to close</p>
   </section>;

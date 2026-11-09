@@ -38,11 +38,10 @@ export function TaskDetail({ model, todo, todoId, onClose, onCount }: {
   }, [editing]);
   useEffect(() => {
     let active = true;
-    let reading = false;
+    let reading: Promise<void> | null = null;
+    let dirty = false;
     heading.current?.focus({ preventScroll: true });
-    const load = async () => {
-      if (reading) return;
-      reading = true;
+    const read = async () => {
       try {
         const response = await model.request({ op: "comment_list", todo_id: todoId });
         if (!active) return;
@@ -68,15 +67,22 @@ export function TaskDetail({ model, todo, todoId, onClose, onCount }: {
           requestAnimationFrame(() => { if (thread.current) thread.current.scrollTop = savedPosition ?? thread.current.scrollHeight; });
         } else if (atEnd && additions) requestAnimationFrame(() => { if (thread.current) thread.current.scrollTop = thread.current.scrollHeight; });
       } catch (failure) { if (active) setError(notesError(failure).message); }
-      finally { reading = false; if (active) setLoading(false); }
+      finally { if (active) setLoading(false); }
+    };
+    const load = () => {
+      dirty = true;
+      if (reading) return reading;
+      const run = async () => {
+        do { dirty = false; await read(); } while (active && dirty);
+      };
+      reading = run().finally(() => { reading = null; });
+      return reading;
     };
     refreshRef.current = load;
+    const unregister = model.registerCommentsRefresh(load);
     void load();
-    const poll = () => { if (document.visibilityState !== "hidden") void load(); };
-    const timer = window.setInterval(poll, 3000);
-    window.addEventListener("focus", poll);
-    return () => { active = false; window.clearInterval(timer); window.removeEventListener("focus", poll); };
-  }, [model.request, model.updateDrafts, todoId, threadKey]);
+    return () => { active = false; unregister(); };
+  }, [model.request, model.updateDrafts, model.registerCommentsRefresh, todoId, threadKey]);
   const focusCommentAction = (id: string | null, action: "edit" | "delete" | "editor", originId = id) => requestAnimationFrame(() => {
     if (!thread.current?.isConnected || !document.hasFocus() || thread.current.closest("[inert]") || document.querySelector('[role="dialog"][aria-modal="true"]')) return;
     const focused = document.activeElement;

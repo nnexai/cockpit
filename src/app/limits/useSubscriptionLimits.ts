@@ -11,73 +11,107 @@ export interface SubscriptionLimitsState {
 
 // Client identity prevents snapshots from one host leaking into another; Workbench resync retains it.
 const snapshots = new WeakMap<CockpitClient, SubscriptionLimitsState>();
-
 const COLLECTING_MS = 3000;
-const WORKING_MS = 15_000;
-const IDLE_MS = 60_000;
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
+function initialState(client: CockpitClient): SubscriptionLimitsState {
+  return snapshots.get(client) ?? { snapshot: null, link: "loading", absent: false, now: Date.now() };
+}
 
 export function useSubscriptionLimits(client: CockpitClient, agentsWorking: boolean): SubscriptionLimitsState {
-  const [state, setState] = useState(() => snapshots.get(client) ?? { snapshot: null, link: "loading" as const, absent: false, now: Date.now() });
+  const [rendered, setRendered] = useState(() => ({ client, value: initialState(client) }));
   const working = useRef(agentsWorking);
   working.current = agentsWorking;
   const previousWorking = useRef(agentsWorking);
-  const updatePolling = useRef<((refreshNow: boolean) => void) | null>(null);
+  const requestRefresh = useRef<(() => void) | null>(null);
   useEffect(() => {
-    let current: SubscriptionLimitsState = { ...(snapshots.get(client) ?? { snapshot: null, link: "loading", absent: false, now: Date.now() }), absent: false };
+    previousWorking.current = working.current;
+    let current: SubscriptionLimitsState = { ...initialState(client), absent: false };
     let failures = current.link === "offline" ? 2 : 0;
     let stopped = false;
+    let collectionPolling = true;
+    let pending = false;
     let controller: AbortController | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const publish = () => {
       snapshots.set(client, current);
-      setState(current);
+      setRendered({ client, value: current });
     };
     const schedule = () => {
-      if (stopped || current.absent) return;
       clearTimeout(timer);
-      timer = setTimeout(refresh, current.snapshot?.collecting ? COLLECTING_MS : working.current ? WORKING_MS : IDLE_MS);
+      if (stopped || current.absent || document.visibilityState === "hidden") return;
+      if (current.snapshot?.collecting && collectionPolling) {
+        timer = setTimeout(refresh, COLLECTING_MS);
+        return;
+      }
+      const now = Date.now();
+      let next = Infinity;
+      for (const provider of current.snapshot?.providers ?? []) {
+        for (const account of provider.accounts) {
+          for (const limit of account.limits) {
+            const reset = limit.resets_at_ms;
+            if (reset !== null && Number.isFinite(reset) && reset > now) next = Math.min(next, reset);
+          }
+        }
+      }
+      if (next !== Infinity) {
+        const delay = next - now;
+        timer = setTimeout(delay > MAX_TIMEOUT_MS ? schedule : refresh, Math.min(delay, MAX_TIMEOUT_MS));
+      }
     };
     const refresh = () => {
-      if (stopped || current.absent || controller) return;
-      if (document.visibilityState === "hidden") { schedule(); return; }
+      if (stopped || current.absent || document.visibilityState === "hidden") return;
+      clearTimeout(timer);
+      if (controller) {
+        pending = true;
+        return;
+      }
+      pending = false;
       current = { ...current, now: Date.now() };
       publish();
       const request = new AbortController();
       controller = request;
       void client.quotaStatus({ agents_working: working.current }, request.signal).then(snapshot => {
         if (stopped || request.signal.aborted) return;
+        collectionPolling = true;
         failures = 0;
         current = { snapshot, link: "live", absent: false, now: Date.now() };
         publish();
       }, error => {
+        collectionPolling = false;
         if (stopped || request.signal.aborted) return;
         const absent = error instanceof CockpitClientError && error.operationCode === "quota_unavailable";
         current = { ...current, absent, now: Date.now(), link: ++failures >= 2 ? "offline" : current.link };
         publish();
       }).finally(() => {
         if (controller === request) controller = null;
-        schedule();
+        if (stopped) return;
+        if (pending && document.visibilityState !== "hidden") refresh();
+        else schedule();
       });
     };
-    updatePolling.current = refreshNow => {
-      clearTimeout(timer);
-      if (refreshNow) refresh();
-      else schedule();
-    };
+    requestRefresh.current = refresh;
     publish();
     refresh();
-    document.addEventListener("visibilitychange", refresh);
+    const onVisibilityChange = () => {
+      clearTimeout(timer);
+      if (document.visibilityState !== "hidden") refresh();
+    };
+    const onFocus = () => refresh();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("focus", onFocus);
     return () => {
       stopped = true;
-      updatePolling.current = null;
+      requestRefresh.current = null;
       clearTimeout(timer);
       controller?.abort();
-      document.removeEventListener("visibilitychange", refresh);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("focus", onFocus);
     };
   }, [client]);
   useEffect(() => {
-    if (previousWorking.current !== agentsWorking) updatePolling.current?.(agentsWorking);
+    if (previousWorking.current !== agentsWorking) requestRefresh.current?.();
     previousWorking.current = agentsWorking;
   }, [agentsWorking]);
-  return state;
+  return rendered.client === client ? rendered.value : initialState(client);
 }

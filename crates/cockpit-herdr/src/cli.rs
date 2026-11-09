@@ -37,6 +37,7 @@ mod projects;
 mod orchestration;
 mod agent_context;
 mod agent_recap;
+mod omp_watch;
 mod quick_ask;
 mod transport;
 mod shell;
@@ -219,6 +220,15 @@ fn parse_snapshot(
     session_id: &str,
     endpoint_identity: &str,
 ) -> Result<SessionSnapshotResponse, InspectionError> {
+    parse_snapshot_with_paths(value, session_id, endpoint_identity, &mut BTreeSet::new())
+}
+
+fn parse_snapshot_with_paths(
+    value: Value,
+    session_id: &str,
+    endpoint_identity: &str,
+    omp_paths: &mut BTreeSet<PathBuf>,
+) -> Result<SessionSnapshotResponse, InspectionError> {
     let root = object(&value, "response")?;
     let result = root
         .get("result")
@@ -380,6 +390,12 @@ fn parse_snapshot(
                 .and_then(|pane| pane.get("agent_session"))
                 .filter(|session| !session.is_null())
                 .is_none_or(|pane_session| object.get("agent_session") == Some(pane_session));
+            if let Some(path) = terminal_id.as_ref().filter(|_| pane_session_matches).and(omp_path) {
+                let path = PathBuf::from(path);
+                if path.is_absolute() {
+                    omp_paths.insert(path);
+                }
+            }
             let context = terminal_id.as_ref().filter(|_| pane_session_matches).and(omp_path)
                 .and_then(agent_context::read_omp_context);
             let native_session_id = context.as_ref().map(|context| context.native_session_id.clone());
@@ -666,6 +682,7 @@ pub struct HerdrCliAdapter {
     autostart_server: bool,
     server_start: Arc<Mutex<()>>,
     shell_states: Arc<Mutex<BTreeMap<String, shell::CachedShell>>>,
+    omp_paths: tokio::sync::broadcast::Sender<(String, BTreeSet<PathBuf>)>,
 }
 
 fn valid_pane_id(pane_id: &str) -> bool {
@@ -715,6 +732,37 @@ struct EventIdentityCheck<'a> {
     checked: bool,
 }
 
+async fn stop_subscription_aux(
+    lifetime: &mut Option<tokio::sync::watch::Sender<()>>,
+    forwarder: &mut Option<tokio::task::JoinHandle<()>>,
+) {
+    drop(lifetime.take());
+    if let Some(forwarder) = forwarder.take() {
+        let _ = forwarder.await;
+    }
+}
+
+async fn forward_subscription_aux(
+    mut messages: mpsc::Receiver<SessionChange>,
+    sender: mpsc::Sender<SessionChange>,
+    mut lifetime: tokio::sync::watch::Receiver<()>,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            _ = lifetime.changed() => break,
+            message = messages.recv() => {
+                let Some(message) = message else { break };
+                tokio::select! {
+                    biased;
+                    _ = lifetime.changed() => break,
+                    result = sender.send(message) => if result.is_err() { break },
+                }
+            }
+        }
+    }
+}
+
 impl HerdrCliAdapter {
     pub fn new(config: HerdrCliConfig) -> Self {
         Self {
@@ -722,6 +770,7 @@ impl HerdrCliAdapter {
             autostart_server: false,
             server_start: Arc::new(Mutex::new(())),
             shell_states: Arc::new(Mutex::new(BTreeMap::new())),
+            omp_paths: tokio::sync::broadcast::channel(32).0,
         }
     }
 
@@ -1365,6 +1414,17 @@ impl HerdrCliAdapter {
         Ok(snapshot)
     }
 
+    async fn read_event_snapshot(
+        &self,
+        session_id: &str,
+        relevance: EventRelevance,
+    ) -> Result<SessionSnapshotResponse, InspectionError> {
+        match relevance {
+            EventRelevance::Session => self.read_snapshot(session_id).await,
+            EventRelevance::Orchestration => self.read_structure_with_identity(session_id, None).await,
+        }
+    }
+
     /// Extension validation uses the authoritative structure snapshot without
     /// issuing extra worktree metadata requests. Optional snapshot provenance
     /// is decoration and cannot invalidate that structural read.
@@ -1382,7 +1442,10 @@ impl HerdrCliAdapter {
                 expected_identity,
             )
             .await?;
-        parse_snapshot(json!({"result": result}), session_id, &identity)
+        let mut paths = BTreeSet::new();
+        let parsed = parse_snapshot_with_paths(json!({"result": result}), session_id, &identity, &mut paths)?;
+        let _ = self.omp_paths.send((session_id.to_owned(), paths));
+        Ok(parsed)
     }
     async fn mutate_resource(
         &self,
@@ -1436,13 +1499,19 @@ impl HerdrCliAdapter {
         }
         let expected_identity = EventIdentity::from_snapshot(&snapshot);
         let (sender, receiver) = mpsc::channel(32);
+        let omp_receiver = self.omp_paths.subscribe();
         let (ready_sender, mut ready_receiver) = mpsc::channel(1);
-        let shell_sender = sender.clone();
+        let (shell_sender, aux_messages) = mpsc::channel(32);
+        let (lifetime, lifetime_rx) = tokio::sync::watch::channel(());
+        let forwarder = tokio::spawn(forward_subscription_aux(aux_messages, sender.clone(), lifetime_rx));
+        let has_omp = snapshot.agents.iter().any(|agent| agent.name == "omp");
         let shell_session_id = session_id.clone();
         let shell_server_instance = snapshot.server_instance.clone();
-        let has_shell_metadata = snapshot.herdr_shell.is_some();
+        let has_shell_metadata = relevance == EventRelevance::Session && snapshot.herdr_shell.is_some();
         let adapter = self.clone();
         tokio::spawn(async move {
+            let mut lifetime = Some(lifetime);
+            let mut forwarder = Some(forwarder);
             let mut delay_ms = 100_u64;
             let mut current_snapshot = snapshot;
             let initial_ready = Some(ready_sender);
@@ -1502,6 +1571,9 @@ impl HerdrCliAdapter {
                         (change, !terminal)
                     }
                 };
+                if !retry {
+                    stop_subscription_aux(&mut lifetime, &mut forwarder).await;
+                }
                 if sender.send(change).await.is_err() {
                     break;
                 }
@@ -1510,11 +1582,12 @@ impl HerdrCliAdapter {
                 }
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 delay_ms = (delay_ms.saturating_mul(2)).min(2000);
-                match adapter.read_snapshot(&session_id).await {
+                match adapter.read_event_snapshot(&session_id, relevance).await {
                     Ok(new_snapshot) => {
                         if let Err(error) =
                             validate_event_snapshot_identity(&new_snapshot, &expected_identity)
                         {
+                            stop_subscription_aux(&mut lifetime, &mut forwarder).await;
                             let _ = sender
                                 .send(SessionChange::Disconnected {
                                     code: error.code,
@@ -1543,6 +1616,9 @@ impl HerdrCliAdapter {
                                     message: error.message,
                                 }
                             };
+                            if terminal {
+                                stop_subscription_aux(&mut lifetime, &mut forwarder).await;
+                            }
                             if sender.send(change).await.is_err() {
                                 break;
                             }
@@ -1560,6 +1636,7 @@ impl HerdrCliAdapter {
                         }
                     }
                     Err(error) if error.code == "session_identity_mismatch" => {
+                        stop_subscription_aux(&mut lifetime, &mut forwarder).await;
                         let _ = sender
                             .send(SessionChange::Disconnected {
                                 code: error.code,
@@ -1582,9 +1659,13 @@ impl HerdrCliAdapter {
                     }
                 }
             }
+            stop_subscription_aux(&mut lifetime, &mut forwarder).await;
         });
         match ready_receiver.recv().await {
             Some(Ok(())) => {
+                if relevance == EventRelevance::Session {
+                    omp_watch::spawn(self.clone(), shell_session_id.clone(), shell_sender.clone(), omp_receiver, has_omp);
+                }
                 if has_shell_metadata {
                     self.subscribe_shell(shell_session_id, shell_server_instance, shell_sender);
                 }
@@ -1793,7 +1874,7 @@ impl HerdrCliAdapter {
         // an authoritative snapshot after the ACK before reporting readiness.
         // If topology changed while the subscription was being established,
         // rebind with the new pane set rather than exposing a bootstrap gap.
-        let latest = self.read_snapshot(session_id).await?;
+        let latest = self.read_event_snapshot(session_id, relevance).await?;
         validate_event_snapshot_identity(&latest, identity.expected)?;
         if pane_set_changed(snapshot, &latest) {
             return Ok(EventConnectionEnd::TopologyChanged(Box::new(latest)));
@@ -1869,8 +1950,13 @@ impl HerdrCliAdapter {
                     continue;
                 }
             }
+            if relevance == EventRelevance::Orchestration
+                && presentation_only_workspace_rename(&value, snapshot)
+            {
+                continue;
+            }
             if topology {
-                let latest = self.read_snapshot(session_id).await?;
+                let latest = self.read_event_snapshot(session_id, relevance).await?;
                 validate_event_snapshot_identity(&latest, identity.expected)?;
                 if pane_set_changed(snapshot, &latest) {
                     if sender.send(SessionChange::Changed).await.is_err() {
@@ -2013,6 +2099,28 @@ fn pane_set_changed(previous: &SessionSnapshotResponse, latest: &SessionSnapshot
 enum EventRelevance {
     Session,
     Orchestration,
+}
+
+// Protocol 22/schema 1's workspace rename carries only presentation state.
+// Any extension or unexpected shape must remain an invalidation.
+fn presentation_only_workspace_rename(value: &Value, snapshot: &SessionSnapshotResponse) -> bool {
+    if snapshot.protocol != 22 {
+        return false;
+    }
+    let Some(envelope) = value.as_object() else {
+        return false;
+    };
+    if envelope.len() != 2 || envelope.get("event").and_then(Value::as_str) != Some("workspace_renamed") {
+        return false;
+    }
+    let Some(data) = envelope.get("data").and_then(Value::as_object) else {
+        return false;
+    };
+    data.len() == 3
+        && data.get("type").and_then(Value::as_str) == Some("workspace_renamed")
+        && data.get("label").is_some_and(Value::is_string)
+        && data.get("workspace_id").and_then(Value::as_str)
+            .is_some_and(|id| snapshot.spaces.iter().any(|space| space.id == id))
 }
 
 const ORCHESTRATION_IGNORED_PANE_FIELDS: [&str; 4] = [
@@ -2451,6 +2559,127 @@ fn space_folder<'a>(snapshot: &'a SessionSnapshotResponse, space_id: &str) -> Op
 mod tests {
     use super::*;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    #[cfg(unix)]
+    async fn workspace_rename_delivery(relevance: EventRelevance) {
+        use tokio::time::{timeout, Duration};
+        let socket = std::env::temp_dir().join(format!(
+            "cockpit-rename-{}-{}.sock", std::process::id(),
+            NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let fixture: Value = serde_json::from_str(
+            &include_str!("../tests/fixtures/session-snapshot.json").replace("space-a", "w1")
+        ).unwrap();
+        let snapshot = parse_snapshot(fixture.clone(), "default", "fixture-endpoint").unwrap();
+        let result = fixture["result"].clone();
+        let (stream_tx, mut stream_rx) = mpsc::channel(1);
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "events.subscribe");
+            let mut events = reader.into_inner();
+            events.write_all(format!("{}\n", json!({
+                "id": request["id"], "result": {"type": "subscription_started"}
+            })).as_bytes()).await.unwrap();
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "session.snapshot");
+            reader.into_inner().write_all(format!("{}\n", json!({
+                "id": request["id"], "result": result
+            })).as_bytes()).await.unwrap();
+            stream_tx.send(events).await.unwrap();
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut reader = BufReader::new(stream);
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["method"], "session.snapshot");
+            reader.into_inner().write_all(format!("{}\n", json!({
+                "id": request["id"], "result": result
+            })).as_bytes()).await.unwrap();
+        });
+        let adapter = HerdrCliAdapter::new(
+            HerdrCliConfig::from_options(None, Some("default".into()), Some(socket.clone())).unwrap()
+        );
+        let (sender, mut receiver) = mpsc::channel(32);
+        let (ready, mut ready_rx) = mpsc::channel(1);
+        let connection = tokio::spawn(async move {
+            let expected = EventIdentity::from_snapshot(&snapshot);
+            adapter.event_connection(
+                "default", &snapshot, EventIdentityCheck { expected: &expected, checked: true },
+                relevance, &sender, Some(ready),
+            ).await
+        });
+        let mut events = stream_rx.recv().await.unwrap();
+        ready_rx.recv().await.unwrap().unwrap();
+        // Exact payload captured from Herdr 0.9.5 in fixture-rename-event.json.
+        let rename = json!({"event":"workspace_renamed","data":{
+            "type":"workspace_renamed","workspace_id":"w1","label":"Fixture event proof"
+        }});
+        let pane = json!({"event":"pane_updated","data":{"type":"pane_updated","pane":{
+            "pane_id":"pane-a","workspace_id":"w1","tab_id":"tab-a",
+            "focused":true,"terminal_title":"output"
+        }}});
+        let mut extra_envelope = rename.clone();
+        extra_envelope["future"] = json!(true);
+        let mut extra_data = rename.clone();
+        extra_data["data"]["future"] = json!(true);
+        let mut wrong_type = rename.clone();
+        wrong_type["data"]["type"] = json!("tab_renamed");
+        let mut unknown_id = rename.clone();
+        unknown_id["data"]["workspace_id"] = json!("another-workspace");
+        let mut bad_label = rename.clone();
+        bad_label["data"]["label"] = json!(null);
+        let mut missing_label = rename.clone();
+        missing_label["data"].as_object_mut().unwrap().remove("label");
+        let mut dotted_event = rename.clone();
+        dotted_event["event"] = json!("workspace.renamed");
+        let mut focus = pane.clone();
+        focus["data"]["pane"]["focused"] = json!(false);
+        let cases = vec![
+            (rename.clone(), relevance == EventRelevance::Session),
+            (pane.clone(), true),
+            (rename, relevance == EventRelevance::Session),
+            // Filtering the rename must still clear the pane deduplication state.
+            (pane, true), (focus, true),
+            (json!({"event":"tab_renamed","data":{"type":"tab_renamed","tab_id":"tab-a","label":"worker"}}), true),
+            (extra_envelope, true), (extra_data, true), (wrong_type, true),
+            (unknown_id, true), (bad_label, true), (missing_label, true), (dotted_event, true),
+            (json!({"event":"pane.agent_status_changed","data":{"pane_id":"pane-a","agent_status":"idle"}}), true),
+            (json!({"event":"pane.created","data":{"pane":{"pane_id":"pane-a"}}}), true),
+        ];
+        for (event, wakes) in cases {
+            events.write_all(format!("{event}\n").as_bytes()).await.unwrap();
+            if wakes {
+                assert_eq!(timeout(Duration::from_secs(2), receiver.recv()).await.unwrap(), Some(SessionChange::Changed), "{event}");
+            } else {
+                assert!(timeout(Duration::from_millis(100), receiver.recv()).await.is_err(), "{event}");
+            }
+        }
+        drop(events);
+        assert_eq!(connection.await.unwrap().unwrap(), EventConnectionEnd::StreamEnded);
+        server.await.unwrap();
+        std::fs::remove_file(socket).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn orchestration_filters_only_known_workspace_label_events() {
+        workspace_rename_delivery(EventRelevance::Orchestration).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn session_delivers_workspace_label_events() {
+        workspace_rename_delivery(EventRelevance::Session).await;
+    }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]

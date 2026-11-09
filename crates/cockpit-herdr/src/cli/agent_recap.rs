@@ -9,7 +9,7 @@ use rusqlite::{Connection, OpenFlags, params};
 
 const MAX_RECAP_BYTES: usize = 2048;
 
-fn database_path() -> Option<PathBuf> {
+pub(super) fn database_path() -> Option<PathBuf> {
     // Non-default profile and config-directory layouts need their own resolved
     // agent directory; do not silently read another profile's history.
     let explicit = std::env::var_os("PI_CODING_AGENT_DIR").filter(|v| !v.is_empty());

@@ -76,6 +76,8 @@ macro_rules! native_commands {
                 crate::power::cockpit_power_set_stay_awake,
                 crate::power::cockpit_power_screen_off,
                 crate::streams::cockpit_session_subscribe,
+                crate::streams::cockpit_local_changes_subscribe,
+                crate::streams::cockpit_local_changes_ack,
                 crate::streams::cockpit_scratch_page_generation,
                 crate::streams::cockpit_terminal_open,
                 crate::streams::cockpit_terminal_command,

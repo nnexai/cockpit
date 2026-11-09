@@ -1,3 +1,5 @@
+import { limitLocalChangeSubscriptions, localChangeReceiver, localChangeScopeFrame } from "./localChanges";
+import type { LocalChangeEvent, LocalChangeScope } from "../protocol/generated/v1";
 import { widgetEventCursor, widgetReports } from "./widgetTransport";
 import type { WidgetEventHandler, WidgetStream } from "./CockpitClient";
 import {
@@ -83,6 +85,61 @@ async function getJson<T>(
     if (error instanceof CockpitClientError) throw error;
     throw new CockpitClientError("malformed_response", `Cockpit ${endpoint} endpoint returned an invalid response`, { cause: error, status: response.status });
   }
+}
+
+function openLocalChanges(
+  factory: BrowserWebSocketFactory, scope: LocalChangeScope,
+  onEvent: (event: LocalChangeEvent) => Promise<void>,
+  onError: (error: CockpitClientError) => void, signal?: AbortSignal,
+): Promise<ClosableStream> {
+  return new Promise((resolve, reject) => {
+    let socket: BrowserWebSocket;
+    let closed = false;
+    let ready = false;
+    let timer: number | undefined;
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      if (timer !== undefined) clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null;
+      socket.close();
+    };
+    const fail = (error: CockpitClientError) => {
+      if (closed) return;
+      close();
+      if (ready) onError(error); else reject(error);
+    };
+    const abort = () => {
+      if (closed) return;
+      close();
+      if (!ready) reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+    };
+    try {
+      signal?.throwIfAborted();
+      const frame = localChangeScopeFrame(scope);
+      socket = factory(websocketUrl("/api/v1/local-changes/events"));
+      signal?.addEventListener("abort", abort, { once: true });
+      timer = window.setTimeout(() => fail(new CockpitClientError("stream_error", "Local changes stream did not become ready")), 30_000);
+      const receive = localChangeReceiver(event => closed ? Promise.resolve() : onEvent(event), async ack => {
+        if (!closed) socket.send(JSON.stringify(ack));
+      }, fail, () => {
+        if (!ready && !closed) { if (timer !== undefined) clearTimeout(timer); timer = undefined; ready = true; resolve({ close }); }
+      });
+      socket.onopen = () => { try { socket.send(frame); } catch (cause) { fail(new CockpitClientError("transport_error", "Local changes scope could not be sent", { cause })); } };
+      socket.onmessage = ({ data }) => {
+        try {
+          if (typeof data !== "string" || new TextEncoder().encode(data).length > 4096) throw new Error("Invalid local changes frame");
+          receive(JSON.parse(data));
+        } catch (cause) { fail(new CockpitClientError("malformed_response", "Local changes event is malformed", { cause })); }
+      };
+      socket.onerror = () => fail(new CockpitClientError("transport_error", "Local changes stream failed"));
+      socket.onclose = () => fail(new CockpitClientError("stream_error", "Local changes stream disconnected"));
+      if (signal?.aborted) abort();
+    } catch (cause) {
+      reject(cause);
+    }
+  });
 }
 
 function openWidgetStream(
@@ -544,6 +601,7 @@ export function createBrowserClient(
   request: BrowserFetch = defaultFetch,
   webSocketFactory: BrowserWebSocketFactory = defaultWebSocket,
 ): CockpitClient {
+  const subscribeLocalChanges = limitLocalChangeSubscriptions((scope, onEvent, onError, signal) => openLocalChanges(webSocketFactory, scope, onEvent, onError, signal));
   return {
     ...bindOperations("browser", (operation) => {
       const http = operation.http;
@@ -562,6 +620,7 @@ export function createBrowserClient(
     subscribeWidgets(onEvent, onError, signal) {
       return openWidgetStream(webSocketFactory, onEvent, onError, signal);
     },
+    subscribeLocalChanges,
     subscribeSession(sessionId, onMessage, onError, signal) { return openSessionStream(webSocketFactory, sessionId, onMessage, onError, signal); },
     openTerminal(requestValue, onMessage, onError, signal) { return openTerminalStream(webSocketFactory, requestValue, onMessage, onError, signal); },
     openBrowserView(requestValue, onEvent, onFrame, onError, signal) {

@@ -3,14 +3,17 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { SupervisorView } from "./SupervisorView";
-import type { TaskView } from "../../protocol/generated/v1";
+import type { Message, TaskHistoryRequest, TaskView } from "../../protocol/generated/v1";
 import { orchestrationFixture, runFixture, taskFixture } from "./testFixtures";
+import type { CockpitClient } from "../../client/CockpitClient";
+const client = { orchestrationTaskHistory: vi.fn(async (request: TaskHistoryRequest) => ({ ...request, revision: 1, digest: "fixture", not_modified: false, messages: [], runs: [], cleanup: [], task_ownership: [], unreflected_inputs: [] })) } as unknown as CockpitClient;
 let root: Root | null = null, host: HTMLDivElement;
 afterEach(() => { if (root) act(() => root!.unmount()); root = null; host?.remove(); });
 async function render(tasks: TaskView[], overrides: Partial<ComponentProps<typeof SupervisorView>> = {}) {
   if (!root) { host = document.createElement("div"); document.body.append(host); root = createRoot(host); }
-  const snapshot = orchestrationFixture(tasks);
-  await act(async () => root!.render(<SupervisorView tasks={tasks} runs={snapshot.runs} snapshot={snapshot} rootId="root" fresh waiting={false} status={null} onClose={vi.fn()} {...overrides} />));
+  const snapshot = overrides.snapshot ?? orchestrationFixture(tasks);
+  vi.mocked(client.orchestrationTaskHistory).mockImplementation(async request => ({ ...request, revision: snapshot.revision, digest: "fixture", not_modified: false, messages: [], runs: snapshot.runs.filter(run => "brief" in run), cleanup: snapshot.cleanup, task_ownership: snapshot.task_ownership, unreflected_inputs: snapshot.unreflected_inputs }));
+  await act(async () => root!.render(<SupervisorView client={client} tasks={tasks} runs={snapshot.runs} snapshot={snapshot} rootId="root" fresh waiting={false} status={null} onClose={vi.fn()} {...overrides} />));
 }
 it("opens the board with Conversation focused, changes to a task-only graph and closes on Escape", async () => {
   const task = taskFixture("Work"), close = vi.fn();
@@ -28,18 +31,19 @@ it("opens full snapshot history from a board card and restores origin focus and 
   const task = taskFixture("Work"), close = vi.fn();
   const worker = runFixture({ kind: "worker", run_id: "worker", task_id: "Work", stage: "working" });
   const snapshot = orchestrationFixture([task], [worker]);
-  snapshot.messages = [
+  const messages: Message[] = [
     { message_id: "question", from: { type: "run", run_id: "worker" }, to_run_id: "root", kind: "report", text: "Which target?", report: { message_id: "question", kind: "needs_input", outcome: null, summary: "Which target?", plan: null, source_output: null, at: worker.created_at }, in_reply_to: null, stale: false, escalated_from: null, stage: "acked", seq: 1, created_at: worker.created_at, acked_at: worker.created_at },
     { message_id: "answer", from: { type: "operator" }, to_run_id: "worker", kind: "answer", text: "Use main", report: null, in_reply_to: "question", stale: false, escalated_from: null, stage: "acked", seq: 2, created_at: "2026-10-07T12:02:00Z", acked_at: "2026-10-07T12:02:00Z" },
   ];
   snapshot.cleanup = [{ run_id: "worker", removed_count: 0, kept_count: 1, waiting_count: 0, unknown_count: 0, items: [
     { resource_id: "output", kind: "attempt_directory", ownership: "owned", cleanup: { operation_id: null, state: "kept", reason: { code: "outputs_kept", class: "user_work", message: "redacted" }, effects: [], updated_at: worker.created_at } },
   ] }];
+  vi.mocked(client.orchestrationTaskHistory).mockResolvedValueOnce({ session_id: snapshot.session_id, state_store_id: snapshot.state_store_id, root_id: "root", task_id: "Work", revision: snapshot.revision, digest: "fixture", not_modified: false, messages, runs: [worker], cleanup: snapshot.cleanup, task_ownership: [], unreflected_inputs: [] });
   await render([task], { snapshot, onClose: close });
   const card = host.querySelector<HTMLButtonElement>(".liaison-card-open")!;
   const board = host.querySelector<HTMLElement>(".liaison-task-board")!, lane = card.closest("ul")!;
   board.scrollLeft = 120; lane.scrollTop = 40;
-  act(() => { card.focus(); card.click(); });
+  await act(async () => { card.focus(); card.click(); });
   const detail = host.querySelector(".liaison-overview-detail")!;
   expect(detail.textContent).toContain("answered by you 2 min later");
   expect(detail.textContent).toContain("Outputs kept");
@@ -100,7 +104,7 @@ it("refreshes the selected projection without stealing focus, including external
   const worker = runFixture({ kind: "worker", run_id: "worker", task_id: "Work", stage: "working" });
   worker.result = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Work reported", plan: null, source_output: null, at: worker.created_at };
   await render([task], { snapshot: orchestrationFixture([task], [worker]) });
-  act(() => host.querySelector<HTMLButtonElement>(".liaison-card-open")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".liaison-card-open")!.click());
   const summary = host.querySelector<HTMLElement>(".liaison-detail summary")!;
   act(() => summary.focus());
   const changed = { ...task, lane: "working" as const };
@@ -138,7 +142,7 @@ it("restores overview focus when a focused history event vanishes with its task"
   const worker = runFixture({ kind: "worker", run_id: "worker", task_id: "Work", stage: "working" });
   worker.result = { message_id: "result", kind: "result", outcome: "succeeded", summary: "Work reported", plan: null, source_output: null, at: worker.created_at };
   await render([task, other], { snapshot: orchestrationFixture([task, other], [worker]) });
-  act(() => host.querySelector<HTMLButtonElement>(".liaison-card-open")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".liaison-card-open")!.click());
   act(() => host.querySelector<HTMLElement>(".liaison-detail summary")!.focus());
   await render([other]);
   expect(document.activeElement).toBe(host.querySelector(".liaison-conversation"));
@@ -392,11 +396,12 @@ it("shows recorded inputs without implying processing, retains disclosures on re
   const receipt = { run_id: "worker", result_message_id: "result", message_id: "input", seq: 3, kind: "instruction" as const, from: { type: "operator" as const }, stage: "acked" as const, after_result: true, created_at: worker.created_at, acked_at: worker.created_at };
   snapshot.unreflected_inputs = [receipt];
   const body = `<img onerror="alert(1)">\n${"x".repeat(16000)}`;
-  snapshot.messages = [{ message_id: "input", from: receipt.from, to_run_id: "worker", kind: "instruction", text: body, images: [{ image_id: "image", mime_type: "image/png", width: 1, height: 1, bytes: 1 }], report: null, in_reply_to: null, stale: false, escalated_from: null, stage: "acked", seq: 3, created_at: worker.created_at, acked_at: worker.created_at }];
+  const messages: Message[] = [{ message_id: "input", from: receipt.from, to_run_id: "worker", kind: "instruction", text: body, images: [{ image_id: "image", mime_type: "image/png", width: 1, height: 1, bytes: 1 }], report: null, in_reply_to: null, stale: false, escalated_from: null, stage: "acked", seq: 3, created_at: worker.created_at, acked_at: worker.created_at }];
+  vi.mocked(client.orchestrationTaskHistory).mockResolvedValueOnce({ session_id: snapshot.session_id, state_store_id: snapshot.state_store_id, root_id: "root", task_id: "Work", revision: snapshot.revision, digest: "fixture", not_modified: false, messages, runs: [worker], cleanup: snapshot.cleanup, task_ownership: [], unreflected_inputs: snapshot.unreflected_inputs });
   await render([task], { snapshot });
   const attention = host.querySelector<HTMLButtonElement>(".liaison-attention button")!;
   expect(attention.textContent).toContain("1 input sent after the Result");
-  act(() => { attention.focus(); attention.click(); });
+  await act(async () => { attention.focus(); attention.click(); });
   expect(host.querySelector(".liaison-history-notice")?.textContent).toBe("1 input sent after the Result. See History below.");
   const detail = host.querySelector(".liaison-detail")!;
   const row = [...detail.querySelectorAll("li")].find(element => element.textContent?.includes("Instruction sent after the Result"))!;
@@ -408,13 +413,17 @@ it("shows recorded inputs without implying processing, retains disclosures on re
   const disclosure = row.querySelector("details")!;
   act(() => { disclosure.open = true; });
   snapshot.unreflected_inputs = [{ ...receipt, message_id: "earlier", seq: 2 }, receipt];
+  snapshot.revision++;
+  vi.mocked(client.orchestrationTaskHistory).mockResolvedValueOnce({ session_id: snapshot.session_id, state_store_id: snapshot.state_store_id, root_id: "root", task_id: "Work", revision: snapshot.revision, digest: "updated", not_modified: false, messages, runs: [worker], cleanup: snapshot.cleanup, task_ownership: [], unreflected_inputs: snapshot.unreflected_inputs });
   await render([task], { snapshot: { ...snapshot } });
   expect([...host.querySelectorAll<HTMLDetailsElement>(".liaison-event details")].find(element => element.textContent?.includes(body))?.open).toBe(true);
   expect(host.textContent).toContain("Text isn't available in this view.");
   const accepted = { ...worker, stage: "closed" as const, close_reason: "accepted" as const };
+  snapshot.revision++;
+  vi.mocked(client.orchestrationTaskHistory).mockResolvedValueOnce({ session_id: snapshot.session_id, state_store_id: snapshot.state_store_id, root_id: "root", task_id: "Work", revision: snapshot.revision, digest: "accepted", not_modified: false, messages, runs: [accepted], cleanup: snapshot.cleanup, task_ownership: [], unreflected_inputs: snapshot.unreflected_inputs });
   await render([task], { snapshot: { ...snapshot, runs: [accepted] } });
   expect(host.querySelector(".liaison-attention")).toBeNull();
-  expect(host.querySelector(".liaison-history-notice")).toBeNull();
+  expect(host.textContent).not.toContain("1 input sent after the Result. See History below.");
   expect(host.querySelector(".liaison-detail")?.textContent).toContain("attempt closed; it can't report on this");
   expect(host.querySelector(".liaison-detail")?.textContent).toContain("Nothing is replayed. If it's still wanted, ask the liaison for a follow-up task.");
   expect(host.textContent).not.toMatch(/not seen|never received|ignored|unprocessed/i);
@@ -426,12 +435,27 @@ it("describes stored input before the Result according to the attempt's state", 
   const worker = runFixture({ kind: "worker", run_id: "worker", task_id: "Work", stage: "reported", result });
   const snapshot = orchestrationFixture([task], [worker]);
   snapshot.unreflected_inputs = [{ run_id: "worker", result_message_id: "result", message_id: "input", seq: 1, kind: "answer", from: { type: "run", run_id: "root" }, stage: "stored", after_result: false, created_at: worker.created_at, acked_at: null }];
+  const messages: Message[] = [{ message_id: "input", from: { type: "run", run_id: "root" }, to_run_id: "worker",
+    kind: "answer", text: "Use the existing approach", report: null, in_reply_to: "question", stale: false,
+    escalated_from: null, stage: "stored", seq: 1, created_at: worker.created_at, acked_at: null }];
+  vi.mocked(client.orchestrationTaskHistory).mockResolvedValueOnce({
+    session_id: snapshot.session_id, state_store_id: snapshot.state_store_id, root_id: "root", task_id: "Work",
+    revision: snapshot.revision, digest: "fixture", not_modified: false, messages, runs: [worker],
+    cleanup: [], task_ownership: [], unreflected_inputs: snapshot.unreflected_inputs,
+  });
   await render([task], { snapshot });
   expect(host.querySelector(".liaison-attention")?.textContent).toContain("1 input sent before the Result, still waiting to be picked up");
-  act(() => host.querySelector<HTMLButtonElement>(".liaison-attention button")!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>(".liaison-attention button")!.click());
   expect(host.querySelector(".liaison-detail")?.textContent).toContain("Answer sent before the Result");
   expect(host.querySelector(".liaison-detail")?.textContent).toContain("waiting to be picked up · from the liaison");
-  await render([task], { snapshot: { ...snapshot, runs: [{ ...worker, stage: "closed", close_reason: "accepted" }] } });
+  const accepted = { ...worker, stage: "closed" as const, close_reason: "accepted" as const };
+  snapshot.revision++;
+  vi.mocked(client.orchestrationTaskHistory).mockResolvedValueOnce({
+    session_id: snapshot.session_id, state_store_id: snapshot.state_store_id, root_id: "root", task_id: "Work",
+    revision: snapshot.revision, digest: "accepted", not_modified: false, messages, runs: [accepted],
+    cleanup: [], task_ownership: [], unreflected_inputs: snapshot.unreflected_inputs,
+  });
+  await render([task], { snapshot: { ...snapshot, runs: [accepted] } });
   expect(host.querySelector(".liaison-detail")?.textContent).toContain("no pickup recorded · from the liaison");
 });
 

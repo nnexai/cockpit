@@ -31,6 +31,38 @@ const snapshot: QuotaStatusResponse = {
   ],
 };
 
+it("shows stable source timestamps and qualifies a passed reset without implying replenishment", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  const copilot = snapshot.providers[2];
+  const value: QuotaStatusResponse = {
+    ...snapshot,
+    providers: [{ ...copilot, stale: true, error: "timeout", accounts: [copilot.accounts[0], copilot.accounts[0]] }],
+  };
+  const sourceTime = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(1000);
+  try {
+    const render = async (now: number) => {
+      await act(async () => root.render(<SubscriptionLimits snapshot={value} link="live" now={now} open={true} onOpenChange={() => {}} suspended={false} />));
+    };
+    await render(1_000_000);
+    const trigger = host.querySelector(".limits-trigger")!;
+    const provider = host.querySelector('section[aria-label="Copilot"]')!;
+    expect(trigger.getAttribute("aria-label")).toContain(`usage report from ${sourceTime}`);
+    expect(provider.querySelector("header")?.textContent).toContain(`Stale · report from ${sourceTime}`);
+    expect(provider.querySelector(".limits-account h4")?.textContent).toContain(`Usage report from ${sourceTime}`);
+    expect(provider.querySelector(".limits-error")?.textContent).toContain(`Showing the report from ${sourceTime}`);
+    expect(provider.querySelector(".limits-reset")?.textContent).toBe("Reset time passed");
+    expect(host.querySelector(".limits-notice")?.textContent).toContain("Usage changed elsewhere");
+    await render(2_000_000);
+    expect(trigger.getAttribute("aria-label")).toContain(`usage report from ${sourceTime}`);
+    expect(provider.querySelector("header")?.textContent).toContain(`Stale · report from ${sourceTime}`);
+  } finally {
+    await act(async () => root.unmount());
+    host.remove();
+  }
+});
+
 it("opens a readable credit popup, restores the pointer trigger on Escape, and leaves outside focus alone", async () => {
   const host = document.createElement("div");
   document.body.append(host);

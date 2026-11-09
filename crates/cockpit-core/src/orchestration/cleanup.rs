@@ -326,22 +326,24 @@ fn counts(states: impl Iterator<Item = CleanupState>) -> (u32, u32, u32, u32) {
 }
 
 pub(crate) fn summaries(state: &OrchestrationState, session_id: &str) -> Vec<RunCleanupSummary> {
-    state.runs.iter().filter(|run| run.session_id == session_id).map(|run| {
-        let items: Vec<_> = state.owned_resources.iter().filter(|r| r.run_id == run.run_id).map(|r| {
-            let mut cleanup = r.cleanup.clone();
-            // Diagnostic effect evidence may contain private filesystem paths.
-            for effect in &mut cleanup.effects { effect.evidence = None; }
-            if let Some(why) = &mut cleanup.reason {
-                let (code, explanation) = cleanup_reason_explanation(&why.code)
-                    .unwrap_or(("cleanup_diagnostic_unavailable", "Cleanup is held by an unrecognized guard."));
-                if why.code != code { why.code = code.into(); }
-                why.message = format!("{explanation} {}", cleanup_hold_action(code));
-            }
-            CleanupResourceSummary { resource_id: r.resource_id.clone(), kind: r.kind, ownership: r.ownership, cleanup }
-        }).collect();
-        let (removed_count, waiting_count, kept_count, unknown_count) = counts(items.iter().map(|r| r.cleanup.state));
-        RunCleanupSummary { run_id: run.run_id.clone(), items, removed_count, waiting_count, kept_count, unknown_count }
-    }).collect()
+    state.runs.iter().filter(|run| run.session_id == session_id).map(|run| summary_for_run(state, run)).collect()
+}
+
+pub(crate) fn summary_for_run(state: &OrchestrationState, run: &Run) -> RunCleanupSummary {
+    let items: Vec<_> = state.owned_resources.iter().filter(|r| r.run_id == run.run_id).map(|r| {
+        let mut cleanup = r.cleanup.clone();
+        // Diagnostic effect evidence may contain private filesystem paths.
+        for effect in &mut cleanup.effects { effect.evidence = None; }
+        if let Some(why) = &mut cleanup.reason {
+            let (code, explanation) = cleanup_reason_explanation(&why.code)
+                .unwrap_or(("cleanup_diagnostic_unavailable", "Cleanup is held by an unrecognized guard."));
+            if why.code != code { why.code = code.into(); }
+            why.message = format!("{explanation} {}", cleanup_hold_action(code));
+        }
+        CleanupResourceSummary { resource_id: r.resource_id.clone(), kind: r.kind, ownership: r.ownership, cleanup }
+    }).collect();
+    let (removed_count, waiting_count, kept_count, unknown_count) = counts(items.iter().map(|r| r.cleanup.state));
+    RunCleanupSummary { run_id: run.run_id.clone(), items, removed_count, waiting_count, kept_count, unknown_count }
 }
 
 pub(crate) fn restoration_summary(state: &OrchestrationState, session_id: &str) -> RestorationSummary {
@@ -904,6 +906,9 @@ impl OrchestrationService {
             CleanupEvaluation::Kept(why) => (CleanupState::Kept, Some(why)),
             CleanupEvaluation::Unknown(why) => (CleanupState::Unknown, Some(why)),
         };
+        // A fresh state can only reject a concurrent change here; an
+        // already-identical evaluation cannot authorize a write.
+        if expected.cleanup.state == state && expected.cleanup.reason == why { return Ok(()) }
         let locked = self.store.lock()?;
         let mut stored = locked.read()?;
         let Some(resource) = stored.owned_resources.iter_mut().find(|r| r.resource_id == expected.resource_id) else { return Ok(()) };

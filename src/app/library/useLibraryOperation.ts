@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { LibraryItemSummary, LibraryListing, LibraryOperation, ProjectProvider, SpaceContextListing, SpaceTarget } from "../../protocol/generated/v1";
+import { subscribeLocalChanges } from "../localChanges";
 import { errorText, sameSpaceTarget } from "./libraryState";
 
 /** Every mounted Library surface rereads its listing after a completed operation or selection change. */
@@ -14,7 +15,6 @@ export function announceLibraryChanged(detail: LibraryChangeDetail = null): void
 
 const POLL_MS = 750;
 const MAX_LISTING_PAGES = 200;
-const LISTING_PROBE_MS = 60_000;
 
 type TrackedOperation = { operation: LibraryOperation; stop?: () => void };
 const tracked = new Map<string, TrackedOperation>();
@@ -220,6 +220,8 @@ export type LibraryListingState = {
   error: string | null;
   providers: ProjectProvider[];
   reload: () => void;
+  watchUnavailable: boolean;
+  retryWatch: () => void;
 };
 
 async function readAllPages(client: CockpitClient, seed: LibraryListing | null, isCurrent: () => boolean): Promise<LibraryListing | null> {
@@ -249,49 +251,119 @@ function followSyncKey(listing: LibraryListing): string {
   return JSON.stringify(listing.follows.map((follow) => [follow.follow_id, follow.sync?.last_success_at ?? null, follow.sync?.reason ?? null]));
 }
 
-/**
- * Reads the whole Library listing while `active`, plus the configured
- * providers used for labels. Nothing is requested while inactive, so a Context
- * pane that never shows the Library root never touches the Library. While active
- * and visible it checks the first page's generation about once a minute and
- * rereads every page only when it changed.
- */
+/** Reads a visible Library listing after watch registration and on invalidation. */
 export function useLibraryListing(client: CockpitClient, active: boolean): LibraryListingState {
   const [state, setState] = useState<{ status: LibraryListingState["status"]; listing: LibraryListing | null; error: string | null }>({ status: "idle", listing: null, error: null });
   const [providers, setProviders] = useState<ProjectProvider[]>([]);
-  const [revision, setRevision] = useState(0);
-  // Explicit reloads invalidate pending probes immediately, before the load effect runs.
-  const newest = useRef(0);
-  const reading = useRef<number | null>(null);
+  const [watchUnavailable, setWatchUnavailable] = useState(false);
+  const reloadAction = useRef<() => void>(() => {});
+  const retryWatchAction = useRef<() => void>(() => {});
   const applied = useRef<LibraryListing | null>(null);
   const listingClient = useRef(client);
   const announcing = useRef(false);
-  const reload = useCallback(() => {
-    newest.current += 1;
-    setRevision((value) => value + 1);
-  }, []);
+  const reload = useCallback(() => reloadAction.current(), []);
+  const retryWatch = useCallback(() => retryWatchAction.current(), []);
   useEffect(() => {
     if (!active) return;
     if (listingClient.current !== client) {
       listingClient.current = client;
       applied.current = null;
     }
-    const id = ++newest.current;
-    const isCurrent = () => id === newest.current;
-    reading.current = id;
-    setState((previous) => ({ ...previous, status: "loading" }));
-    readAllPages(client, null, isCurrent).then((listing) => {
-      if (!isCurrent() || !listing) return;
-      reading.current = null;
-      applied.current = listing;
-      setState({ status: "ready", listing, error: null });
-    }, (cause: unknown) => {
-      if (!isCurrent()) return;
-      reading.current = null;
-      setState((previous) => ({ status: "error", listing: previous.listing, error: errorText(cause, "The Library could not be read.") }));
+    let stopped = false;
+    let epoch = 0;
+    let watching = false;
+    let pending = false;
+    let announce = false;
+    let flight: Promise<void> | null = null;
+    const visible = () => document.visibilityState !== "hidden";
+    const refresh = (notify: boolean): Promise<void> => {
+      if (stopped || !visible()) return Promise.resolve();
+      pending = true;
+      announce ||= notify;
+      if (flight) return flight;
+      const currentEpoch = epoch;
+      const isCurrent = () => !stopped && visible() && epoch === currentEpoch;
+      const run = async () => {
+        while (pending && isCurrent()) {
+          pending = false;
+          const notifySnapshot = announce;
+          announce = false;
+          try {
+            const first = await client.libraryListing(null);
+            if (!isCurrent()) return;
+            const previous = applied.current;
+            let listing: LibraryListing;
+            const changed = !previous || first.generation !== previous.generation;
+            if (changed) {
+              const result = await readAllPages(client, first, isCurrent);
+              if (!result || !isCurrent()) return;
+              listing = result;
+            } else if (followSyncKey(first) !== followSyncKey(previous)) {
+              listing = { ...previous, follows: first.follows };
+            } else {
+              listing = previous;
+            }
+            applied.current = listing;
+            if (watching) setWatchUnavailable(false);
+            setState((old) => {
+              if (old.status === "ready" && old.listing === listing && old.error === null) return old;
+              return { status: "ready", listing, error: null };
+            });
+            if (changed && previous && notifySnapshot) {
+              announcing.current = true;
+              try { announceLibraryChanged({ kind: "snapshot_update" }); }
+              finally { announcing.current = false; }
+            }
+          } catch (cause) {
+            if (isCurrent()) setState((old) => ({ status: "error", listing: old.listing, error: errorText(cause, "The Library could not be read.") }));
+          }
+        }
+      };
+      const result = run().finally(() => { if (flight === result) flight = null; });
+      flight = result;
+      return result;
+    };
+    const subscription = subscribeLocalChanges(client, { kind: "library_listing" }, async (event) => {
+      if (event.kind === "unavailable") {
+        watching = false;
+        setWatchUnavailable(true);
+        setState((old) => old.listing ? old : { ...old, status: "error", error: "Automatic updates unavailable." });
+        return;
+      }
+      if (event.kind === "ready") watching = true;
+      await refresh(event.kind === "changed");
+    }, () => {
+      if (!stopped && visible()) {
+        watching = false;
+        setWatchUnavailable(true);
+        setState((old) => old.listing ? old : { ...old, status: "error", error: "Automatic updates unavailable." });
+      }
     });
-    return () => { newest.current += 1; };
-  }, [active, client, revision]);
+    reloadAction.current = () => { void refresh(false); };
+    retryWatchAction.current = () => subscription.retry();
+    const changed = () => { if (!announcing.current) void refresh(false); };
+    const visibility = () => {
+      if (!visible()) {
+        epoch += 1;
+        watching = false;
+        pending = false;
+        announce = false;
+        flight = null;
+      }
+    };
+    window.addEventListener(LIBRARY_CHANGED_EVENT, changed);
+    document.addEventListener("visibilitychange", visibility);
+    setState((old) => ({ ...old, status: "loading" }));
+    return () => {
+      stopped = true;
+      epoch += 1;
+      reloadAction.current = () => {};
+      retryWatchAction.current = () => {};
+      subscription.close();
+      window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [active, client]);
   useEffect(() => {
     if (!active) return;
     let current = true;
@@ -299,68 +371,7 @@ export function useLibraryListing(client: CockpitClient, active: boolean): Libra
     client.projectConfiguration().then((configuration) => { if (current) setProviders(configuration.providers); }, () => undefined);
     return () => { current = false; };
   }, [active, client]);
-  useEffect(() => {
-    if (!active) return;
-    const changed = () => { if (!announcing.current) reload(); };
-    window.addEventListener(LIBRARY_CHANGED_EVENT, changed);
-    return () => window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
-  }, [active, reload]);
-  useEffect(() => {
-    if (!active) return;
-    let stopped = false;
-    let timer: number | undefined;
-    const schedule = () => {
-      if (!stopped) timer = window.setTimeout(() => { void probe(); }, LISTING_PROBE_MS);
-    };
-    const probe = async () => {
-      if (stopped) return;
-      if (document.visibilityState === "hidden") {
-        document.addEventListener("visibilitychange", probe, { once: true });
-        return;
-      }
-      if (reading.current === newest.current) {
-        schedule();
-        return;
-      }
-      let id = newest.current;
-      const isCurrent = () => !stopped && id === newest.current;
-      try {
-        const first = await client.libraryListing(null);
-        if (!isCurrent()) return;
-        const previous = applied.current;
-        if (previous && first.generation === previous.generation) {
-          if (followSyncKey(first) !== followSyncKey(previous)) {
-            const listing = { ...previous, follows: first.follows };
-            applied.current = listing;
-            setState({ status: "ready", listing, error: null });
-          }
-          return;
-        }
-        id = ++newest.current;
-        reading.current = id;
-        const listing = await readAllPages(client, first, isCurrent);
-        if (!isCurrent() || !listing) return;
-        applied.current = listing;
-        setState({ status: "ready", listing, error: null });
-        // The local bridge refreshes other views, not this already-current listing.
-        announcing.current = true;
-        try { announceLibraryChanged({ kind: "snapshot_update" }); }
-        finally { announcing.current = false; }
-      } catch (cause) {
-        if (isCurrent()) setState((previous) => ({ status: "error", listing: previous.listing, error: errorText(cause, "The Library could not be read.") }));
-      } finally {
-        if (reading.current === id) reading.current = null;
-        schedule();
-      }
-    };
-    schedule();
-    return () => {
-      stopped = true;
-      window.clearTimeout(timer);
-      document.removeEventListener("visibilitychange", probe);
-    };
-  }, [active, client]);
-  return { ...state, providers, reload };
+  return { ...state, providers, reload, watchUnavailable, retryWatch };
 }
 
 export type SpaceListingState = {

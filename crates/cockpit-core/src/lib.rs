@@ -13,6 +13,7 @@ pub mod context_search;
 pub mod credentials;
 pub mod extension_adapter;
 pub mod library;
+pub mod local_changes;
 pub mod jira_query;
 pub mod paste_adapter;
 pub mod process;
@@ -36,6 +37,9 @@ pub mod space_git_action;
 pub mod space_services;
 pub mod space_cpu;
 pub mod space_tags;
+mod space_watch;
+#[cfg(test)]
+mod space_watch_tests;
 pub mod viewer;
 pub mod widget;
 
@@ -173,6 +177,7 @@ pub struct CockpitService {
     git_actions: Arc<space_git_action::SpaceGitActions>,
     space_services: Arc<space_services::SpaceServices>,
     space_cpu: Arc<space_cpu::SpaceCpuSampler>,
+    space_watch: Arc<space_watch::SpaceWatch>,
 }
 
 #[derive(Default)]
@@ -247,6 +252,7 @@ impl CockpitService {
             git_actions: Arc::new(space_git_action::SpaceGitActions::default()),
             space_services: Arc::new(space_services::SpaceServices::default()),
             space_cpu: Arc::new(space_cpu::SpaceCpuSampler::default()),
+            space_watch: Arc::new(space_watch::SpaceWatch::default()),
         }
     }
 
@@ -326,6 +332,7 @@ impl CockpitService {
     }
 
     pub fn with_space_tags(mut self, tags: space_tags::SpaceTagService) -> Self {
+        self.space_watch.set_tag_dir(tags.watch_dir());
         self.space_tags = Some(Arc::new(tags));
         self
     }
@@ -479,8 +486,21 @@ impl CockpitService {
         &self,
         session_id: &str,
     ) -> Result<SpaceGitStatusResponse, InspectionError> {
+        self.ensure_live()?;
+        validate_session_id(session_id)?;
+        let generation = self.space_watch.next_read();
         let snapshot = self.session_snapshot(session_id).await?;
-        Ok(space_git::read(&snapshot).await)
+        // A watch-limit failure must not suppress the authoritative Git read.
+        let watch_read = self.space_watch.begin_git_for(session_id, &snapshot.server_instance, generation).ok();
+        Ok(space_git::read(&snapshot, &self.space_watch, watch_read).await)
+    }
+
+    pub(crate) fn space_watch_subscribe(
+        &self, session_id: &str, server_instance: &str, topic: space_watch::SpaceWatchTopic,
+    ) -> Result<space_watch::SpaceWatchLease, InspectionError> {
+        self.ensure_live()?;
+        validate_session_id(session_id)?;
+        self.space_watch.subscribe(session_id, server_instance, topic)
     }
 
     /// Read live action-launcher services without waiting for health probes.

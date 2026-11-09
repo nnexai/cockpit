@@ -1,5 +1,6 @@
 //! Durable, session-independent provider snapshots.
 mod attachments;
+mod changes;
 mod folder;
 pub(crate) mod folder_io;
 mod follow;

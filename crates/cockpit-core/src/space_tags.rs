@@ -1,6 +1,6 @@
 use std::collections::{BTreeSet, HashSet};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use cockpit_protocol::v1::{SpaceTagChangeRequest, SpaceTags, SpaceTagsResponse};
@@ -20,6 +20,7 @@ const MAX_RECORDS: usize = 4096;
 pub struct SpaceTagService {
     store: ProjectStore,
     herdr: Arc<dyn ProjectHerdrAdapter>,
+    watch_dir: PathBuf,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -55,8 +56,13 @@ struct ProvenSession {
 
 impl SpaceTagService {
     pub fn new(state_root: &Path, herdr: Arc<dyn ProjectHerdrAdapter>) -> Result<Self, InspectionError> {
-        Ok(Self { store: ProjectStore::new(state_root.join("space-tags"))?, herdr })
+        let path = state_root.join("space-tags");
+        let store = ProjectStore::new(&path)?;
+        let watch_dir = std::fs::canonicalize(&path).unwrap_or(path);
+        Ok(Self { store, herdr, watch_dir })
     }
+
+    pub(crate) fn watch_dir(&self) -> &Path { &self.watch_dir }
 
     async fn prove(&self, session_id: &str) -> Result<ProvenSession, InspectionError> {
         validate_id(session_id)?;
@@ -383,6 +389,25 @@ mod tests {
 
     fn request(adapter: &Adapter, tag: &str, assigned: bool) -> SpaceTagChangeRequest {
         SpaceTagChangeRequest { space_id: "w1".into(), server_instance: adapter.instance(), tag: tag.into(), assigned }
+    }
+
+    #[tokio::test]
+    async fn external_service_change_wakes_tag_watch_but_list_does_not() {
+        use crate::space_watch::TestWaitRequest;
+        let fixture = Fixture::new();
+        let adapter = Adapter::new();
+        let first = fixture.service(adapter.clone());
+        let second = fixture.service(adapter.clone());
+        let watch = crate::space_watch::SpaceWatch::default();
+        watch.set_tag_dir(first.watch_dir());
+        let initial = watch.wait("session", &TestWaitRequest { after_git: 0, after_tags: 0, timeout_ms: 0 }).await;
+        first.list("session").await.unwrap();
+        let unchanged = watch.wait("session", &TestWaitRequest { after_git: initial.git, after_tags: initial.tags, timeout_ms: 200 }).await;
+        assert_eq!(unchanged.tags, initial.tags);
+        second.change("session", &request(&adapter, "External", true)).await.unwrap();
+        let changed = watch.wait("session", &TestWaitRequest { after_git: unchanged.git, after_tags: unchanged.tags, timeout_ms: 2000 }).await;
+        assert_ne!(changed.tags, unchanged.tags);
+        assert_eq!(first.list("session").await.unwrap().catalog, ["External"]);
     }
 
     #[tokio::test]
