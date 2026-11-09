@@ -387,7 +387,29 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
         let next = if let Some((m, root)) = latest_card { Some(text(m.report.as_ref().unwrap().card.as_ref().unwrap().next.clone(), owner_source(root, true), Some(m))) }
             else if let Some(receipt) = receipts.last() { let label = root_map.get(receipt.to_run_id.as_str()).map_or(receipt.to_run_id.as_str(), |r| r.label.as_str()); Some(text(if receipt.stage == DeliveryStage::Stored { format!("Waiting for {label} to pick up") } else { format!("With {label}") }, InboxSource::Recorded, None)) }
             else if tasks.len() == 1 { Some(text(format!("{} · {}", task_lane_label(tasks[0].lane), tasks[0].title), InboxSource::Recorded, None)) } else { None };
-        let recommendation = reports.iter().rev().find_map(|(m, root)| m.report.as_ref()?.card.as_ref()?.recommendation.as_ref().map(|v| text(v.clone(), owner_source(root, true), Some(m))));
+        // A question's recommendation belongs to that decision, not to the
+        // thread forever. Use the same owner-scoped current-question receipts
+        // as the decision UI, including answers still awaiting delivery.
+        // Other reports can carry recommendations too; retain only the most
+        // recent report for that owner, unless a later handoff superseded it.
+        let recommendation = reports.iter().filter_map(|(m, root)| {
+            let report = m.report.as_ref()?;
+            let value = report.card.as_ref()?.recommendation.as_ref()?;
+            let current = if report.kind == ReportKind::NeedsInput {
+                projected_questions.iter().any(|q| q.run_id == root.run_id
+                    && q.question_message_id == report.message_id
+                    && matches!(q.receipt, QuestionReceipt::Unresolved))
+            } else {
+                let position = message_positions[&(*m as *const Message)];
+                !messages.iter().any(|later| message_positions[&(*later as *const Message)] > position
+                    && (report_owner(later, &root_map).is_some_and(|owner| owner.run_id == root.run_id)
+                        || (later.to_run_id == root.run_id && !later.stale
+                            && matches!(later.from, ActorRef::Operator)
+                            && later.kind == MessageKind::Instruction && later.handoff.is_some())))
+            };
+            current.then_some((*m, *root, value))
+        }).max_by_key(|(m, _, _)| message_positions[&(*m as *const Message)])
+            .map(|(m, root, value)| text(value.clone(), owner_source(root, true), Some(m)));
         let reply = reports.iter().rev().find(|(m, _)| m.report.as_ref().is_some_and(|r| matches!(r.kind, ReportKind::Progress | ReportKind::Result))).map(|(m, root)| message_text(m.report.as_ref().unwrap().summary.clone(), owner_source(root, false), m));
         let project = latest_card.and_then(|(m, _)| m.report.as_ref()?.card.as_ref()?.project.clone());
         let mut facts = Vec::new();
@@ -509,6 +531,88 @@ mod tests {
     }
     fn image(id: &str) -> MessageImage {
         MessageImage { image_id: id.into(), mime_type: "image/png".into(), width: 1, height: 1, bytes: 42 }
+    }
+
+    fn recommend(message: &mut Message, value: &str) {
+        message.report.as_mut().unwrap().card = Some(ThreadCard {
+            title: "Title".into(), next: "Next".into(), recommendation: Some(value.into()),
+            choices: vec![], project: None,
+        });
+    }
+
+    #[test]
+    fn recommendation_tracks_question_receipt_and_result() {
+        let mut state = OrchestrationState { runs: vec![root("r")], ..Default::default() };
+        let mut question = report("q", "r", 1, Some("t"), ReportKind::NeedsInput);
+        recommend(&mut question, "choose A");
+        state.messages.push(question);
+        assert_eq!(view(&state, vec![]).threads[0].recommendation.as_ref().unwrap().text, "choose A");
+        let mut answer = message("answer", "r", 2, Some("t"), MessageKind::Answer);
+        answer.in_reply_to = Some("q".into());
+        state.messages.push(answer);
+        for stage in [DeliveryStage::Stored, DeliveryStage::Read, DeliveryStage::Acked] {
+            state.messages.last_mut().unwrap().stage = stage;
+            let projected = view(&state, vec![]);
+            let thread = &projected.threads[0];
+            assert!(thread.recommendation.is_none());
+            assert_eq!(thread.timeline.last().unwrap().text, "answer");
+            assert!(!matches!(thread.questions[0].receipt, QuestionReceipt::Unresolved));
+        }
+        state.messages.push(report("result", "r", 3, Some("t"), ReportKind::Result));
+        let projected = view(&state, vec![]);
+        assert!(projected.threads[0].recommendation.is_none());
+        assert_eq!(projected.threads[0].reply.as_ref().unwrap().text, "summary result");
+    }
+
+    #[test]
+    fn recommendation_uses_current_owner_question_not_another_owners_answer() {
+        let mut state = OrchestrationState { runs: vec![root("a"), root("b")], ..Default::default() };
+        let mut a = report("shared", "a", 1, Some("t"), ReportKind::NeedsInput);
+        recommend(&mut a, "A");
+        let mut b = report("shared", "b", 2, Some("t"), ReportKind::NeedsInput);
+        recommend(&mut b, "B");
+        let mut answer = message("answer", "b", 3, Some("t"), MessageKind::Answer);
+        answer.in_reply_to = Some("shared".into());
+        state.messages.extend([a, b, answer]);
+        let projected = view(&state, vec![]);
+        let thread = &projected.threads[0];
+        assert_eq!(thread.recommendation.as_ref().unwrap().text, "A");
+        assert_eq!(thread.need, Some(InboxNeed::Decision));
+        let mut replacement = report("replacement", "a", 4, Some("t"), ReportKind::NeedsInput);
+        recommend(&mut replacement, "new A");
+        state.messages.push(replacement);
+        assert_eq!(view(&state, vec![]).threads[0].recommendation.as_ref().unwrap().text, "new A");
+        state.messages.push(report("result", "a", 5, Some("t"), ReportKind::Result));
+        assert!(view(&state, vec![]).threads[0].recommendation.is_none());
+    }
+
+    #[test]
+    fn recommendation_preserves_current_non_question_and_open_followup_question() {
+        let mut state = OrchestrationState { runs: vec![root("r")], ..Default::default() };
+        let mut initial = report("initial", "r", 0, Some("t"), ReportKind::Progress);
+        recommend(&mut initial, "progress advice");
+        state.messages.push(initial);
+        assert_eq!(view(&state, vec![]).threads[0].recommendation.as_ref().unwrap().text, "progress advice");
+        let mut result = report("result", "r", 1, Some("t"), ReportKind::Result);
+        recommend(&mut result, "next action");
+        state.messages.push(result);
+        assert_eq!(view(&state, vec![]).threads[0].recommendation.as_ref().unwrap().text, "next action");
+        let mut follow = message("follow", "r", 2, Some("t"), MessageKind::Instruction);
+        follow.handoff = Some(HandoffRecord { task_id: None, task_revision: None, attempt_run_id: None, binding: None, origin: OperatorOrigin::Browser });
+        state.messages.push(follow);
+        assert!(view(&state, vec![]).threads[0].recommendation.is_none());
+        let mut question = report("q", "r", 3, Some("t"), ReportKind::NeedsInput);
+        recommend(&mut question, "decision");
+        state.messages.push(question);
+        let mut unrelated = message("other-answer", "r", 4, Some("t"), MessageKind::Answer);
+        unrelated.in_reply_to = Some("other".into());
+        state.messages.push(unrelated);
+        let mut progress = report("progress", "r", 5, Some("t"), ReportKind::Progress);
+        progress.stale = true;
+        state.messages.push(progress);
+        let projected = view(&state, vec![]);
+        assert_eq!(projected.threads[0].recommendation.as_ref().unwrap().text, "decision");
+        assert_eq!(projected.threads[0].need, Some(InboxNeed::Decision));
     }
 
     #[test]
