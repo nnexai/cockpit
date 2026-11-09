@@ -12,7 +12,7 @@ export interface SubscriptionLimitsState {
 // Client identity prevents snapshots from one host leaking into another; Workbench resync retains it.
 const snapshots = new WeakMap<CockpitClient, SubscriptionLimitsState>();
 const COLLECTING_MS = 3000;
-const MAX_TIMEOUT_MS = 2_147_483_647;
+const REFRESH_MS = 60_000;
 
 function initialState(client: CockpitClient): SubscriptionLimitsState {
   return snapshots.get(client) ?? { snapshot: null, link: "loading", absent: false, now: Date.now() };
@@ -45,7 +45,7 @@ export function useSubscriptionLimits(client: CockpitClient, agentsWorking: bool
         return;
       }
       const now = Date.now();
-      let next = Infinity;
+      let next = now + REFRESH_MS;
       for (const provider of current.snapshot?.providers ?? []) {
         for (const account of provider.accounts) {
           for (const limit of account.limits) {
@@ -54,10 +54,7 @@ export function useSubscriptionLimits(client: CockpitClient, agentsWorking: bool
           }
         }
       }
-      if (next !== Infinity) {
-        const delay = next - now;
-        timer = setTimeout(delay > MAX_TIMEOUT_MS ? schedule : refresh, Math.min(delay, MAX_TIMEOUT_MS));
-      }
+      timer = setTimeout(refresh, next - now);
     };
     const refresh = () => {
       if (stopped || current.absent || document.visibilityState === "hidden") return;

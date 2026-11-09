@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { NotesOperation, NotesTargetInfo, NotesTodo, NotesDecisionSummary, NotesResponse, NotesDocument } from "../../protocol/generated/v1";
 import { subscribeLocalChanges } from "../localChanges";
+import { watchFallback } from "../watchFallback";
 import { readDrafts, reconcileDraft, storeDrafts, subscribeDrafts, type NotesDrafts } from "./drafts";
 
 const pendingWrites = new Set<string>();
@@ -165,8 +166,18 @@ export function useNotes(client: CockpitClient, info: NotesTargetInfo): NotesMod
   }, [request, refresh, updateDrafts, info.notes_id]);
   useEffect(() => {
     alive.current = true;
+    const fallback = watchFallback(async () => {
+      try {
+        await refresh();
+        if (alive.current) setCommentsRevision(value => value + 1);
+        await commentsRefresh.current?.();
+      } catch (failure) {
+        if (alive.current && !outcomeUnknown.current) setError(notesError(failure));
+      }
+    });
     const subscription = subscribeLocalChanges(client, { kind: "notes_content", notes_id: info.notes_id }, async event => {
-      if (event.kind === "unavailable") { if (alive.current) setWatchUnavailable(true); return; }
+      if (event.kind === "unavailable") { fallback.start(); if (alive.current) setWatchUnavailable(true); return; }
+      if (event.kind === "ready") fallback.stop();
       try {
         if (event.kind === "ready" || event.topics.some(topic => topic !== "comments")) await refresh();
         if (event.kind === "ready" || event.topics.includes("comments")) {
@@ -174,8 +185,8 @@ export function useNotes(client: CockpitClient, info: NotesTargetInfo): NotesMod
           await commentsRefresh.current?.();
         }
         if (alive.current && event.kind === "ready") setWatchUnavailable(false);
-      } catch (failure) { if (alive.current) { setWatchUnavailable(true); if (!outcomeUnknown.current) setError(notesError(failure)); } }
-    }, () => { if (alive.current) setWatchUnavailable(true); });
+      } catch (failure) { fallback.start(); if (alive.current) { setWatchUnavailable(true); if (!outcomeUnknown.current) setError(notesError(failure)); } }
+    }, () => { fallback.start(); if (alive.current) setWatchUnavailable(true); });
     watch.current = subscription;
     const focus = () => {
       if (document.visibilityState === "hidden") return;
@@ -183,7 +194,7 @@ export function useNotes(client: CockpitClient, info: NotesTargetInfo): NotesMod
       void commentsRefresh.current?.();
     };
     window.addEventListener("focus", focus);
-    return () => { alive.current = false; ++latest.current; watch.current = null; subscription.close(); window.removeEventListener("focus", focus); };
+    return () => { alive.current = false; ++latest.current; watch.current = null; fallback.close(); subscription.close(); window.removeEventListener("focus", focus); };
   }, [client, info.notes_id, refresh]);
   const acknowledgeError = (problem: { code: string; message: string } | null) => {
     if (problem === null) {

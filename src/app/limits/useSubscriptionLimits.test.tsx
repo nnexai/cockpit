@@ -69,13 +69,18 @@ async function changeVisibility(value: DocumentVisibilityState) {
   });
 }
 
-it.each([false, true])("does not poll idle snapshots with working=%s, including rerenders", async working => {
+it.each([false, true])("refreshes every 60 seconds with working=%s, including rerenders", async working => {
   const { client, quotaStatus } = fixture();
   const display = view(client);
   await display.render(working);
   await display.render(working);
-  await advance(3_600_000);
+  await advance(59_999);
   expect(quotaStatus).toHaveBeenCalledTimes(1);
+  await advance(1);
+  expect(quotaStatus).toHaveBeenCalledTimes(2);
+  await advance(60_000);
+  expect(quotaStatus).toHaveBeenCalledTimes(3);
+  expect(quotaStatus.mock.calls.map(([request]) => request.agents_working)).toEqual([working, working, working]);
 });
 
 it("refreshes on both activity transitions and focus, but not unchanged renders", async () => {
@@ -87,6 +92,22 @@ it("refreshes on both activity transitions and focus, but not unchanged renders"
   await display.render(false);
   await act(async () => window.dispatchEvent(new Event("focus")));
   expect(quotaStatus.mock.calls.map(([request]) => request.agents_working)).toEqual([false, true, false, false]);
+});
+
+it("reschedules the periodic refresh after focus and cancels it on unmount", async () => {
+  const { client, quotaStatus } = fixture();
+  const display = view(client);
+  await display.render(false);
+  await advance(30_000);
+  await act(async () => window.dispatchEvent(new Event("focus")));
+  expect(quotaStatus).toHaveBeenCalledTimes(2);
+  await advance(59_999);
+  expect(quotaStatus).toHaveBeenCalledTimes(2);
+  await advance(1);
+  expect(quotaStatus).toHaveBeenCalledTimes(3);
+  await display.unmount();
+  await advance(120_000);
+  expect(quotaStatus).toHaveBeenCalledTimes(3);
 });
 
 it("coalesces triggers during a request without overlapping and uses the latest activity", async () => {
@@ -103,11 +124,11 @@ it("coalesces triggers during a request without overlapping and uses the latest 
   await act(async () => complete(snapshot()));
   expect(quotaStatus).toHaveBeenCalledTimes(2);
   expect(quotaStatus.mock.calls[1][0].agents_working).toBe(true);
-  await advance(90_000);
-  expect(quotaStatus).toHaveBeenCalledTimes(2);
+  await advance(60_000);
+  expect(quotaStatus).toHaveBeenCalledTimes(3);
 });
 
-it("polls only while collection is in progress", async () => {
+it("uses faster polling while collection is in progress, then returns to the normal cadence", async () => {
   const { client, quotaStatus } = fixture();
   quotaStatus.mockImplementationOnce(async () => snapshot(true));
   quotaStatus.mockImplementationOnce(async () => snapshot(true));
@@ -117,19 +138,23 @@ it("polls only while collection is in progress", async () => {
   expect(quotaStatus).toHaveBeenCalledTimes(1);
   await advance(3001);
   expect(quotaStatus).toHaveBeenCalledTimes(3);
-  await advance(600_000);
+  await advance(59_999);
   expect(quotaStatus).toHaveBeenCalledTimes(3);
+  await advance(1);
+  expect(quotaStatus).toHaveBeenCalledTimes(4);
 });
 
-it("does not repeatedly retry a failed collecting request", async () => {
+it("returns to the normal cadence after a failed collecting request", async () => {
   const { client, quotaStatus } = fixture();
   quotaStatus.mockImplementationOnce(async () => snapshot(true));
   quotaStatus.mockRejectedValueOnce(new CockpitClientError("transport_error", "Disconnected"));
   const display = view(client);
   await display.render(false);
-  await advance(600_000);
+  await advance(3000);
   expect(quotaStatus).toHaveBeenCalledTimes(2);
-  await act(async () => window.dispatchEvent(new Event("focus")));
+  await advance(59_999);
+  expect(quotaStatus).toHaveBeenCalledTimes(2);
+  await advance(1);
   expect(quotaStatus).toHaveBeenCalledTimes(3);
 });
 
@@ -148,8 +173,10 @@ it("refreshes once at a known future quota reset, not repeatedly for a past dead
   expect(quotaStatus).toHaveBeenCalledTimes(1);
   await advance(1);
   expect(quotaStatus).toHaveBeenCalledTimes(2);
-  await advance(600_000);
+  await advance(59_999);
   expect(quotaStatus).toHaveBeenCalledTimes(2);
+  await advance(1);
+  expect(quotaStatus).toHaveBeenCalledTimes(3);
 });
 
 it("suppresses requests while hidden and refreshes when visible", async () => {

@@ -216,6 +216,23 @@ describe("NotesView consumer safety", () => {
     await notify(current, "notes_content", [], "unavailable");
     expect(host!.textContent).toContain("Automatic updates unavailable");
     expect(query<HTMLTextAreaElement>('[aria-label="New comment Markdown"]').value).toBe("Comment draft to preserve");
+    current.replaceTodos([{ ...current.task, text: "Changed during outage", revision: "item3" }]);
+    await notify(current, "notes_binding", [], "unavailable");
+    const bindingReads = current.resolveTarget.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(current.resolveTarget.mock.calls.length).toBeGreaterThan(bindingReads);
+    expect(host!.textContent).toContain("Changed during outage");
+    expect(host!.textContent).toContain("Automatic updates unavailable");
+    expect(query<HTMLTextAreaElement>('[aria-label="New comment Markdown"]').value).toBe("Comment draft to preserve");
+    await act(async () => {
+      await watches.get(current.client)!.get("notes_binding")!({ kind: "ready", topics: [] });
+      await watches.get(current.client)!.get("notes_content")!({ kind: "ready", topics: [] });
+    });
+    // Recovery refresh changes model.decisions and schedules the normal search debounce.
+    await act(async () => { await vi.advanceTimersByTimeAsync(160); });
+    const recoveredReads = current.notes.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(current.notes.mock.calls.length).toBe(recoveredReads);
   });
   it("retains a content invalidation arriving during a read", async () => {
     const current = fixture();

@@ -225,4 +225,32 @@ describe("ContextSearch", () => {
     expect(invalidate).toHaveBeenCalledTimes(2);
     expect(onInvalidate).toHaveBeenCalledOnce();
   });
+  it("checks visible files during watch failure and stops after recovery", async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    vi.useFakeTimers();
+    container = document.createElement("div"); document.body.append(container); root = createRoot(container);
+    let emit!: (event: LocalChangeEvent) => Promise<void>;
+    let fail!: (error: unknown) => void;
+    const invalidate = vi.fn(async (request: { request_generation: number }) => ({
+      binding_id: "binding", root_id: "root", request_generation: request.request_generation,
+      invalidations: [{ path: "visible.md", state: "changed" as const, revision: "r2" }], truncated: false,
+    }));
+    const onInvalidate = vi.fn();
+    const subscribe = (_root: string, _paths: string[], callback: typeof emit, onError: typeof fail) => {
+      emit = callback; fail = onError; return { close: vi.fn(), retry: vi.fn() };
+    };
+    await act(async () => root.render(<ContextSearch identity="viewer" bindingId="binding" rootId="root"
+      known={[{ path: "visible.md", revision: "r1" }]} search={vi.fn()} invalidate={invalidate}
+      watchFiles={subscribe} onSelect={vi.fn()} onInvalidate={onInvalidate} />));
+    const ready: LocalChangeEvent = { stream_id: "s", sequence: 1, kind: "ready", topics: ["files"] };
+    await act(async () => { await emit(ready); fail(new Error("watch failed")); });
+    onInvalidate.mockClear();
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(onInvalidate).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain("Automatic updates unavailable");
+    await act(async () => { await emit(ready); });
+    const reads = invalidate.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(invalidate).toHaveBeenCalledTimes(reads);
+  });
 });

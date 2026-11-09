@@ -47,3 +47,38 @@ it("reconciles a change during a slow index read without periodic revalidation a
     expect(close).toHaveBeenCalledOnce();
   } finally { await act(async () => mounted.unmount()); host.remove(); vi.useRealTimers(); }
 });
+
+it("refreshes the open index during watch failure and stops after recovery", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  vi.useFakeTimers();
+  const host = document.createElement("div");
+  const mounted = createRoot(host);
+  const root = { root_id: "fallback-picker" } as ContextRoot;
+  let path = "old.md";
+  let emit!: (event: LocalChangeEvent) => Promise<void>;
+  let fail!: () => void;
+  const fileIndex = vi.fn(async (_id: string, mode: string) => ({
+    root_id: root.root_id, state: mode === "cached" ? "cached" : "fresh",
+    files: [{ path, bytes: null }], truncated: false,
+  } as ContextFileIndex));
+  const reader = { identity: "fallback", fileIndex, watchIndex: (_id: string, onEvent: typeof emit, onError: typeof fail) => {
+    emit = onEvent; fail = onError; return { close: vi.fn(), retry: vi.fn() };
+  } } as unknown as ContextReader;
+  let picker!: { openFilePicker(): void; pickerIndex: { files: readonly { path: string }[]; watchUnavailable: boolean } };
+  function Harness() { picker = useFilePicker({ reader, root, bindingId: "binding", identityKey: "fallback" }); return null; }
+  const event = (kind: "ready"): LocalChangeEvent => ({ stream_id: "s", sequence: 1, kind, topics: ["index"] });
+  try {
+    await act(async () => mounted.render(<Harness />));
+    await act(async () => picker.openFilePicker());
+    await act(async () => { await emit(event("ready")); });
+    await act(async () => fail());
+    path = "new.md";
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(picker.pickerIndex.files[0].path).toBe("new.md");
+    expect(picker.pickerIndex.watchUnavailable).toBe(true);
+    await act(async () => { await emit(event("ready")); });
+    const reads = fileIndex.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(fileIndex).toHaveBeenCalledTimes(reads);
+  } finally { await act(async () => mounted.unmount()); vi.useRealTimers(); }
+});

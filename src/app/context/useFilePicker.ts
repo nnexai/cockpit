@@ -3,6 +3,7 @@ import type { ContextRoot, ContextIndexedFile } from "../../protocol/generated/v
 import type { ContextReader } from "./contextSource";
 import { getFileIndex, putFileIndex } from "../input/fileIndexCache";
 import { prepareFileCandidates, type FileNavigationCandidate } from "../input/fileNavigation";
+import { watchFallback } from "../watchFallback";
 
 const PICKER_RETRY_LIMIT = 4;
 const PICKER_RETRY_BASE_MS = 1_500;
@@ -98,17 +99,20 @@ export function useFilePicker({ reader, root, bindingId, identityKey }: {
       })().finally(() => { running = null; });
       return running;
     };
+    const fallback = watchFallback(() => fetchFresh());
     const subscription = reader.watchIndex(root.root_id, async (event) => {
       if (event.kind === "unavailable") {
+        fallback.start();
         watching = false;
         if (current()) setPickerIndex((previous) => ({ ...previous, watchUnavailable: true, mayBeOutOfDate: true }));
         if (!freshSettled) await fetchFresh();
         return;
       }
-      if (event.kind === "ready") watching = true;
+      if (event.kind === "ready") { fallback.stop(); watching = true; }
       await fetchFresh();
     }, () => {
       if (!current()) return;
+      fallback.start();
       watching = false;
       setPickerIndex((previous) => ({ ...previous, watchUnavailable: true, mayBeOutOfDate: true }));
       if (!freshSettled) void fetchFresh();
@@ -117,6 +121,7 @@ export function useFilePicker({ reader, root, bindingId, identityKey }: {
     retryWatchRef.current = () => subscription.retry();
     return () => {
       cancelled = true;
+      fallback.close();
       subscription.close();
       controller.abort();
       if (retryTimer !== null) window.clearTimeout(retryTimer);

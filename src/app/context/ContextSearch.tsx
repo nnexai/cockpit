@@ -1,3 +1,4 @@
+import { watchFallback } from "../watchFallback";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type {
   ContextInvalidation,
@@ -194,17 +195,20 @@ export function ContextSearch({
       })().finally(() => { running = null; });
       return running;
     };
+    const fallback = watchFallback(check);
     const subscription = watchFiles(rootId, [...new Set(knownSnapshot.map((entry) => entry.path))], async (event) => {
-      if (event.kind === "unavailable") { watching = false; setCheckError("Automatic updates unavailable; displayed data may be stale."); return; }
-      if (event.kind === "ready") watching = true;
+      if (event.kind === "unavailable") { fallback.start(); watching = false; setCheckError("Automatic updates unavailable; displayed data may be stale."); return; }
+      if (event.kind === "ready") { fallback.stop(); watching = true; }
       await check();
     }, () => {
+      fallback.start();
       watching = false;
       if (!cancelled) setCheckError("Automatic updates unavailable; displayed data may be stale.");
     });
     retryWatchRef.current = () => { watching = false; subscription.retry(); };
     return () => {
       cancelled = true;
+      fallback.close();
       document.removeEventListener("visibilitychange", visibilityChanged);
       retryWatchRef.current = null;
       subscription.close();

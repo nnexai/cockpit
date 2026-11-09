@@ -326,6 +326,22 @@ describe("background Library listing visibility", () => {
     expect(display.state.watchUnavailable).toBe(false);
   });
 
+  it("refreshes during a watch outage and stops on recovery", async () => {
+    vi.useFakeTimers();
+    const { client, libraryListing } = fixture();
+    libraryListing.mockResolvedValue(page("g1", ["old"]));
+    const display = await view(client);
+    await act(async () => watches.get(client)!.error());
+    libraryListing.mockResolvedValue(page("g2", ["new"]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(display.state.listing?.items[0].item_id).toBe("new");
+    expect(display.state.watchUnavailable).toBe(true);
+    await emit(client, "ready");
+    const reads = libraryListing.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+    expect(libraryListing).toHaveBeenCalledTimes(reads);
+  });
+
   it("ignores late responses after client or visibility changes", async () => {
     const old = fixture();
     old.libraryListing.mockResolvedValueOnce(page("old", ["old"]));

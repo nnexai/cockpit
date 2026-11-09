@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { NotesCatalogEntry, NotesTargetInfo, NotesTodo } from "../../protocol/generated/v1";
 import { subscribeLocalChanges } from "../localChanges";
+import { watchFallback } from "../watchFallback";
 import type { LibrarySpace } from "../library/libraryState";
 import { UiIcon } from "../UiIcon";
 import { MarkdownEditor, MarkdownPreview, NotesEditorScope } from "./MarkdownEditor";
@@ -296,18 +297,19 @@ export function NotesView({ client, space, onClose }: { client: CockpitClient; s
     };
     resolveRef.current = resolve;
     flushBinding.current = () => { if (dirty) void resolve(); };
+    const fallback = watchFallback(resolve);
     let subscription: { close(): void; retry(): void } | null = null;
     if (target && space?.live) {
       subscription = subscribeLocalChanges(client, { kind: "notes_binding", session_id: target.session_id, space_id: target.space_id }, async event => {
-        if (event.kind === "unavailable") { if (active) setBindingUnavailable(true); return; }
-        if (event.kind === "ready") needsBaseline = true;
+        if (event.kind === "unavailable") { needsBaseline = false; fallback.start(); if (active) setBindingUnavailable(true); return; }
+        if (event.kind === "ready") { fallback.stop(); needsBaseline = true; }
         await resolve();
-      }, () => { if (active) { setBindingUnavailable(true); setLoading(false); } });
+      }, () => { needsBaseline = false; fallback.start(); if (active) { setBindingUnavailable(true); setLoading(false); } });
       bindingWatch.current = subscription;
     } else void resolve();
     const onFocus = () => { if (document.visibilityState !== "hidden") void resolve(); };
     window.addEventListener("focus", onFocus);
-    return () => { active = false; bindingWatch.current = null; flushBinding.current = () => {}; subscription?.close(); window.removeEventListener("focus", onFocus); };
+    return () => { active = false; bindingWatch.current = null; flushBinding.current = () => {}; fallback.close(); subscription?.close(); window.removeEventListener("focus", onFocus); };
   }, [client, target?.session_id, target?.space_id, space?.live]);
   useEffect(() => { if (!picker) flushBinding.current(); }, [picker]);
   const bind = async (notesId?: string) => {

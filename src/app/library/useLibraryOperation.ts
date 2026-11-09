@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { CockpitClient } from "../../client/CockpitClient";
 import type { LibraryItemSummary, LibraryListing, LibraryOperation, ProjectProvider, SpaceContextListing, SpaceTarget } from "../../protocol/generated/v1";
 import { subscribeLocalChanges } from "../localChanges";
+import { watchFallback } from "../watchFallback";
 import { errorText, sameSpaceTarget } from "./libraryState";
 
 /** Every mounted Library surface rereads its listing after a completed operation or selection change. */
@@ -323,17 +324,20 @@ export function useLibraryListing(client: CockpitClient, active: boolean): Libra
       flight = result;
       return result;
     };
+    const fallback = watchFallback(() => refresh(true));
     const subscription = subscribeLocalChanges(client, { kind: "library_listing" }, async (event) => {
       if (event.kind === "unavailable") {
+        fallback.start();
         watching = false;
         setWatchUnavailable(true);
         setState((old) => old.listing ? old : { ...old, status: "error", error: "Automatic updates unavailable." });
         return;
       }
-      if (event.kind === "ready") watching = true;
+      if (event.kind === "ready") { fallback.stop(); watching = true; }
       await refresh(event.kind === "changed");
     }, () => {
       if (!stopped && visible()) {
+        fallback.start();
         watching = false;
         setWatchUnavailable(true);
         setState((old) => old.listing ? old : { ...old, status: "error", error: "Automatic updates unavailable." });
@@ -359,6 +363,7 @@ export function useLibraryListing(client: CockpitClient, active: boolean): Libra
       epoch += 1;
       reloadAction.current = () => {};
       retryWatchAction.current = () => {};
+      fallback.close();
       subscription.close();
       window.removeEventListener(LIBRARY_CHANGED_EVENT, changed);
       document.removeEventListener("visibilitychange", visibility);
