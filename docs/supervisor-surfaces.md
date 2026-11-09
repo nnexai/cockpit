@@ -8,6 +8,8 @@ Inbox is a separate switchable work-oriented screen; Workbench retains its Space
 
 Batch completion leaves the session's personal liaison Active for later work across projects; worker `run done` and source cleanup do not retire it. Root completion is conversational, not another operational button.
 
+The orchestration state document is bounded to 64 MiB on both reads and writes. If a write would exceed that limit it fails with `orchestration_state_full` without discarding durable records or replacing the prior document. This extends capacity rather than providing unlimited retention; a backend with the older 8 MiB limit cannot read a larger document, so do not roll back to that version after the state has grown past its limit.
+
 ### Voice screen contract
 
 Voice is a dedicated, integrated screen alongside Workbench and Inbox, including a same-window native surface, not a detached window or a dictation control. The user explicitly starts a real OMP live voice call; phone keyboard dictation remains the user's choice and Cockpit adds no dictation integration. Browser and native Voice share the webview WebRTC implementation; the native app uses a separate Voice webview. Native device behavior, packaging and macOS support require platform verification.

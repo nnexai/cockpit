@@ -21,7 +21,7 @@ use crate::{
     },
 };
 
-pub(crate) const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 pub(crate) const SCHEMA: u32 = 4;
 
 /// Canonical machine records and temporary transaction journals. Task content
@@ -344,7 +344,7 @@ pub(crate) fn encode_state(state: &OrchestrationState) -> Result<Vec<u8>, Inspec
     let mut encoded = BoundedStateBytes { bytes: Vec::new(), full: false };
     serde_json::to_writer(&mut encoded, state).map_err(|error| {
         if encoded.full {
-            InspectionError::new("orchestration_state_full", "orchestration state exceeds 8 MiB; durable records cannot be discarded")
+            InspectionError::new("orchestration_state_full", format!("orchestration state exceeds {} MiB; durable records cannot be discarded", MAX_STATE_BYTES / (1024 * 1024)))
         } else {
             InspectionError::new("orchestration_state_write", error.to_string())
         }
@@ -670,6 +670,49 @@ mod tests {
         );
         assert_eq!(state.revision, 1);
         assert_eq!(store.store.state_dir().read("state.json").unwrap(), before);
+    }
+
+    #[test]
+    fn large_store_reopens_and_capacity_failure_preserves_all_records() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut state = lock.read().unwrap();
+        let first = message("a".repeat(9 * 1024 * 1024));
+        let first_id = first.message_id.clone();
+        let second = message("retained receipt".into());
+        let second_id = second.message_id.clone();
+        state.messages.extend([first, second]);
+        assert_eq!(lock.save(&mut state).unwrap(), 1);
+        let before = lock.exact_bytes().unwrap();
+        assert!(before.len() > 8 * 1024 * 1024);
+        drop(state);
+        drop(lock);
+        drop(store);
+
+        let reopened = fixture.open();
+        let lock = reopened.lock().unwrap();
+        let mut state = lock.read().unwrap();
+        assert_eq!(state.revision, 1);
+        assert_eq!(state.messages.len(), 2);
+        assert_eq!(state.messages[0].message_id, first_id);
+        assert_eq!(state.messages[0].text, "a".repeat(9 * 1024 * 1024));
+        assert_eq!(state.messages[1].message_id, second_id);
+        assert_eq!(state.messages[1].text, "retained receipt");
+        state.messages.push(message("x".repeat(MAX_STATE_BYTES)));
+        let error = lock.save(&mut state).unwrap_err();
+        assert_eq!(error.code, "orchestration_state_full");
+        assert_eq!(state.revision, 1);
+        assert_eq!(lock.exact_bytes().unwrap(), before);
+        drop(lock);
+        drop(reopened);
+        let reopened = fixture.open();
+        let lock = reopened.lock().unwrap();
+        let persisted = lock.read().unwrap();
+        assert_eq!(persisted.revision, 1);
+        assert_eq!(persisted.messages.len(), 2);
+        assert_eq!(persisted.messages[0].message_id, first_id);
+        assert_eq!(persisted.messages[1].message_id, second_id);
     }
 
     #[test]
