@@ -1890,8 +1890,10 @@ impl HerdrCliAdapter {
         if let Some(readiness) = readiness.as_ref() {
             let _ = readiness.send(Ok(())).await;
         }
-        let mut pane_filter =
-            (relevance == EventRelevance::Orchestration).then(PaneUpdateFilter::default);
+        let mut pane_filter = (relevance == EventRelevance::Orchestration).then(|| PaneUpdateFilter {
+            normalize_token_since: snapshot.protocol == 22,
+            ..Default::default()
+        });
         loop {
             let n = tokio::select! {
                 result = read_bounded_line(&mut reader, &mut line, MAX_TERMINAL_LINE) => {
@@ -2137,6 +2139,7 @@ fn pane_update_event(event: &str) -> bool {
 #[derive(Default)]
 struct PaneUpdateFilter {
     panes: BTreeMap<String, serde_json::Map<String, Value>>,
+    normalize_token_since: bool,
 }
 
 impl PaneUpdateFilter {
@@ -2161,6 +2164,15 @@ impl PaneUpdateFilter {
         let mut pane = std::mem::take(pane);
         for field in ORCHESTRATION_IGNORED_PANE_FIELDS {
             pane.remove(field);
+        }
+        // Protocol 22 reports an elapsed display string here. Preserve its
+        // presence and type, as well as every other token field.
+        if self.normalize_token_since
+            && let Some(Value::String(since)) = pane.get_mut("tokens")
+                .and_then(Value::as_object_mut)
+                .and_then(|tokens| tokens.get_mut("since"))
+        {
+            since.clear();
         }
         let pane_id = pane["pane_id"].as_str().expect("pane_id was validated");
         if let Some(previous) = self.panes.get_mut(pane_id) {
@@ -2561,16 +2573,17 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
     #[cfg(unix)]
-    async fn workspace_rename_delivery(relevance: EventRelevance) {
+    async fn workspace_rename_delivery(relevance: EventRelevance, protocol: u32) {
         use tokio::time::{timeout, Duration};
         let socket = std::env::temp_dir().join(format!(
             "cockpit-rename-{}-{}.sock", std::process::id(),
             NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
         ));
         let listener = tokio::net::UnixListener::bind(&socket).unwrap();
-        let fixture: Value = serde_json::from_str(
+        let mut fixture: Value = serde_json::from_str(
             &include_str!("../tests/fixtures/session-snapshot.json").replace("space-a", "w1")
         ).unwrap();
+        fixture["result"]["snapshot"]["protocol"] = json!(protocol);
         let snapshot = parse_snapshot(fixture.clone(), "default", "fixture-endpoint").unwrap();
         let result = fixture["result"].clone();
         let (stream_tx, mut stream_rx) = mpsc::channel(1);
@@ -2643,13 +2656,40 @@ mod tests {
         dotted_event["event"] = json!("workspace.renamed");
         let mut focus = pane.clone();
         focus["data"]["pane"]["focused"] = json!(false);
+        let mut token_pane = focus.clone();
+        token_pane["data"]["pane"]["tokens"] = json!({"since": "1s", "count": 10});
+        let mut elapsed = token_pane.clone();
+        elapsed["data"]["pane"]["tokens"]["since"] = json!("2s");
+        let mut count = elapsed.clone();
+        count["data"]["pane"]["tokens"]["count"] = json!(11);
+        let mut extra_token = count.clone();
+        extra_token["data"]["pane"]["tokens"]["future"] = json!("new");
+        let mut null_since = extra_token.clone();
+        null_since["data"]["pane"]["tokens"]["since"] = Value::Null;
+        let mut numeric_since = null_since.clone();
+        numeric_since["data"]["pane"]["tokens"]["since"] = json!(3);
+        let mut missing_since = numeric_since.clone();
+        missing_since["data"]["pane"]["tokens"].as_object_mut().unwrap().remove("since");
+        let mut malformed_tokens = missing_since.clone();
+        malformed_tokens["data"]["pane"]["tokens"] = json!(["unexpected"]);
+        let mut status = token_pane.clone();
+        status["data"]["pane"]["agent_status"] = json!("idle");
         let cases = vec![
-            (rename.clone(), relevance == EventRelevance::Session),
+            (token_pane.clone(), true),
+            (elapsed.clone(), relevance == EventRelevance::Session || protocol != 22),
+            (rename.clone(), relevance == EventRelevance::Session || protocol != 22),
             (pane.clone(), true),
-            (rename, relevance == EventRelevance::Session),
+            (rename, relevance == EventRelevance::Session || protocol != 22),
             // Filtering the rename must still clear the pane deduplication state.
             (pane, true), (focus, true),
+            (token_pane.clone(), true),
+            (elapsed, relevance == EventRelevance::Session || protocol != 22),
+            (count, true), (extra_token, true), (null_since, true),
+            (numeric_since, true), (missing_since, true), (malformed_tokens, true),
+            (token_pane, true), (status.clone(), true),
             (json!({"event":"tab_renamed","data":{"type":"tab_renamed","tab_id":"tab-a","label":"worker"}}), true),
+            // An intervening event clears the cache, even for an unchanged pane.
+            (status, true),
             (extra_envelope, true), (extra_data, true), (wrong_type, true),
             (unknown_id, true), (bad_label, true), (missing_label, true), (dotted_event, true),
             (json!({"event":"pane.agent_status_changed","data":{"pane_id":"pane-a","agent_status":"idle"}}), true),
@@ -2672,13 +2712,19 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn orchestration_filters_only_known_workspace_label_events() {
-        workspace_rename_delivery(EventRelevance::Orchestration).await;
+        workspace_rename_delivery(EventRelevance::Orchestration, 22).await;
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn session_delivers_workspace_label_events() {
-        workspace_rename_delivery(EventRelevance::Session).await;
+        workspace_rename_delivery(EventRelevance::Session, 22).await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unknown_protocol_keeps_token_elapsed_changes() {
+        workspace_rename_delivery(EventRelevance::Orchestration, 23).await;
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
