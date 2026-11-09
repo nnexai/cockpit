@@ -52,7 +52,7 @@ pub(super) fn check(state: &OrchestrationState, root_id: &str, task_id: &str) ->
 
     if runs.iter().any(|run| run.stage != RunStage::Closed
         || run.attachment.as_ref().is_some_and(|a| a.state != AttachmentState::Revoked)
-        || run.resume.as_ref().is_some_and(|resume| resume.phase != ResumePhase::Connected)
+        || run.resume.as_ref().is_some_and(|resume| !matches!(resume.phase, ResumePhase::Connected | ResumePhase::Reattached))
         || run.retirement.as_ref().is_some_and(|retirement| match &retirement.state {
             RetirementState::Retired { .. } => false,
             RetirementState::Retained { reason, .. } => matches!(reason,
@@ -90,7 +90,21 @@ pub(super) fn check(state: &OrchestrationState, root_id: &str, task_id: &str) ->
         || state.owned_resources.iter().any(|resource|
             (ids.contains(resource.run_id.as_str()) || resource.consumers.iter().any(|c| ids.contains(c.run_id.as_str())))
             && (!matches!(resource.cleanup.state, CleanupState::Removed)
-                || !resource.consumers.is_empty()
+                // Removed records may retain historical references. Only accept
+                // exact, revoked incarnations with a released checkout claim;
+                // shared or unprovable consumers remain blockers.
+                || (!resource.consumers.is_empty() && (!ids.contains(resource.run_id.as_str())
+                    || resource.consumers.iter().any(|consumer| !runs.iter().any(|run|
+                        run.run_id == consumer.run_id
+                            && run.attachment.as_ref().is_some_and(|attachment|
+                                attachment.state == AttachmentState::Revoked
+                                    && attachment.attachment_id == consumer.attachment_id
+                                    && attachment.epoch == consumer.attachment_epoch)
+                            && run.checkout.as_ref().is_some_and(|checkout|
+                                run.checkout_claim_id.as_ref().is_some_and(|id|
+                                    state.checkout_claims.iter().any(|claim| &claim.claim_id == id
+                                        && claim.state == ClaimState::Released && claim.holder.is_none()
+                                        && &claim.checkout == checkout)))))))
                 || resource.cleanup.effects.iter().any(|e| matches!(e.state, CleanupEffectState::Intent | CleanupEffectState::Unknown)))) {
         return ineligible("Task has an unsettled resource request or cleanup");
     }
@@ -139,6 +153,40 @@ mod tests {
         assert!(check(&state, "root", "task").is_err());
         state.runs[0].close_reason = Some(CloseReason::Accepted);
         assert!(check(&state, "root", "task").is_ok());
+    }
+
+    #[test]
+    fn settled_reattachment_does_not_hide_unsettled_work() {
+        use cockpit_protocol::orchestration::ExecutionAttachment;
+        let mut run = accepted_run("root", "task");
+        run.attachment = Some(ExecutionAttachment {
+            attachment_id: "attachment".into(), epoch: 1, state: AttachmentState::Revoked,
+            launch_mode: None, location: None, conversation: None, process: None, shell: None,
+            machine_id: None, process_scope: None, launch_attempt: 1, updated_at: "now".into(),
+        });
+        run.resume = Some(serde_json::from_value(serde_json::json!({
+            "operation_id":"resume", "run_id":"root-task", "previous_attachment_epoch":1,
+            "phase":"reattached", "cause":null, "decision_id":null,
+            "replacement_attachment_epoch":null, "updated_at":"now"
+        })).unwrap());
+        let mut state = OrchestrationState::default();
+        state.runs.push(run);
+        assert!(check(&state, "root", "task").is_ok());
+        for phase in [ResumePhase::Reconciling, ResumePhase::Launching, ResumePhase::Blocked] {
+            state.runs[0].resume.as_mut().unwrap().phase = phase;
+            assert!(check(&state, "root", "task").is_err());
+        }
+        state.runs[0].resume.as_mut().unwrap().phase = ResumePhase::Reattached;
+        state.runs[0].attachment.as_mut().unwrap().state = AttachmentState::Connected;
+        assert!(check(&state, "root", "task").is_err());
+        state.runs[0].attachment.as_mut().unwrap().state = AttachmentState::Revoked;
+        state.operations.push(DurableOperationRecord {
+            operation_id: "resume".into(), actor_run_id: None, principal_key: "operator".into(),
+            root_id: "root".into(), kind: DurableOperationKind::RunResume,
+            request_digest: "digest".into(), run_id: Some("root-task".into()), resume_operation_id: None,
+            result: None, effect_receipts: vec![], created_at: "now".into(), updated_at: "now".into(),
+        });
+        assert!(check(&state, "root", "task").is_err());
     }
     #[test]
     fn accepted_owner_must_match_closed_run_and_generation() {
@@ -191,6 +239,71 @@ mod tests {
         assert!(check(&state, "root", "task").is_err());
         state.owned_resources[0].cleanup.state = CleanupState::Removed;
         assert!(check(&state, "root", "task").is_ok());
+    }
+
+    #[test]
+    fn removed_resource_accepts_only_proven_historical_consumers() {
+        use cockpit_protocol::orchestration::{AttachmentReference, CheckoutIdentity, CleanupAuthority,
+            CleanupEffectReceipt, CleanupItem, DirectoryIdentity, ExecutionAttachment,
+            OwnedAttemptDirectoryIdentity, OwnedResourceIdentity, OwnedResourceKind, OwnedResourceRecord,
+            ResourceOwnership};
+        use super::super::claims::CheckoutClaim;
+        let checkout = CheckoutIdentity { key: "checkout".into(), path: "/tmp/checkout".into(),
+            directory_identity: DirectoryIdentity { device: "device".into(), inode: "inode".into() }, git: None };
+        let mut run = accepted_run("root", "task");
+        run.checkout = Some(checkout.clone());
+        run.checkout_claim_id = Some("claim".into());
+        run.attachment = Some(ExecutionAttachment {
+            attachment_id: "attachment".into(), epoch: 1, state: AttachmentState::Revoked,
+            launch_mode: None, location: None, conversation: None, process: None, shell: None,
+            machine_id: None, process_scope: None, launch_attempt: 1, updated_at: "now".into(),
+        });
+        let mut state = OrchestrationState::default();
+        state.runs.push(run);
+        state.checkout_claims.push(CheckoutClaim { claim_id: "claim".into(), checkout, revision: 1,
+            state: ClaimState::Released, holder: None, transition_operation_id: None });
+        let consumer = AttachmentReference { run_id: "root-task".into(),
+            attachment_id: "attachment".into(), attachment_epoch: 1 };
+        state.owned_resources.push(OwnedResourceRecord {
+            resource_id: "resource".into(), root_id: "root".into(), run_id: "root-task".into(),
+            kind: OwnedResourceKind::AttemptDirectory, ownership: ResourceOwnership::Owned,
+            creation_operation_id: Some("create".into()),
+            identity: OwnedResourceIdentity::AttemptDirectory { identity: OwnedAttemptDirectoryIdentity {
+                creation_operation_id: "create".into(), root: "/tmp/resource".into(),
+                device: "device".into(), inode: "inode".into(),
+            }},
+            authority: CleanupAuthority::OwnedWhenSafe, consumers: vec![consumer.clone()],
+            integration_result_id: None,
+            cleanup: CleanupItem { operation_id: None, state: CleanupState::Removed, reason: None,
+                effects: vec![], updated_at: "now".into() },
+        });
+        assert!(check(&state, "root", "task").is_ok());
+        state.owned_resources[0].cleanup.state = CleanupState::Waiting;
+        assert!(check(&state, "root", "task").is_err());
+        state.owned_resources[0].cleanup.state = CleanupState::Removed;
+        state.owned_resources[0].cleanup.effects.push(CleanupEffectReceipt {
+            effect_id: "effect".into(), kind: OwnedResourceKind::AttemptDirectory,
+            identity_digest: "digest".into(), state: CleanupEffectState::Unknown,
+            evidence: None, updated_at: "now".into(),
+        });
+        assert!(check(&state, "root", "task").is_err());
+        state.owned_resources[0].cleanup.effects[0].state = CleanupEffectState::Intent;
+        assert!(check(&state, "root", "task").is_err());
+        state.owned_resources[0].cleanup.effects[0].state = CleanupEffectState::Applied;
+        state.owned_resources[0].consumers[0].attachment_epoch = 2;
+        assert!(check(&state, "root", "task").is_err());
+        state.owned_resources[0].consumers[0] = consumer.clone();
+        state.owned_resources[0].consumers.push(AttachmentReference { run_id: "other".into(), ..consumer });
+        assert!(check(&state, "root", "task").is_err());
+        state.owned_resources[0].consumers.pop();
+        state.owned_resources[0].run_id = "other".into();
+        assert!(check(&state, "root", "task").is_err());
+        state.owned_resources[0].run_id = "root-task".into();
+        state.checkout_claims[0].state = ClaimState::Held;
+        assert!(check(&state, "root", "task").is_err());
+        state.checkout_claims[0].state = ClaimState::Released;
+        state.runs[0].attachment.as_mut().unwrap().state = AttachmentState::Connected;
+        assert!(check(&state, "root", "task").is_err());
     }
 
 
