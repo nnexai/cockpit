@@ -1891,7 +1891,7 @@ impl HerdrCliAdapter {
             let _ = readiness.send(Ok(())).await;
         }
         let mut pane_filter = (relevance == EventRelevance::Orchestration).then(|| PaneUpdateFilter {
-            normalize_token_since: snapshot.protocol == 22,
+            protocol_22: snapshot.protocol == 22,
             ..Default::default()
         });
         loop {
@@ -1940,22 +1940,27 @@ impl HerdrCliAdapter {
             let pane_update = pane_update_event(event);
             let topology = pane_topology_event(event);
             if let Some(filter) = pane_filter.as_mut() {
-                if !pane_update {
-                    filter.reset();
-                } else if let Some(data) = value.get_mut("data")
-                    && data.get("pane")
-                        .and_then(|pane| pane.get("pane_id"))
-                        .and_then(Value::as_str)
-                        .is_some_and(|id| snapshot.panes.iter().any(|pane| pane.id == id))
-                    && filter.redundant(data)
-                {
+                if presentation_only_workspace_metadata(&value, snapshot) {
                     continue;
                 }
-            }
-            if relevance == EventRelevance::Orchestration
-                && presentation_only_workspace_rename(&value, snapshot)
-            {
-                continue;
+                if pane_update {
+                    let valid_envelope = value.as_object().is_some_and(|envelope| envelope.len() == 2);
+                    if valid_envelope
+                        && let Some(data) = value.get_mut("data")
+                        && data.get("pane")
+                            .and_then(|pane| pane.get("pane_id"))
+                            .and_then(Value::as_str)
+                            .is_some_and(|id| snapshot.panes.iter().any(|pane| pane.id == id))
+                    {
+                        if filter.redundant(data) {
+                            continue;
+                        }
+                    } else {
+                        filter.reset();
+                    }
+                } else {
+                    filter.reset();
+                }
             }
             if topology {
                 let latest = self.read_event_snapshot(session_id, relevance).await?;
@@ -2103,26 +2108,61 @@ enum EventRelevance {
     Orchestration,
 }
 
-// Protocol 22/schema 1's workspace rename carries only presentation state.
-// Any extension or unexpected shape must remain an invalidation.
-fn presentation_only_workspace_rename(value: &Value, snapshot: &SessionSnapshotResponse) -> bool {
+// Protocol 22 metadata events may only be ignored when their full shape is
+// known and their embedded semantic workspace state still matches discovery.
+fn presentation_only_workspace_metadata(value: &Value, snapshot: &SessionSnapshotResponse) -> bool {
     if snapshot.protocol != 22 {
         return false;
     }
-    let Some(envelope) = value.as_object() else {
-        return false;
-    };
-    if envelope.len() != 2 || envelope.get("event").and_then(Value::as_str) != Some("workspace_renamed") {
+    let Some(envelope) = value.as_object() else { return false };
+    if envelope.len() != 2 {
         return false;
     }
-    let Some(data) = envelope.get("data").and_then(Value::as_object) else {
+    let Some(event) = envelope.get("event").and_then(Value::as_str) else { return false };
+    let Some(data) = envelope.get("data").and_then(Value::as_object) else { return false };
+    if data.get("type").and_then(Value::as_str) != Some(event) {
         return false;
-    };
-    data.len() == 3
-        && data.get("type").and_then(Value::as_str) == Some("workspace_renamed")
-        && data.get("label").is_some_and(Value::is_string)
-        && data.get("workspace_id").and_then(Value::as_str)
-            .is_some_and(|id| snapshot.spaces.iter().any(|space| space.id == id))
+    }
+    if event == "workspace_renamed" {
+        return data.len() == 3
+            && data.get("label").is_some_and(Value::is_string)
+            && data.get("workspace_id").and_then(Value::as_str)
+                .is_some_and(|id| snapshot.spaces.iter().any(|space| space.id == id));
+    }
+    if event != "workspace_metadata_updated" || data.len() != 2 {
+        return false;
+    }
+    let Some(workspace) = data.get("workspace").and_then(Value::as_object) else { return false };
+    if workspace.keys().any(|key| !matches!(key.as_str(),
+        "workspace_id" | "number" | "label" | "focused" | "pane_count" | "tab_count"
+        | "active_tab_id" | "agent_status" | "tokens" | "worktree"))
+    {
+        return false;
+    }
+    let Some(space) = workspace.get("workspace_id").and_then(Value::as_str)
+        .and_then(|id| snapshot.spaces.iter().find(|space| space.id == id)) else { return false };
+    // The parsed snapshot does not retain repo_root, so a non-null worktree
+    // cannot be fully compared and must remain an invalidation.
+    let worktree_matches = matches!(workspace.get("worktree"), None | Some(Value::Null))
+        && space.git.is_none();
+    workspace.get("number").and_then(Value::as_u64) == Some(u64::from(space.number))
+        && workspace.get("label").is_some_and(Value::is_string)
+        && workspace.get("focused").and_then(Value::as_bool) == Some(space.focused)
+        && workspace.get("pane_count").and_then(Value::as_u64) == Some(u64::from(space.pane_count))
+        && workspace.get("tab_count").and_then(Value::as_u64) == Some(u64::from(space.tab_count))
+        && workspace.get("agent_status").and_then(Value::as_str) == Some(space.agent_status.as_str())
+        && workspace.get("active_tab_id").and_then(Value::as_str).is_some_and(|id|
+            snapshot.tabs.iter().any(|tab| tab.id == id && tab.space_id == space.id && tab.focused))
+        && workspace.get("tokens").is_none_or(valid_display_tokens)
+        && worktree_matches
+}
+
+fn valid_display_tokens(value: &Value) -> bool {
+    value.as_object().is_some_and(|tokens| tokens.len() <= 32 && tokens.iter().all(|(key, value)| {
+        !key.is_empty() && key.len() <= 32
+            && key.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+            && value.is_string()
+    }))
 }
 
 const ORCHESTRATION_IGNORED_PANE_FIELDS: [&str; 4] = [
@@ -2139,7 +2179,7 @@ fn pane_update_event(event: &str) -> bool {
 #[derive(Default)]
 struct PaneUpdateFilter {
     panes: BTreeMap<String, serde_json::Map<String, Value>>,
-    normalize_token_since: bool,
+    protocol_22: bool,
 }
 
 impl PaneUpdateFilter {
@@ -2153,26 +2193,26 @@ impl PaneUpdateFilter {
                 !kind.as_str().is_some_and(pane_update_event)
             })
         {
+            self.reset();
             return false;
         }
         let Some(pane) = data.get_mut("pane").and_then(Value::as_object_mut) else {
+            self.reset();
             return false;
         };
-        if !pane.get("pane_id").is_some_and(Value::is_string) {
+        if !pane.get("pane_id").is_some_and(Value::is_string)
+            || (self.protocol_22 && pane.get("tokens").is_some_and(|tokens| !valid_display_tokens(tokens)))
+        {
+            self.reset();
             return false;
         }
         let mut pane = std::mem::take(pane);
         for field in ORCHESTRATION_IGNORED_PANE_FIELDS {
             pane.remove(field);
         }
-        // Protocol 22 reports an elapsed display string here. Preserve its
-        // presence and type, as well as every other token field.
-        if self.normalize_token_since
-            && let Some(Value::String(since)) = pane.get_mut("tokens")
-                .and_then(Value::as_object_mut)
-                .and_then(|tokens| tokens.get_mut("since"))
-        {
-            since.clear();
+        // Protocol 22 token maps are display-only, including their presence.
+        if self.protocol_22 {
+            pane.remove("tokens");
         }
         let pane_id = pane["pane_id"].as_str().expect("pane_id was validated");
         if let Some(previous) = self.panes.get_mut(pane_id) {
@@ -2584,6 +2624,7 @@ mod tests {
             &include_str!("../tests/fixtures/session-snapshot.json").replace("space-a", "w1")
         ).unwrap();
         fixture["result"]["snapshot"]["protocol"] = json!(protocol);
+        fixture["result"]["snapshot"]["workspaces"][0]["worktree"] = Value::Null;
         let snapshot = parse_snapshot(fixture.clone(), "default", "fixture-endpoint").unwrap();
         let result = fixture["result"].clone();
         let (stream_tx, mut stream_rx) = mpsc::channel(1);
@@ -2636,6 +2677,25 @@ mod tests {
         let rename = json!({"event":"workspace_renamed","data":{
             "type":"workspace_renamed","workspace_id":"w1","label":"Fixture event proof"
         }});
+        let metadata = json!({"event":"workspace_metadata_updated","data":{
+            "type":"workspace_metadata_updated","workspace":{
+                "workspace_id":"w1","number":1,"label":"Development","focused":true,
+                "pane_count":1,"tab_count":1,"active_tab_id":"tab-a","agent_status":"unknown",
+                "tokens":{"usage":"10"},"worktree":null
+            }
+        }});
+        let mut metadata_status = metadata.clone();
+        metadata_status["data"]["workspace"]["agent_status"] = json!("working");
+        let mut metadata_unknown = metadata.clone();
+        metadata_unknown["data"]["workspace"]["future"] = json!(true);
+        let mut metadata_malformed = metadata.clone();
+        metadata_malformed["data"]["workspace"]["tokens"]["usage"] = json!(42);
+        let mut metadata_envelope = metadata.clone();
+        metadata_envelope["future"] = json!(true);
+        let mut metadata_identity = metadata.clone();
+        metadata_identity["data"]["workspace"]["workspace_id"] = json!("other");
+        let mut metadata_missing = metadata.clone();
+        metadata_missing["data"]["workspace"].as_object_mut().unwrap().remove("active_tab_id");
         let pane = json!({"event":"pane_updated","data":{"type":"pane_updated","pane":{
             "pane_id":"pane-a","workspace_id":"w1","tab_id":"tab-a",
             "focused":true,"terminal_title":"output"
@@ -2657,11 +2717,11 @@ mod tests {
         let mut focus = pane.clone();
         focus["data"]["pane"]["focused"] = json!(false);
         let mut token_pane = focus.clone();
-        token_pane["data"]["pane"]["tokens"] = json!({"since": "1s", "count": 10});
+        token_pane["data"]["pane"]["tokens"] = json!({"since": "1s", "count": "10"});
         let mut elapsed = token_pane.clone();
         elapsed["data"]["pane"]["tokens"]["since"] = json!("2s");
         let mut count = elapsed.clone();
-        count["data"]["pane"]["tokens"]["count"] = json!(11);
+        count["data"]["pane"]["tokens"]["count"] = json!("11");
         let mut extra_token = count.clone();
         extra_token["data"]["pane"]["tokens"]["future"] = json!("new");
         let mut null_since = extra_token.clone();
@@ -2674,21 +2734,25 @@ mod tests {
         malformed_tokens["data"]["pane"]["tokens"] = json!(["unexpected"]);
         let mut status = token_pane.clone();
         status["data"]["pane"]["agent_status"] = json!("idle");
+        let unfiltered = relevance == EventRelevance::Session || protocol != 22;
         let cases = vec![
             (token_pane.clone(), true),
-            (elapsed.clone(), relevance == EventRelevance::Session || protocol != 22),
-            (rename.clone(), relevance == EventRelevance::Session || protocol != 22),
+            (elapsed.clone(), unfiltered),
+            (metadata, unfiltered),
+            (token_pane.clone(), unfiltered),
+            (rename.clone(), unfiltered),
             (pane.clone(), true),
-            (rename, relevance == EventRelevance::Session || protocol != 22),
-            // Filtering the rename must still clear the pane deduplication state.
-            (pane, true), (focus, true),
-            (token_pane.clone(), true),
-            (elapsed, relevance == EventRelevance::Session || protocol != 22),
-            (count, true), (extra_token, true), (null_since, true),
+            (rename, unfiltered),
+            (pane, unfiltered), (focus, true),
+            (token_pane.clone(), unfiltered),
+            (elapsed, unfiltered),
+            (count, unfiltered), (extra_token, unfiltered), (null_since, true),
             (numeric_since, true), (missing_since, true), (malformed_tokens, true),
             (token_pane, true), (status.clone(), true),
+            (metadata_status, true), (metadata_unknown, true), (metadata_malformed, true),
+            (metadata_envelope, true), (metadata_identity, true), (metadata_missing, true),
             (json!({"event":"tab_renamed","data":{"type":"tab_renamed","tab_id":"tab-a","label":"worker"}}), true),
-            // An intervening event clears the cache, even for an unchanged pane.
+            // An intervening semantic event clears the cache.
             (status, true),
             (extra_envelope, true), (extra_data, true), (wrong_type, true),
             (unknown_id, true), (bad_label, true), (missing_label, true), (dotted_event, true),
@@ -2820,8 +2884,35 @@ mod tests {
                 assert!(!filter.redundant(&mut invalid.clone()), "{invalid}");
             }
         }
+        assert!(!filter.redundant(&mut base.clone()));
         // Older payloads omit the redundant data.type discriminator.
         assert!(filter.redundant(&mut json!({"pane": base["pane"]})));
+    }
+
+    #[test]
+    fn protocol_22_display_token_maps_are_ignored_but_malformed_values_are_not() {
+        let base = json!({"type":"pane_updated","pane":{"pane_id":"pane-a","agent_status":"working"}});
+        let mut filter = PaneUpdateFilter { protocol_22: true, ..Default::default() };
+        assert!(!filter.redundant(&mut base.clone()));
+        let mut tokens = base.clone();
+        tokens["pane"]["tokens"] = json!({"since":"1s", "count":"10"});
+        assert!(filter.redundant(&mut tokens.clone()));
+        tokens["pane"]["tokens"] = json!({"since":"2s", "other":"arbitrary"});
+        assert!(filter.redundant(&mut tokens.clone()));
+        assert!(filter.redundant(&mut base.clone()));
+        for invalid in [json!(null), json!([]), json!({"count":10}), json!({"bad key":"x"})] {
+            let mut update = base.clone();
+            update["pane"]["tokens"] = invalid;
+            assert!(!filter.redundant(&mut update.clone()));
+            assert!(!filter.redundant(&mut update));
+            assert!(!filter.redundant(&mut base.clone()));
+        }
+        let mut semantic = tokens;
+        semantic["pane"]["agent_status"] = json!("idle");
+        assert!(!filter.redundant(&mut semantic));
+        let mut unknown = base.clone();
+        unknown["pane"]["future"] = json!(true);
+        assert!(!filter.redundant(&mut unknown));
     }
 
     fn subscription_snapshot(panes: &[&str]) -> SessionSnapshotResponse {

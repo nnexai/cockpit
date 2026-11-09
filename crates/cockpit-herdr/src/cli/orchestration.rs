@@ -851,14 +851,29 @@ mod tests {
     }
 
     #[cfg(unix)]
-    async fn pane_update_subscription_changes(
-        orchestration: bool,
-        connections: usize,
-    ) -> Vec<usize> {
+    async fn pane_update_subscription_behavior(orchestration: bool, reconnect: bool) {
         use std::{sync::atomic::Ordering, time::Duration};
         use cockpit_core::{HerdrAdapter, SessionChange};
-        use tokio::io::AsyncWriteExt;
+        use tokio::{io::AsyncWriteExt, sync::mpsc, time::timeout};
         use super::super::{HerdrCliConfig, NEXT_REQUEST_ID};
+
+        async fn check_event(
+            stream: &mut tokio::net::UnixStream,
+            messages: &mut mpsc::Receiver<SessionChange>,
+            event: Value,
+            expected: bool,
+        ) {
+            stream.write_all(format!("{event}\n").as_bytes()).await.unwrap();
+            if expected {
+                assert_eq!(
+                    timeout(Duration::from_secs(2), messages.recv()).await.unwrap(),
+                    Some(SessionChange::Changed),
+                    "{event}"
+                );
+            } else {
+                assert!(timeout(Duration::from_millis(100), messages.recv()).await.is_err(), "{event}");
+            }
+        }
 
         let socket = std::env::temp_dir().join(format!(
             "cockpit-pane-events-{}-{}.sock",
@@ -871,81 +886,20 @@ mod tests {
         let snapshot = parse_snapshot(fixture.clone(), "default", "fixture-endpoint").unwrap();
         let result = fixture["result"].clone();
         let mut pane = result["snapshot"]["panes"][0].clone();
-        pane["revision"] = json!(8);
-        pane["terminal_title"] = json!("t0");
-        pane["terminal_title_stripped"] = json!("t0");
-        pane["scroll"] = json!({"offset": 0});
-        let mut events = vec![json!({
-            "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
-        })];
-        for revision in 9..=12 {
-            pane["revision"] = json!(revision);
-            pane["terminal_title"] = json!(format!("t{revision}"));
-            pane["terminal_title_stripped"] = json!(format!("t{revision}"));
-            if revision == 10 {
-                pane["scroll"] = json!({"offset": 10});
-            }
-            let event = if revision == 12 { "pane.updated" } else { "pane_updated" };
-            events.push(json!({"event": event, "data": {"type": event, "pane": pane}}));
-        }
-        for (field, value) in [
-            ("tokens", json!({"input": 10, "output": 20})),
-            ("cwd", json!("/tmp")),
-            ("future_field", json!({"status": "new"})),
-        ] {
-            pane[field] = value;
-            events.push(json!({
-                "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
-            }));
-        }
-        pane["terminal_title"] = json!("after-metadata");
-        events.push(json!({
-            "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
-        }));
-        events.push(json!({
-            "event": "pane.agent_status_changed",
-            "data": {"pane_id": "pane-a", "agent_status": "idle"}
-        }));
-        pane["terminal_title"] = json!("after-agent-status");
-        events.push(json!({
-            "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
-        }));
-        let reconnect_pane = pane.clone();
-        // Unknown pane IDs must be delivered, but never admitted to the bounded cache.
-        pane["pane_id"] = json!("unknown-pane");
-        for _ in 0..2 {
-            events.push(json!({
-                "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
-            }));
-        }
+        let (stream_tx, mut stream_rx) = mpsc::channel(1);
         let server = tokio::spawn(async move {
-            for connection in 0..connections {
+            for connection in 0..if reconnect { 2 } else { 1 } {
                 if orchestration || connection > 0 {
                     reply_to_event_test_request(&listener, "session.snapshot", &result).await;
                 }
                 reply_to_event_test_request(
                     &listener, "ping", &json!({"type": "pong", "version": "0.9.0", "protocol": 22}),
                 ).await;
-                let mut stream = reply_to_event_test_request(
+                let stream = reply_to_event_test_request(
                     &listener, "events.subscribe", &json!({"type": "subscription_started"}),
                 ).await;
                 reply_to_event_test_request(&listener, "session.snapshot", &result).await;
-                if connection == 0 {
-                    for event in &events {
-                        stream.write_all(format!("{event}\n").as_bytes()).await.unwrap();
-                    }
-                } else {
-                    // Same relevant state as before disconnect: first must still invalidate.
-                    for title in ["reconnected", "reconnected-again"] {
-                        let mut pane = reconnect_pane.clone();
-                        pane["terminal_title"] = json!(title);
-                        let event = json!({
-                            "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
-                        });
-                        stream.write_all(format!("{event}\n").as_bytes()).await.unwrap();
-                    }
-                }
-                stream.shutdown().await.unwrap();
+                stream_tx.send(stream).await.unwrap();
             }
         });
         let adapter = HerdrCliAdapter::new(
@@ -956,44 +910,78 @@ mod tests {
         } else {
             adapter.subscribe_session("default", &snapshot).await.unwrap()
         };
-        let mut counts = Vec::new();
-        let mut changed = 0;
-        while counts.len() < connections {
-            match tokio::time::timeout(Duration::from_secs(3), subscription.messages.recv())
-                .await.unwrap().expect("subscription remains open")
-            {
-                SessionChange::Changed => changed += 1,
-                SessionChange::Disconnected { code, .. } => {
-                    assert_eq!(code, "disconnected");
-                    counts.push(changed);
-                    changed = 0;
+        let mut stream = stream_rx.recv().await.unwrap();
+        let event = |pane: &Value| json!({
+            "event": "pane_updated", "data": {"type": "pane_updated", "pane": pane}
+        });
+        check_event(&mut stream, &mut subscription.messages, event(&pane), true).await;
+        pane["terminal_title"] = json!("changed title");
+        check_event(&mut stream, &mut subscription.messages, event(&pane), !orchestration).await;
+        pane["tokens"] = json!({"input": "10", "output": "20"});
+        check_event(&mut stream, &mut subscription.messages, event(&pane), !orchestration).await;
+        pane["cwd"] = json!("/tmp");
+        check_event(&mut stream, &mut subscription.messages, event(&pane), true).await;
+        pane["future_field"] = json!({"status": "new"});
+        check_event(&mut stream, &mut subscription.messages, event(&pane), true).await;
+        check_event(&mut stream, &mut subscription.messages, json!({
+            "event": "pane.agent_status_changed",
+            "data": {"pane_id": "pane-a", "agent_status": "idle"}
+        }), true).await;
+        check_event(&mut stream, &mut subscription.messages, event(&pane), true).await;
+        let mut unknown = pane.clone();
+        unknown["pane_id"] = json!("unknown-pane");
+        for _ in 0..2 {
+            check_event(&mut stream, &mut subscription.messages, event(&unknown), true).await;
+        }
+        // Restore the known pane in the cache before testing reconnect.
+        check_event(&mut stream, &mut subscription.messages, event(&pane), true).await;
+
+        if reconnect {
+            drop(stream);
+            loop {
+                match timeout(Duration::from_secs(3), subscription.messages.recv()).await.unwrap().unwrap() {
+                    SessionChange::Disconnected { code, .. } => {
+                        assert_eq!(code, "disconnected");
+                        break;
+                    }
+                    SessionChange::Changed => {}
+                    other => panic!("unexpected subscription change: {other:?}"),
                 }
-                other => panic!("unexpected subscription change: {other:?}"),
             }
+            let mut stream = timeout(Duration::from_secs(3), stream_rx.recv()).await.unwrap().unwrap();
+            // Drain reconnect snapshot invalidations before testing the live event.
+            loop {
+                match timeout(Duration::from_millis(100), subscription.messages.recv()).await {
+                    Ok(Some(SessionChange::Changed)) => {}
+                    Err(_) => break,
+                    other => panic!("unexpected reconnect message: {other:?}"),
+                }
+            }
+            check_event(&mut stream, &mut subscription.messages, event(&pane), true).await;
+            pane["terminal_title"] = json!("after reconnect");
+            check_event(&mut stream, &mut subscription.messages, event(&pane), false).await;
         }
         drop(subscription);
         server.await.unwrap();
         std::fs::remove_file(socket).unwrap();
-        counts
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn orchestration_session_changes_ignore_title_only_pane_updates() {
-        assert_eq!(pane_update_subscription_changes(true, 1).await, vec![8]);
+        pane_update_subscription_behavior(true, false).await;
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn ui_session_subscription_keeps_title_only_pane_updates() {
-        assert_eq!(pane_update_subscription_changes(false, 1).await, vec![13]);
+        pane_update_subscription_behavior(false, false).await;
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn orchestration_pane_update_filter_resets_on_reconnect() {
-        // Reconnect publishes two snapshot invalidations, plus its first live pane update.
-        assert_eq!(pane_update_subscription_changes(true, 2).await, vec![8, 3]);
+        pane_update_subscription_behavior(true, true).await;
     }
 
     #[cfg(unix)]
