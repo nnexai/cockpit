@@ -192,6 +192,8 @@ pub struct ResolvedMutationInput {
     pub root_main_recovery: Option<RootMainRecoveryProof>,
     pub attachment_observation: Option<ExecutionAttachment>,
     pub root_attachment_expected: Option<ExecutionAttachment>,
+    /// Host-observed idle status for the exact live root attachment.
+    pub fresh_root_idle: bool,
     pub observation_cause: Option<ResumeCause>,
     pub output_facts: Option<OutputFacts>,
     pub resource_source: Option<ResourceSourceFacts>,

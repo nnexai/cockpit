@@ -588,6 +588,36 @@ async fn resolve_physical_mutation_input(
                 None => resolve_resume_input(service, herdr, &run).await,
             }
         }
+        OrchestrationAction::RunStartFreshSupervisor { run_id, .. } => {
+            if !matches!(actor, Actor::Operator(_)) {
+                return Err(InspectionError::new("actor_forbidden", "Only the operator may start a fresh supervisor conversation"));
+            }
+            let run = service.run_for_review(&request.session_id, run_id)?;
+            let mut input = service.observe_root_resume(herdr, &run).await;
+            if let Some(observed) = input.attachment_observation.as_ref()
+                && let Some(location) = observed.location.as_ref()
+                && let Some(process) = observed.process.as_ref() {
+                let runtime = herdr.runtime(&request.session_id).await?;
+                let panes: Vec<_> = runtime.panes.iter().filter(|pane| pane.pane_id == location.pane_id).collect();
+                if runtime.endpoint_identity == location.endpoint_identity
+                    && runtime.boot_id == location.boot_id && runtime.peer_process == location.peer_process
+                    && panes.len() == 1 && panes[0].workspace_id == location.workspace_id
+                    && panes[0].tab_id == location.tab_id && panes[0].terminal_id == location.terminal_id
+                    && location.terminal_id.as_deref().is_some_and(|id| !id.is_empty())
+                    && runtime.panes.iter().filter(|pane| pane.terminal_id == location.terminal_id).count() == 1
+                    && !panes[0].launch_pending
+                    && matches!(panes[0].agent_status.as_deref(), Some("idle" | "done")) {
+                    let info = herdr.pane_process_info(&request.session_id, &runtime.endpoint_identity, &location.pane_id).await?;
+                    input.fresh_root_idle = info.pane_id == location.pane_id
+                        && info.processes.iter().any(|(pid, _)| *pid == process.pid);
+                }
+            }
+            if input.root_main_recovery.is_none() && !input.fresh_root_idle {
+                return Err(InspectionError::new("fresh_supervisor_busy",
+                    "The supervisor must be idle with an exactly identified terminal, or its exact exit must be proven, before starting a fresh conversation"));
+            }
+            Ok(input)
+        }
         _ => Ok(ResolvedMutationInput::default()),
     }
 }

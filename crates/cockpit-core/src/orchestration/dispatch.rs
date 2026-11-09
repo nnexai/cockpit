@@ -62,6 +62,15 @@ pub(super) fn stalled_root_resume(run: &Run) -> bool {
                         && resume.phase == cockpit_protocol::orchestration::ResumePhase::Launching
                         && resume.replacement_attachment_epoch == Some(attachment.epoch)))
 }
+fn fresh_root_reconciling(run: &Run) -> bool {
+    run.kind != RunKind::Worker && run.run_id == run.root_id && run.parent_run_id.is_none()
+        && run.resume.as_ref().is_some_and(|resume| resume.fresh_conversation == Some(true)
+            && matches!(resume.phase, cockpit_protocol::orchestration::ResumePhase::Reconciling
+                | cockpit_protocol::orchestration::ResumePhase::Blocked))
+}
+
+const FRESH_ROOT_RETRY_DELAY: Duration = Duration::from_secs(5);
+
 
 pub(super) fn plan_failed_before_effects(run: &Run) -> bool {
     run.kind == RunKind::Worker && run.stage == RunStage::Queued
@@ -665,6 +674,13 @@ impl Dispatcher {
                 dispatch.latch_state == Some(cockpit_protocol::orchestration::AgentLatchState::Released)) {
                 self.complete_scope_receipt(&current).await;
             }
+            if fresh_root_reconciling(&current)
+                && matches!(self.service.fresh_root_stop_state(&current), Ok(Some(_))) {
+                self.reconcile_fresh_root(&current).await;
+                let deadline = tokio::time::Instant::now() + FRESH_ROOT_RETRY_DELAY;
+                idle_deadline = Some(idle_deadline.map_or(deadline, |existing| existing.min(deadline)));
+                continue;
+            }
             if current.stage == RunStage::Reported || current.result.is_some() { continue; }
             let Some(attachment) = &current.attachment else { continue };
             let mut input = super::ResolvedMutationInput::default();
@@ -720,6 +736,66 @@ impl Dispatcher {
             let _ = self.service.resume_owner(&current, &input);
         }
         idle_deadline
+    }
+    async fn reconcile_fresh_root(&self, run: &Run) {
+        use super::store::RootStopState;
+        let Some(resume) = run.resume.as_ref() else { return };
+        // Exit, not the close response or disappearance from the layout, is the
+        // authority for replacement. The observer revalidates its proof under
+        // the durable lock when advancing the existing operation.
+        let Ok(Some(state)) = self.service.fresh_root_stop_state(run) else { return };
+        let observed = self.service.observe_root_resume(self.herdr.as_ref(), run).await;
+        if observed.root_main_recovery.is_some()
+            && (matches!(state, RootStopState::Pending | RootStopState::Refused)
+                || fresh_root_container_absent(self.herdr.as_ref(), run).await) {
+            let _ = self.service.advance_resume_observed(&run.run_id, &resume.operation_id, &observed);
+            return;
+        }
+        if resume.phase == cockpit_protocol::orchestration::ResumePhase::Blocked { return; }
+        let elapsed = super::parse_time(&resume.updated_at)
+            .map(|at| (time::OffsetDateTime::now_utc() - at).whole_seconds().max(0))
+            .unwrap_or(0);
+        if state != RootStopState::Pending {
+            if elapsed >= 30 {
+                let _ = self.service.block_fresh_root_stop(run, "fresh_stop_unconfirmed",
+                    "The old supervisor's exact exit could not be confirmed. Its terminal was not closed again and no replacement was started.");
+            }
+            return;
+        }
+        if !fresh_root_close_target(self.herdr.as_ref(), run).await {
+            if elapsed >= 600 {
+                let _ = self.service.block_fresh_root_stop(run, "fresh_stop_unconfirmed",
+                    "The old supervisor could not be safely stopped. Its terminal was retained and no replacement was started.");
+            }
+            return;
+        }
+        if !matches!(self.service.transition_fresh_root_stop(run, RootStopState::Pending, RootStopState::Submitted), Ok(true)) {
+            return;
+        }
+        // Once Submitted is durable, only a definitive pre-dispatch refusal
+        // permits a later explicit retry. An uncertain effect is never replayed.
+        let refusal = if !fresh_root_close_target(self.herdr.as_ref(), run).await {
+            Some(("fresh_stop_identity_changed".to_owned(),
+                "The supervisor became busy or its terminal identity changed before close; nothing was closed.".to_owned()))
+        } else if let Some(location) = run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref()) {
+            match self.herdr.close_pane(&run.session_id, &location.endpoint_identity, &location.pane_id).await {
+                Err(error) if fresh_stop_definite_refusal(&error.code) => Some((error.code, error.message)),
+                _ => None,
+            }
+        } else {
+            Some(("fresh_stop_identity_changed".to_owned(), "The recorded terminal is unavailable; nothing was closed.".to_owned()))
+        };
+        if let Some((code, message)) = refusal {
+            if matches!(self.service.transition_fresh_root_stop(run, RootStopState::Submitted, RootStopState::Refused), Ok(true)) {
+                let _ = self.service.block_fresh_root_stop(run, &code, &message);
+            }
+            return;
+        }
+        let _ = self.service.transition_fresh_root_stop(run, RootStopState::Submitted, RootStopState::Unknown);
+        let observed = self.service.observe_root_resume(self.herdr.as_ref(), run).await;
+        if observed.root_main_recovery.is_some() && fresh_root_container_absent(self.herdr.as_ref(), run).await {
+            let _ = self.service.advance_resume_observed(&run.run_id, &resume.operation_id, &observed);
+        }
     }
 
     async fn step(&self, queued: &Run) -> Result<(), InspectionError> {
@@ -1977,6 +2053,72 @@ pub(super) fn automatic_recovery_available(run: &Run) -> bool {
         && (run.attachment.as_ref().and_then(|attachment| attachment.conversation.as_ref()).is_none() || recorded_process_stopped(run))
         && !run.annotations.iter().any(|a| matches!(a.by, cockpit_protocol::orchestration::ActorRef::Dispatcher)
             && a.text.starts_with(RECOVERY_ATTEMPT_ANNOTATION))
+}
+
+fn fresh_stop_definite_refusal(code: &str) -> bool {
+    matches!(code, "foreign_space_group_close_risk" | "confirmation_required"
+        | "stale_identity" | "request_not_dispatched" | "pane_not_found")
+}
+
+fn fresh_root_runtime_matches(runtime: &RuntimeView, location: &RunLocation, harness: &str) -> bool {
+    location.terminal_id.as_deref().is_some_and(|id| !id.is_empty())
+        && runtime.endpoint_identity == location.endpoint_identity
+        && location.boot_id.as_ref().is_none_or(|boot| runtime.boot_id.as_ref() == Some(boot))
+        && location.peer_process.as_ref().is_none_or(|peer| runtime.peer_process.as_ref() == Some(peer))
+        && runtime.panes.iter().filter(|pane| pane.tab_id == location.tab_id).count() == 1
+        && runtime.panes.iter().filter(|pane| pane.pane_id == location.pane_id
+            && pane.tab_id == location.tab_id && pane.workspace_id == location.workspace_id
+            && pane.terminal_id == location.terminal_id
+            && location.native_session_id.as_ref().is_none_or(|id| pane.native_session_id.as_ref() == Some(id))
+            && !pane.launch_pending && pane.agent_kind.as_deref() == Some(harness)
+            && matches!(pane.agent_status.as_deref(), Some("idle" | "done"))).count() == 1
+        && runtime.panes.iter().filter(|pane| pane.terminal_id == location.terminal_id).count() == 1
+}
+
+/// Confirm the exact recorded foreground process and exclusive pane around
+/// Herdr's process inspection. Labels alone never authorize a close.
+async fn fresh_root_close_target(herdr: &dyn OrchestrationHerdr, run: &Run) -> bool {
+    let Some(attachment) = run.attachment.as_ref() else { return false };
+    let Some(location) = attachment.location.as_ref() else { return false };
+    let Some(process) = attachment.process.as_ref() else { return false };
+    let Ok(pid) = i32::try_from(process.pid) else { return false };
+    if location.session_id != run.session_id || location.terminal_id.as_deref().is_none_or(str::is_empty)
+        || process.pid == 0 || process.start_ticks == 0
+        || process.kernel_boot_id.as_deref().is_none_or(str::is_empty)
+        || attachment.machine_id.as_deref().is_none_or(str::is_empty) {
+        return false;
+    }
+    let running = || matches!(crate::process_identity::same_machine_process_running(process, attachment.machine_id.as_deref()), Ok(true))
+        && matches!(crate::process_identity::incarnation_foreground(pid, process.start_ticks), Ok(true));
+    if !running() { return false; }
+    let Ok(runtime) = herdr.runtime(&run.session_id).await else { return false };
+    if !fresh_root_runtime_matches(&runtime, location, &run.launch_config.harness_kind) { return false; }
+    let Ok(info) = herdr.pane_process_info(&run.session_id, &location.endpoint_identity, &location.pane_id).await else { return false };
+    if info.pane_id != location.pane_id || info.foreground_pgid.is_none()
+        || !info.processes.iter().any(|(pid, _)| *pid == process.pid) || !running() {
+        return false;
+    }
+    let Ok(fresh) = herdr.runtime(&run.session_id).await else { return false };
+    fresh_root_runtime_matches(&fresh, location, &run.launch_config.harness_kind) && fresh.endpoint_identity == runtime.endpoint_identity
+        && fresh.boot_id == runtime.boot_id && fresh.peer_process == runtime.peer_process && running()
+}
+
+async fn fresh_root_container_absent(herdr: &dyn OrchestrationHerdr, run: &Run) -> bool {
+    let Some(location) = run.attachment.as_ref().and_then(|attachment| attachment.location.as_ref()) else { return false };
+    let Ok(runtime) = herdr.runtime(&run.session_id).await else { return false };
+    if runtime.endpoint_identity != location.endpoint_identity {
+        // The root observer independently validates the restored server and
+        // original process; this is not itself an exit proof.
+        return true;
+    }
+    if let Some(boot) = &location.boot_id {
+        match &runtime.boot_id {
+            Some(current) if current != boot => return true,
+            None => return false,
+            _ => {}
+        }
+    }
+    owned_launch_absent(&runtime, run)
 }
 
 /// Exact recorded ownership only; labels are deliberately irrelevant.

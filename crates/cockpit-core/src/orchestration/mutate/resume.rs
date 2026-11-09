@@ -439,8 +439,8 @@ pub(super) fn resume(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> 
         run_id: run_id.clone(), resume: ctx.state.runs[index].resume.clone().expect("resume installed"), duplicate: false,
     }}))
 }
-/// Explicit operator cutover fences only the root capability. It neither
-/// asserts process exit nor changes worker credentials or checkout claims.
+/// Journal a root-only cutover before any physical stop is attempted.
+/// The old attachment remains authoritative until exact exit is proved.
 pub(super) fn start_fresh_supervisor(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
     let OrchestrationAction::RunStartFreshSupervisor { run_id, operation_id, expected_attachment_epoch } = &action else { unreachable!() };
     if !matches!(ctx.actor, Actor::Operator(_)) {
@@ -456,46 +456,43 @@ pub(super) fn start_fresh_supervisor(ctx: &mut MutationCtx<'_>, action: Orchestr
         return Err(error("attachment_conflict", "Attachment epoch changed before fresh supervisor start"));
     }
     project_identity::admit_fresh_root(ctx.state, run)?;
-    let epoch = old.epoch.checked_add(1).filter(|n| *n <= MAX_SAFE_COUNTER)
-        .ok_or_else(|| error("orchestration_state_full", "Attachment epoch exhausted"))?;
-    let attempt = run.dispatch.as_ref().map(|d| d.launch_attempt).unwrap_or(old.launch_attempt).checked_add(1)
-        .ok_or_else(|| error("orchestration_state_full", "Launch attempt exhausted"))?;
+    if let Some(input) = ctx.resolved {
+        if let Some(proof) = input.root_main_recovery.as_ref() {
+            if proof.basis != claims::RootExitBasis::ExactIncarnation {
+                return Err(error("root_main_exit_unproven", "Fresh supervisor requires exact process exit proof"));
+            }
+            project_identity::revalidate_root_recovery(ctx.state, run, proof)?;
+        } else if input.fresh_root_idle {
+            let expected = input.root_attachment_expected.as_ref().ok_or_else(||
+                error("fresh_supervisor_observation_required", "Exact supervisor observation is missing"))?;
+            project_identity::revalidate_root_observation(ctx.state, run, expected)?;
+        }
+    }
+    if ctx.state.operations.iter().any(|operation| operation.run_id.as_deref() == Some(run_id.as_str())
+        && operation.effect_receipts.iter().any(|receipt| matches!(receipt,
+            DurableEffectReceipt::RootStop { attachment_id, attachment_epoch, state }
+                if attachment_id == &old.attachment_id && *attachment_epoch == old.epoch
+                    && matches!(state, super::super::store::RootStopState::Submitted | super::super::store::RootStopState::Unknown)))) {
+        return Err(error("fresh_supervisor_stop_unknown", "The previous stop may have been submitted. The original supervisor is protected until its exact exit is proven."));
+    }
     let previous_conversation = old.conversation.clone();
-    let receipts = effects(run);
-    let adopted_setup = if run.kind == RunKind::Adopted && run.dispatch.is_none() {
-        let checkout = run.checkout.as_ref().expect("admitted adopted checkout");
-        let location = old.location.as_ref().expect("admitted root location");
-        Some((checkout.clone(), location.workspace_id.clone(), old.launch_attempt))
-    } else { None };
+    let attachment_id = old.attachment_id.clone();
+    let mut receipts = effects(run);
+    receipts.push(DurableEffectReceipt::RootStop {
+        attachment_id, attachment_epoch: old.epoch, state: super::super::store::RootStopState::Pending,
+    });
     settle_current_resume(ctx.state, index);
-    for credential in &mut ctx.state.credentials {
-        if credential.run_id == *run_id { credential.state = credentials::CredentialState::Revoked; }
-    }
     let run = &mut ctx.state.runs[index];
-    run.attachment = Some(reserved_attachment(epoch, attempt));
-    if let Some((checkout, workspace_id, previous_attempt)) = adopted_setup {
-        run.target = Some(DispatchTarget::ExistingSpace { workspace_id: workspace_id.clone() });
-        run.setup = Some(SetupSummary {
-            operation_id: None, generation: None, workspace_id: Some(workspace_id),
-            checkout_path: checkout.path, repository_id: run.project.as_ref().and_then(|project| project.repository_id.clone()),
-            branch: None, base: None, base_commit: None, ownership: None,
-            effects: Vec::new(), warnings: Vec::new(), project_workspace_id: None,
-        });
-        let mut previous = dispatch(DispatchStep::Launched);
-        previous.launch_attempt = previous_attempt;
-        run.dispatch = Some(previous);
-    }
     let resume = ResumeRecord { operation_id: operation_id.clone(), run_id: run_id.clone(),
-        previous_attachment_epoch: Some(*expected_attachment_epoch), fresh_conversation: Some(true), previous_conversation, session_namespace: Some(id()),
-        phase: ResumePhase::Launching, cause: None, decision_id: None,
-        replacement_attachment_epoch: Some(epoch), updated_at: now() };
+        previous_attachment_epoch: Some(*expected_attachment_epoch), fresh_conversation: Some(true), previous_conversation,
+        session_namespace: Some(id()), phase: ResumePhase::Reconciling, cause: None, decision_id: None,
+        replacement_attachment_epoch: None, updated_at: now() };
     run.resume = Some(resume.clone());
     let root_id = run.root_id.clone();
     record(ctx, operation_id.clone(), DurableOperationKind::RunResume, &action, root_id,
-        OrchestrationActionResult::RunResumed { resume: RunResumeResult { run_id: run_id.clone(), resume, duplicate: false } }, receipts)?;
-    super::reviewed::reset_launch_metadata_after_resume(ctx.state, index)?;
+        OrchestrationActionResult::RunResumed { resume: RunResumeResult { run_id: run_id.clone(), resume: resume.clone(), duplicate: false } }, receipts)?;
     Ok(Applied::Machine(OrchestrationActionResult::RunResumed { resume: RunResumeResult {
-        run_id: run_id.clone(), resume: ctx.state.runs[index].resume.clone().expect("resume installed"), duplicate: false,
+        run_id: run_id.clone(), resume, duplicate: false,
     }}))
 }
 
@@ -505,6 +502,12 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
     }
     if state.runs[index].resume.as_ref().is_some_and(|r| r.phase == ResumePhase::Launching)
         && resolved.is_none_or(|r| r.attachment_observation.is_none()) {
+        return Ok(());
+    }
+    let fresh_cutover = state.runs[index].resume.as_ref().is_some_and(|r|
+        r.fresh_conversation == Some(true) && matches!(r.phase, ResumePhase::Reconciling | ResumePhase::Blocked)
+            && r.replacement_attachment_epoch.is_none());
+    if fresh_cutover && resolved.is_some_and(|r| r.attachment_observation.is_some()) {
         return Ok(());
     }
     let observed = resolved.and_then(|r| r.attachment_observation.as_ref());
@@ -586,8 +589,15 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
             return block(state, index, "resume_effect_unknown", "Unsettled setup must be reconciled before replacement");
         }
         let current = state.runs[index].attachment.as_ref().ok_or_else(|| error("writer_exit_unproven", "No recorded incarnation to replace"))?;
-        if current.conversation.is_some() && !dispatch::resume_supported(&state.runs[index].launch_config) {
+        if !fresh_cutover && current.conversation.is_some() && !dispatch::resume_supported(&state.runs[index].launch_config) {
             return block(state, index, "harness_resume_unsupported", "The configured harness has no same-conversation resume arguments; the existing attachment is preserved");
+        }
+        if fresh_cutover && !state.operations.iter().any(|operation| operation.operation_id == operation_id
+            && operation.run_id.as_deref() == Some(state.runs[index].run_id.as_str())
+            && operation.effect_receipts.iter().any(|receipt| matches!(receipt,
+                DurableEffectReceipt::RootStop { attachment_id, attachment_epoch, .. }
+                    if attachment_id == &current.attachment_id && *attachment_epoch == current.epoch))) {
+            return Err(error("operation_conflict", "Fresh supervisor stop intent no longer matches the attachment"));
         }
         let receipts = effects(&state.runs[index]);
         // An unregistered initial direct launch has no saved conversation to
@@ -605,6 +615,9 @@ pub(super) fn apply_observation(state: &mut OrchestrationState, index: usize, op
             claims::revoke_and_reserve_replacement(state, &claim_id, writer_proof.expect("worker proof validated"), replacement, operation_id)?;
         } else {
             claims::revoke_root_and_reserve_replacement(state, root_proof.expect("root proof validated"), replacement, operation_id)?;
+            if fresh_cutover {
+                state.runs[index].attachment.as_mut().expect("replacement reserved").conversation = None;
+            }
             if state.runs[index].kind == RunKind::Adopted && state.runs[index].dispatch.is_none() {
                 // The observer verified the retained physical checkout and
                 // existing Space before revocation. No setup/ownership effect
@@ -683,6 +696,77 @@ pub(super) fn attach(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> 
 }
 
 impl OrchestrationService {
+    pub(crate) fn fresh_root_stop_state(&self, expected: &Run) -> Result<Option<super::super::store::RootStopState>, InspectionError> {
+        let locked = self.store.lock()?;
+        let state = locked.read_shared()?;
+        let run = &state.runs[scoped_index(&state, &expected.session_id, &expected.run_id)?];
+        let Some(resume) = run.resume.as_ref().filter(|r| r.fresh_conversation == Some(true)
+            && matches!(r.phase, ResumePhase::Reconciling | ResumePhase::Blocked) && r.replacement_attachment_epoch.is_none()) else { return Ok(None) };
+        let Some(old) = run.attachment.as_ref() else { return Ok(None) };
+        if expected.resume.as_ref().map(|r| &r.operation_id) != Some(&resume.operation_id)
+            || expected.attachment.as_ref().is_none_or(|a| !project_identity::same_root_attachment(a, old)) {
+            return Ok(None);
+        }
+        Ok(state.operations.iter().find(|op| op.operation_id == resume.operation_id && op.run_id.as_deref() == Some(run.run_id.as_str()))
+            .and_then(|op| op.effect_receipts.iter().find_map(|receipt| match receipt {
+                DurableEffectReceipt::RootStop { attachment_id, attachment_epoch, state }
+                    if attachment_id == &old.attachment_id && *attachment_epoch == old.epoch => Some(*state),
+                _ => None,
+            })))
+    }
+
+    pub(crate) fn transition_fresh_root_stop(&self, expected: &Run, from: super::super::store::RootStopState,
+        to: super::super::store::RootStopState) -> Result<bool, InspectionError> {
+        use super::super::store::RootStopState;
+        if !matches!((from, to), (RootStopState::Pending, RootStopState::Submitted)
+            | (RootStopState::Submitted, RootStopState::Unknown | RootStopState::Refused)) {
+            return Err(error("operation_conflict", "Invalid fresh supervisor stop transition"));
+        }
+        let locked = self.store.lock()?;
+        let mut state = locked.read()?;
+        let run = &state.runs[scoped_index(&state, &expected.session_id, &expected.run_id)?];
+        let Some(resume) = run.resume.as_ref().filter(|r| r.fresh_conversation == Some(true)
+            && r.phase == ResumePhase::Reconciling && r.replacement_attachment_epoch.is_none()) else { return Ok(false) };
+        let Some(old) = run.attachment.as_ref() else { return Ok(false) };
+        if expected.resume.as_ref().map(|r| &r.operation_id) != Some(&resume.operation_id)
+            || expected.attachment.as_ref().is_none_or(|a| !project_identity::same_root_attachment(a, old)) {
+            return Ok(false);
+        }
+        let operation_id = resume.operation_id.clone();
+        let attachment_id = old.attachment_id.clone();
+        let epoch = old.epoch;
+        let Some(receipt) = state.operations.iter_mut().find(|op| op.operation_id == operation_id && op.run_id.as_deref() == Some(expected.run_id.as_str()))
+            .and_then(|op| op.effect_receipts.iter_mut().find(|receipt| matches!(receipt,
+                DurableEffectReceipt::RootStop { attachment_id: id, attachment_epoch, state }
+                    if id == &attachment_id && *attachment_epoch == epoch && *state == from))) else { return Ok(false) };
+        if let DurableEffectReceipt::RootStop { state, .. } = receipt { *state = to; }
+        if to == RootStopState::Submitted {
+            let index = scoped_index(&state, &expected.session_id, &expected.run_id)?;
+            state.runs[index].resume.as_mut().expect("matched resume").updated_at = now();
+        }
+        let revision = locked.save(&mut state)?;
+        self.revision.send_replace(revision);
+        Ok(true)
+    }
+
+    pub(crate) fn block_fresh_root_stop(&self, expected: &Run, code: &str, message: &str) -> Result<bool, InspectionError> {
+        let locked = self.store.lock()?;
+        let mut state = locked.read()?;
+        let index = scoped_index(&state, &expected.session_id, &expected.run_id)?;
+        let run = &state.runs[index];
+        let Some(resume) = run.resume.as_ref().filter(|r| r.fresh_conversation == Some(true)
+            && r.phase == ResumePhase::Reconciling && r.replacement_attachment_epoch.is_none()) else { return Ok(false) };
+        if expected.resume.as_ref().map(|r| &r.operation_id) != Some(&resume.operation_id)
+            || expected.attachment.as_ref().zip(run.attachment.as_ref()).is_none_or(|(a, b)|
+                !project_identity::same_root_attachment(a, b)) {
+            return Ok(false);
+        }
+        block(&mut state, index, code, message)?;
+        let revision = locked.save(&mut state)?;
+        self.revision.send_replace(revision);
+        Ok(true)
+    }
+
     /// Operator-only bootstrap transport, scoped to the exact borrowed placement.
     pub fn job_adoption_credential_file(&self, actor: &Actor, session_id: &str, run_id: &str, location: &RunLocation) -> Result<std::path::PathBuf, InspectionError> {
         operator(actor)?;

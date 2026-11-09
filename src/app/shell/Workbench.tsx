@@ -223,7 +223,7 @@ export function Workbench(props: WorkbenchProps) {
   const commandActions = buildCommands({
     herdr: { commands: shell?.commands ?? [], prefixes: customPrefixes, reason: input.customCommandReason, popupOpen: Boolean(popup) },
     view: runtime, libraryOpen, notesOpen, browser: { open: browserOpen, reason: browserReason },
-    liaison: { label: liaisonLabel, reason: liaisonReason, overviewAvailable: liaison.tasks.some(task => !task.task.checked), overviewOpen },
+    liaison: { label: liaisonLabel, reason: liaisonReason, overviewAvailable: liaison.tasks.some(task => !task.task.checked), overviewOpen, freshConversationVisible: liaison.freshConversationVisible, freshConversationReason: liaison.freshConversationReason },
     git: { target, status, pending: gitActions.forStatus(status), blocked: gitBlocked },
     tags: { blocked: runtime.spaceTags.editBlocked },
     widgets: { pending: widgetsPending, dockTabId: tabLayout?.viewers.widget ? tabLayout.tabId : null, list: widgets.widgets(ctx.sessionId) },
@@ -231,7 +231,7 @@ export function Workbench(props: WorkbenchProps) {
     power: { stayAwake: power.enabled, toggleStayAwake: power.available ? power.toggle : undefined, turnScreenOff: power.screenOffAvailable ? power.screenOff : undefined },
     sendToIdleAgents: () => setSendAgentsOpen(true),
     run: {
-      herdr: input.runHerdrCommand, prefix: input.runCommand, liaison: toggleLiaison, overview: () => { if (!overviewOpen) openOverview(); else { closeOverview(); if (props.selection.paneId !== liaison.paneId && liaison.startAvailable) void liaison.start(); } }, git: runGitAction,
+      herdr: input.runHerdrCommand, prefix: input.runCommand, liaison: toggleLiaison, freshConversation: liaison.activateFresh, overview: () => { if (!overviewOpen) openOverview(); else { closeOverview(); if (props.selection.paneId !== liaison.paneId && liaison.startAvailable) void liaison.start(); } }, git: runGitAction,
       recovery: () => setRecoveryOpen(true), toggleNotes: notesOpen ? closeNotes : openNotes, openBrowser: actions.openBrowser,
       askAgent: () => runtime.setAskOpen(true),
       editSpaceTags: () => { if (runtime.selectedSpace) runtime.requestTagEditor(runtime.selectedSpace.id); },

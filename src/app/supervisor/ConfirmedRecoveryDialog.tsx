@@ -8,9 +8,9 @@ import "./confirmedRecovery.css";
 
 export function ConfirmedRecoveryDialog({ recovery }: { recovery: ConfirmedRecovery }) {
   const titleId = useId(), bodyId = useId();
-  const [view, setView] = useState<"options" | "stopped" | "fresh">("options");
+  const [view, setView] = useState<"options" | "stopped" | "fresh">(recovery.source === "fresh" || recovery.pendingAction === "fresh" ? "fresh" : "options");
   const safeRef = useRef<HTMLButtonElement>(null), confirmRef = useRef<HTMLButtonElement>(null);
-  const back = () => { if (recovery.busy) return; if (view === "options" || recovery.retry) recovery.close(); else setView("options"); };
+  const back = () => { if (recovery.busy) return; if (view === "options" || recovery.retry || recovery.source === "fresh") recovery.close(); else setView("options"); };
   useRestoreFocus();
   useEffect(() => { safeRef.current?.focus(); }, [view]);
   useEffect(() => { if (recovery.busy) confirmRef.current?.focus(); }, [recovery.busy]);
@@ -23,17 +23,18 @@ export function ConfirmedRecoveryDialog({ recovery }: { recovery: ConfirmedRecov
           <p className="confirmed-recovery-lead">Continue only after you have stopped the old supervisor and all processes it started, and closed its terminal.</p>
           <p className="confirmed-recovery-fine">Tasks and history stay. Cockpit checks that the old terminal is absent; it cannot verify that those processes stopped.</p>
         </> : view === "fresh" ? <>
-          <p className="confirmed-recovery-lead">Start a new conversation with your existing tasks and history.</p>
-          <p className="confirmed-recovery-fine">The old terminal stays open. Its supervisor's Cockpit credential will no longer work; you can close the terminal yourself.</p>
+          <p className="confirmed-recovery-lead">Start a new conversation with your existing tasks, history and workers.</p>
+          <p className="confirmed-recovery-fine">The current supervisor terminal will close, and unsent input will be lost. Cockpit starts the new conversation only after it can confirm the supervisor has stopped.</p>
+          {recovery.waiting ? <p className="confirmed-recovery-fine">The supervisor is waiting for your answer. Review it before starting a new conversation.</p> : null}
         </> : <>
           <p className="confirmed-recovery-lead">The previous supervisor may still be running. Your tasks and history are kept.</p>
-          <p className="confirmed-recovery-fine">{recovery.freshAvailable ? "Retry the saved conversation, or start a new one without closing the old terminal." : "Retry the saved conversation after checking the old supervisor and terminal."}</p>
+          <p className="confirmed-recovery-fine">{recovery.freshAvailable ? "Retry the saved conversation, or start a new one after Cockpit confirms the old supervisor has stopped." : "Retry the saved conversation after checking the old supervisor and terminal."}</p>
           {recovery.stopConfirmable && !recovery.retry ? <button type="button" onClick={() => setView("stopped")}>I've stopped it myself…</button> : null}
         </>}
       </div></div>
       <footer className="task-setup-footer">
         <ErrorSlot placement="dialog" message={recovery.message} error={recovery.error} />
-        <button ref={safeRef} type="button" disabled={recovery.busy} onClick={back}>{view === "options" || recovery.retry ? "Cancel" : "Back"}</button>
+        <button ref={safeRef} type="button" disabled={recovery.busy} onClick={back}>{view === "options" || recovery.retry || recovery.source === "fresh" ? "Cancel" : "Back"}</button>
         {view === "options" && !recovery.retry && recovery.freshAvailable ? <button type="button" disabled={unavailable} onClick={() => setView("fresh")}>Start new conversation (tasks kept)</button> : null}
         <button ref={confirmRef} type="button" className="setup-primary" aria-disabled={unavailable} onClick={() => {
           if (unavailable) return;

@@ -1625,6 +1625,25 @@ describe("liaison conversation and compact task rail", () => {
     if (first.action !== "run_resume" || last.action !== "run_resume") throw new Error("Expected root resume");
     expect(last.operation_id).not.toBe(first.operation_id);
   });
+  it("confirms a new conversation for a connected supervisor and retries an uncertain request", async () => {
+    const fixture = new AppFixture();
+    const current = orchestrationFixture([taskFixture("Existing work")]);
+    bindLiaison(fixture, () => current, () => ({ fresh_available: true }));
+    vi.mocked(fixture.client.orchestrationMutate).mockRejectedValue(new Error("Response lost"));
+    await mount(fixture);
+    await openCommand("New supervisor conversation"); await settle();
+    expect(recoveryButton("Cancel")).toBe(document.activeElement);
+    click(recoveryButton("Cancel")); await settle();
+    expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
+    await openCommand("New supervisor conversation"); await settle();
+    click(recoveryButton("Start new conversation")); await settle();
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).toContain("No answer yet");
+    click(recoveryButton("Start new conversation")); await settle();
+    const actions = vi.mocked(fixture.client.orchestrationMutate).mock.calls.map(([request]) => request.action);
+    expect(actions).toHaveLength(2);
+    expect(actions[0]).toEqual({ action: "run_start_fresh_supervisor", run_id: "root", operation_id: expect.any(String), expected_attachment_epoch: 1 });
+    expect(actions[1]).toEqual(actions[0]);
+  });
   it("retries a fresh conversation with the same identity after an unknown result and keeps tasks", async () => {
     const fixture = new AppFixture();
     const task = taskFixture("Existing work");
@@ -1645,7 +1664,7 @@ describe("liaison conversation and compact task rail", () => {
     expect(document.body.querySelector(".confirmed-recovery")?.textContent).toContain("Your tasks and history are kept");
     expect(recoveryButton("I've stopped it myself…")).toBeTruthy();
     click(recoveryButton("Start new conversation (tasks kept)")); await settle();
-    expect(document.body.querySelector(".confirmed-recovery")?.textContent).toContain("Start a new conversation with your existing tasks and history");
+    expect(document.body.querySelector(".confirmed-recovery")?.textContent).toContain("Start a new conversation with your existing tasks, history and workers");
     expect(fixture.client.orchestrationMutate).not.toHaveBeenCalled();
     click(recoveryButton("Start new conversation")); await settle();
     expect(document.body.querySelector(".confirmed-recovery")?.textContent).toContain("No answer yet. Retrying sends the same request.");

@@ -353,7 +353,7 @@ impl Context {
         }
         self.check_caller().await?;
         let mut input = if matches!(&request.action,
-            OrchestrationAction::SupervisorStart { .. } | OrchestrationAction::RunResume { .. }
+            OrchestrationAction::SupervisorStart { .. } | OrchestrationAction::RunResume { .. } | OrchestrationAction::RunStartFreshSupervisor { .. }
                 | OrchestrationAction::WorkerStart { .. } | OrchestrationAction::WorkerReplace { .. }
                 | OrchestrationAction::ResourceRegister { .. } | OrchestrationAction::ThreadHandoff { .. })
         {

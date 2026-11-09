@@ -63,9 +63,9 @@ function taskAttention(snapshot: OrchestrationSnapshot | null, rootId: string | 
 }
 
 /** Optional overview; the normal terminal remains mounted as the conversation. */
-export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot, rootId, fresh }: {
+export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot, rootId, fresh, onFreshConversation, freshConversationReason }: {
   tasks: readonly TaskView[]; runs: readonly Run[]; waiting: boolean; status: string | null; onClose(): void;
-  snapshot: OrchestrationSnapshot | null; rootId: string | null; fresh: boolean;
+  snapshot: OrchestrationSnapshot | null; rootId: string | null; fresh: boolean; onFreshConversation?(): void; freshConversationReason?: string | null;
 }) {
   const [mode, setMode] = useState<"tasks" | "graph">("tasks");
   const [project, setProject] = useState<string | null>(null);
@@ -129,7 +129,7 @@ export function SupervisorView({ tasks, runs, waiting, status, onClose, snapshot
   }).join(" · ");
   return <section ref={overview} className="liaison-task-overview" aria-label="Task overview" onFocusCapture={event => { lastFocused.current = event.target as HTMLElement; }}
     onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (selected) goBack(); else onClose(); } }}>
-    <header><button type="button" className="liaison-conversation" ref={conversation} onClick={onClose}>‹ Conversation</button><h1>Overview</h1><div role="group" aria-label="Overview view"><button type="button" aria-pressed={mode === "tasks"} onClick={() => setMode("tasks")}>Board</button><button type="button" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>Graph</button></div><span className={waiting ? "liaison-waiting" : "liaison-task-status"}>{waiting ? "● waiting for you" : status ?? summary}</span></header>
+    <header><button type="button" className="liaison-conversation" ref={conversation} onClick={onClose}>‹ Conversation</button><h1>Overview</h1><div role="group" aria-label="Overview view"><button type="button" aria-pressed={mode === "tasks"} onClick={() => setMode("tasks")}>Board</button><button type="button" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>Graph</button></div>{onFreshConversation ? <button type="button" title={freshConversationReason ?? "New supervisor conversation"} disabled={!!freshConversationReason} onClick={onFreshConversation}>New conversation</button> : null}<span className={waiting ? "liaison-waiting" : "liaison-task-status"}>{waiting ? "● waiting for you" : status ?? summary}</span></header>
     <div className="liaison-overview-body">
       <div className="liaison-overview-content">
         {attention.length || snapshot && (!fresh || snapshot.runtime.status !== "fresh") ? <section className="liaison-attention" aria-label="Task attention">

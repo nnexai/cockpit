@@ -146,6 +146,7 @@ pub(crate) enum DurableEffectReceipt {
     Launch { attachment_id: String, attachment_epoch: u64, dispatch: cockpit_protocol::orchestration::DispatchState },
     Setup { setup: cockpit_protocol::orchestration::SetupSummary },
     ReselectedSpace { workspace_id: String, endpoint_identity: String, boot: String, attachment_id: String, attachment_epoch: u64 },
+    RootStop { attachment_id: String, attachment_epoch: u64, state: RootStopState },
     Stop { retirement: cockpit_protocol::orchestration::RunRetirement },
     ScopeRelease { unit: String, invocation_id: String, claim_id: String, outcome: ScopeReleaseOutcome },
     /// Semantic origin of a scheduled implicit borrow, not a physical effect.
@@ -155,6 +156,10 @@ pub(crate) enum DurableEffectReceipt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ScopeReleaseOutcome { Intent, Stopped, Drained, Released, Unknown }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RootStopState { Pending, Submitted, Unknown, Refused }
 
 impl Default for OrchestrationState {
     fn default() -> Self {
