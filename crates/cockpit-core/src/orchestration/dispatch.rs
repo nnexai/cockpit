@@ -170,7 +170,17 @@ struct DispatchPass {
     has_hints: bool,
     cleanup_ref_paths: Vec<PathBuf>,
     cleanup_ref_noop: bool,
+    has_queued_resources: bool,
+    has_active_schedules: bool,
 }
+impl DispatchPass {
+    fn stall_hints(&self) -> (bool, bool) {
+        // Recovery and scheduling can mutate state after this snapshot.
+        let quiescent = !self.pending_recovery && self.schedules.as_ref().is_some_and(Vec::is_empty);
+        (quiescent && !self.has_queued_resources, quiescent && !self.has_active_schedules)
+    }
+}
+
 
 impl OrchestrationService {
     #[cfg(test)]
@@ -201,6 +211,11 @@ impl OrchestrationService {
                     && run.launch_config.inbox_prompt_hints && super::launch_receipt_coherent(run)),
             cleanup_ref_paths: super::cleanup::cleanup_ref_paths(&state),
             cleanup_ref_noop: false,
+            has_queued_resources: state.resource_requests.iter().any(|request|
+                request.state == cockpit_protocol::orchestration::ResourceRequestState::Queued),
+            has_active_schedules: state.task_ownership.iter().any(|owner| owner.schedule.is_some()
+                && state.runs.iter().any(|root| root.run_id == owner.root_id
+                    && root.run_id == root.root_id && root.stage == RunStage::Active)),
         };
         for run in &state.runs {
             if run.stage != RunStage::Closed {
@@ -427,7 +442,7 @@ impl Dispatcher {
                 }
                 let pass = dispatcher.service.dispatch_pass_for(dispatcher.settings.max_parallel, &capacity_projects,
                     pass_kind == PassKind::Refs);
-                let (queue, retirements, observation_sessions, observation_runs, schedules, has_hints, cleanup_ref_noop) = match pass {
+                let (queue, retirements, observation_sessions, observation_runs, schedules, has_hints, cleanup_ref_noop, stall_hints) = match pass {
                     Ok(pass) => {
                         if last_revision.is_some_and(|revision| revision != pass.revision) || pass.pending_recovery {
                             pass_kind = PassKind::Full;
@@ -439,12 +454,13 @@ impl Dispatcher {
                             watcher_retry = Some(tokio::time::Instant::now() + watcher_backoff);
                         }
                         if pass.pending_recovery { let _ = dispatcher.service.recover_intents(); }
+                        let stall_hints = pass.stall_hints();
                         (Some(pass.dispatch), pass.retirements, Some(pass.observation_sessions),
-                            pass.observation_runs, pass.schedules, pass.has_hints, pass.cleanup_ref_noop)
+                            pass.observation_runs, pass.schedules, pass.has_hints, pass.cleanup_ref_noop, stall_hints)
                     }
                     Err(_) => {
                         pass_kind = PassKind::Full;
-                        (None, Vec::new(), None, Vec::new(), None, false, false)
+                        (None, Vec::new(), None, Vec::new(), None, false, false, (false, false))
                     }
                 };
                 // This hint only suppresses a ref observer; it never authorizes
@@ -473,10 +489,8 @@ impl Dispatcher {
                         }
                 }
                 if pass_kind == PassKind::Full {
-                stall_deadline = dispatcher.service.resource_stall_delay().ok().flatten()
-                    .map(|delay| tokio::time::Instant::now() + delay);
-                capacity_deadline = dispatcher.service.capacity_stalls(
-                    dispatcher.settings.max_parallel, &capacity_projects, &mut capacity_waits).ok().flatten();
+                (stall_deadline, capacity_deadline) = dispatcher.service.stall_deadlines(
+                    dispatcher.settings.max_parallel, &capacity_projects, &mut capacity_waits, stall_hints);
                 if let Some(queue) = queue {
                     deadlines.clear();
                     for run in queue {
@@ -2929,6 +2943,23 @@ pub(super) fn stall_project_label(project: &cockpit_protocol::orchestration::Pro
 }
 
 impl OrchestrationService {
+    // Negative hints only avoid reads. Every possible stall still takes the
+    // fresh locked path that computes deadlines and publishes notices.
+    fn stall_deadlines(&self, max: u32, projects: &BTreeMap<String, (String, String)>,
+        waits: &mut BTreeMap<String, tokio::time::Instant>, no_work: (bool, bool))
+        -> (Option<tokio::time::Instant>, Option<tokio::time::Instant>) {
+        let resource = if no_work.0 { None } else {
+            self.resource_stall_delay().ok().flatten().map(|delay| tokio::time::Instant::now() + delay)
+        };
+        let capacity = if no_work.1 {
+            waits.clear();
+            None
+        } else {
+            self.capacity_stalls(max, projects, waits).ok().flatten()
+        };
+        (resource, capacity)
+    }
+
     fn capacity_full(&self, session: &str, key: &str, max: u32) -> Result<bool, InspectionError> {
         let locked = self.store.lock()?;
         let state = locked.read_shared()?;

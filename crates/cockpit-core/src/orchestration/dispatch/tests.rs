@@ -413,6 +413,11 @@ fn queued_resource_stall_waits_ten_minutes_and_notifies_once() {
     fixture.worker_task(None);
     let run = fixture.current().1;
     let attachment = run.attachment.as_ref().unwrap();
+    let projects = BTreeMap::new();
+    let mut waits = BTreeMap::new();
+    let hints = fixture.service.dispatch_pass(4, &projects).unwrap().stall_hints();
+    assert!(hints.0);
+    assert!(fixture.service.stall_deadlines(4, &projects, &mut waits, hints).0.is_none());
     let locked = fixture.service.store.lock().unwrap();
     let mut state = locked.read().unwrap();
     state.resource_requests.push(ResourceRequestRecord {
@@ -425,17 +430,29 @@ fn queued_resource_stall_waits_ten_minutes_and_notifies_once() {
     });
     locked.save(&mut state).unwrap();
     drop(locked);
-    assert!(fixture.service.resource_stall_delay().unwrap().is_some());
+    let hints = fixture.service.dispatch_pass(4, &projects).unwrap().stall_hints();
+    assert!(!hints.0);
+    assert!(fixture.service.stall_deadlines(4, &projects, &mut waits, hints).0.is_some());
     assert!(fixture.service.store.lock().unwrap().read().unwrap().messages.is_empty());
     let locked = fixture.service.store.lock().unwrap();
     let mut state = locked.read().unwrap();
     state.resource_requests[0].updated_at = "2000-01-01T00:00:00Z".into();
     locked.save(&mut state).unwrap();
     drop(locked);
-    assert!(fixture.service.resource_stall_delay().unwrap().is_none());
-    fixture.service.resource_stall_delay().unwrap();
+    let hints = fixture.service.dispatch_pass(4, &projects).unwrap().stall_hints();
+    assert!(fixture.service.stall_deadlines(4, &projects, &mut waits, hints).0.is_none());
+    fixture.service.stall_deadlines(4, &projects, &mut waits, hints);
     let state = fixture.service.store.lock().unwrap().read().unwrap();
     assert_eq!(state.messages.iter().filter(|m| m.message_id.starts_with("resource-stall:")).count(), 1);
+    drop(state);
+    let locked = fixture.service.store.lock().unwrap();
+    let mut state = locked.read().unwrap();
+    state.resource_requests.clear();
+    locked.save(&mut state).unwrap();
+    drop(locked);
+    let hints = fixture.service.dispatch_pass(4, &projects).unwrap().stall_hints();
+    assert!(hints.0);
+    assert!(fixture.service.stall_deadlines(4, &projects, &mut waits, hints).0.is_none());
 }
 
 struct ReviewFixture {
@@ -3466,6 +3483,27 @@ async fn schedule_hold_is_durable_deduplicated_and_cleared_on_launch() {
 #[tokio::test]
 async fn capacity_stall_is_delayed_and_deduplicated() {
     let (fixture, dispatcher) = path_schedule_fixture("git").await;
+    let saved_schedules = {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let saved: Vec<_> = state.task_ownership.iter_mut().filter_map(|owner|
+            owner.schedule.take().map(|schedule| (owner.task_id.clone(), schedule))).collect();
+        locked.save(&mut state).unwrap();
+        saved
+    };
+    let mut waits = BTreeMap::from([("obsolete".to_string(), tokio::time::Instant::now())]);
+    let hints = fixture.service.dispatch_pass(1, &BTreeMap::new()).unwrap().stall_hints();
+    assert!(hints.1);
+    assert!(fixture.service.stall_deadlines(1, &BTreeMap::new(), &mut waits, hints).1.is_none());
+    assert!(waits.is_empty());
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        for (task_id, schedule) in saved_schedules {
+            state.task_ownership.iter_mut().find(|owner| owner.task_id == task_id).unwrap().schedule = Some(schedule);
+        }
+        locked.save(&mut state).unwrap();
+    }
     let candidates = fixture.service.schedule_candidates(4).unwrap();
     let first = dispatcher.resolve_schedule_target(&candidates[0]).await.unwrap();
     let second = dispatcher.resolve_schedule_target(&candidates[1]).await.unwrap();
@@ -3473,15 +3511,27 @@ async fn capacity_stall_is_delayed_and_deduplicated() {
     let projects = BTreeMap::from([(candidates[1].schedule.operation_id.clone(),
         (project.key.clone(), project.repository_id.clone().unwrap_or_else(|| "Project".into())))]);
     fixture.service.scheduled_start(&candidates[0], &first).unwrap().unwrap();
-    let mut waits = BTreeMap::new();
-    let deadline = fixture.service.capacity_stalls(1, &projects, &mut waits).unwrap().unwrap();
+    let hints = fixture.service.dispatch_pass(1, &projects).unwrap().stall_hints();
+    assert!(!hints.1);
+    let deadline = fixture.service.stall_deadlines(1, &projects, &mut waits, hints).1.unwrap();
     assert!(deadline > tokio::time::Instant::now());
     assert!(!fixture.service.store.lock().unwrap().read().unwrap().messages.iter().any(|m| m.message_id.starts_with("capacity-stall:")));
     for value in waits.values_mut() { *value = tokio::time::Instant::now(); }
-    fixture.service.capacity_stalls(1, &projects, &mut waits).unwrap();
-    fixture.service.capacity_stalls(1, &projects, &mut waits).unwrap();
+    fixture.service.stall_deadlines(1, &projects, &mut waits, hints);
+    fixture.service.stall_deadlines(1, &projects, &mut waits, hints);
     let state = fixture.service.store.lock().unwrap().read().unwrap();
     assert_eq!(state.messages.iter().filter(|m| m.message_id.starts_with("capacity-stall:")).count(), 1);
+    drop(state);
+    waits.insert("obsolete-after-removal".into(), tokio::time::Instant::now());
+    let locked = fixture.service.store.lock().unwrap();
+    let mut state = locked.read().unwrap();
+    for owner in &mut state.task_ownership { owner.schedule = None; }
+    locked.save(&mut state).unwrap();
+    drop(locked);
+    let hints = fixture.service.dispatch_pass(1, &projects).unwrap().stall_hints();
+    assert!(hints.1);
+    assert!(fixture.service.stall_deadlines(1, &projects, &mut waits, hints).1.is_none());
+    assert!(waits.is_empty());
 }
 
 #[tokio::test]
