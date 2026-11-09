@@ -189,7 +189,22 @@ fn mark_non_code_accepted(run: &mut Run) {
 impl OrchestrationService {
     pub(crate) fn recover_intents(&self) -> Result<(), InspectionError> {
         let locked = self.store.lock()?;
-        let mut state = locked.read()?;
+        let shared = locked.read_shared()?;
+        if shared.assignment_intents.is_empty()
+            && shared.scope_intents.is_empty()
+            && shared.continue_intents.is_empty()
+            && shared.task_intents.is_empty()
+        {
+            self.revision.send_if_modified(|revision| {
+                if *revision == shared.revision {
+                    return false;
+                }
+                *revision = shared.revision;
+                true
+            });
+            return Ok(());
+        }
+        let mut state = locked.into_owned_state(shared);
         let assignment_recovery = assignments::recover(&locked, &mut state);
         // Publish committed recovery (including before an error) or externally
         // changed state, but do not wake the dispatcher for an unchanged revision.

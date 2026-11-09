@@ -2,6 +2,17 @@
 
 These are historical observations, not proof of the current checkout. Each named original source occurrence is reproduced verbatim, including mixed current-rule/result paragraphs, obsolete wording, dates and limitations. Current architecture, rules and source owners live in the root documents. Undated cohorts retain source context rather than an invented run date.
 
+## Backend orchestration CPU investigation (2026-11-09)
+
+The running backend averaged 33.07% of one core over 181.14 seconds while workers were active; this is not an idle-only measurement. A read-only observation saw 489 opens of an unchanged 8.4 MB orchestration state file in eight seconds. In a disposable fixture with an inert synthetic active root and 9.39 MB state, 62 workspace renames triggered 539 state opens in eight seconds; compilation overlapped, so that cohort is not valid CPU evidence. Cached-read `rchar` is not physical disk traffic. The precise live wake source was not proven, and the default empty fixture cannot represent the persistent state.
+
+An initial candidate made two stall checks avoid cloning the whole decoded state unless they appended a notice. Its A/B/B/A disposable 181-second idle cohorts each recorded zero state opens and 0.127–0.144% of one core, but compilers overlapped every idle window, so these are observational rather than admitted CPU comparisons. Two compiler-free 30-second rename bursts used 87.87% baseline and 88.77% candidate CPU with different completed event counts; those results do not establish a CPU reduction. All fixture lifecycle stops joined recorded processes, but exhaustive cleanup remained unknown because of protected `/proc` entries and unproven escaped consumers.
+
+The expanded candidate also avoids no-work recovery and disabled hint processing while retaining current-byte validation under the lock, save fencing and revision publication. Focused release tests passed 75 cases across stall, recovery, hint, owned/shared-state and stale-generation filters, including the disabled-hint interrupted-submission transition. Independent high-severity review found no findings. A genuine unchanged 30-second disposable wait returned unchanged without spinning.
+
+With the expanded candidate, a paced A/B/B/A fixture comparison recorded baseline burst CPU of 27.40% and 30.63% versus candidate 27.23% and 21.23%, with 56–57 acknowledged renames per 30-second window. Every window overlapped observed compiler processes, so these are not admitted causal savings. The candidate's 181-second idle window recorded 0.127% CPU and zero state opens, also with compiler overlap. Fixture state had 50 synthetic runs and 2,000 synthetic messages, with one active root but no live agent attachment; these results do not prove the persistent backend is idle or fixed. Evidence: `/home/nnex/.cache/cockpit-idle-4c540808/workload-active-rename-cpol-{nprtgvrq,ex5yo9yc,158fd3qv,6ecvjyf0}.json`. No installed process was restarted or replaced.
+
+
 ## Mobile first-frame terminal sizing correction (2026-11-01)
 
 The user reported that physical Chrome phone scrolling and keyboard visibility still failed after the earlier mobile delivery. The earlier keyboard geometry check measured the Inbox composer, not the OMP terminal prompt; it was not physical IME acceptance.

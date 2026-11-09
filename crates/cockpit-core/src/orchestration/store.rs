@@ -453,6 +453,18 @@ impl LockedStore<'_> {
         Ok(state)
     }
 
+    pub(crate) fn into_owned_state(&self, state: Arc<OrchestrationState>) -> OrchestrationState {
+        {
+            let mut decoded = self.store.decoded.lock().unwrap_or_else(|error| error.into_inner());
+            if decoded.as_ref().is_some_and(|cached| Arc::ptr_eq(&cached.state, &state))
+                && Arc::strong_count(&state) == 2 {
+                // Release the cache's reference so a cold mutation can avoid a deep clone.
+                *decoded = None;
+            }
+        }
+        Arc::try_unwrap(state).unwrap_or_else(|shared| (*shared).clone())
+    }
+
     pub(crate) fn save(&self, state: &mut OrchestrationState) -> Result<u64, InspectionError> {
         let (source_schema, current) = match self.revision.get() {
             Some(revision) => revision,
@@ -862,6 +874,49 @@ mod tests {
         assert_eq!(current.revision, before.revision);
         assert_eq!(current.messages[0].text, "edited");
         assert_eq!(before.messages[0].text, "before");
+    }
+
+    #[test]
+    fn owned_state_mutation_preserves_outstanding_shared_view() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut state = lock.read().unwrap();
+        state.messages.push(message("before".into()));
+        lock.save(&mut state).unwrap();
+
+        let before = lock.read_shared().unwrap();
+        let mut owned = lock.into_owned_state(Arc::clone(&before));
+        owned.messages[0].text = "after".into();
+        assert_eq!(before.messages[0].text, "before");
+        lock.save(&mut owned).unwrap();
+
+        let current = lock.read_shared().unwrap();
+        assert_eq!(current.revision, before.revision + 1);
+        assert_eq!(current.messages[0].text, "after");
+        assert_eq!(before.messages[0].text, "before");
+    }
+
+    #[test]
+    fn owning_an_older_view_does_not_disturb_a_newer_generation() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut state = lock.read().unwrap();
+        state.messages.push(message("first".into()));
+        lock.save(&mut state).unwrap();
+        let old = lock.read_shared().unwrap();
+
+        state.messages[0].text = "second".into();
+        lock.save(&mut state).unwrap();
+        let newer = lock.read_shared().unwrap();
+        let mut stale = lock.into_owned_state(old);
+        stale.messages[0].text = "stale edit".into();
+        assert_eq!(lock.save(&mut stale).unwrap_err().code, "orchestration_revision_conflict");
+        let current = lock.read_shared().unwrap();
+        assert_eq!(current.revision, newer.revision);
+        assert_eq!(current.messages[0].text, "second");
+        assert_eq!(newer.messages[0].text, "second");
     }
 
     #[test]

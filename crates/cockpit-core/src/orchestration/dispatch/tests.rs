@@ -2407,6 +2407,39 @@ async fn interrupted_durable_hint_submission_becomes_unknown_without_resubmittin
 }
 
 #[tokio::test]
+async fn disabled_hints_settle_interrupted_submission_without_resubmitting() {
+    use std::sync::atomic::Ordering;
+    use super::super::store::HintState;
+    let (fixture, observed) = inbox_hint_fixture(true);
+    assert_eq!(fixture.service.hint_queue().unwrap().len(), 1);
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        assert_eq!(state.inbox_hints.len(), 1);
+        state.inbox_hints[0].state = HintState::Submitting;
+        locked.save(&mut state).unwrap();
+    }
+    fixture.change(|run| run.launch_config.inbox_prompt_hints = false);
+    assert!(fixture.service.hint_queue().unwrap().is_empty());
+    {
+        let state = fixture.service.store.lock().unwrap().read().unwrap();
+        assert!(matches!(state.inbox_hints[0].state, HintState::Unknown));
+        assert_eq!(state.inbox_hints[0].cause.as_deref(), Some("submission_interrupted"));
+        assert_eq!(state.messages[0].stage, cockpit_protocol::orchestration::DeliveryStage::Stored);
+    }
+    let adapter = Arc::new(CountingHerdr::new(observed, false, false));
+    let dispatcher = fixture.dispatcher(Arc::clone(&adapter));
+    dispatcher.hint_agents().await.unwrap();
+    fixture.change(|run| run.launch_config.inbox_prompt_hints = true);
+    assert!(fixture.service.hint_queue().unwrap().is_empty());
+    dispatcher.hint_agents().await.unwrap();
+    assert_eq!(adapter.prompt_calls.load(Ordering::SeqCst), 0);
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert!(matches!(state.inbox_hints[0].state, HintState::Unknown));
+    assert_eq!(state.inbox_hints[0].cause.as_deref(), Some("submission_interrupted"));
+}
+
+#[tokio::test]
 async fn pane_events_coalesce_and_disconnect_reconnects_without_snapshot_polling() {
     use std::sync::atomic::Ordering;
     let adapter = Arc::new(CountingHerdr::new(runtime(), false, false));

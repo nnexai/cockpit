@@ -2336,7 +2336,13 @@ impl OrchestrationService {
     pub(crate) fn hint_queue(&self) -> Result<Vec<(Run, super::store::InboxHint)>, InspectionError> {
         use super::store::{HintState, InboxHint};
         let locked = self.store.lock()?;
-        let mut state = locked.read()?;
+        let shared = locked.read_shared()?;
+        if !shared.inbox_hints.iter().any(|hint| hint.state == HintState::Submitting)
+            && !shared.runs.iter().any(|run| run.stage != RunStage::Closed
+                && run.launch_config.inbox_prompt_hints && super::launch_receipt_coherent(run)) {
+            return Ok(Vec::new());
+        }
+        let mut state = locked.into_owned_state(shared);
         let mut changed = false;
         // Interrupted submission might have pressed Enter; never repeat it.
         for hint in &mut state.inbox_hints {
@@ -2583,7 +2589,7 @@ impl OrchestrationService {
         use cockpit_protocol::orchestration::{ActorRef, MessageKind};
         use super::mutate::runs::{project_capacity_full, schedule_principal_current, schedule_ready, scheduled_project_key};
         let locked = self.store.lock()?;
-        let mut state = locked.read()?;
+        let state = locked.read_shared()?;
         let mut blocked = std::collections::HashSet::new();
         let mut notices = Vec::new();
         let mut next = None;
@@ -2613,6 +2619,7 @@ impl OrchestrationService {
         }
         waits.retain(|key, _| blocked.contains(key));
         if !notices.is_empty() {
+            let mut state = locked.into_owned_state(state);
             for (root, id, text) in notices {
                 super::messages::append(&mut state, super::messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Dispatcher,
                     to_run_id: &root, message_id: &id, kind: MessageKind::Observation, text: &text,
@@ -2628,7 +2635,7 @@ impl OrchestrationService {
     fn resource_stall_delay(&self) -> Result<Option<Duration>, InspectionError> {
         use cockpit_protocol::orchestration::{ActorRef, MessageKind, ResourceRequestState};
         let locked = self.store.lock()?;
-        let mut state = locked.read()?;
+        let state = locked.read_shared()?;
         let at = time::OffsetDateTime::now_utc();
         let mut next = None::<Duration>;
         let mut notices = Vec::new();
@@ -2652,6 +2659,7 @@ impl OrchestrationService {
             notices.push((run.root_id.clone(), key, format!("Task \"{title}\" ({project}) has waited over 10 minutes for a resource; inspect the queued request {}.", request.request_id)));
         }
         if !notices.is_empty() {
+            let mut state = locked.into_owned_state(state);
             for (root, key, text) in notices {
                 super::messages::append(&mut state, super::messages::AppendMessage { images: Vec::new(), thread_id: None, handoff: None, from: ActorRef::Dispatcher,
                     to_run_id: &root, message_id: &key, kind: MessageKind::Observation, text: &text,
