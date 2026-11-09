@@ -374,10 +374,40 @@ pub(crate) fn restoration_summary(state: &OrchestrationState, session_id: &str) 
 
 /// Returns only event-relevant cleanup candidates; attempts/resources are never
 /// grouped by canonical task, so superseded output cannot inherit successor proof.
-fn cleanup_candidates(state: &OrchestrationState) -> Vec<OwnedResourceRecord> {
+fn cleanup_candidate_resources(state: &OrchestrationState) -> impl Iterator<Item = &OwnedResourceRecord> {
     state.owned_resources.iter().filter(|resource| resource.cleanup.state != CleanupState::Removed
         && state.runs.iter().any(|run| run.run_id == resource.run_id && run.stage == RunStage::Closed))
-        .cloned().collect()
+}
+
+fn cleanup_candidates(state: &OrchestrationState) -> Vec<OwnedResourceRecord> {
+    cleanup_candidate_resources(state).cloned().collect()
+}
+
+// Skip only assessments whose result is already known from this exact snapshot.
+// The public queue and ref watches still include these resources. In particular,
+// external inspection, terminal handling and uncertain fixture receipts must
+// not be skipped merely because a previous assessment retained a resource.
+fn cleanup_evaluation_candidates(state: &OrchestrationState) -> Vec<OwnedResourceRecord> {
+    cleanup_candidate_resources(state).filter(|resource| {
+        let Some(run) = state.runs.iter().find(|run| run.run_id == resource.run_id) else { return true };
+        if resource.cleanup.state != CleanupState::Kept
+            || resource.ownership != ResourceOwnership::Owned
+            || resource.authority != CleanupAuthority::OwnedWhenSafe
+            || resource.kind == OwnedResourceKind::WorkerTerminal
+            || (run.close_reason == Some(CloseReason::Superseded) && resource.kind == OwnedResourceKind::Space)
+            || (matches!(resource.kind, OwnedResourceKind::FixtureSet | OwnedResourceKind::Scratch)
+                && resource.cleanup.effects.iter().any(|effect| matches!(effect.state, CleanupEffectState::Intent | CleanupEffectState::Unknown)))
+            || !resource.cleanup.reason.as_ref().is_some_and(|why|
+                why.code == "containment_unproven" || why.code == "checkout_consumer_present" || why.code.starts_with("scope_")) {
+            return true;
+        }
+        let claim_pending = state.checkout_claims.iter().any(|claim|
+            Some(claim.claim_id.as_str()) == run.checkout_claim_id.as_deref()
+                && matches!(claim.state, claims::ClaimState::Reserved | claims::ClaimState::Held | claims::ClaimState::Quiescing));
+        let drained = || run.attachment.as_ref().is_some_and(|attachment|
+            OrchestrationService::writer_quiescent(state, run, &attachment.attachment_id, attachment.epoch));
+        !(claim_pending || !drained())
+    }).cloned().collect()
 }
 
 fn setup_resources_captured(resources: &[OwnedResourceRecord], run: &Run) -> bool {
@@ -721,11 +751,11 @@ impl OrchestrationService {
                     !Self::writer_quiescent(state, run, &attachment.attachment_id, attachment.epoch)))
     }
 
-    /// Called by the existing owner scheduler; each resource is independently
-    /// evaluated. A missing Space is not consulted for Git-only removal.
+    /// Called by the existing owner scheduler. Assess resources independently
+    /// unless a fresh snapshot proves their existing scope hold is unchanged.
     pub async fn cleanup_owned_resources(&self, projects: &ProjectService) -> Result<(), InspectionError> {
         self.reconcile_accepted_integrations().await?;
-        let queue = self.cleanup_queue()?;
+        let queue = cleanup_evaluation_candidates(self.store.lock()?.read_shared()?.as_ref());
         for queued in queue {
             if queued.cleanup.state == CleanupState::Removed { continue; }
             let Some(_lease) = self.execution_lease(&queued.run_id)? else { continue };

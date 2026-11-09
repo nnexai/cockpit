@@ -4,6 +4,47 @@ use crate::process_scope::{self, ScopeState};
 use super::super::store::{DurableEffectReceipt, DurableOperationRecord, ScopeReleaseOutcome};
 use std::{path::Path, time::Duration};
 
+const MISSING_SCOPE_MESSAGE: &str = "This launch has no exact owned process-scope receipt; preserve unknown consumers and claims. Existing launches are never retrofitted.";
+
+fn scope_hold_target(resource: &OwnedResourceRecord, run: &Run) -> bool {
+    resource.run_id == run.run_id && resource.cleanup.state != CleanupState::Removed
+        && resource.ownership == ResourceOwnership::Owned
+        && resource.authority == CleanupAuthority::OwnedWhenSafe
+        && matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch | OwnedResourceKind::Scratch | OwnedResourceKind::Space | OwnedResourceKind::AttemptDirectory)
+}
+
+fn scope_hold_message_needed(state: &OrchestrationState, run: &Run) -> bool {
+    state.checkout_claims.iter().any(|claim|
+        Some(claim.claim_id.as_str()) == run.checkout_claim_id.as_deref()
+            && matches!(claim.state, claims::ClaimState::Reserved | claims::ClaimState::Held | claims::ClaimState::Quiescing)
+            && run.checkout.as_ref() == Some(&claim.checkout)
+            && claim.holder.as_ref().is_some_and(|holder| holder_matches(run, holder)))
+        && state.runs.iter().any(|root| root.run_id == run.root_id
+            && root.parent_run_id.is_none() && root.stage != RunStage::Closed)
+}
+
+fn scope_hold_message_id(run: &Run, code: &str) -> String {
+    let epoch = run.attachment.as_ref().map_or(0, |attachment| attachment.epoch);
+    format!("scope-cleanup:{}:{epoch}:{code}", run.run_id)
+}
+
+// This is only a snapshot-based no-op check, not authority to change anything.
+// Any later durable receipt, claim, resource or root change causes a fresh pass.
+fn missing_scope_hold_complete(state: &OrchestrationState, run: &Run) -> bool {
+    if run.checkout.is_none() || !run.attachment.as_ref().is_some_and(|attachment| attachment.process_scope.is_none()) {
+        return false;
+    }
+    let why = reason(CleanupReasonClass::Authority, "containment_unproven", MISSING_SCOPE_MESSAGE);
+    let mut targets = state.owned_resources.iter().filter(|resource| scope_hold_target(resource, run)).peekable();
+    if targets.peek().is_some() {
+        return targets.all(|resource| resource.cleanup.state == CleanupState::Kept && resource.cleanup.reason.as_ref() == Some(&why));
+    }
+    !scope_hold_message_needed(state, run) || {
+        let message_id = scope_hold_message_id(run, "containment_unproven");
+        state.messages.iter().any(|saved| matches!(saved.from, ActorRef::Dispatcher) && saved.message_id == message_id)
+    }
+}
+
 fn holder(run: &Run) -> Option<AttachmentReference> {
     let attachment = run.attachment.as_ref()?;
     Some(AttachmentReference { run_id: run.run_id.clone(), attachment_id: attachment.attachment_id.clone(),
@@ -140,12 +181,13 @@ impl OrchestrationService {
         for queued in saved.runs.iter().filter(|run| run.kind == RunKind::Worker && run.stage == RunStage::Closed
             && saved.checkout_claims.iter().any(|claim| Some(claim.claim_id.as_str()) == run.checkout_claim_id.as_deref()
                 && matches!(claim.state, claims::ClaimState::Reserved | claims::ClaimState::Held | claims::ClaimState::Quiescing))) {
+            if missing_scope_hold_complete(&saved, queued) { continue; }
             let Some(_lease) = self.execution_lease(&queued.run_id)? else { continue };
             let run = self.run_for_review(&queued.session_id, &queued.run_id)?;
             let Some(checkout) = run.checkout.as_ref() else { continue };
             let Some(attachment) = run.attachment.as_ref() else { continue };
             let Some(scope) = attachment.process_scope.as_ref() else {
-                self.scope_hold(&run, "containment_unproven", "This launch has no exact owned process-scope receipt; preserve unknown consumers and claims. Existing launches are never retrofitted.")?;
+                self.scope_hold(&run, "containment_unproven", MISSING_SCOPE_MESSAGE)?;
                 continue;
             };
             let observation = match process_scope::observe(scope).await {
@@ -346,10 +388,7 @@ impl OrchestrationService {
         let why = reason(if code.starts_with("scope_") { CleanupReasonClass::UserWork } else { CleanupReasonClass::Authority }, code, message);
         let mut changed = false;
         let mut has_resource_target = false;
-        for resource in state.owned_resources.iter_mut().filter(|resource| resource.run_id == expected.run_id
-            && resource.cleanup.state != CleanupState::Removed && resource.ownership == ResourceOwnership::Owned
-            && resource.authority == CleanupAuthority::OwnedWhenSafe
-            && matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch | OwnedResourceKind::Scratch | OwnedResourceKind::Space | OwnedResourceKind::AttemptDirectory)) {
+        for resource in state.owned_resources.iter_mut().filter(|resource| scope_hold_target(resource, expected)) {
             has_resource_target = true;
             if resource.cleanup.state != CleanupState::Kept || resource.cleanup.reason.as_ref() != Some(&why) {
                 resource.cleanup.state = CleanupState::Kept;
@@ -361,15 +400,9 @@ impl OrchestrationService {
         // Borrowed checkout attempts own no filesystem row. Their sealed
         // claim can still be genuinely held by a foreign checkout consumer.
         // Report that scope boundary without inventing filesystem ownership.
-        if !has_resource_target && state.checkout_claims.iter().any(|claim|
-            Some(claim.claim_id.as_str()) == expected.checkout_claim_id.as_deref()
-                && matches!(claim.state, claims::ClaimState::Reserved | claims::ClaimState::Held | claims::ClaimState::Quiescing)
-                && expected.checkout.as_ref() == Some(&claim.checkout)
-                && claim.holder.as_ref().is_some_and(|holder| holder_matches(expected, holder)))
-            && state.runs.iter().any(|root| root.run_id == expected.root_id
-                && root.parent_run_id.is_none() && root.stage != RunStage::Closed) {
+        if !has_resource_target && scope_hold_message_needed(&state, expected) {
             let epoch = expected.attachment.as_ref().map_or(0, |attachment| attachment.epoch);
-            let message_id = format!("scope-cleanup:{}:{epoch}:{code}", expected.run_id);
+            let message_id = scope_hold_message_id(expected, code);
             if !state.messages.iter().any(|saved| matches!(saved.from, ActorRef::Dispatcher) && saved.message_id == message_id) {
                 let text = format!("Cleanup is on hold for attempt {} (checkout claim {}, attachment epoch {epoch}): {}. {}",
                     expected.run_id, expected.checkout_claim_id.as_deref().unwrap_or("unproven"),
@@ -427,6 +460,15 @@ fn update_scope_outcome(state: &mut OrchestrationState, expected: &Run, outcome:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct NoHerdr;
+    #[async_trait::async_trait]
+    impl super::super::super::herdr::OrchestrationHerdr for NoHerdr {
+        async fn runtime(&self, _: &str) -> Result<super::super::super::herdr::RuntimeView, InspectionError> { panic!("unexpected runtime") }
+        async fn create_agent_tab(&self, _: &str, _: &super::super::super::herdr::AgentTabRequest) -> Result<RunLocation, InspectionError> { panic!("unexpected launch") }
+        async fn pane_process_info(&self, _: &str, _: &str, _: &str) -> Result<super::super::super::herdr::PaneProcessInfo, InspectionError> { panic!("unexpected pane") }
+        async fn close_pane(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> { panic!("unexpected close") }
+    }
 
     struct Fixture { root: std::path::PathBuf, service: OrchestrationService, run: Run }
     impl Drop for Fixture {
@@ -491,6 +533,93 @@ mod tests {
             drop(locked);
             Self { root, service, run }
         }
+    }
+
+    #[tokio::test]
+    async fn missing_scope_hold_skips_only_unchanged_snapshot_and_reacts_to_transitions() {
+        let fixture = Fixture::new();
+        {
+            let locked = fixture.service.store.lock().unwrap();
+            let mut state = locked.read().unwrap();
+            state.runs[0].attachment.as_mut().unwrap().process_scope = None;
+            state.owned_resources.push(OwnedResourceRecord {
+                resource_id: id(), root_id: fixture.run.root_id.clone(), run_id: fixture.run.run_id.clone(),
+                kind: OwnedResourceKind::Space, ownership: ResourceOwnership::Owned,
+                creation_operation_id: Some(id()),
+                identity: OwnedResourceIdentity::Space { identity: OwnedSpaceIdentity {
+                    creation_operation_id: id(), endpoint_identity: "fixture".into(),
+                    session_id: fixture.run.session_id.clone(), workspace_id: "fixture".into(),
+                    checkout_path: fixture.root.to_string_lossy().into_owned(),
+                } },
+                authority: CleanupAuthority::OwnedWhenSafe, consumers: Vec::new(), integration_result_id: None,
+                cleanup: CleanupItem { operation_id: None, state: CleanupState::Running,
+                    reason: None, effects: Vec::new(), updated_at: now() },
+            });
+            locked.save(&mut state).unwrap();
+        }
+        fixture.service.cleanup_worker_scopes(&NoHerdr).await.unwrap();
+        let state = fixture.service.store.lock().unwrap().read().unwrap();
+        assert_eq!(state.checkout_claims[0].state, claims::ClaimState::Held);
+        assert_eq!(state.owned_resources[0].cleanup.state, CleanupState::Kept);
+        assert_eq!(state.owned_resources[0].cleanup.reason.as_ref().unwrap().message, MISSING_SCOPE_MESSAGE);
+        let revision = state.revision;
+        fixture.service.cleanup_worker_scopes(&NoHerdr).await.unwrap();
+        assert_eq!(fixture.service.store.lock().unwrap().read().unwrap().revision, revision);
+
+        {
+            let locked = fixture.service.store.lock().unwrap();
+            let mut state = locked.read().unwrap();
+            state.owned_resources[0].cleanup.state = CleanupState::Running;
+            locked.save(&mut state).unwrap();
+        }
+        fixture.service.cleanup_worker_scopes(&NoHerdr).await.unwrap();
+        let state = fixture.service.store.lock().unwrap().read().unwrap();
+        assert_eq!(state.owned_resources[0].cleanup.state, CleanupState::Kept);
+        assert_eq!(state.owned_resources[0].cleanup.reason.as_ref().unwrap().message, MISSING_SCOPE_MESSAGE);
+        assert_eq!(state.checkout_claims[0].state, claims::ClaimState::Held);
+
+        {
+            let locked = fixture.service.store.lock().unwrap();
+            let mut state = locked.read().unwrap();
+            let mut receipt = fixture.run.attachment.as_ref().unwrap().process_scope.clone().unwrap();
+            receipt.unit = "invalid".into();
+            state.runs[0].attachment.as_mut().unwrap().process_scope = Some(receipt);
+            locked.save(&mut state).unwrap();
+        }
+        fixture.service.cleanup_worker_scopes(&NoHerdr).await.unwrap();
+        let state = fixture.service.store.lock().unwrap().read().unwrap();
+        assert_ne!(state.owned_resources[0].cleanup.reason.as_ref().unwrap().message, MISSING_SCOPE_MESSAGE);
+        assert_eq!(state.checkout_claims[0].state, claims::ClaimState::Held);
+    }
+
+    #[tokio::test]
+    async fn missing_scope_borrowed_claim_transition_reports_once() {
+        let fixture = Fixture::new();
+        {
+            let locked = fixture.service.store.lock().unwrap();
+            let mut state = locked.read().unwrap();
+            state.runs[0].attachment.as_mut().unwrap().process_scope = None;
+            let mut root = new_run("root", "scope-tests", RunKind::Supervisor, "root".into(), "root", RunLineage::default(), 1);
+            root.stage = RunStage::Active;
+            state.runs.push(root);
+            state.checkout_claims[0].holder = None;
+            locked.save(&mut state).unwrap();
+        }
+        fixture.service.cleanup_worker_scopes(&NoHerdr).await.unwrap();
+        {
+            let locked = fixture.service.store.lock().unwrap();
+            let mut state = locked.read().unwrap();
+            assert!(state.messages.is_empty());
+            state.checkout_claims[0].holder = holder(&state.runs[0]);
+            locked.save(&mut state).unwrap();
+        }
+        fixture.service.cleanup_worker_scopes(&NoHerdr).await.unwrap();
+        let state = fixture.service.store.lock().unwrap().read().unwrap();
+        assert_eq!(state.messages.len(), 1);
+        assert_eq!(state.checkout_claims[0].state, claims::ClaimState::Held);
+        let revision = state.revision;
+        fixture.service.cleanup_worker_scopes(&NoHerdr).await.unwrap();
+        assert_eq!(fixture.service.store.lock().unwrap().read().unwrap().revision, revision);
     }
 
     #[test]
