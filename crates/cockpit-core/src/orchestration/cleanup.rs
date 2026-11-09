@@ -748,7 +748,16 @@ impl OrchestrationService {
             };
             let needs_merged = matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch)
                 && !git_integration_eligible(&run);
-            let merged = if needs_merged { merged::merged_proof(&state, &run).await } else { Ok(None) };
+            let scope_hold = !drained && resource.cleanup.reason.as_ref().is_some_and(|why|
+                why.code == "containment_unproven" || why.code == "checkout_consumer_present" || why.code.starts_with("scope_"));
+            // An undrained owned Git resource cannot be removed, regardless of
+            // integration. Keep its scope hold even if Git proof is unavailable;
+            // obtain fresh proof on the event that establishes drain.
+            let held_git = needs_merged && scope_hold && run.stage == RunStage::Closed
+                && run.close_reason != Some(CloseReason::Superseded)
+                && resource.ownership == ResourceOwnership::Owned
+                && resource.authority == CleanupAuthority::OwnedWhenSafe;
+            let merged = if needs_merged && !held_git { merged::merged_proof(&state, &run).await } else { Ok(None) };
             let merged = match merged {
                 Ok(proof) => proof,
                 Err(why) => {
@@ -796,12 +805,14 @@ impl OrchestrationService {
                     CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumer_drain_unproven",
                         "Private attempt removal requires its exact checkout claim to be Released with consumer-exit proof and its own pane retired"))
                 }
+            } else if scope_hold {
+                // Scope cleanup and resource cleanup share this status. Preserve
+                // the stronger writer hold until drain is proven; replacing it
+                // with integration_pending makes the two passes oscillate.
+                CleanupEvaluation::Kept(resource.cleanup.reason.clone().expect("classified scope hold"))
             } else if needs_merged && merged.is_none() {
                 CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "integration_pending",
                     "Record IntegrationRecord, or merge/cherry-pick the accepted commits into the project's primary checkout; cleanup re-evaluates on ref changes."))
-            } else if !drained && resource.cleanup.reason.as_ref().is_some_and(|why|
-                why.code == "containment_unproven" || why.code == "checkout_consumer_present" || why.code.starts_with("scope_")) {
-                CleanupEvaluation::Kept(resource.cleanup.reason.clone().expect("classified scope hold"))
             } else if blocked {
                 CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumers_active", "Known descendant or checkout writer consumers remain protected"))
             } else if matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch | OwnedResourceKind::Scratch | OwnedResourceKind::AttemptDirectory)

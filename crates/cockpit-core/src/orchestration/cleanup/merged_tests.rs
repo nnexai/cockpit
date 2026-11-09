@@ -7,6 +7,39 @@ use std::path::{Path, PathBuf};
 const TIMEOUT_MS: u64 = 10_000;
 const OUTPUT_BYTES: usize = 128 * 1024;
 
+#[derive(Default)]
+struct NoEffectsAdapter;
+
+#[async_trait::async_trait]
+impl crate::HerdrAdapter for NoEffectsAdapter {
+    async fn inspect(&self) -> Result<cockpit_protocol::v1::HerdrCompatibility, InspectionError> { panic!("unexpected Herdr call") }
+    async fn inspect_session(&self, _: &str) -> Result<cockpit_protocol::v1::HerdrCompatibility, InspectionError> { panic!("unexpected Herdr call") }
+    async fn sessions(&self) -> Result<cockpit_protocol::v1::SessionListResponse, InspectionError> { panic!("unexpected Herdr call") }
+    async fn session_snapshot(&self, _: &str) -> Result<cockpit_protocol::v1::SessionSnapshotResponse, InspectionError> { panic!("unexpected Herdr call") }
+    async fn focus(&self, _: &str, _: &cockpit_protocol::v1::FocusRequest) -> Result<cockpit_protocol::v1::FocusResponse, InspectionError> { panic!("unexpected Herdr call") }
+    async fn mutate(&self, _: &str, _: &cockpit_protocol::v1::ResourceMutationRequest) -> Result<cockpit_protocol::v1::ResourceMutationResponse, InspectionError> { panic!("unexpected Herdr call") }
+    async fn subscribe_session(&self, _: &str, _: &cockpit_protocol::v1::SessionSnapshotResponse) -> Result<crate::SessionSubscription, InspectionError> { panic!("unexpected Herdr call") }
+    async fn open_terminal(&self, _: &cockpit_protocol::v1::TerminalOpenRequest) -> Result<crate::TerminalSession, InspectionError> { panic!("unexpected Herdr call") }
+}
+
+#[async_trait::async_trait]
+impl crate::ProjectHerdrAdapter for NoEffectsAdapter {
+    async fn project_endpoint_identity(&self, _: &str) -> Result<String, InspectionError> { panic!("unexpected project call") }
+    async fn project_inventory(&self, _: &str, _: &str) -> Result<crate::project_adapter::ProjectInventory, InspectionError> { panic!("unexpected project call") }
+    async fn project_worktree(&self, _: &str, _: &crate::project_adapter::ProjectWorktreeRequest) -> Result<crate::project_adapter::ProjectWorktreeResult, InspectionError> { panic!("unexpected project call") }
+    async fn project_worktree_dirty(&self, _: &str, _: u32, _: u32) -> Result<crate::project_adapter::WorktreeStatus, InspectionError> { panic!("unexpected project call") }
+    async fn project_close_workspace(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> { panic!("unexpected project call") }
+    async fn project_remove_worktree(&self, _: &str, _: &crate::project_adapter::ProjectWorktreeRemoveRequest) -> Result<(), InspectionError> { panic!("unexpected project call") }
+}
+
+#[async_trait::async_trait]
+impl super::super::herdr::OrchestrationHerdr for NoEffectsAdapter {
+    async fn runtime(&self, _: &str) -> Result<super::super::herdr::RuntimeView, InspectionError> { panic!("unexpected Herdr call") }
+    async fn create_agent_tab(&self, _: &str, _: &super::super::herdr::AgentTabRequest) -> Result<RunLocation, InspectionError> { panic!("unexpected Herdr call") }
+    async fn pane_process_info(&self, _: &str, _: &str, _: &str) -> Result<super::super::herdr::PaneProcessInfo, InspectionError> { panic!("unexpected Herdr call") }
+    async fn close_pane(&self, _: &str, _: &str, _: &str) -> Result<(), InspectionError> { panic!("unexpected Herdr call") }
+}
+
 struct Fixture {
     directory: PathBuf,
     repository: PathBuf,
@@ -151,6 +184,56 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.directory); }
+}
+
+#[tokio::test]
+async fn scope_hold_stays_stable_until_drain_then_rechecks_integration() {
+    let fixture = Fixture::new(false).await;
+    fixture.mutate(|state| state.checkout_claims[0].state = claims::ClaimState::Held);
+    let herdr = NoEffectsAdapter;
+    fixture.service.cleanup_worker_scopes(&herdr).await.unwrap();
+    let why = fixture.state().owned_resources[0].cleanup.reason.clone().unwrap();
+    assert_eq!(why.code, "containment_unproven");
+    let projects = ProjectService::new(
+        cockpit_protocol::projects::ProjectConfiguration::for_tests(&fixture.directory),
+        std::sync::Arc::new(NoEffectsAdapter),
+    ).unwrap();
+    fixture.service.cleanup_owned_resources(&projects).await.unwrap();
+    let stable_revision = fixture.state().revision;
+    for _ in 0..3 {
+        fixture.service.cleanup_worker_scopes(&herdr).await.unwrap();
+        fixture.service.cleanup_owned_resources(&projects).await.unwrap();
+        let state = fixture.state();
+        assert_eq!(state.revision, stable_revision, "unchanged cleanup must not wake its own scheduler");
+        for resource in &state.owned_resources {
+            assert_eq!(resource.cleanup.state, CleanupState::Kept);
+            assert_eq!(resource.cleanup.reason.as_ref(), Some(&why));
+            assert!(resource.cleanup.effects.is_empty());
+        }
+    }
+    // A failed fresh Git inspection must not replace the stronger writer hold
+    // and cause the two cleanup passes to rewrite each other indefinitely.
+    let git_dir = fixture.repository.join(".git");
+    let unavailable = fixture.directory.join("temporarily-unavailable-git");
+    std::fs::rename(&git_dir, &unavailable).unwrap();
+    assert!(merged_proof(&fixture.state(), &fixture.run).await.is_err());
+    fixture.service.cleanup_worker_scopes(&herdr).await.unwrap();
+    fixture.service.cleanup_owned_resources(&projects).await.unwrap();
+    let held = fixture.state();
+    assert_eq!(held.revision, stable_revision);
+    assert!(held.owned_resources.iter().all(|resource|
+        resource.cleanup.state == CleanupState::Kept && resource.cleanup.reason.as_ref() == Some(&why)));
+    std::fs::rename(&unavailable, &git_dir).unwrap();
+    fixture.mutate(|state| state.checkout_claims[0].state = claims::ClaimState::Released);
+    fixture.service.cleanup_owned_resources(&projects).await.unwrap();
+    let state = fixture.state();
+    assert!(state.revision > stable_revision);
+    for resource in &state.owned_resources {
+        assert_eq!(resource.cleanup.state, CleanupState::WaitingIntegration);
+        assert_eq!(resource.cleanup.reason.as_ref().unwrap().code, "integration_pending");
+        assert!(resource.cleanup.effects.is_empty());
+    }
+    fixture.assert_git_preserved();
 }
 
 #[tokio::test]
