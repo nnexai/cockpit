@@ -17,11 +17,19 @@ import { parseWorkspaceSetupRequest } from "./projectProtocol";
 import { definePolicy, parseWire, rootMessage } from "./wire";
 
 const encoder = new TextEncoder();
-const boundedText = (max: number) => (value: string) => value.length <= max
-  && encoder.encode(value).byteLength <= max && !value.includes("\0");
+// All bounded text fields have a limit of at most 16 KiB. Reuse the buffer
+// because validation is synchronous and encoded bytes are never retained.
+const utf8Scratch = new Uint8Array(16 * 1024);
+function withinUtf8Bytes(value: string, max: number): boolean {
+  if (value.length > max) return false;
+  // Even unpaired UTF-16 surrogates encode to at most three bytes per unit.
+  if (value.length * 3 <= max) return true;
+  const { read, written } = encoder.encodeInto(value, utf8Scratch);
+  return read === value.length && written <= max;
+}
+const boundedText = (max: number) => (value: string) => withinUtf8Bytes(value, max) && !value.includes("\0");
 const text = boundedText(16 * 1024), label = boundedText(256), path = boundedText(4096);
-const id = (value: string) => value.length > 0 && value.length <= 512
-  && encoder.encode(value).byteLength <= 512 && !/[\x00-\x1f\x7f]/.test(value);
+const id = (value: string) => value.length > 0 && withinUtf8Bytes(value, 512) && !/[\x00-\x1f\x7f]/.test(value);
 const absolutePath = (value: string) => path(value) && value.startsWith("/")
   && !/[\x00-\x1f\x7f]/.test(value) && !value.split("/").some(part => part === "." || part === "..");
 const decimalU64 = (value: string) => /^(?:0|[1-9]\d*)$/.test(value)

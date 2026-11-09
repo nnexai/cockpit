@@ -315,6 +315,31 @@ const defaultedSnapshotFields: Readonly<Record<string, true>> = {
 };
 
 describe("orchestration protocol boundary", () => {
+  it("matches TextEncoder byte limits and control rules for orchestration strings", () => {
+    const encoder = new TextEncoder();
+    const samples = ["", "a", "\0", "\x1f", "\x7f", "\x80", "\u07ff", "\u0800",
+      "\ud7ff", "\ud800", "\udfff", "\ue000", "\ud800\udc00", "\udbff\udfff",
+      "\ud800a", "\ud800\ud800\udc00", "\udfff\ud800", "é😀\ud800"];
+    for (const [field, max] of [["label", 256], ["selected_root_id", 512], ["brief", 16 * 1024]] as const) {
+      for (const sample of samples) {
+        const sampleBytes = encoder.encode(sample).byteLength;
+        for (const padding of [0, Math.max(0, max - sampleBytes - 1), Math.max(0, max - sampleBytes),
+          Math.max(0, max - sampleBytes + 1)]) {
+          const value = "a".repeat(padding) + sample;
+          const expected = encoder.encode(value).byteLength <= max && (field === "selected_root_id"
+            ? value.length > 0 && !/[\x00-\x1f\x7f]/.test(value) : !value.includes("\0"));
+          const action = field === "brief" ? { ...workerStartAction, brief: value } : { ...startAction, [field]: value };
+          let accepted = true;
+          try { parseOrchestrationAction(action); } catch (error) {
+            if (!(error instanceof CockpitClientError)) throw error;
+            accepted = false;
+          }
+          expect(accepted, `${field}: ${JSON.stringify(sample)} with ${padding} ASCII bytes`).toBe(expected);
+        }
+      }
+    }
+  });
+
   it("strictly validates unreflected input metadata", () => {
     const input = { run_id: "run", result_message_id: "result", message_id: "input", seq: 2,
       kind: "instruction", from: { type: "operator" }, stage: "stored", after_result: true,
