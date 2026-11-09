@@ -237,6 +237,60 @@ async fn scope_hold_stays_stable_until_drain_then_rechecks_integration() {
 }
 
 #[tokio::test]
+async fn previous_boot_does_not_replace_pending_claim_scope_hold() {
+    let Some(machine) = crate::process_identity::machine_id() else { return };
+    let Some(boot) = crate::process_identity::kernel_boot_id() else { return };
+    for close_reason in [CloseReason::Accepted, CloseReason::Superseded] {
+        let fixture = Fixture::new(false).await;
+        fixture.mutate(|state| {
+            state.checkout_claims[0].state = claims::ClaimState::Held;
+            let run = &mut state.runs[1];
+            run.close_reason = Some(close_reason);
+            let attachment = run.attachment.as_mut().unwrap();
+            attachment.machine_id = Some(machine.clone());
+            attachment.process = Some(cockpit_protocol::orchestration::NativeProcessIdentity {
+                pid: 42, start_ticks: 7, kernel_boot_id: Some(format!("previous-{boot}")),
+            });
+            attachment.process_scope = None;
+        });
+        let herdr = NoEffectsAdapter;
+        let projects = ProjectService::new(
+            cockpit_protocol::projects::ProjectConfiguration::for_tests(&fixture.directory),
+            std::sync::Arc::new(NoEffectsAdapter),
+        ).unwrap();
+        fixture.service.cleanup_worker_scopes(&herdr).await.unwrap();
+        let held = fixture.state();
+        let why = held.owned_resources[0].cleanup.reason.clone().unwrap();
+        assert_eq!(why.code, "containment_unproven");
+        fixture.service.cleanup_owned_resources(&projects).await.unwrap();
+        let settled = fixture.state();
+        assert!(settled.owned_resources.iter().all(|resource|
+            resource.cleanup.state == CleanupState::Kept && resource.cleanup.reason.as_ref() == Some(&why)),
+            "the first resource assessment must preserve the pending-claim hold: {:?}", settled.owned_resources);
+        let revision = settled.revision;
+        for _ in 0..3 {
+            fixture.service.cleanup_owned_resources(&projects).await.unwrap();
+            fixture.service.cleanup_worker_scopes(&herdr).await.unwrap();
+            let state = fixture.state();
+            assert_eq!(state.revision, revision, "competing assessments must retain the pending-claim hold");
+            assert_eq!(state.checkout_claims[0].state, claims::ClaimState::Held);
+            assert!(state.owned_resources.iter().all(|resource|
+                resource.cleanup.state == CleanupState::Kept
+                    && resource.cleanup.reason.as_ref() == Some(&why)
+                    && resource.cleanup.effects.is_empty()));
+        }
+        // A separately established release re-enables the ordinary assessment.
+        fixture.mutate(|state| state.checkout_claims[0].state = claims::ClaimState::Released);
+        fixture.service.cleanup_owned_resources(&projects).await.unwrap();
+        let state = fixture.state();
+        assert!(state.revision > revision);
+        assert!(state.owned_resources.iter().all(|resource|
+            resource.cleanup.reason.as_ref() != Some(&why) && resource.cleanup.effects.is_empty()));
+        assert!(fixture.worker_path.is_dir());
+    }
+}
+
+#[tokio::test]
 async fn accepted_no_ff_merge_removes_worktree_then_branch_without_integration_record() {
     let fixture = Fixture::new(true).await;
     let before = fixture.state();

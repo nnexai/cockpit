@@ -10,6 +10,8 @@ Batch completion leaves the session's personal liaison Active for later work acr
 
 The orchestration state document is bounded to 64 MiB on both reads and writes. If a write would exceed that limit it fails with `orchestration_state_full` without discarding durable records or replacing the prior document. This extends capacity rather than providing unlimited retention; a backend with the older 8 MiB limit cannot read a larger document, so do not roll back to that version after the state has grown past its limit.
 
+Cleanup retains an existing containment hold while its exact checkout claim remains reserved, held, or quiescing, even if a prior-boot observation establishes the old writer was quiescent. Competing resource assessments do not replace that hold and repeatedly wake snapshot subscribers. A separately established claim release permits ordinary reassessment; a prior boot alone does not release the claim or authorize cleanup.
+
 ### Local operator orchestration archive
 
 Archival is an explicit local-operator operation, not an agent capability or an automatic retention policy. It moves eligible task history out of the active orchestration state for later inspection or restoration; it is not a worker cleanup, integration, acceptance, or authority to modify a terminal, checkout, Space, or external artifact. The archive contains operational history and should be protected like the orchestration state itself.
