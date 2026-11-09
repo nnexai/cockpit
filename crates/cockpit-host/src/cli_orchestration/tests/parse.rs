@@ -26,6 +26,48 @@ struct AgentTestCli {
 }
 
 #[test]
+fn archive_commands_require_explicit_revision_for_apply() {
+    use super::super::args::ArchiveCommand;
+
+    let TestCommand::Task(args) = TestCli::try_parse_from([
+        "test", "task", "archive", "plan", "task-id", "--operator", "--root", "root-id",
+    ]).unwrap().command else { panic!("expected task") };
+    assert!(args.common.operator && args.common.root.as_deref() == Some("root-id"));
+    assert!(matches!(args.command, TaskCommand::Archive {
+        command: ArchiveCommand::Plan { task }
+    } if task == "task-id"));
+
+    let TestCommand::Task(args) = TestCli::try_parse_from([
+        "test", "task", "archive", "apply", "task-id", "--revision", "42", "--operator", "--root", "root-id",
+    ]).unwrap().command else { panic!("expected task") };
+    assert!(matches!(args.command, TaskCommand::Archive {
+        command: ArchiveCommand::Apply { task, revision: 42 }
+    } if task == "task-id"));
+    for args in [
+        vec!["test", "task", "archive", "apply", "task-id"],
+        vec!["test", "task", "archive", "apply", "task-id", "--revision", "invalid"],
+        vec!["test", "task", "archive", "show"],
+        vec!["test", "task", "archive", "restore"],
+    ] {
+        assert!(TestCli::try_parse_from(&args).is_err(), "accepted {args:?}");
+    }
+    for (verb, expected) in [("show", false), ("restore", true)] {
+        let TestCommand::Task(args) = TestCli::try_parse_from([
+            "test", "task", "archive", verb, "archive-id", "--operator",
+        ]).unwrap().command else { panic!("expected task") };
+        assert!(match args.command {
+            TaskCommand::Archive { command: ArchiveCommand::Show { archive_id } } => !expected && archive_id == "archive-id",
+            TaskCommand::Archive { command: ArchiveCommand::Restore { archive_id } } => expected && archive_id == "archive-id",
+            _ => false,
+        });
+    }
+    let TestCommand::Task(args) = TestCli::try_parse_from([
+        "test", "task", "archive", "list", "--operator",
+    ]).unwrap().command else { panic!("expected task") };
+    assert!(matches!(args.command, TaskCommand::Archive { command: ArchiveCommand::List }));
+}
+
+#[test]
 fn directive_commands_enforce_scope_and_preserve_arguments() {
     let parsed = DirectiveTestCli::try_parse_from([
         "test", "add", "--text", "Use the API", "--task", "task-1", "--directive-id", "id-1",
@@ -1313,6 +1355,32 @@ fn inbox_next_wait_and_capture_options_are_bounded() {
     assert!(matches!(args.command, InboxCommand::Next { wait: 0, deliverable: false, capture_file: None }));
     for invalid in ["-1", "3601", "18446744073709551616", "forever"] {
         assert!(TestCli::try_parse_from(["test", "inbox", "next", "--wait", invalid]).is_err());
+    }
+}
+
+#[tokio::test]
+async fn inbox_close_requires_explicit_operator_and_exact_thread_uuid() {
+    let thread = "01234567-89ab-4cde-8fab-0123456789ab";
+    for flags in [
+        vec!["--operator", "close", "--thread", thread],
+        vec!["close", "--thread", thread, "--operator"],
+    ] {
+        let TestCommand::Inbox(args) = TestCli::try_parse_from(
+            ["test", "inbox"].into_iter().chain(flags),
+        ).unwrap().command else { panic!("expected inbox") };
+        assert!(args.common.operator);
+        assert!(matches!(args.command, InboxCommand::Close { thread: id } if id == thread));
+    }
+    assert!(TestCli::try_parse_from(["test", "inbox", "--operator", "close"]).is_err());
+    let TestCommand::Inbox(args) = TestCli::try_parse_from([
+        "test", "inbox", "close", "--thread", thread,
+    ]).unwrap().command else { panic!("expected inbox") };
+    assert_eq!(args.run().await.unwrap_err().code, "actor_forbidden");
+    for invalid in ["01234567", "0123456789ab4cde8fab0123456789ab", "not-a-uuid"] {
+        let TestCommand::Inbox(args) = TestCli::try_parse_from([
+            "test", "inbox", "--operator", "close", "--thread", invalid,
+        ]).unwrap().command else { panic!("expected inbox") };
+        assert_eq!(args.run().await.unwrap_err().code, "invalid_thread_id");
     }
 }
 

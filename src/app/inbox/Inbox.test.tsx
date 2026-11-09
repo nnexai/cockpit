@@ -644,6 +644,19 @@ describe("Inbox", () => {
     expect(host.querySelector('textarea[aria-label="Follow up with owner"]')).not.toBeNull();
     expect(client.orchestrationMutate).not.toHaveBeenCalled();
   });
+  it("shows explicitly closed threads in Handled without implying a result", async () => {
+    const { client } = fixture(), app = setup(client), inbox = view("a");
+    inbox.threads = [{ thread_id: "thread", state: "handled", closed_at: "2026-11-04T10:00:00Z", need: null, owner_root_ids: ["owner"], title: { text: "Closed request", source: { kind: "user" }, message_id: null, at: null, images: [] }, next: null, project: null, request: null, follow_ups: [], questions: [], recommendation: null, reply: null, unread_interims: [], unread_result_message_id: null, tasks: [], receipts: [], facts: [], timeline: [], timeline_omitted: 0, updated_at: "2026-11-04T10:00:00Z" }];
+    vi.mocked(client.orchestrationInbox).mockResolvedValue(inbox);
+    await flush(() => app.render());
+    const group = Array.from(host.querySelectorAll("details")).find(element => element.querySelector("summary")?.textContent?.includes("Handled"))!;
+    const row = group.querySelector<HTMLButtonElement>(".inbox-row")!;
+    expect(row.querySelector(".inbox-row-state")?.textContent).toBe("Closed");
+    expect(row.querySelector(".inbox-row-next")?.textContent).toBe("Closed");
+    await flush(() => row.click());
+    expect(host.querySelector(".inbox-state")?.textContent).toBe("Closed");
+    expect(client.orchestrationMutate).not.toHaveBeenCalled();
+  });
   it("shows a NeedsInput report as rich question text without changing its choices", async () => {
     const { client } = fixture(), app = setup(client), inbox = view("a");
     const question = { run_id: "owner", question_message_id: "q", asked_at: "now", text: { text: "## Decision\n\nPlease review **both** options.", source: { kind: "owner" as const, run_id: "owner", harness: "omp" }, message_id: "q", at: "now", images: [] }, choices: ["Yes", "No"], receipt: { status: "unresolved" as const } };

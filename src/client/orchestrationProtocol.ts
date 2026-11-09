@@ -17,11 +17,19 @@ import { parseWorkspaceSetupRequest } from "./projectProtocol";
 import { definePolicy, parseWire, rootMessage } from "./wire";
 
 const encoder = new TextEncoder();
-const boundedText = (max: number) => (value: string) => value.length <= max
-  && encoder.encode(value).byteLength <= max && !value.includes("\0");
+// All bounded text fields have a limit of at most 16 KiB. Reuse the buffer
+// because validation is synchronous and encoded bytes are never retained.
+const utf8Scratch = new Uint8Array(16 * 1024);
+function withinUtf8Bytes(value: string, max: number): boolean {
+  if (value.length > max) return false;
+  // Even unpaired UTF-16 surrogates encode to at most three bytes per unit.
+  if (value.length * 3 <= max) return true;
+  const { read, written } = encoder.encodeInto(value, utf8Scratch);
+  return read === value.length && written <= max;
+}
+const boundedText = (max: number) => (value: string) => withinUtf8Bytes(value, max) && !value.includes("\0");
 const text = boundedText(16 * 1024), label = boundedText(256), path = boundedText(4096);
-const id = (value: string) => value.length > 0 && value.length <= 512
-  && encoder.encode(value).byteLength <= 512 && !/[\x00-\x1f\x7f]/.test(value);
+const id = (value: string) => value.length > 0 && withinUtf8Bytes(value, 512) && !/[\x00-\x1f\x7f]/.test(value);
 const absolutePath = (value: string) => path(value) && value.startsWith("/")
   && !/[\x00-\x1f\x7f]/.test(value) && !value.split("/").some(part => part === "." || part === "..");
 const decimalU64 = (value: string) => /^(?:0|[1-9]\d*)$/.test(value)
@@ -388,6 +396,7 @@ const POLICY = definePolicy({
         Directive: ["thread_id"], ThreadLink: ["thread_id"], "OrchestrationAction[directive_add]": ["thread_id"],
         Message: ["thread_id"], QuestionStatus: ["thread_id"], InboxThread: ["thread_id"],
         "OrchestrationAction[thread_handoff]": ["thread_id"], "OrchestrationAction[thread_mark_read]": ["thread_id"],
+        "OrchestrationAction[thread_close]": ["thread_id"],
         "OrchestrationAction[thread_link]": ["thread_id"],
       }),
       ...refine(timestamp, {
@@ -396,7 +405,7 @@ const POLICY = definePolicy({
         Directive: ["created_at", "removed_at"], InboxStall: ["since"],
         Message: ["created_at", "acked_at"], AnswerReceipt: ["created_at", "acked_at"], QuestionStatus: ["asked_at"], UnreflectedInput: ["created_at", "acked_at"],
         "InboxObservation[fresh]": ["observed_at"], InboxText: ["at"], InboxRequestEcho: ["created_at"],
-        InboxQuestion: ["asked_at"], InboxReceipt: ["created_at", "acked_at"], InboxThread: ["updated_at"],
+        InboxQuestion: ["asked_at"], InboxReceipt: ["created_at", "acked_at"], InboxThread: ["updated_at", "closed_at"],
         RunObservation: ["state_changed_at"], "RuntimeObservation[fresh]": ["observed_at"], Attention: ["since"], UnmanagedAgent: ["state_changed_at"],
         "RetirementState[close_intent]": ["at"], "RetirementState[retired]": ["at"], "RetirementState[retained]": ["at"], "RetirementState[unknown]": ["at"],
         ExecutionAttachment: ["updated_at"], ResumeRecord: ["updated_at"], LiaisonCandidate: ["updated_at"],

@@ -4,6 +4,8 @@ const descriptions: Record<string, string> = {
   harness_resume_unsupported: "This agent cannot resume the saved conversation with its current configuration. Configure resume arguments for this agent before trying again.",
   attachment_conflict: "The agent's attachment changed or could not be verified. Refresh its state before trying again.",
   root_stop_confirmation_unavailable: "This supervisor can no longer be confirmed stopped from this prompt. Refresh its state before trying again.",
+  supervisor_busy: "The supervisor is busy. Wait until it is idle before starting a new conversation.",
+  fresh_supervisor_exit_unprovable: "Cockpit could not confirm that the previous supervisor stopped. A new conversation was not started.",
   request_outcome_unknown: "Herdr did not confirm the outcome. Resync and check the session before trying again.",
   mutation_applied_snapshot_failed: "The change was applied, but the updated session could not be loaded. Resync to see the current state.",
   protocol_mismatch: "This Herdr version uses an incompatible protocol. Install a compatible Herdr version and retry status.",

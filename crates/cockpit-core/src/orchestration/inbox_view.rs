@@ -222,6 +222,16 @@ fn question_message<'a>(messages: &'a [Message], q: &QuestionStatus) -> Option<&
 
 pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards: Vec<TaskBoard>,
     runtime: Result<RuntimeView, InspectionError>, now: &str, store_id: &str) -> Result<InboxView, InspectionError> {
+    project_inner(request, state, boards, runtime, now, store_id, true)
+}
+
+pub(super) fn project_uncapped(request: &InboxRequest, state: &OrchestrationState, boards: Vec<TaskBoard>,
+    runtime: Result<RuntimeView, InspectionError>, now: &str, store_id: &str) -> Result<InboxView, InspectionError> {
+    project_inner(request, state, boards, runtime, now, store_id, false)
+}
+
+fn project_inner(request: &InboxRequest, state: &OrchestrationState, boards: Vec<TaskBoard>,
+    runtime: Result<RuntimeView, InspectionError>, now: &str, store_id: &str, cap_handled: bool) -> Result<InboxView, InspectionError> {
     let roots: Vec<&Run> = state.runs.iter().filter(|r| r.session_id == request.session_id
         && r.run_id == r.root_id && r.parent_run_id.is_none()).collect();
     let root_map: HashMap<&str, &Run> = roots.iter().map(|r| (r.run_id.as_str(), *r)).collect();
@@ -361,10 +371,44 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             .filter_map(|m| interim_ref(state, m)).collect();
         let unresolved = projected_questions.iter().any(|q| matches!(q.receipt, QuestionReceipt::Unresolved));
         let answered_legacy = questions.get(id).is_some_and(|qs| qs.iter().any(|q| q.thread_id.is_none() && !matches!(q.receipt, QuestionReceipt::Unresolved))) && latest_report.is_some_and(|(m, _)| m.message_id == id);
+        // The newest close covers only events present when it was written.
+        // Positions are stable across archive compaction and hydration.
+        let close = state.thread_reads.iter().rev().find_map(|read| {
+            let (session, thread, message_fence, widget_fence) = super::threads::parse_close_marker(read)?;
+            (session == request.session_id && thread == id).then_some((read, message_fence, widget_fence))
+        });
+        let close_coverage = close.map(|(record, message_fence, widget_fence)| {
+            if message_fence > state.messages.len() || widget_fence > state.widget_publications.len()
+                || messages.iter().any(|message| message_positions[&(*message as *const Message)] >= message_fence)
+                || state.widget_publications.iter().enumerate().any(|(index, publication)|
+                    index >= widget_fence && publication.thread_id == id && root_map.contains_key(publication.root_id.as_str()))
+                || state.messages.iter().enumerate().skip(message_fence).any(|(_, answer)|
+                    !answer.stale && answer.kind == MessageKind::Answer
+                    && (matches!(answer.from, ActorRef::Operator) || matches!(&answer.from, ActorRef::Run { run_id }
+                        if run_id == &answer.to_run_id && root_map.contains_key(run_id.as_str())))
+                    && messages.iter().any(|question| report_owner(question, &root_map).is_some_and(|root|
+                        root.run_id == answer.to_run_id && question.report.as_ref().is_some_and(|report|
+                            report.kind == ReportKind::NeedsInput && answer.in_reply_to.as_deref() == Some(question.message_id.as_str())))))
+            { return (record, false); }
+            (record, true)
+        });
+        let reopened = close_coverage.is_some_and(|(_, covers)| !covers);
+        let handled_result = latest_report.is_some_and(|(message, _)| {
+            if !message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Result) { return false; }
+            if !reopened { return true; }
+            let position = message_positions[&(message as *const Message)];
+            !messages.iter().any(|later| message_positions[&(*later as *const Message)] > position)
+                && !state.widget_publications.iter().any(|publication| publication.thread_id == id
+                    && root_map.contains_key(publication.root_id.as_str()) && publication.message_position > position)
+        });
         let (state_value, need) = if unresolved { (InboxState::NeedsYou, Some(InboxNeed::Decision)) }
             else if unread.is_some() || !unread_interims.is_empty() { (InboxState::NeedsYou, Some(InboxNeed::Answer)) }
-            else if latest_report.is_some_and(|(m, _)| m.report.as_ref().is_some_and(|r| r.kind == ReportKind::Result)) || (link_count > 0 && tasks.len() == link_count && tasks.iter().all(|t| t.lane == TaskLane::Accepted)) || answered_legacy { (InboxState::Handled, None) }
+            else if handled_result || (!reopened && ((link_count > 0 && tasks.len() == link_count && tasks.iter().all(|t| t.lane == TaskLane::Accepted)) || answered_legacy)) { (InboxState::Handled, None) }
             else { (InboxState::Underway, None) };
+        let closed_at = if state_value == InboxState::Underway {
+            close_coverage.filter(|(_, covers)| *covers).map(|(record, _)| record.at.clone())
+        } else { None };
+        let state_value = if closed_at.is_some() { InboxState::Handled } else { state_value };
         let linked_title = state.thread_links.iter().filter(|link| link.thread_id == id)
             .filter_map(|link| tasks.iter().find(|task| task.root_id == link.root_id && task.task_id == link.task_id).map(|task| (link, task)))
             .min_by(|(a, _), (b, _)| (&a.at, &a.root_id, &a.task_id).cmp(&(&b.at, &b.root_id, &b.task_id))).map(|(_, task)| task)
@@ -432,7 +476,7 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
             .chain(state.widget_publications.iter().filter(|p| p.thread_id == id && root_map.contains_key(p.root_id.as_str())).map(|p| p.at.as_str()))
             .max().unwrap_or(now).to_owned();
         let (timeline, timeline_omitted, earlier_widgets, earlier_widgets_omitted) = timeline(&messages, state, id, &root_map, &boards);
-        threads.push(InboxThread { thread_id: id.into(), state: state_value, need, owner_root_ids: owner_ids.into_iter().map(str::to_owned).collect(), title, next, project, request: request_echo, follow_ups, questions: projected_questions, recommendation, reply, unread_result_message_id: unread, unread_interims, tasks, receipts, facts, updated_at, timeline, timeline_omitted, earlier_widgets: (!earlier_widgets.is_empty()).then_some(earlier_widgets), earlier_widgets_omitted });
+        threads.push(InboxThread { thread_id: id.into(), state: state_value, need, closed_at, owner_root_ids: owner_ids.into_iter().map(str::to_owned).collect(), title, next, project, request: request_echo, follow_ups, questions: projected_questions, recommendation, reply, unread_result_message_id: unread, unread_interims, tasks, receipts, facts, updated_at, timeline, timeline_omitted, earlier_widgets: (!earlier_widgets.is_empty()).then_some(earlier_widgets), earlier_widgets_omitted });
     }
     threads.sort_by(|a,b| {
         let rank = |t: &InboxThread| match t.need { Some(InboxNeed::Decision) => 0, Some(InboxNeed::Answer) => 1, None if t.state == InboxState::Underway => 2, None => 3 };
@@ -443,7 +487,9 @@ pub(crate) fn project(request: &InboxRequest, state: &OrchestrationState, boards
         } else { b.updated_at.cmp(&a.updated_at) }).then_with(|| a.thread_id.cmp(&b.thread_id))
     });
     let mut handled = 0;
-    threads.retain(|t| { if t.state != InboxState::Handled { true } else { handled += 1; handled <= 50 } });
+    if cap_handled {
+        threads.retain(|t| { if t.state != InboxState::Handled { true } else { handled += 1; handled <= 50 } });
+    }
     let observation = match observation { RuntimeObservation::Fresh { observed_at, .. } => InboxObservation::Fresh { observed_at }, RuntimeObservation::Unavailable { error } => InboxObservation::Unavailable { error } };
     let stalls = roots.iter().filter_map(|root| {
         let subtree: HashSet<&str> = runs.iter().filter(|run| run.root_id == root.run_id).map(|run| run.run_id.as_str()).collect();
@@ -1090,6 +1136,87 @@ mod tests {
         assert_eq!(thread.next.as_ref().unwrap().text, "Assigned · Task");
         assert!(thread.facts.iter().any(|fact| fact.text == "Assigned · Task"));
     }
+    #[test]
+    fn close_fences_are_session_scoped_and_reopen_on_widget_or_message() {
+        use cockpit_protocol::widget::{WidgetKey, WidgetLiveBinding};
+        use super::super::store::WidgetPublication;
+        let mut state = OrchestrationState { runs: vec![root("r")], ..Default::default() };
+        state.messages.push(message("request", "r", 1, Some("t"), MessageKind::Instruction));
+        let marker = |session: &str, messages, widgets| ThreadReadRecord {
+            thread_id: String::new(),
+            through_message_id: super::super::threads::close_marker(session, "t", messages, widgets),
+            origin: ActorRef::Operator, at: NOW.into(),
+        };
+        state.thread_reads.push(marker("other", 1, 0));
+        assert_eq!(view(&state, vec![]).threads[0].state, InboxState::Underway);
+        state.thread_reads.push(marker("session", 1, 0));
+        let closed = view(&state, vec![]);
+        assert_eq!(closed.threads[0].state, InboxState::Handled);
+        assert_eq!(closed.threads[0].closed_at.as_deref(), Some(NOW));
+        let event = InboxWidgetEvent { key: WidgetKey { session_id: "session".into(), tab_id: "tab".into(), id: "w".into() },
+            revision: 1, binding: WidgetLiveBinding { run_id: "r".into(), attempt: 1, session_id: "session".into(),
+                attachment_id: "attachment".into(), attachment_epoch: 1 }, title: "Widget".into(),
+            publication_id: "publication".into(), content_sha256: "hash".into() };
+        state.widget_publications.push(WidgetPublication { thread_id: "t".into(), root_id: "r".into(),
+            at: NOW.into(), message_position: 1, event });
+        assert_eq!(view(&state, vec![]).threads[0].state, InboxState::Underway);
+        state.thread_reads.push(marker("session", 1, 1));
+        state.messages.push(report("update", "r", 2, Some("t"), ReportKind::Progress));
+        assert_eq!(view(&state, vec![]).threads[0].state, InboxState::Underway);
+        state.thread_reads.push(marker("session", 99, 99));
+        assert_eq!(view(&state, vec![]).threads[0].state, InboxState::Underway);
+    }
+
+    #[test]
+    fn follow_up_reopens_close_even_if_linked_task_is_now_accepted() {
+        let mut state = OrchestrationState { runs: vec![root("r")], ..Default::default() };
+        state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(),
+            linked_by: ActorRef::Operator, at: NOW.into() });
+        state.messages.push(message("request", "r", 1, Some("t"), MessageKind::Instruction));
+        state.thread_reads.push(ThreadReadRecord { thread_id: String::new(),
+            through_message_id: super::super::threads::close_marker("session", "t", 1, 0),
+            origin: ActorRef::Operator, at: NOW.into() });
+        state.messages.push(message("follow-up", "r", 2, Some("t"), MessageKind::Instruction));
+        let projected = view(&state, vec![board("r", "task")]);
+        assert_eq!(projected.threads[0].state, InboxState::Underway);
+        assert!(projected.threads[0].closed_at.is_none());
+        state.messages.push(report("question", "r", 3, Some("t"), ReportKind::NeedsInput));
+        assert_eq!(view(&state, vec![board("r", "task")]).threads[0].state, InboxState::NeedsYou);
+    }
+
+    #[test]
+    fn close_marker_cannot_be_a_read_receipt_even_when_ids_collide() {
+        let mut state = OrchestrationState { runs: vec![root("r")], ..Default::default() };
+        let key = super::super::threads::close_marker("session", "t", 1, 0);
+        state.messages.push(report(&key, "r", 1, Some("t"), ReportKind::Result));
+        state.thread_reads.push(ThreadReadRecord { thread_id: String::new(),
+            through_message_id: key.clone(), origin: ActorRef::Operator, at: NOW.into() });
+        let projected = view(&state, vec![]);
+        assert_eq!(projected.threads[0].need, Some(InboxNeed::Answer));
+        assert_eq!(projected.threads[0].unread_result_message_id.as_deref(), Some(key.as_str()));
+    }
+
+    #[test]
+    fn explicitly_closed_threads_obey_handled_cap() {
+        let mut state = OrchestrationState { runs: vec![root("r")], ..Default::default() };
+        for index in 0..51 {
+            let thread = format!("thread-{index}");
+            state.messages.push(message(&format!("message-{index}"), "r", index + 1, Some(&thread), MessageKind::Instruction));
+        }
+        for index in 0..51 {
+            let thread = format!("thread-{index}");
+            state.thread_reads.push(ThreadReadRecord { thread_id: String::new(),
+                through_message_id: super::super::threads::close_marker("session", &thread, 51, 0),
+                origin: ActorRef::Operator, at: NOW.into() });
+        }
+        let capped = view(&state, vec![]);
+        assert_eq!(capped.threads.len(), 50);
+        assert!(capped.threads.iter().all(|thread| thread.closed_at.is_some()));
+        let all = project_uncapped(&InboxRequest { session_id: "session".into() }, &state, vec![],
+            Err(InspectionError::new("offline", "unavailable")), NOW, "store").unwrap();
+        assert_eq!(all.threads.len(), 51);
+    }
+
     #[test]
     fn widget_publications_survive_storage_and_preserve_order_scope_and_cap() {
         use cockpit_protocol::widget::{WidgetKey, WidgetLiveBinding};

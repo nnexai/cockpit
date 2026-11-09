@@ -367,6 +367,118 @@ fn read_marks_require_operator_and_root_result_in_the_same_thread() {
 }
 
 #[test]
+fn operator_close_is_durable_idempotent_and_reopens_without_accepting_work() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let actor = fixture.root_actor(&root);
+    let thread = id();
+    fixture.operator(handoff(&root, &thread));
+    let close = || OrchestrationAction::ThreadClose { thread_id: thread.clone() };
+    let operator = Actor::Operator(OperatorOrigin::Native);
+    let before = fixture.state_bytes();
+    assert_code(fixture.apply(&actor, close()), "actor_forbidden");
+    assert_eq!(fixture.state_bytes(), before);
+    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), close()), "actor_forbidden");
+    assert_eq!(fixture.state_bytes(), before);
+    assert_code(fixture.apply(&operator, OrchestrationAction::ThreadClose { thread_id: id() }), "thread_close_invalid");
+    let stale = fixture.state().revision.saturating_sub(1);
+    assert_code(fixture.service.mutate_resolved(&operator, OrchestrationMutationRequest {
+        session_id: SESSION.into(), expected_revision: Some(stale), action: close(),
+    }, &ResolvedMutationInput::default()), "orchestration_revision_conflict");
+    assert_eq!(fixture.state_bytes(), before);
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let position = state.messages.iter().position(|message| message.thread_id.as_deref() == Some(thread.as_str())).unwrap();
+        let segment = super::super::archive::test_segment(&locked, vec![(position, state.messages[position].clone())]);
+        state.archives.push(segment);
+        locked.save(&mut state).unwrap();
+    }
+    fixture.seed_run(&root, |run| run.stage = RunStage::Closed);
+    let before = fixture.state();
+    fixture.apply(&operator, close()).unwrap();
+    let after = fixture.state();
+    assert_eq!(serde_json::to_value(&before.runs).unwrap(), serde_json::to_value(&after.runs).unwrap());
+    assert_eq!(serde_json::to_value(&before.messages).unwrap(), serde_json::to_value(&after.messages).unwrap());
+    assert_eq!(serde_json::to_value(&before.thread_links).unwrap(), serde_json::to_value(&after.thread_links).unwrap());
+    assert_eq!(serde_json::to_value(&before.archives).unwrap(), serde_json::to_value(&after.archives).unwrap());
+    let project = |state: &store::OrchestrationState| super::super::inbox_view::project(
+        &InboxRequest { session_id: SESSION.into() }, state, vec![],
+        Err(InspectionError::new("offline", "unavailable")), "2026-10-05T12:00:00Z", "store").unwrap();
+    let view = project(&after);
+    let item = view.threads.iter().find(|item| item.thread_id == thread).unwrap();
+    assert_eq!(item.state, InboxState::Handled);
+    assert!(item.closed_at.is_some());
+    let bytes = fixture.state_bytes();
+    fixture.apply(&operator, close()).unwrap();
+    assert_eq!(fixture.state_bytes(), bytes);
+    // Restoring the archived message must not invalidate the persisted fence.
+    fixture.seed_state(|state| { state.archives.clear(); });
+    let restored = project(&fixture.state());
+    assert!(restored.threads.iter().find(|item| item.thread_id == thread).unwrap().closed_at.is_some());
+    fixture.seed_run(&root, |run| run.stage = RunStage::Active);
+    fixture.operator(handoff(&root, &thread));
+    let reopened = project(&fixture.state());
+    let item = reopened.threads.iter().find(|item| item.thread_id == thread).unwrap();
+    assert_eq!(item.state, InboxState::Underway);
+    assert!(item.closed_at.is_none());
+    fixture.apply(&operator, close()).unwrap();
+    assert_eq!(fixture.state().thread_reads.iter().filter(|record|
+        super::super::threads::parse_close_marker(record).is_some()).count(), 1);
+}
+
+#[test]
+fn close_refuses_attention_and_never_marks_a_later_result_read() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let actor = fixture.root_actor(&root);
+    let operator = Actor::Operator(OperatorOrigin::Native);
+    let question_thread = id();
+    let result_thread = id();
+    for thread in [&question_thread, &result_thread] { fixture.operator(handoff(&root, thread)); }
+    let close = |thread: &str| OrchestrationAction::ThreadClose { thread_id: thread.into() };
+    fixture.apply(&operator, close(&result_thread)).unwrap();
+    for (kind, thread) in [(ReportKind::NeedsInput, &question_thread), (ReportKind::Result, &result_thread)] {
+        let mut action = report(kind, (kind == ReportKind::Result).then_some(ReportOutcome::Succeeded), None);
+        if let OrchestrationAction::Report { thread_id, .. } = &mut action { *thread_id = Some(thread.clone()); }
+        fixture.apply(&actor, action).unwrap();
+        let before = fixture.state_bytes();
+        assert_code(fixture.apply(&operator, close(thread)), "thread_close_invalid");
+        assert_eq!(fixture.state_bytes(), before);
+    }
+    let state = fixture.state();
+    let view = super::super::inbox_view::project(&InboxRequest { session_id: SESSION.into() },
+        &state, vec![], Err(InspectionError::new("offline", "unavailable")), "2026-10-05T12:00:00Z", "store").unwrap();
+    let item = view.threads.iter().find(|item| item.thread_id == result_thread).unwrap();
+    assert_eq!(item.need, Some(InboxNeed::Answer));
+    assert!(item.closed_at.is_none());
+    let result_id = item.unread_result_message_id.clone().unwrap();
+    let mut progress = report(ReportKind::Progress, None, None);
+    if let OrchestrationAction::Report { thread_id, .. } = &mut progress { *thread_id = Some(result_thread.clone()); }
+    fixture.apply(&actor, progress).unwrap();
+    let before = fixture.state_bytes();
+    assert_code(fixture.apply(&operator, close(&result_thread)), "thread_close_invalid");
+    assert_eq!(fixture.state_bytes(), before);
+    fixture.apply(&operator, OrchestrationAction::ThreadMarkRead {
+        thread_id: result_thread.clone(), through_message_id: result_id, run_id: None,
+    }).unwrap();
+    fixture.apply(&operator, close(&result_thread)).unwrap();
+}
+
+#[test]
+fn close_rejects_a_foreign_session_thread() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let thread = id();
+    fixture.operator(handoff(&root, &thread));
+    fixture.seed_run(&root, |run| run.session_id = "other-session".into());
+    let before = fixture.state_bytes();
+    assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Native),
+        OrchestrationAction::ThreadClose { thread_id: thread }), "thread_close_invalid");
+    assert_eq!(fixture.state_bytes(), before);
+}
+
+#[test]
 fn task_create_recovers_prejournaled_link_and_replays_without_duplicate() {
     let fixture = Fixture::new();
     let root = fixture.root();

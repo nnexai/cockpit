@@ -315,6 +315,31 @@ const defaultedSnapshotFields: Readonly<Record<string, true>> = {
 };
 
 describe("orchestration protocol boundary", () => {
+  it("matches TextEncoder byte limits and control rules for orchestration strings", () => {
+    const encoder = new TextEncoder();
+    const samples = ["", "a", "\0", "\x1f", "\x7f", "\x80", "\u07ff", "\u0800",
+      "\ud7ff", "\ud800", "\udfff", "\ue000", "\ud800\udc00", "\udbff\udfff",
+      "\ud800a", "\ud800\ud800\udc00", "\udfff\ud800", "é😀\ud800"];
+    for (const [field, max] of [["label", 256], ["selected_root_id", 512], ["brief", 16 * 1024]] as const) {
+      for (const sample of samples) {
+        const sampleBytes = encoder.encode(sample).byteLength;
+        for (const padding of [0, Math.max(0, max - sampleBytes - 1), Math.max(0, max - sampleBytes),
+          Math.max(0, max - sampleBytes + 1)]) {
+          const value = "a".repeat(padding) + sample;
+          const expected = encoder.encode(value).byteLength <= max && (field === "selected_root_id"
+            ? value.length > 0 && !/[\x00-\x1f\x7f]/.test(value) : !value.includes("\0"));
+          const action = field === "brief" ? { ...workerStartAction, brief: value } : { ...startAction, [field]: value };
+          let accepted = true;
+          try { parseOrchestrationAction(action); } catch (error) {
+            if (!(error instanceof CockpitClientError)) throw error;
+            accepted = false;
+          }
+          expect(accepted, `${field}: ${JSON.stringify(sample)} with ${padding} ASCII bytes`).toBe(expected);
+        }
+      }
+    }
+  });
+
   it("strictly validates unreflected input metadata", () => {
     const input = { run_id: "run", result_message_id: "result", message_id: "input", seq: 2,
       kind: "instruction", from: { type: "operator" }, stage: "stored", after_result: true,
@@ -2021,6 +2046,12 @@ describe("browser/native orchestration parity", () => {
     const nativeCall = vi.fn(async () => payload);
     const client = transport === "browser" ? createBrowserClient(browserCall) : createNativeClient(nativeCall);
     await expect(client.orchestrationInbox(request)).resolves.toEqual(view);
+    payload = { ...view, threads: [{ ...thread, state: "handled", closed_at: at }] };
+    await expect(client.orchestrationInbox(request)).resolves.toEqual(payload);
+    for (const invalid of ["yesterday", "", null]) {
+      payload = { ...view, threads: [{ ...thread, closed_at: invalid }] };
+      await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
+    }
     const taskLink = { root_id: "root", task_id: "task", title: "Task", project: null, lane: "working", run: null, evidence: null };
     const workerWait = { cause: "worker_waiting", since: at, held_by: [], code: null, detail: "Awaiting approval", next_automatic: false };
     for (const task of [taskLink, { ...taskLink, worker_waiting: workerWait }]) {
@@ -2116,6 +2147,7 @@ describe("browser/native orchestration parity", () => {
       { action: "thread_handoff", message_id: assignmentTaskId, thread_id: prerequisiteId, to_run_id: "root", text: "Please investigate", binding },
       { action: "thread_mark_read", thread_id: prerequisiteId, through_message_id: assignmentTaskId },
       { action: "thread_mark_read", thread_id: prerequisiteId, through_message_id: assignmentTaskId, run_id: "worker" },
+      { action: "thread_close", thread_id: prerequisiteId },
       { action: "thread_link", root_id: "root", task_id: assignmentTaskId, thread_id: prerequisiteId },
     ];
     for (const action of actions) {
@@ -2124,6 +2156,8 @@ describe("browser/native orchestration parity", () => {
     }
     expect(() => parseOrchestrationAction({ ...actions[1], binding: { ...binding, unexpected: true } })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationAction({ action: "thread_mark_read", thread_id: prerequisiteId, through_message_id: assignmentTaskId, run_id: "" })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ action: "thread_close", thread_id: "" })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ action: "thread_close", thread_id: "not-a-uuid" })).toThrow(CockpitClientError);
   });
 
   it.each(["browser", "native"] as const)("preserves W3 integration receipts and resource proof on %s", async transport => {

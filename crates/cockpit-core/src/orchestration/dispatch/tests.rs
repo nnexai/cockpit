@@ -155,6 +155,53 @@ fn receipt() -> RunLocation {
         native_session_id: Some("native".into()),
     }
 }
+#[test]
+fn fresh_stop_requires_exact_idle_exclusive_pane() {
+    let location = receipt();
+    let mut view = runtime();
+    view.boot_id = Some("boot".into());
+    view.panes[0].native_session_id = Some("native".into());
+    view.panes[0].agent_kind = Some("omp".into());
+    assert!(fresh_root_runtime_matches(&view, &location, "omp"));
+    for mismatch in 0..10 {
+        let mut changed = view.clone();
+        match mismatch {
+            0 => changed.endpoint_identity = "other".into(),
+            1 => changed.boot_id = None,
+            2 => changed.panes[0].pane_id = "other".into(),
+            3 => changed.panes[0].terminal_id = Some("other".into()),
+            4 => changed.panes[0].native_session_id = None,
+            5 => changed.panes[0].agent_status = Some("working".into()),
+            6 => changed.panes[0].agent_kind = None,
+            7 => changed.panes[0].launch_pending = true,
+            8 => {
+                let mut other = changed.panes[0].clone();
+                other.pane_id = "other".into();
+                other.terminal_id = Some("other".into());
+                changed.panes.push(other);
+            }
+            _ => {
+                let mut other = changed.panes[0].clone();
+                other.pane_id = "other".into();
+                other.tab_id = "other".into();
+                changed.panes.push(other);
+            }
+        }
+        assert!(!fresh_root_runtime_matches(&changed, &location, "omp"), "mismatch {mismatch}");
+    }
+}
+
+#[test]
+fn fresh_stop_only_retries_definitive_refusals() {
+    for code in ["foreign_space_group_close_risk", "confirmation_required", "stale_identity",
+        "request_not_dispatched", "pane_not_found"] {
+        assert!(fresh_stop_definite_refusal(code), "{code}");
+    }
+    for code in ["herdr_outcome_unknown", "timeout", "malformed_response", "inspection_unavailable"] {
+        assert!(!fresh_stop_definite_refusal(code), "{code}");
+    }
+}
+
 
 #[test]
 fn launch_proof_fences_available_boot_terminal_and_native_identity() {

@@ -28,7 +28,7 @@ function outcomeLine(thread: InboxThread) {
   const question = thread.questions.find(q => q.receipt.status === "unresolved");
   const text = question?.text.text || thread.reply?.text || thread.timeline.find(entry => unreadInterim(thread, entry))?.text || thread.next?.text;
   const lines = text?.split(/\r?\n/).map(line => line.replace(/<[^>]*>|[*_`#>\[\]]/g, "").trim()).filter(Boolean) ?? [];
-  return lines.find(line => line !== threadHeadline(thread)) || (thread.state === "handled" ? "Handled" : thread.state === "needs_you" ? "Awaiting your response" : "Waiting for an update");
+  return lines.find(line => line !== threadHeadline(thread)) || (thread.state === "handled" ? thread.closed_at ? "Closed" : "Handled" : thread.state === "needs_you" ? "Awaiting your response" : "Waiting for an update");
 }
 const directBusyCodes: Record<string, true> = { agent_not_idle: true, herdr_prompt_deferred: true, agent_blocked: true, agent_not_ready: true };
 const ownerLabel = (view: InboxView | null, runId: string) => {
@@ -62,7 +62,7 @@ function tone(thread: InboxThread): { kind: string; icon: UiIconName; label: str
   }
   if (thread.unread_interims.length) return { kind: "review", icon: "eye", label: "Interim update" };
   if (thread.state === "underway") return { kind: "work", icon: "work", label: "In progress" };
-  if (thread.state === "handled") return { kind: "done", icon: "check-circle", label: "Handled" };
+  if (thread.state === "handled") return { kind: "done", icon: "check-circle", label: thread.closed_at ? "Closed" : "Handled" };
   return { kind: "decision", icon: "help", label: "Needs you" };
 }
 const srcKind = (value: InboxText) => value.source.kind === "owner_card" ? "ai" : value.source.kind;

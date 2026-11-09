@@ -748,15 +748,16 @@ impl OrchestrationService {
             };
             let needs_merged = matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch)
                 && !git_integration_eligible(&run);
-            let scope_hold = !drained && resource.cleanup.reason.as_ref().is_some_and(|why|
+            // A prior-boot writer observation alone does not release the exact
+            // checkout claim or prove that all other consumers are absent.
+            let claim_pending = state.checkout_claims.iter().any(|claim|
+                Some(claim.claim_id.as_str()) == run.checkout_claim_id.as_deref()
+                    && matches!(claim.state, claims::ClaimState::Reserved | claims::ClaimState::Held | claims::ClaimState::Quiescing));
+            let scope_hold = (!drained || claim_pending) && resource.cleanup.reason.as_ref().is_some_and(|why|
                 why.code == "containment_unproven" || why.code == "checkout_consumer_present" || why.code.starts_with("scope_"));
-            // An undrained owned Git resource cannot be removed, regardless of
-            // integration. Keep its scope hold even if Git proof is unavailable;
-            // obtain fresh proof on the event that establishes drain.
-            let held_git = needs_merged && scope_hold && run.stage == RunStage::Closed
-                && run.close_reason != Some(CloseReason::Superseded)
-                && resource.ownership == ResourceOwnership::Owned
-                && resource.authority == CleanupAuthority::OwnedWhenSafe;
+            // Keep a pending scope hold even if Git proof is unavailable.
+            // Reassess after the hold no longer applies.
+            let held_git = needs_merged && scope_hold;
             let merged = if needs_merged && !held_git { merged::merged_proof(&state, &run).await } else { Ok(None) };
             let merged = match merged {
                 Ok(proof) => proof,
@@ -777,9 +778,14 @@ impl OrchestrationService {
             } else if run.close_reason == Some(CloseReason::Superseded) && resource.kind == OwnedResourceKind::Space {
                 match projects.inspect_owned_resource(&resource, &run, None, None).await {
                     Ok(CleanupEvaluation::Absent) => CleanupEvaluation::Absent,
+                    _ if scope_hold => CleanupEvaluation::Kept(resource.cleanup.reason.clone().expect("classified scope hold")),
                     _ => CleanupEvaluation::Kept(reason(CleanupReasonClass::UserWork, "superseded_space_preserved",
                         "No explicit Space teardown is authorized for replaced work; only fresh exact-incarnation absence can settle its bookkeeping")),
                 }
+            } else if scope_hold {
+                // Preserve the stronger writer hold until independent claim release;
+                // competing cleanup assessments must not continually overwrite it.
+                CleanupEvaluation::Kept(resource.cleanup.reason.clone().expect("classified scope hold"))
             } else if run.close_reason == Some(CloseReason::Superseded)
                 && resource.kind != OwnedResourceKind::WorkerTerminal {
                 if !drained {
@@ -805,11 +811,6 @@ impl OrchestrationService {
                     CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "consumer_drain_unproven",
                         "Private attempt removal requires its exact checkout claim to be Released with consumer-exit proof and its own pane retired"))
                 }
-            } else if scope_hold {
-                // Scope cleanup and resource cleanup share this status. Preserve
-                // the stronger writer hold until drain is proven; replacing it
-                // with integration_pending makes the two passes oscillate.
-                CleanupEvaluation::Kept(resource.cleanup.reason.clone().expect("classified scope hold"))
             } else if needs_merged && merged.is_none() {
                 CleanupEvaluation::Waiting(reason(CleanupReasonClass::Reconcilable, "integration_pending",
                     "Record IntegrationRecord, or merge/cherry-pick the accepted commits into the project's primary checkout; cleanup re-evaluates on ref changes."))

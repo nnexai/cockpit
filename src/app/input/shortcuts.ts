@@ -44,7 +44,7 @@ export type LocalShortcutId =
   | "comment-lines" | "comment-file"
   | "terminal-copy" | "terminal-paste" | "terminal-newline"
   | "browser-delete-annotation"
-  | "literal-prefix" | "cancel-prefix" | "commands-bare" | "quick-switch" | "subscription-limits" | "show-overview"
+  | "literal-prefix" | "cancel-prefix" | "commands-bare" | "quick-switch" | "subscription-limits" | "show-overview" | "fresh-conversation"
   | "show-widgets" | "next-widget" | "previous-widget" | "remove-widget";
 
 export type ShortcutId = PrefixCommand | LocalShortcutId;
@@ -134,6 +134,7 @@ export const SHORTCUTS: readonly ShortcutEntry[] = [
   { id: "subscription-limits", label: "Subscription limits", group: "Navigate", scope: "global", note: "Commands-only; opens read-only subscription limits in the lower workarea strip." },
   { id: "liaison", label: "Liaison", group: "Navigate", scope: "global", chords: [{ mod: true, shift: true, key: "l", display: "L" }], palette: "custom", primary: true, allowWhileBusy: true, note: "Goes to the liaison from any Space; the same keys return. Starts or resumes it when it is not running." },
   { id: "show-overview", label: "Show overview", group: "Navigate", scope: "global", palette: "custom", note: "Read-only task board and prerequisite graph, available while work is open. No assigned shortcut." },
+  { id: "fresh-conversation", label: "New supervisor conversation", group: "Navigate", scope: "global", palette: "custom", note: "Starts a fresh supervisor conversation while retaining tasks and workers. No assigned shortcut." },
   { id: "show-widgets", label: "Show widgets", group: "Pane", scope: "global", palette: "custom", note: "Commands-only; opens widgets waiting in the selected tab without taking terminal focus." },
   { id: "next-widget", label: "Next widget", group: "Pane", scope: "global", palette: "custom", note: "Commands-only; shows the next widget in the selected tab's dock." },
   { id: "previous-widget", label: "Previous widget", group: "Pane", scope: "global", palette: "custom", note: "Commands-only; shows the previous widget in the selected tab's dock." },

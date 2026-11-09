@@ -311,9 +311,10 @@ pub fn fresh_root_available(run: &Run) -> bool {
         && run.run_id == run.root_id && run.parent_run_id.is_none()
         && run.checkout_claim_id.is_none() && !matches!(run.stage, RunStage::Closed | RunStage::Reported)
         && run.result.is_none()
-        && run.resume.as_ref().is_some_and(|resume| resume.phase == ResumePhase::Blocked)
+        && run.resume.as_ref().is_none_or(|resume| !matches!(resume.phase, ResumePhase::Reconciling | ResumePhase::Launching))
         && run.attachment.as_ref().is_some_and(|attachment| !matches!(attachment.state,
-            AttachmentState::Reserved | AttachmentState::Quiescing | AttachmentState::Revoked))
+            AttachmentState::Reserved | AttachmentState::Quiescing | AttachmentState::Revoked)
+            && attachment.process.is_some() && attachment.machine_id.as_deref().is_some_and(|id| !id.is_empty()))
         && (run.kind != RunKind::Supervisor || run.dispatch.is_some())
         && run.dispatch.as_ref().is_none_or(|dispatch| dispatch.step == DispatchStep::Launched
             && run.attachment.as_ref().is_some_and(|attachment| dispatch.launch_attempt == attachment.launch_attempt))
@@ -330,13 +331,13 @@ pub fn fresh_root_available(run: &Run) -> bool {
                     .is_some_and(|location| location.session_id == run.session_id)))
 }
 
-/// Fences no worker capability and makes no claim of physical process exit.
+/// Admission retains the old incarnation until its exact exit is proved.
 pub(crate) fn admit_fresh_root(state: &super::store::OrchestrationState, run: &Run) -> Result<(), InspectionError> {
     if !fresh_root_available(run) || state.checkout_claims.iter().any(|claim|
         claim.state != super::claims::ClaimState::Released
             && claim.holder.as_ref().is_some_and(|holder| holder.run_id == run.run_id)) {
         return Err(InspectionError::new("fresh_supervisor_unavailable",
-            "A fresh conversation requires a blocked, claim-free root and a supported isolated launch."));
+            "A fresh conversation requires a settled, claim-free root with recorded process identity and a supported isolated launch."));
     }
     if run.kind == RunKind::Adopted && run.dispatch.is_none() {
         if run.target.is_some() || run.setup.is_some()

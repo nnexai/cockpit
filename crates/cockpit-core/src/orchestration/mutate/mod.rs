@@ -112,6 +112,7 @@ pub(super) fn apply(
             super::cleanup::apply(ctx, action),
         action @ OrchestrationAction::ThreadHandoff { .. } => super::threads::handoff(ctx, action),
         action @ OrchestrationAction::ThreadMarkRead { .. } => super::threads::mark_read(ctx, action),
+        action @ OrchestrationAction::ThreadClose { .. } => super::threads::close(ctx, action),
         action @ OrchestrationAction::ThreadLink { .. } => super::threads::link(ctx, action),
         OrchestrationAction::Accept { run_id, expected_task_revision } =>
             intents::accept(ctx, run_id, expected_task_revision),

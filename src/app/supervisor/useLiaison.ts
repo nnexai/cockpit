@@ -6,16 +6,16 @@ import { plainError } from "../shell/plainErrors";
 import { useSupervisor, type LiaisonAction, type MutationRequestScope } from "./useSupervisor";
 
 type ConfirmationAttachment = { sessionId: string; stateStoreId: string; rootId: string; attachmentId: string; epoch: number };
-type RecoveryState = ConfirmationAttachment & { message: string | null; retry: boolean; unavailable: boolean };
+type RecoveryState = ConfirmationAttachment & { source: "recovery" | "fresh"; message: string | null; retry: boolean; unavailable: boolean };
 type RetainedOperation = { action: LiaisonAction; scope: MutationRequestScope; confirmation?: ConfirmationAttachment };
 export interface ConfirmedRecovery {
-  busy: boolean; unavailable: boolean; retry: boolean; message: string | null; error: boolean; stopConfirmable: boolean; freshAvailable: boolean; pendingAction: "resume" | "fresh" | null;
+  source: "recovery" | "fresh"; waiting: boolean; busy: boolean; unavailable: boolean; retry: boolean; message: string | null; error: boolean; stopConfirmable: boolean; freshAvailable: boolean; pendingAction: "resume" | "fresh" | null;
   confirm(): Promise<void>; retryResume(): Promise<void>; startNew(): Promise<void>; close(): void;
 }
 export interface LiaisonController {
   snapshot: OrchestrationSnapshot | null; root: Run | null; tasks: TaskView[];
   waiting: boolean; fresh: boolean; connected: boolean; status: string | null; actionLabel: string | null; actionEnabled: boolean; actionReason: string | null; startAvailable: boolean; error: string | null;
-  paneId: string | null; tabId: string | null; start(): Promise<void>; activate(): Promise<void>; recovery: ConfirmedRecovery | null;
+  paneId: string | null; tabId: string | null; freshConversationVisible: boolean; freshConversationReason: string | null; start(): Promise<void>; activate(): Promise<void>; activateFresh(): void; recovery: ConfirmedRecovery | null;
 }
 export function useLiaison(props: WorkbenchProps, openConversation: () => void, navigate: (paneId: string, run: Run, snapshot: OrchestrationSnapshot) => Promise<void>, conversationVisible: boolean): LiaisonController {
   const { client, state, selection, onReconnect } = props;
@@ -92,6 +92,11 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
   const tasks = root && snapshot?.board?.root_id === root.run_id ? snapshot.board.tasks : [];
   const status = !fresh ? "Offline" : observer.busy ? root ? "Resuming…" : "Starting…" : candidate?.resume === "blocked" && candidate.cause ? plainError(candidate.cause.code, candidate.cause.message).text : (initialLaunchUnconfirmed || replacementLaunchUnconfirmed) && root.dispatch?.error ? plainError(root.dispatch.error.code, root.dispatch.error.message).text : initialLaunchUnconfirmed || replacementLaunchUnconfirmed ? "Supervisor start is unconfirmed. Check the existing terminal before resuming." : root?.resume && ["reconciling", "launching"].includes(root.resume.phase) ? "Resuming…" : initialStarting ? "Starting…" : null;
   const actionReason = actionEnabled || !actionLabel ? null : state.sync !== "live" ? "Offline" : lookup?.status !== "resolved" ? lookup?.message ?? "Checking supervisor…" : !fresh || observer.busy ? status : kind === "pending" ? pendingReason : kind === "reselect" && !reselectSpaceMatches ? "Select the supervisor's original Space to resume in its folder." : retainedScopeMatches ? "Supervisor unavailable" : "The original request is kept.";
+  const freshConversationVisible = !!live;
+  const pendingFresh = retained.current?.action.action === "run_start_fresh_supervisor" && !!retained.current.confirmation;
+  const freshConversationReason = !actionable ? actionReason ?? status ?? "Supervisor unavailable"
+    : retained.current && !pendingFresh ? "The original request is kept."
+    : !root?.attachment || !candidate?.fresh_available && !pendingFresh ? "A new conversation is not available for this supervisor." : null;
   const perform = async (operation: RetainedOperation) => {
     const result = await observer.mutateResult(operation.action, operation.scope);
     if (result?.result === "supervisor_started" && result.start.operation_id === operation.action.operation_id) {
@@ -143,7 +148,15 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
       sessionId: state.sessionId, stateStoreId: snapshot.state_store_id,
       rootId: root.run_id, attachmentId: root.attachment.attachment_id, epoch: root.attachment.epoch,
     } : null);
-    if (captured) setRecovery({ ...captured, retry: !!retained.current, unavailable: false, message: retained.current ? "No answer yet. Retrying sends the same request." : candidate?.cause ? plainError(candidate.cause.code, candidate.cause.message).text : null });
+    if (captured) setRecovery({ ...captured, source: "recovery", retry: !!retained.current, unavailable: false, message: retained.current ? "No answer yet. Retrying sends the same request." : candidate?.cause ? plainError(candidate.cause.code, candidate.cause.message).text : null });
+  };
+  const activateFresh = () => {
+    if (!freshConversationVisible || freshConversationReason || !state.sessionId || !snapshot || !root?.attachment) return;
+    const captured = retained.current?.confirmation ?? {
+      sessionId: state.sessionId, stateStoreId: snapshot.state_store_id,
+      rootId: root.run_id, attachmentId: root.attachment.attachment_id, epoch: root.attachment.epoch,
+    };
+    setRecovery({ ...captured, source: "fresh", retry: !!retained.current, unavailable: false, message: retained.current ? "No answer yet. Retrying sends the same request." : null });
   };
   const recoveryScopeMatches = !!recovery && recovery.sessionId === state.sessionId && recovery.stateStoreId === snapshot?.state_store_id && recovery.rootId === root?.run_id;
   useEffect(() => {
@@ -177,9 +190,9 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
       }
       const failure = observer.mutationFailure.current;
       const code = failure instanceof CockpitClientError ? failure.operationCode : undefined;
-      const definitive = code === "attachment_conflict" || code === "root_stop_confirmation_unavailable" || code === "fresh_supervisor_unavailable" || code === "fresh_supervisor_unsupported";
+      const definitive = code === "attachment_conflict" || code === "root_stop_confirmation_unavailable" || code === "fresh_supervisor_unavailable" || code === "fresh_supervisor_unsupported" || code === "supervisor_busy" || code === "fresh_supervisor_exit_unprovable";
       if (definitive) retained.current = null;
-      setRecovery(previous => previous ? { ...previous, retry: !definitive, unavailable: false,
+      setRecovery(previous => previous ? { ...previous, retry: !definitive, unavailable: code === "attachment_conflict",
         message: definitive && failure instanceof Error ? plainError(code, failure.message).text : "No answer yet. Retrying sends the same request.",
       } : null);
     } finally { confirming.current = false; }
@@ -194,7 +207,7 @@ export function useLiaison(props: WorkbenchProps, openConversation: () => void, 
   }, [root, snapshot, observation, state.sessionId, state.snapshot, selection.paneId, conversationVisible, navigate]);
   const savedLocation = root?.session_id === state.sessionId ? root.attachment?.location : null;
   const recoveryMessage = observer.busy ? "Working…" : !actionable ? actionReason : recovery?.message ?? null;
-  return { snapshot, root, tasks, waiting, fresh, connected: !!live && candidate?.connection === "connected", status, actionLabel, actionEnabled, actionReason, startAvailable, start, activate,
-    recovery: recovery && recoveryScopeMatches ? { busy: observer.busy, unavailable: recovery.unavailable || !actionable, retry: recovery.retry, message: recoveryMessage, error: !observer.busy && actionable && !!recovery.message, stopConfirmable: !!candidate?.stop_confirmable, freshAvailable: !!candidate?.fresh_available, pendingAction: recovery.retry ? retained.current?.action.action === "run_start_fresh_supervisor" ? "fresh" : "resume" : null, confirm: () => recover(false, true), retryResume: () => recover(false), startNew: () => recover(true), close: () => { if (!observer.busy && !confirming.current) setRecovery(null); } } : null,
+  return { snapshot, root, tasks, waiting, fresh, connected: !!live && candidate?.connection === "connected", status, actionLabel, actionEnabled, actionReason, startAvailable, start, activate, activateFresh, freshConversationVisible, freshConversationReason,
+    recovery: recovery && recoveryScopeMatches ? { source: recovery.source, waiting, busy: observer.busy, unavailable: recovery.unavailable || !actionable, retry: recovery.retry, message: recoveryMessage, error: !observer.busy && actionable && !!recovery.message, stopConfirmable: !!candidate?.stop_confirmable, freshAvailable: !!candidate?.fresh_available, pendingAction: recovery.retry ? retained.current?.action.action === "run_start_fresh_supervisor" ? "fresh" : "resume" : null, confirm: () => recover(false, true), retryResume: () => recover(false), startNew: () => recover(true), close: () => { if (!observer.busy && !confirming.current) setRecovery(null); } } : null,
     error: navigationError ?? observer.error ?? (fresh && candidate?.resume === "blocked" && candidate.cause ? plainError(candidate.cause.code, candidate.cause.message).text : null), paneId: observation?.presence === "present" ? observation.pane_id : savedLocation?.pane_id ?? null, tabId: observation?.presence === "present" ? observation.tab_id : savedLocation?.tab_id ?? null };
 }

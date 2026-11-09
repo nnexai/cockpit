@@ -1778,6 +1778,9 @@ pub struct InboxThread {
     pub thread_id: String,
     pub state: InboxState,
     pub need: Option<InboxNeed>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub closed_at: Option<String>,
     pub owner_root_ids: Vec<String>,
     pub title: InboxText,
     pub next: Option<InboxText>,
@@ -2101,6 +2104,7 @@ pub enum OrchestrationAction {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_id: Option<String>,
     },
+    ThreadClose { thread_id: String },
     ThreadLink {
         root_id: String,
         task_id: String,
@@ -2342,6 +2346,7 @@ mod tests {
 
         for wire in [
             json!({"action": "thread_mark_read", "thread_id": "t", "through_message_id": "m"}),
+            json!({"action": "thread_close", "thread_id": "t"}),
             json!({"action": "thread_link", "root_id": "r", "task_id": "task", "thread_id": "t"}),
         ] {
             let action: OrchestrationAction = serde_json::from_value(wire.clone()).unwrap();
