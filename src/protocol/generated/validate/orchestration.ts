@@ -285,6 +285,7 @@ export const wireInboxThread: WireDescriptor<V1.InboxThread> = struct<V1.InboxTh
   "thread_id": req(str),
   "state": req(named(() => wireInboxState)),
   "need": req(nullable(named(() => wireInboxNeed)), { fill: null }),
+  "closed_at": opt(str, OMIT, { fill: null, rustOmits: true }),
   "owner_root_ids": req(list(str)),
   "title": req(named(() => wireInboxText)),
   "next": req(nullable(named(() => wireInboxText)), { fill: null }),

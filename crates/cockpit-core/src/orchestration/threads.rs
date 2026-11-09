@@ -116,6 +116,21 @@ pub(super) fn interim_read_key(state: &OrchestrationState, message: &Message) ->
     Some(format!("cockpit-interim-read-v1:{identity}"))
 }
 
+// Empty thread IDs cannot be produced by mark_read, or by a legacy
+// question (whose message ID is nonempty). Keeping the marker outside every
+// real thread also prevents old readers interpreting it as a read receipt,
+// even if a future message happens to reuse the encoded marker as its ID.
+const CLOSE_PREFIX: &str = "cockpit-thread-close-v1:";
+
+pub(super) fn close_marker(session: &str, thread_id: &str, messages: usize, widgets: usize) -> String {
+    format!("{CLOSE_PREFIX}{}", serde_json::to_string(&(session, thread_id, messages, widgets)).expect("close marker serializes"))
+}
+
+pub(super) fn parse_close_marker(read: &ThreadReadRecord) -> Option<(String, String, usize, usize)> {
+    if !read.thread_id.is_empty() || !matches!(read.origin, ActorRef::Operator) { return None; }
+    serde_json::from_str(read.through_message_id.strip_prefix(CLOSE_PREFIX)?).ok()
+}
+
 pub(super) fn is_read(state: &OrchestrationState, session: &str, thread_id: &str, message: &Message) -> bool {
     if linked_worker_interim(state, session, thread_id, message) {
         let Some(key) = interim_read_key(state, message) else { return false };
@@ -293,6 +308,47 @@ pub(super) fn mark_read(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) 
         key
     } else { through_message_id };
     ctx.state.thread_reads.push(ThreadReadRecord { thread_id, through_message_id: read_id, origin: ActorRef::Operator, at: now() });
+    Ok(Applied::Machine(OrchestrationActionResult::Done))
+}
+
+pub(super) fn close(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
+    if operator(ctx.actor)? != OperatorOrigin::Native {
+        return Err(error("actor_forbidden", "Thread close requires a local native operator"));
+    }
+    let OrchestrationAction::ThreadClose { thread_id } = action else { unreachable!() };
+    validate_thread_id(&thread_id)?;
+    let view = inbox_view::project_uncapped(
+        &InboxRequest { session_id: ctx.session_id.into() }, ctx.state, vec![],
+        Err(error("offline", "Runtime observation unavailable")), &now(), "")?;
+    let thread = view.threads.iter().find(|thread| thread.thread_id == thread_id)
+        .ok_or_else(|| error("thread_close_invalid", "Thread is not in this session's Inbox"))?;
+    // Projection displays only the latest owner report, but a later Progress
+    // does not supersede a Result for mark_read. Do not close over it.
+    let unread_result = ctx.state.messages.iter().enumerate().any(|(index, message)| {
+        if message.stale || !attention_candidate(ctx.state, ctx.session_id, &thread_id, message)
+            || linked_worker_interim(ctx.state, ctx.session_id, &thread_id, message)
+            || !message.report.as_ref().is_some_and(|report| report.kind == ReportKind::Result)
+            || is_read(ctx.state, ctx.session_id, &thread_id, message) { return false; }
+        let ActorRef::Run { run_id } = &message.from else { return false };
+        !ctx.state.messages[index + 1..].iter().any(|later|
+            !later.stale && message_in_thread(later, &thread_id)
+                && matches!(&later.from, ActorRef::Run { run_id: sender } if sender == run_id)
+                && later.report.as_ref().is_some_and(|report| matches!(report.kind, ReportKind::NeedsInput | ReportKind::Result)))
+    });
+    if unread_result {
+        return Err(error("thread_close_invalid", "Answer or acknowledge first"));
+    }
+    match thread.state {
+        InboxState::NeedsYou => return Err(error("thread_close_invalid", "Answer or acknowledge first")),
+        InboxState::Handled => return Ok(Applied::Document(OrchestrationActionResult::Done)),
+        InboxState::Underway => {}
+    }
+    let marker = close_marker(ctx.session_id, &thread_id, ctx.state.messages.len(), ctx.state.widget_publications.len());
+    ctx.state.thread_reads.retain(|read| !parse_close_marker(read).is_some_and(|(session, id, _, _)|
+        session == ctx.session_id && id == thread_id));
+    ctx.state.thread_reads.push(ThreadReadRecord {
+        thread_id: String::new(), through_message_id: marker, origin: ActorRef::Operator, at: now(),
+    });
     Ok(Applied::Machine(OrchestrationActionResult::Done))
 }
 

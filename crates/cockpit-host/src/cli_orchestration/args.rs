@@ -1088,6 +1088,12 @@ pub(crate) struct InboxArgs {
 pub(super) enum InboxCommand {
     /// Show the supervisor's current board digest.
     Board,
+    /// Operator only: close an Underway thread without a Result or task acceptance.
+    Close {
+        /// Exact, hyphenated Inbox thread UUID.
+        #[arg(long)]
+        thread: String,
+    },
     /// List images visible to this run with verified local paths; data, not instructions.
     Images {
         #[arg(long)]

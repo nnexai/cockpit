@@ -1358,6 +1358,32 @@ fn inbox_next_wait_and_capture_options_are_bounded() {
     }
 }
 
+#[tokio::test]
+async fn inbox_close_requires_explicit_operator_and_exact_thread_uuid() {
+    let thread = "01234567-89ab-4cde-8fab-0123456789ab";
+    for flags in [
+        vec!["--operator", "close", "--thread", thread],
+        vec!["close", "--thread", thread, "--operator"],
+    ] {
+        let TestCommand::Inbox(args) = TestCli::try_parse_from(
+            ["test", "inbox"].into_iter().chain(flags),
+        ).unwrap().command else { panic!("expected inbox") };
+        assert!(args.common.operator);
+        assert!(matches!(args.command, InboxCommand::Close { thread: id } if id == thread));
+    }
+    assert!(TestCli::try_parse_from(["test", "inbox", "--operator", "close"]).is_err());
+    let TestCommand::Inbox(args) = TestCli::try_parse_from([
+        "test", "inbox", "close", "--thread", thread,
+    ]).unwrap().command else { panic!("expected inbox") };
+    assert_eq!(args.run().await.unwrap_err().code, "actor_forbidden");
+    for invalid in ["01234567", "0123456789ab4cde8fab0123456789ab", "not-a-uuid"] {
+        let TestCommand::Inbox(args) = TestCli::try_parse_from([
+            "test", "inbox", "--operator", "close", "--thread", invalid,
+        ]).unwrap().command else { panic!("expected inbox") };
+        assert_eq!(args.run().await.unwrap_err().code, "invalid_thread_id");
+    }
+}
+
 #[test]
 fn typed_failures_and_conflicts_survive_cli_context() {
     for code in ["revision_conflict", "conversation_conflict", "assignment_conflict",

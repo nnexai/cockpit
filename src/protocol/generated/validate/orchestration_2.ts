@@ -271,6 +271,9 @@ export const wireOrchestrationAction: WireDescriptor<V1.OrchestrationAction> = t
     "through_message_id": req(str),
     "run_id": opt(nullable(str), OMIT, { fill: null, rustOmits: true }),
   },
+  "thread_close": {
+    "thread_id": req(str),
+  },
   "thread_link": {
     "root_id": req(str),
     "task_id": req(str),

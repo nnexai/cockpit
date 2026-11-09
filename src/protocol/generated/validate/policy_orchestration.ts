@@ -134,7 +134,6 @@ export interface WireTypes {
   "ResourceRequest": V1.ResourceRequest;
   "ResourceRequestState": V1.ResourceRequestState;
   "ResourceRequestRecord": V1.ResourceRequestRecord;
-  "ResourceRelease": V1.ResourceRelease;
 }
 
 export interface WireOwners {
@@ -262,7 +261,6 @@ export interface WireOwners {
   "ResourceSourceIdentity": V1.ResourceSourceIdentity;
   "ResourceRequest": V1.ResourceRequest;
   "ResourceRequestRecord": V1.ResourceRequestRecord;
-  "ResourceRelease": V1.ResourceRelease;
 }
 
 export interface WireFields {
@@ -428,6 +426,7 @@ export interface WireFields {
   "InboxThread.thread_id": (V1.InboxThread)["thread_id"];
   "InboxThread.state": (V1.InboxThread)["state"];
   "InboxThread.need": (V1.InboxThread)["need"];
+  "InboxThread.closed_at": (V1.InboxThread)["closed_at"];
   "InboxThread.owner_root_ids": (V1.InboxThread)["owner_root_ids"];
   "InboxThread.title": (V1.InboxThread)["title"];
   "InboxThread.next": (V1.InboxThread)["next"];
@@ -816,8 +815,6 @@ export interface WireFields {
   "ResourceRequestRecord.machine_id": (V1.ResourceRequestRecord)["machine_id"];
   "ResourceRequestRecord.blocked_reason": (V1.ResourceRequestRecord)["blocked_reason"];
   "ResourceRequestRecord.updated_at": (V1.ResourceRequestRecord)["updated_at"];
-  "ResourceRelease.request_id": (V1.ResourceRelease)["request_id"];
-  "ResourceRelease.expected_holder": (V1.ResourceRelease)["expected_holder"];
 }
 
 export interface WireFieldNames {
@@ -858,7 +855,7 @@ export interface WireFieldNames {
   "InboxTaskIntegration": "target" | "commit";
   "InboxTaskEvidence": "run_id" | "attempt" | "attempts" | "result" | "checks" | "commits" | "head_commit" | "integration" | "artifacts" | "images" | "decisions";
   "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence" | "worker_waiting";
-  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "unread_interims" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
+  "InboxThread": "thread_id" | "state" | "need" | "closed_at" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "unread_interims" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
   "Directive": "directive_id" | "root_id" | "scope" | "text" | "source" | "thread_id" | "message_id" | "created_by" | "created_at" | "removed_at";
   "DirectiveScope": never;
   "DirectiveScope[task]": "task_id";
@@ -945,7 +942,6 @@ export interface WireFieldNames {
   "ResourceSourceIdentity": "checkout_key" | "source_commit" | "source_tree" | "input_configuration" | "toolchain_fingerprint";
   "ResourceRequest": "operation_id" | "resource_key" | "source_identity" | "holder";
   "ResourceRequestRecord": "request_id" | "sequence" | "resource_key" | "source_identity" | "holder" | "state" | "build_processes" | "machine_id" | "blocked_reason" | "updated_at";
-  "ResourceRelease": "request_id" | "expected_holder";
 }
 
 export interface WireChildNames {
@@ -1026,7 +1022,6 @@ export interface WireChildNames {
   "ResourceRequest.holder": "AttachmentReference";
   "ResourceRequestRecord.source_identity": "ResourceSourceIdentity";
   "ResourceRequestRecord.holder": "AttachmentReference";
-  "ResourceRelease.expected_holder": "AttachmentReference";
 }
 
 export interface WireTagNames {
@@ -1107,7 +1102,7 @@ export interface WireCheckpointFieldNames {
   "InboxTaskIntegration": "target" | "commit";
   "InboxTaskEvidence": "run_id" | "attempt" | "attempts" | "result" | "checks" | "commits" | "head_commit" | "integration" | "artifacts" | "images" | "decisions";
   "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence" | "worker_waiting";
-  "InboxThread": "thread_id" | "state" | "need" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "unread_interims" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
+  "InboxThread": "thread_id" | "state" | "need" | "closed_at" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "unread_interims" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
   "Directive": "directive_id" | "root_id" | "scope" | "text" | "source" | "thread_id" | "message_id" | "created_by" | "created_at" | "removed_at";
   "DirectiveScope": "project_key" | "scope" | "task_id";
   "DirectiveScope[task]": "task_id" | "scope";
@@ -1194,7 +1189,6 @@ export interface WireCheckpointFieldNames {
   "ResourceSourceIdentity": "checkout_key" | "source_commit" | "source_tree" | "input_configuration" | "toolchain_fingerprint";
   "ResourceRequest": "operation_id" | "resource_key" | "source_identity" | "holder";
   "ResourceRequestRecord": "request_id" | "sequence" | "resource_key" | "source_identity" | "holder" | "state" | "build_processes" | "machine_id" | "blocked_reason" | "updated_at";
-  "ResourceRelease": "request_id" | "expected_holder";
 }
 
 export type WireOmittableField =
@@ -1230,6 +1224,7 @@ export type WireOmittableField =
   | "InboxTaskLink.evidence"
   | "InboxTaskLink.worker_waiting"
   | "InboxThread.need"
+  | "InboxThread.closed_at"
   | "InboxThread.next"
   | "InboxThread.project"
   | "InboxThread.request"
@@ -1349,6 +1344,7 @@ export type WireOptionalField =
   | "InboxEntry.task_title"
   | "InboxEntry.widget"
   | "InboxTaskLink.worker_waiting"
+  | "InboxThread.closed_at"
   | "InboxThread.earlier_widgets"
   | "InboxThread.earlier_widgets_omitted"
   | "Directive.thread_id"

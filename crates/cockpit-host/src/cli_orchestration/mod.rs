@@ -891,8 +891,19 @@ fn unreflected_inputs_notice(
 
 impl InboxArgs {
     pub async fn run(self) -> Result<(), CliError> {
-        if !matches!(self.command, InboxCommand::Board) {
-            context::require_job(&self.common)?;
+        match &self.command {
+            InboxCommand::Board => {}
+            InboxCommand::Close { thread } => {
+                if !self.common.operator {
+                    return Err(CliError::new("actor_forbidden", "inbox close requires explicit --operator authority"));
+                }
+                if !uuid::Uuid::parse_str(thread)
+                    .is_ok_and(|id| id.hyphenated().to_string().eq_ignore_ascii_case(thread))
+                {
+                    return Err(CliError::new("invalid_thread_id", "inbox close requires the exact hyphenated thread UUID"));
+                }
+            }
+            _ => context::require_job(&self.common)?,
         }
         let context = Context::open(&self.common, true).await?;
         let action = match self.command {
@@ -911,6 +922,7 @@ impl InboxArgs {
                 };
                 return emit(&board_digest(&context, &root).await?, self.common.json);
             },
+            InboxCommand::Close { thread } => OrchestrationAction::ThreadClose { thread_id: thread },
             InboxCommand::Images { id } => {
                 let Some(cockpit_core::orchestration::Actor::Agent(caller)) = &context.actor else { unreachable!() };
                 context.check_caller().await?;

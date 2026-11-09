@@ -2046,6 +2046,12 @@ describe("browser/native orchestration parity", () => {
     const nativeCall = vi.fn(async () => payload);
     const client = transport === "browser" ? createBrowserClient(browserCall) : createNativeClient(nativeCall);
     await expect(client.orchestrationInbox(request)).resolves.toEqual(view);
+    payload = { ...view, threads: [{ ...thread, state: "handled", closed_at: at }] };
+    await expect(client.orchestrationInbox(request)).resolves.toEqual(payload);
+    for (const invalid of ["yesterday", "", null]) {
+      payload = { ...view, threads: [{ ...thread, closed_at: invalid }] };
+      await expect(client.orchestrationInbox(request)).rejects.toMatchObject({ code: "malformed_response" });
+    }
     const taskLink = { root_id: "root", task_id: "task", title: "Task", project: null, lane: "working", run: null, evidence: null };
     const workerWait = { cause: "worker_waiting", since: at, held_by: [], code: null, detail: "Awaiting approval", next_automatic: false };
     for (const task of [taskLink, { ...taskLink, worker_waiting: workerWait }]) {
@@ -2141,6 +2147,7 @@ describe("browser/native orchestration parity", () => {
       { action: "thread_handoff", message_id: assignmentTaskId, thread_id: prerequisiteId, to_run_id: "root", text: "Please investigate", binding },
       { action: "thread_mark_read", thread_id: prerequisiteId, through_message_id: assignmentTaskId },
       { action: "thread_mark_read", thread_id: prerequisiteId, through_message_id: assignmentTaskId, run_id: "worker" },
+      { action: "thread_close", thread_id: prerequisiteId },
       { action: "thread_link", root_id: "root", task_id: assignmentTaskId, thread_id: prerequisiteId },
     ];
     for (const action of actions) {
@@ -2149,6 +2156,8 @@ describe("browser/native orchestration parity", () => {
     }
     expect(() => parseOrchestrationAction({ ...actions[1], binding: { ...binding, unexpected: true } })).toThrow(CockpitClientError);
     expect(() => parseOrchestrationAction({ action: "thread_mark_read", thread_id: prerequisiteId, through_message_id: assignmentTaskId, run_id: "" })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ action: "thread_close", thread_id: "" })).toThrow(CockpitClientError);
+    expect(() => parseOrchestrationAction({ action: "thread_close", thread_id: "not-a-uuid" })).toThrow(CockpitClientError);
   });
 
   it.each(["browser", "native"] as const)("preserves W3 integration receipts and resource proof on %s", async transport => {

@@ -396,6 +396,7 @@ const POLICY = definePolicy({
         Directive: ["thread_id"], ThreadLink: ["thread_id"], "OrchestrationAction[directive_add]": ["thread_id"],
         Message: ["thread_id"], QuestionStatus: ["thread_id"], InboxThread: ["thread_id"],
         "OrchestrationAction[thread_handoff]": ["thread_id"], "OrchestrationAction[thread_mark_read]": ["thread_id"],
+        "OrchestrationAction[thread_close]": ["thread_id"],
         "OrchestrationAction[thread_link]": ["thread_id"],
       }),
       ...refine(timestamp, {
@@ -404,7 +405,7 @@ const POLICY = definePolicy({
         Directive: ["created_at", "removed_at"], InboxStall: ["since"],
         Message: ["created_at", "acked_at"], AnswerReceipt: ["created_at", "acked_at"], QuestionStatus: ["asked_at"], UnreflectedInput: ["created_at", "acked_at"],
         "InboxObservation[fresh]": ["observed_at"], InboxText: ["at"], InboxRequestEcho: ["created_at"],
-        InboxQuestion: ["asked_at"], InboxReceipt: ["created_at", "acked_at"], InboxThread: ["updated_at"],
+        InboxQuestion: ["asked_at"], InboxReceipt: ["created_at", "acked_at"], InboxThread: ["updated_at", "closed_at"],
         RunObservation: ["state_changed_at"], "RuntimeObservation[fresh]": ["observed_at"], Attention: ["since"], UnmanagedAgent: ["state_changed_at"],
         "RetirementState[close_intent]": ["at"], "RetirementState[retired]": ["at"], "RetirementState[retained]": ["at"], "RetirementState[unknown]": ["at"],
         ExecutionAttachment: ["updated_at"], ResumeRecord: ["updated_at"], LiaisonCandidate: ["updated_at"],
