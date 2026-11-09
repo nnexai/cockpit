@@ -309,6 +309,18 @@ impl OrchestrationService {
         }
         Ok(notifications.as_ref().expect("watcher initialized").subscribe())
     }
+    /// Independent cumulative filesystem causes for dispatcher passes.
+    /// A closed receiver requires a fresh subscription and a full resync.
+    fn classified_changes(&self) -> Result<watch::Receiver<wait_notifications::ChangeGenerations>, InspectionError> {
+        let mut notifications = self.notifications.lock().unwrap_or_else(|error| error.into_inner());
+        if notifications.as_ref().is_some_and(|watcher| watcher.error().is_some()) {
+            *notifications = None;
+        }
+        if notifications.is_none() {
+            *notifications = Some(wait_notifications::WaitNotifications::open(self.store.base())?);
+        }
+        Ok(notifications.as_ref().expect("watcher initialized").subscribe_classified())
+    }
     /// Dispatcher-owned ref watches share the durable-state notification owner.
     pub(crate) fn watch_cleanup_refs(&self, paths: &[std::path::PathBuf]) -> Result<(), InspectionError> {
         let mut notifications = self.notifications.lock().unwrap_or_else(|error| error.into_inner());
@@ -1024,6 +1036,7 @@ impl OrchestrationService {
             .cloned()
             .collect())
     }
+    #[cfg(test)]
     pub(crate) fn observation_runs(&self) -> Result<Vec<Run>, InspectionError> {
         Ok(self
             .store

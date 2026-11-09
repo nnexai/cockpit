@@ -376,7 +376,7 @@ pub(crate) fn restoration_summary(state: &OrchestrationState, session_id: &str) 
 
 /// Returns only event-relevant cleanup candidates; attempts/resources are never
 /// grouped by canonical task, so superseded output cannot inherit successor proof.
-fn cleanup_candidate_resources(state: &OrchestrationState) -> impl Iterator<Item = &OwnedResourceRecord> {
+pub(super) fn cleanup_candidate_resources(state: &OrchestrationState) -> impl Iterator<Item = &OwnedResourceRecord> {
     state.owned_resources.iter().filter(|resource| resource.cleanup.state != CleanupState::Removed
         && state.runs.iter().any(|run| run.run_id == resource.run_id && run.stage == RunStage::Closed))
 }
@@ -429,6 +429,36 @@ fn cleanup_evaluation_candidates(state: &OrchestrationState) -> Vec<OwnedResourc
     }).cloned().collect()
 }
 
+// This is only a negative reporting check against freshly read bytes. It does
+// not authorize an effect or suppress the locked recheck before publication.
+fn unreported_cleanup_hold(state: &OrchestrationState, resource: &OwnedResourceRecord) -> bool {
+    if resource.cleanup.state == CleanupState::Removed
+        || !state.runs.iter().any(|run| run.run_id == resource.run_id && run.stage == RunStage::Closed) {
+        return false;
+    }
+    let Some(why) = resource.cleanup.reason.as_ref() else { return false };
+    if !matches!(resource.cleanup.state, CleanupState::Waiting | CleanupState::WaitingIntegration
+        | CleanupState::Kept | CleanupState::Unknown | CleanupState::Stalled) {
+        return false;
+    }
+    if !state.runs.iter().any(|root| root.run_id == resource.root_id
+        && root.parent_run_id.is_none() && root.stage != RunStage::Closed) {
+        return false;
+    }
+    !state.messages.iter().any(|message| matches!(message.from, ActorRef::Dispatcher)
+        && message.message_id.strip_prefix("cleanup:")
+            .and_then(|id| id.strip_prefix(resource.resource_id.as_str()))
+            .and_then(|id| id.strip_prefix(':')) == Some(why.code.as_str()))
+}
+
+/// Negative scheduling hint only; it must never authorize an effect or be
+/// carried into a full pass. Directory conflicts are checked afresh here.
+pub(super) fn ref_cleanup_noop(state: &OrchestrationState) -> bool {
+    !super::mutate::integration::reconciliation_may_apply(state)
+        && cleanup_evaluation_candidates(state).is_empty()
+        && !state.owned_resources.iter().any(|resource| unreported_cleanup_hold(state, resource))
+}
+
 fn setup_resources_captured(resources: &[OwnedResourceRecord], run: &Run) -> bool {
     let Some(setup) = &run.setup else { return false };
     let raw = setup.operation_id.as_deref().is_some_and(|operation|
@@ -455,6 +485,42 @@ fn attempt_directory_released(state: &OrchestrationState, run: &Run) -> bool {
             && retirement::identity_matches(run, record))
         && state.checkout_claims.iter().any(|claim| Some(claim.claim_id.as_str()) == run.checkout_claim_id.as_deref()
             && claim.state == claims::ClaimState::Released && run.checkout.as_ref() == Some(&claim.checkout))
+}
+
+pub(super) fn cleanup_ref_paths(state: &OrchestrationState) -> Vec<std::path::PathBuf> {
+    let mut paths = std::collections::BTreeSet::new();
+    for resource in state.owned_resources.iter().filter(|resource|
+        resource.cleanup.state != CleanupState::Removed
+            && state.runs.iter().any(|run| run.run_id == resource.run_id && run.stage == RunStage::Closed)) {
+        if let OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } = &resource.identity
+            && !identity.common_dir.is_empty() { paths.insert(std::path::PathBuf::from(&identity.common_dir)); }
+    }
+    for run in state.runs.iter().filter(|run| run.stage == RunStage::Closed
+        && run.close_reason == Some(CloseReason::Accepted) && !git_integration_eligible(run)
+        && state.owned_resources.iter().any(|resource| resource.run_id == run.run_id
+            && matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch)
+            && resource.cleanup.state != CleanupState::Removed)) {
+        for related in state.runs.iter().filter(|related| related.root_id == run.root_id
+            && related.session_id == run.session_id) {
+            if let Some(git) = related.checkout.as_ref().and_then(|checkout| checkout.git.as_ref()) {
+                paths.insert(std::path::PathBuf::from(&git.common_dir));
+                if related.run_id == run.root_id {
+                    paths.insert(std::path::PathBuf::from(&git.worktree_git_dir));
+                }
+            }
+        }
+    }
+    // Pending schedules still need integration/input wakes after predecessor
+    // resources have been removed. Project identity survives private root cwd.
+    let scheduled_roots: std::collections::BTreeSet<_> = state.task_ownership.iter()
+        .filter(|ownership| ownership.schedule.is_some()).map(|ownership| ownership.root_id.as_str()).collect();
+    for run in state.runs.iter().filter(|run| scheduled_roots.contains(run.root_id.as_str())) {
+        if let Some(ProjectSource::Git { common_dir }) = run.project.as_ref().map(|project| &project.source)
+            && !common_dir.is_empty() && !paths.contains(std::path::Path::new(common_dir)) {
+                paths.insert(std::path::PathBuf::from(common_dir));
+            }
+    }
+    paths.into_iter().collect()
 }
 
 impl OrchestrationService {
@@ -484,40 +550,7 @@ impl OrchestrationService {
     /// Git common directories to register before reading/evaluating the queue.
     /// Removed resources are omitted so the shared notification owner can unwatch.
     pub fn cleanup_ref_watch_paths(&self) -> Result<Vec<std::path::PathBuf>, InspectionError> {
-        let state = self.store.lock()?.read_shared()?;
-        let mut paths = std::collections::BTreeSet::new();
-        for resource in state.owned_resources.iter().filter(|resource|
-            resource.cleanup.state != CleanupState::Removed
-                && state.runs.iter().any(|run| run.run_id == resource.run_id && run.stage == RunStage::Closed)) {
-            if let OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } = &resource.identity
-                && !identity.common_dir.is_empty() { paths.insert(std::path::PathBuf::from(&identity.common_dir)); }
-        }
-        for run in state.runs.iter().filter(|run| run.stage == RunStage::Closed
-            && run.close_reason == Some(CloseReason::Accepted) && !git_integration_eligible(run)
-            && state.owned_resources.iter().any(|resource| resource.run_id == run.run_id
-                && matches!(resource.kind, OwnedResourceKind::Worktree | OwnedResourceKind::Branch)
-                && resource.cleanup.state != CleanupState::Removed)) {
-            for related in state.runs.iter().filter(|related| related.root_id == run.root_id
-                && related.session_id == run.session_id) {
-                if let Some(git) = related.checkout.as_ref().and_then(|checkout| checkout.git.as_ref()) {
-                    paths.insert(std::path::PathBuf::from(&git.common_dir));
-                    if related.run_id == run.root_id {
-                        paths.insert(std::path::PathBuf::from(&git.worktree_git_dir));
-                    }
-                }
-            }
-        }
-        // Pending schedules still need integration/input wakes after predecessor
-        // resources have been removed. Project identity survives private root cwd.
-        let scheduled_roots: std::collections::BTreeSet<_> = state.task_ownership.iter()
-            .filter(|ownership| ownership.schedule.is_some()).map(|ownership| ownership.root_id.as_str()).collect();
-        for run in state.runs.iter().filter(|run| scheduled_roots.contains(run.root_id.as_str())) {
-            if let Some(ProjectSource::Git { common_dir }) = run.project.as_ref().map(|project| &project.source)
-                && !common_dir.is_empty() && !paths.contains(std::path::Path::new(common_dir)) {
-                    paths.insert(std::path::PathBuf::from(common_dir));
-                }
-        }
-        Ok(paths.into_iter().collect())
+        Ok(cleanup_ref_paths(self.store.lock()?.read_shared()?.as_ref()))
     }
 
     pub fn cleanup_job_run(&self, caller: &AgentCaller, request: &CleanupFinish) -> Result<Run, InspectionError> {
@@ -773,9 +806,21 @@ impl OrchestrationService {
     /// Called by the existing owner scheduler. Assess resources independently
     /// unless a fresh snapshot proves their existing scope hold is unchanged.
     pub async fn cleanup_owned_resources(&self, projects: &ProjectService) -> Result<(), InspectionError> {
-        self.reconcile_accepted_integrations().await?;
-        let snapshot = { self.store.lock()?.read_shared()? };
+        let mut snapshot = { self.store.lock()?.read_shared()? };
+        if self.reconcile_accepted_integrations_from_snapshot(&snapshot).await? {
+            // A reconciliation attempt may have published a new integration or
+            // observed a concurrent change while awaiting Git. Do not evaluate
+            // cleanup from the snapshot it started with.
+            snapshot = self.store.lock()?.read_shared()?;
+        }
         let queue = cleanup_evaluation_candidates(&snapshot);
+        // Reconciliation must run first even for an empty queue: Git refs can
+        // change integration without changing the orchestration state. When no
+        // assessment or inbox publication is needed, the fresh snapshot is a
+        // sufficient negative result; a later state change wakes the scheduler.
+        if queue.is_empty() && !snapshot.owned_resources.iter().any(|resource| unreported_cleanup_hold(&snapshot, resource)) {
+            return Ok(());
+        }
         for queued in queue {
             if queued.cleanup.state == CleanupState::Removed { continue; }
             let Some(_lease) = self.execution_lease(&queued.run_id)? else { continue };
@@ -1050,18 +1095,9 @@ impl OrchestrationService {
         let mut state = locked.read()?;
         let before = state.messages.len();
         let holds: Vec<_> = state.owned_resources.iter().filter_map(|resource| {
-            if resource.cleanup.state == CleanupState::Removed
-                || !state.runs.iter().any(|run| run.run_id == resource.run_id && run.stage == RunStage::Closed) { return None; }
-            let why = resource.cleanup.reason.as_ref()?;
-            if !matches!(resource.cleanup.state, CleanupState::Waiting | CleanupState::WaitingIntegration
-                | CleanupState::Kept | CleanupState::Unknown | CleanupState::Stalled) { return None; }
-            let root = state.runs.iter().find(|root| root.run_id == resource.root_id && root.parent_run_id.is_none())?;
-            if root.stage == RunStage::Closed { return None; }
-            // Dedup the cause before rendering diagnostics; owner/pane wakes must
-            // not copy resource receipts or rebuild already delivered boundaries.
+            if !unreported_cleanup_hold(&state, resource) { return None; }
+            let why = resource.cleanup.reason.as_ref().expect("unreported hold has a reason");
             let message_id = format!("cleanup:{}:{}", resource.resource_id, why.code);
-            if state.messages.iter().any(|message| matches!(message.from, ActorRef::Dispatcher)
-                && message.message_id == message_id) { return None; }
             let action = cleanup_hold_action(&why.code);
             let text = format!("Cleanup is on hold for attempt {} ({:?}, resource {}): {}. {}",
                 resource.run_id, resource.kind, resource.resource_id, why.message.trim_end_matches('.'), action);

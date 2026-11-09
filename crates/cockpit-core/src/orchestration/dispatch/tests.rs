@@ -1011,7 +1011,7 @@ async fn automatic_root_observation_never_replaces_a_stopped_main() {
         let before = serde_json::to_value(before).unwrap();
         let dispatcher = fixture.dispatcher(herdr.clone());
         for _ in 0..3 {
-            dispatcher.observe().await;
+            dispatcher.observe(fixture.service.observation_runs().unwrap()).await;
             let stopped = fixture.current().1;
             assert!(stopped.resume.is_none(), "automatic observation must not launch or block the root");
             assert_eq!(stopped.stage, old.stage);
@@ -2057,7 +2057,7 @@ fn root_registration_pins_generic_conversation_without_physical_process_evidence
 #[test]
 fn dispatch_pass_uses_fresh_queue_hints_without_granting_effect_authority() {
     let fixture = ReviewFixture::new(RunStage::Working);
-    let pass = fixture.service.dispatch_pass().unwrap();
+    let pass = fixture.service.dispatch_pass(10, &BTreeMap::new()).unwrap();
     assert_eq!(pass.dispatch.iter().map(|run| &run.run_id).collect::<Vec<_>>(),
         fixture.service.dispatch_queue().unwrap().iter().map(|run| &run.run_id).collect::<Vec<_>>());
     assert!(pass.observation_sessions.contains(&fixture.run.session_id));
@@ -2069,10 +2069,212 @@ fn dispatch_pass_uses_fresh_queue_hints_without_granting_effect_authority() {
         state.runs[0].stage = RunStage::Closed;
         locked.save(&mut state).unwrap();
     }
-    let next = fixture.service.dispatch_pass().unwrap();
+    let next = fixture.service.dispatch_pass(10, &BTreeMap::new()).unwrap();
     assert!(next.dispatch.is_empty());
     assert!(next.observation_sessions.is_empty());
     assert!(leased_run(&fixture.service, &pass.dispatch[0]).unwrap().is_none());
+}
+
+#[test]
+fn dispatch_pass_publishes_external_revision_only_once() {
+    let fixture = ReviewFixture::new(RunStage::Working);
+    let mut changes = fixture.service.subscribe();
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.runs[0].label = "external edit".into();
+        locked.save(&mut state).unwrap();
+    }
+    fixture.service.dispatch_pass(10, &BTreeMap::new()).unwrap();
+    assert!(changes.has_changed().unwrap());
+    changes.borrow_and_update();
+    fixture.service.dispatch_pass(10, &BTreeMap::new()).unwrap();
+    assert!(!changes.has_changed().unwrap());
+}
+
+#[test]
+fn cumulative_full_wakes_dominate_refs_and_deferred_work() {
+    use crate::orchestration::wait_notifications::ChangeGenerations;
+    let before = ChangeGenerations { full: 3, refs: 4 };
+    assert_eq!(merge_file_generations(PassKind::Refs, before,
+        ChangeGenerations { full: 3, refs: 5 }), PassKind::Refs);
+    assert_eq!(merge_file_generations(PassKind::Refs, before,
+        ChangeGenerations { full: 4, refs: 5 }), PassKind::Full);
+    assert_eq!(merge_file_generations(PassKind::Full, before,
+        ChangeGenerations { full: 3, refs: 5 }), PassKind::Full);
+    assert_eq!(PassKind::Refs.max(PassKind::Full).max(PassKind::Refs), PassKind::Full);
+}
+
+async fn probe_event(events: &mut tokio::sync::mpsc::UnboundedReceiver<(&'static str, PassKind)>,
+    expected: (&'static str, PassKind)) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(event) = events.recv().await {
+            if event == expected { return; }
+        }
+        panic!("dispatcher stopped before {expected:?}");
+    }).await.expect("dispatcher did not reach expected event");
+}
+
+fn probed_dispatcher(fixture: &ReviewFixture, with_cleanup_candidate: bool) -> (Arc<DispatchProbe>,
+    tokio::sync::mpsc::UnboundedReceiver<(&'static str, PassKind)>, CancellationToken, JoinHandle<()>) {
+    if with_cleanup_candidate {
+        use cockpit_protocol::orchestration::{CleanupAuthority, CleanupItem, CleanupState, OwnedResourceIdentity,
+            OwnedResourceKind, OwnedResourceRecord, OwnedSpaceIdentity, ResourceOwnership};
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.owned_resources.push(OwnedResourceRecord {
+            resource_id: "ref-observer-candidate".into(), root_id: fixture.run.root_id.clone(),
+            run_id: fixture.run.run_id.clone(), kind: OwnedResourceKind::Space,
+            identity: OwnedResourceIdentity::Space { identity: OwnedSpaceIdentity {
+                creation_operation_id: "operation".into(), endpoint_identity: "endpoint".into(),
+                session_id: fixture.run.session_id.clone(), workspace_id: "space".into(), checkout_path: "/checkout".into(),
+            } },
+            ownership: ResourceOwnership::Borrowed, authority: CleanupAuthority::OwnedWhenSafe,
+            creation_operation_id: Some("operation".into()), consumers: Vec::new(), integration_result_id: None,
+            cleanup: CleanupItem { operation_id: None, state: CleanupState::Pending, reason: None, effects: Vec::new(), updated_at: now() },
+        });
+        locked.save(&mut state).unwrap();
+    }
+    fixture.service.dispatch_pass(10, &BTreeMap::new()).unwrap();
+    let (wakes, _) = tokio::sync::watch::channel((Default::default(), false));
+    let (events, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let probe = Arc::new(DispatchProbe { wakes, events, ref_release: tokio::sync::Semaphore::new(0), schedule_release: None });
+    let adapter = Arc::new(CountingHerdr::new(runtime(), false, false));
+    let mut dispatcher = Arc::try_unwrap(fixture.dispatcher(adapter)).ok().unwrap();
+    dispatcher.test_probe = Some(probe.clone());
+    let shutdown = CancellationToken::new();
+    let task = dispatcher.spawn(shutdown.clone());
+    (probe, receiver, shutdown, task)
+}
+
+#[tokio::test]
+async fn ref_noop_skips_observer_but_later_state_change_still_runs_full() {
+    let fixture = ReviewFixture::new(RunStage::Closed);
+    let (probe, mut events, shutdown, task) = probed_dispatcher(&fixture, false);
+    probe_event(&mut events, ("observer_end", PassKind::Full)).await;
+    probe.wakes.send_modify(|(generation, _)| generation.refs += 1);
+    probe_event(&mut events, ("observer_noop", PassKind::Refs)).await;
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.runs[0].updated_at = now();
+        locked.save(&mut state).unwrap();
+    }
+    probe.wakes.send_modify(|(generation, _)| { generation.refs += 1; generation.full += 1; });
+    probe_event(&mut events, ("pass", PassKind::Full)).await;
+    probe_event(&mut events, ("observer_end", PassKind::Full)).await;
+    shutdown.cancel();
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn ref_only_pass_schedules_and_cleans_without_broad_observation() {
+    let fixture = ReviewFixture::new(RunStage::Closed);
+    let (probe, mut events, shutdown, task) = probed_dispatcher(&fixture, true);
+    probe_event(&mut events, ("observer_end", PassKind::Full)).await;
+    probe.wakes.send_modify(|(generation, _)| generation.refs += 1);
+    probe_event(&mut events, ("pass", PassKind::Refs)).await;
+    probe_event(&mut events, ("schedule", PassKind::Refs)).await;
+    probe_event(&mut events, ("observer_start", PassKind::Refs)).await;
+    probe.ref_release.add_permits(1);
+    probe_event(&mut events, ("observer_end", PassKind::Refs)).await;
+    assert!(!std::iter::from_fn(|| events.try_recv().ok()).any(|event|
+        event == ("observer_start", PassKind::Full)));
+    shutdown.cancel();
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn full_wake_during_ref_cleanup_is_deferred_and_never_overlaps() {
+    let fixture = ReviewFixture::new(RunStage::Closed);
+    let (probe, mut events, shutdown, task) = probed_dispatcher(&fixture, true);
+    probe_event(&mut events, ("observer_end", PassKind::Full)).await;
+    probe.wakes.send_modify(|(generation, _)| generation.refs += 1);
+    probe_event(&mut events, ("observer_start", PassKind::Refs)).await;
+    probe.wakes.send_modify(|(generation, _)| { generation.refs += 1; generation.full += 1; });
+    probe_event(&mut events, ("pass", PassKind::Full)).await;
+    probe_event(&mut events, ("schedule", PassKind::Full)).await;
+    probe_event(&mut events, ("observer_deferred", PassKind::Full)).await;
+    assert!(!std::iter::from_fn(|| events.try_recv().ok()).any(|event| event.0 == "observer_start"),
+        "full observer must not overlap targeted cleanup");
+    probe.ref_release.add_permits(1);
+    probe_event(&mut events, ("observer_end", PassKind::Refs)).await;
+    probe_event(&mut events, ("observer_start", PassKind::Full)).await;
+    probe_event(&mut events, ("observer_end", PassKind::Full)).await;
+    shutdown.cancel();
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn due_deadline_promotes_continuous_ref_wakes_to_full_work() {
+    let fixture = ReviewFixture::new(RunStage::Closed);
+    let (probe, mut events, shutdown, task) = probed_dispatcher(&fixture, true);
+    probe_event(&mut events, ("observer_end", PassKind::Full)).await;
+    probe.wakes.send_modify(|(generation, _)| generation.refs += 1);
+    probe_event(&mut events, ("observer_start", PassKind::Refs)).await;
+    for _ in 0..3 {
+        probe.wakes.send_modify(|(generation, _)| generation.refs += 1);
+        probe_event(&mut events, ("pass", PassKind::Refs)).await;
+    }
+    probe.wakes.send_modify(|(generation, due)| { generation.refs += 1; *due = true; });
+    probe_event(&mut events, ("pass", PassKind::Full)).await;
+    probe.wakes.send_modify(|(_, due)| *due = false);
+    probe.ref_release.add_permits(1);
+    probe_event(&mut events, ("observer_end", PassKind::Refs)).await;
+    probe_event(&mut events, ("observer_start", PassKind::Full)).await;
+    probe_event(&mut events, ("observer_end", PassKind::Full)).await;
+    shutdown.cancel();
+    task.await.unwrap();
+}
+
+#[test]
+fn dispatch_pass_projects_cleanup_watches_and_sessions_from_current_state() {
+    use cockpit_protocol::orchestration::{
+        CleanupAuthority, CleanupItem, CleanupState, OwnedGitIdentity, OwnedResourceIdentity,
+        OwnedResourceKind, OwnedResourceRecord, OwnedSpaceIdentity, ResourceOwnership,
+    };
+    let fixture = ReviewFixture::new(RunStage::Closed);
+    let record = |identity, kind| OwnedResourceRecord {
+        resource_id: format!("{kind:?}"), root_id: fixture.run.root_id.clone(),
+        run_id: fixture.run.run_id.clone(), kind, identity,
+        ownership: ResourceOwnership::Owned, authority: CleanupAuthority::OwnedWhenSafe,
+        creation_operation_id: Some("operation".into()), consumers: Vec::new(),
+        integration_result_id: None,
+        cleanup: CleanupItem { operation_id: None, state: CleanupState::Pending,
+            reason: None, effects: Vec::new(), updated_at: now() },
+    };
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.owned_resources.push(record(OwnedResourceIdentity::Space { identity: OwnedSpaceIdentity {
+            creation_operation_id: "operation".into(), endpoint_identity: "endpoint".into(),
+            session_id: "cleanup-only-session".into(), workspace_id: "space".into(), checkout_path: "/checkout".into(),
+        } }, OwnedResourceKind::Space));
+        state.owned_resources.push(record(OwnedResourceIdentity::Branch { identity: OwnedGitIdentity {
+            creation_operation_id: "operation".into(), machine_id: "machine".into(), repository_key: "repo".into(),
+            repository_root: "/repo".into(), repository_device: "1".into(), repository_inode: "2".into(),
+            common_dir: "/repo/.git".into(), common_device: "1".into(), common_inode: "3".into(),
+            checkout_path: "/checkout".into(), checkout_device: "1".into(), checkout_inode: "4".into(),
+            checkout_key: "1:4".into(), branch_ref: Some("refs/heads/owned".into()), creation_tip: "a".repeat(40),
+        } }, OwnedResourceKind::Branch));
+        locked.save(&mut state).unwrap();
+    }
+    let pass = fixture.service.dispatch_pass(10, &BTreeMap::new()).unwrap();
+    assert!(pass.observation_sessions.contains("cleanup-only-session"));
+    assert_eq!(pass.cleanup_ref_paths, fixture.service.cleanup_ref_watch_paths().unwrap());
+    assert_eq!(pass.cleanup_ref_paths, vec![PathBuf::from("/repo/.git")]);
+    assert_eq!(fixture.service.cleanup_queue().unwrap().len(), 2);
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        for resource in &mut state.owned_resources { resource.cleanup.state = CleanupState::Removed; }
+        locked.save(&mut state).unwrap();
+    }
+    let next = fixture.service.dispatch_pass(10, &BTreeMap::new()).unwrap();
+    assert!(!next.observation_sessions.contains("cleanup-only-session"));
+    assert!(next.cleanup_ref_paths.is_empty());
+    assert!(pass.observation_sessions.contains("cleanup-only-session"));
+    assert_eq!(pass.cleanup_ref_paths, vec![PathBuf::from("/repo/.git")]);
 }
 
 #[test]
@@ -2211,14 +2413,17 @@ fn only_pending_effects_have_wake_deadlines_and_unknown_launch_is_not_replayed()
 
 #[tokio::test]
 async fn filesystem_receiver_consumes_changes_without_idle_reading() {
-    let (sender, receiver) = tokio::sync::watch::channel(0);
+    use crate::orchestration::wait_notifications::ChangeGenerations;
+    let (sender, receiver) = tokio::sync::watch::channel(ChangeGenerations::default());
     let mut receiver = Some(receiver);
-    sender.send_replace(1);
-    filesystem_changed(&mut receiver).await;
-    assert_eq!(*receiver.as_ref().unwrap().borrow(), 1);
+    let mut test_wake = None;
+    let changed = ChangeGenerations { full: 1, refs: 0 };
+    sender.send_replace(changed);
+    filesystem_changed(&mut receiver, &mut test_wake).await;
+    assert_eq!(*receiver.as_ref().unwrap().borrow(), changed);
     assert!(!receiver.as_ref().unwrap().has_changed().unwrap());
     drop(sender);
-    filesystem_changed(&mut receiver).await;
+    filesystem_changed(&mut receiver, &mut test_wake).await;
     assert!(receiver.is_none(), "closed watchers must be reinstalled, not spin");
 }
 
@@ -3132,6 +3337,106 @@ async fn path_schedule_fixture(mode: &str) -> (ReviewFixture, Arc<Dispatcher>) {
     locked.save(&mut state).unwrap();
     drop(locked);
     (fixture, dispatcher)
+}
+
+#[tokio::test]
+async fn ref_wake_starts_schedule_after_accepted_code_is_materialized() {
+    use cockpit_protocol::orchestration::{CloseReason, Report, ReportKind, ReportOutcome,
+        SourceOutput, TaskOwner, TaskOwnership};
+    let (fixture, dispatcher) = path_schedule_fixture("default").await;
+    let checkout = fixture.root.join("repositories/primary");
+    let git = |args: Vec<&'static str>| {
+        let checkout = checkout.clone();
+        async move {
+            let output = tokio::process::Command::new("git").current_dir(checkout)
+                .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+                .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+                .args(args).output().await.unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        }
+    };
+    let base = git(vec!["rev-parse", "HEAD"]).await;
+    let tree = git(vec!["rev-parse", "HEAD^{tree}"]).await;
+    let output = tokio::process::Command::new("git").current_dir(&checkout)
+        .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+        .args(["commit-tree", &tree, "-p", &base, "-m", "accepted dependency"]).output().await.unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let accepted_head = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+    let branch = git(vec!["symbolic-ref", "HEAD"]).await;
+    let prerequisite = uuid::Uuid::new_v4().to_string();
+    let parent_run_id = uuid::Uuid::new_v4().to_string();
+    let root_id = fixture.run.run_id.clone();
+    let task_file = super::super::tasks_md::root_filename(&root_id).unwrap();
+    let child = {
+        let state = fixture.service.store.lock().unwrap().read().unwrap();
+        state.task_ownership[0].task_id.clone()
+    };
+    let unchecked = format!("- [ ] Prerequisite <!-- cockpit-task: {prerequisite} -->\n\
+        - [ ] Consumer <!-- cockpit-task: {child} -->\n  <!-- cockpit-relations: depends_on={prerequisite} -->\n");
+    fixture.service.store.tasks_dir().write(&task_file, unchecked.as_bytes()).unwrap();
+    let revision = {
+        let locked = fixture.service.store.lock().unwrap();
+        locked.tasks(&root_id).unwrap().task(&prerequisite).unwrap().task_revision.clone()
+    };
+    fixture.service.store.tasks_dir().write(&task_file, unchecked.replacen("- [ ] Prerequisite", "- [x] Prerequisite", 1).as_bytes()).unwrap();
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        let root = state.runs.iter_mut().find(|run| run.run_id == root_id).unwrap();
+        root.dispatch.as_mut().unwrap().step = DispatchStep::Launched;
+        root.attachment.as_mut().unwrap().process = None;
+        root.attachment.as_mut().unwrap().shell = None;
+        state.task_ownership.retain(|owner| owner.task_id == child);
+        let project = state.runs.iter().find(|run| run.run_id == root_id).unwrap().project.clone().unwrap();
+        let message_id = uuid::Uuid::new_v4().to_string();
+        let source = SourceOutput::Code { repository_key: project.key.clone(), checkout_key: "accepted-checkout".into(),
+            base_commit: base.clone(), head_commit: accepted_head.clone(), commits: vec![accepted_head.clone()],
+            task_revision: revision, result_message_id: message_id.clone(), focused_checks: vec![] };
+        let mut parent = crate::orchestration::new_run(&parent_run_id, &fixture.run.session_id,
+            RunKind::Worker, "Accepted prerequisite".into(), &root_id, crate::orchestration::RunLineage::default(), 1);
+        parent.parent_run_id = Some(root_id.clone());
+        parent.task_id = Some(prerequisite.clone());
+        parent.assignment_generation = Some(1);
+        parent.stage = RunStage::Closed;
+        parent.close_reason = Some(CloseReason::Accepted);
+        parent.project = Some(project);
+        parent.source_output = Some(source.clone());
+        parent.result = Some(Report { message_id, kind: ReportKind::Result, outcome: Some(ReportOutcome::Succeeded),
+            summary: "accepted".into(), plan: None, source_output: Some(source), card: None, at: now() });
+        state.runs.push(parent);
+        state.task_ownership.push(TaskOwnership { root_id: root_id.clone(), task_id: prerequisite, generation: 1,
+            owner: Some(TaskOwner { run_id: parent_run_id, conversation: None, claim_operation_id: uuid::Uuid::new_v4().to_string() }),
+            schedule: None, reopened_after_attempt: None });
+        locked.save(&mut state).unwrap();
+    }
+    let candidate = fixture.service.schedule_candidates(4).unwrap().remove(0);
+    let mut dependency_task_id = None;
+    let error = dispatcher.resolve_schedule_target_with_hold(&candidate, &mut dependency_task_id).await.unwrap_err();
+    assert_eq!(error.code, "dependency_input_not_materialized");
+    fixture.service.record_schedule_hold(&candidate, &error, dependency_task_id).unwrap();
+    fixture.service.dispatch_pass(4, &BTreeMap::new()).unwrap();
+    let (wakes, _) = tokio::sync::watch::channel((Default::default(), false));
+    let (events, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let probe = Arc::new(DispatchProbe { wakes, events, ref_release: tokio::sync::Semaphore::new(1),
+        schedule_release: Some(tokio::sync::Semaphore::new(0)) });
+    let mut dispatcher = Arc::try_unwrap(dispatcher).ok().unwrap();
+    dispatcher.test_probe = Some(probe.clone());
+    let shutdown = CancellationToken::new();
+    let task = dispatcher.spawn(shutdown.clone());
+    probe_event(&mut receiver, ("observer_end", PassKind::Full)).await;
+    let result = tokio::process::Command::new("git").current_dir(&checkout)
+        .args(["update-ref", &branch, &accepted_head, &base]).output().await.unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    probe_event(&mut receiver, ("schedule_end", PassKind::Refs)).await;
+    let state = fixture.service.store.lock().unwrap().read().unwrap();
+    assert!(state.runs.iter().any(|run| run.task_id.as_deref() == Some(child.as_str())
+        && run.stage != RunStage::Closed), "ref-only scheduling must publish a new attempt");
+    drop(state);
+    probe.ref_release.add_permits(10);
+    shutdown.cancel();
+    task.await.unwrap();
 }
 
 #[tokio::test]

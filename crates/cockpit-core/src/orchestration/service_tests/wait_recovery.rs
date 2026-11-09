@@ -127,6 +127,86 @@ async fn change_lease_rejects_replaced_base_and_tasks_after_watcher_recreation()
 
 
 
+#[test]
+fn classified_wakes_preserve_coalesced_order_and_independent_cursors() {
+    use super::super::wait_notifications::{ChangeGenerations, publish_test_event};
+    use notify::{Event, EventKind, event::ModifyKind};
+    use std::{collections::BTreeSet, path::PathBuf};
+    let state = PathBuf::from("/state/state.json");
+    let tasks = PathBuf::from("/state/tasks");
+    let root = PathBuf::from("/git");
+    let roots = BTreeSet::from([root.clone()]);
+    let ref_event = Event::new(EventKind::Modify(ModifyKind::Any)).add_path(root.join("refs/heads/main"));
+    let task_event = Event::new(EventKind::Modify(ModifyKind::Any)).add_path(tasks.join("root.md"));
+    let mixed = Event::new(EventKind::Modify(ModifyKind::Any))
+        .add_path(state.clone()).add_path(root.join("HEAD"));
+    for events in [[&ref_event, &task_event], [&task_event, &ref_event]] {
+        let (legacy, mut legacy_receiver) = tokio::sync::watch::channel(0u64);
+        let (sender, mut first) = tokio::sync::watch::channel(ChangeGenerations::default());
+        let mut second = sender.subscribe();
+        for event in events {
+            publish_test_event(&legacy, &sender, event, &state, &tasks, &roots, false);
+        }
+        assert_eq!(*first.borrow_and_update(), ChangeGenerations { full: 1, refs: 1 });
+        assert_eq!(*legacy_receiver.borrow_and_update(), 2);
+        assert!(second.has_changed().unwrap());
+        assert_eq!(*second.borrow_and_update(), ChangeGenerations { full: 1, refs: 1 });
+        // A new event after the first cursor's captured pass stays pending.
+        publish_test_event(&legacy, &sender, &ref_event, &state, &tasks, &roots, false);
+        assert!(first.has_changed().unwrap());
+        assert_eq!(*first.borrow_and_update(), ChangeGenerations { full: 1, refs: 2 });
+        assert!(second.has_changed().unwrap());
+        publish_test_event(&legacy, &sender, &mixed, &state, &tasks, &roots, false);
+        assert_eq!(*first.borrow_and_update(), ChangeGenerations { full: 2, refs: 3 });
+    }
+}
+
+#[test]
+fn classified_wakes_are_conservative_for_ambiguity_and_failure() {
+    use super::super::wait_notifications::{ChangeGenerations, classify_event, publish_test_failure};
+    use notify::{Event, EventKind, event::{Flag, ModifyKind, RemoveKind}};
+    use std::{collections::BTreeSet, path::PathBuf, sync::Mutex};
+    let state = PathBuf::from("/state/state.json");
+    let tasks = PathBuf::from("/state/tasks");
+    let root = PathBuf::from("/git");
+    let roots = BTreeSet::from([root.clone()]);
+    let classify = |event: Event, attempt| classify_event(&event, &state, &tasks, &roots, attempt);
+    let full = ChangeGenerations { full: 1, refs: 0 };
+    for event in [
+        Event::new(EventKind::Other).set_flag(Flag::Rescan),
+        Event::new(EventKind::Any),
+        Event::new(EventKind::Remove(RemoveKind::Any)).add_path(root.join("refs")),
+        Event::new(EventKind::Remove(RemoveKind::Any)).add_path(tasks.clone()),
+        Event::new(EventKind::Modify(ModifyKind::Any)),
+    ] {
+        assert_eq!(classify(event, false), full);
+    }
+    assert_eq!(classify(Event::new(EventKind::Modify(ModifyKind::Any))
+        .add_path(root.join("HEAD")).add_path(PathBuf::from("/unknown")), false),
+        ChangeGenerations { full: 1, refs: 1 });
+    assert_eq!(classify(Event::new(EventKind::Modify(ModifyKind::Any))
+        .add_path(root.join("packed-refs")), false), ChangeGenerations { full: 0, refs: 1 });
+    assert_eq!(classify(Event::new(EventKind::Remove(RemoveKind::Any))
+        .add_path(PathBuf::from("/attempts/run/output")), true), full);
+    let (legacy, _) = tokio::sync::watch::channel(0u64);
+    let (sender, mut receiver) = tokio::sync::watch::channel(ChangeGenerations::default());
+    let failure = Mutex::new(None);
+    publish_test_failure(&legacy, &sender, &failure);
+    assert_eq!(*receiver.borrow_and_update(), full);
+    assert!(failure.lock().unwrap().is_some());
+    assert_eq!(*legacy.borrow(), 1);
+}
+
+#[test]
+fn classified_watcher_recreation_closes_old_cursors() {
+    let fixture = Fixture::new();
+    let old = fixture.service.classified_changes().unwrap();
+    *fixture.service.notifications.lock().unwrap() = None;
+    let fresh = fixture.service.classified_changes().unwrap();
+    assert!(old.has_changed().is_err());
+    assert!(!fresh.has_changed().unwrap());
+}
+
 #[tokio::test]
 async fn cleanup_ref_watch_delivers_external_head_packed_and_loose_ref_replacements() {
     for relative in ["HEAD", "packed-refs", "refs/heads/main"] {

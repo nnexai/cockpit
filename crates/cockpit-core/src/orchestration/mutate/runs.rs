@@ -687,6 +687,30 @@ impl OrchestrationService {
     }
 }
 
+/// Select owned schedule hints for one root from a borrowed state and its
+/// canonical task document. The caller controls root order and document reads.
+pub(in crate::orchestration) fn schedule_candidates_for_root(
+    state: &OrchestrationState,
+    root: &Run,
+    document: &tasks_md::TaskDocument<'_>,
+    max_parallel: u32,
+) -> Result<Vec<ScheduleCandidate>, InspectionError> {
+    let mut candidates = Vec::new();
+    let graph = dependencies::DependencyGraph::new(&document.tasks);
+    for ownership in state.task_ownership.iter().filter(|record| record.root_id == root.run_id) {
+        let Some(schedule) = &ownership.schedule else { continue };
+        let Ok(task) = document.task(&ownership.task_id) else { continue };
+        if !schedule_principal_current(state, root, schedule)
+            || !schedule_ready(state, root, task, &graph) { continue; }
+        let known_key = scheduled_project_key(state, root, task, schedule);
+        if known_key.is_some_and(|key| project_capacity_full(state, &root.session_id, key,
+            max_parallel.min(root.launch_config.max_parallel))) { continue; }
+        candidates.push(ScheduleCandidate { session_id: root.session_id.clone(), root_id: root.run_id.clone(),
+            task_id: task.task_id.clone(), schedule: schedule.clone(), next_attempt: next_attempt(state, &root.run_id, &task.task_id)? });
+    }
+    Ok(candidates)
+}
+
 
 impl OrchestrationService {
     /// Read the durable execution queue once; no model turn or physical effect.
@@ -696,18 +720,7 @@ impl OrchestrationService {
         let mut candidates = Vec::new();
         for root in state.runs.iter().filter(|run| run.run_id == run.root_id && run.stage == RunStage::Active) {
             let document = locked.tasks(&root.run_id)?;
-            let graph = dependencies::DependencyGraph::new(&document.tasks);
-            for ownership in state.task_ownership.iter().filter(|record| record.root_id == root.run_id) {
-                let Some(schedule) = &ownership.schedule else { continue };
-                let Ok(task) = document.task(&ownership.task_id) else { continue };
-                if !schedule_principal_current(&state, root, schedule)
-                    || !schedule_ready(&state, root, task, &graph) { continue; }
-                let known_key = scheduled_project_key(&state, root, task, schedule);
-                if known_key.is_some_and(|key| project_capacity_full(&state, &root.session_id, key,
-                    max_parallel.min(root.launch_config.max_parallel))) { continue; }
-                candidates.push(ScheduleCandidate { session_id: root.session_id.clone(), root_id: root.run_id.clone(),
-                    task_id: task.task_id.clone(), schedule: schedule.clone(), next_attempt: next_attempt(&state, &root.run_id, &task.task_id)? });
-            }
+            candidates.extend(schedule_candidates_for_root(&state, root, &document, max_parallel)?);
         }
         Ok(candidates)
     }

@@ -5,11 +5,114 @@ use tokio::sync::watch;
 
 use crate::InspectionError;
 
+/// Cumulative filesystem causes. Each subscriber maintains its own cursor;
+/// compare both fields with the values captured before starting a pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct ChangeGenerations {
+    pub(super) full: u64,
+    pub(super) refs: u64,
+}
+
+fn publish(changes: &watch::Sender<u64>, classified: &watch::Sender<ChangeGenerations>,
+    relevant: bool, causes: ChangeGenerations) {
+    if relevant {
+        changes.send_modify(|sequence| *sequence = sequence.wrapping_add(1));
+    }
+    if causes != ChangeGenerations::default() {
+        classified.send_modify(|generation| {
+            generation.full = generation.full.wrapping_add(causes.full);
+            generation.refs = generation.refs.wrapping_add(causes.refs);
+        });
+    }
+}
+
+fn publish_failure(changes: &watch::Sender<u64>, classified: &watch::Sender<ChangeGenerations>,
+    failure: &Mutex<Option<String>>, message: String) {
+    *failure.lock().unwrap_or_else(|error| error.into_inner()) = Some(message);
+    publish(changes, classified, true, ChangeGenerations { full: 1, refs: 0 });
+}
+
+/// Classify only mutations; a ref mixed with an unrecognized path is not
+/// proof of a ref-only change. Git's lock source in an atomic rename is known.
+pub(super) fn classify_event(event: &notify::Event, state: &Path, tasks: &Path,
+    roots: &BTreeSet<PathBuf>, attempt_lifecycle: bool) -> ChangeGenerations {
+    let mutation = matches!(event.kind, EventKind::Any | EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) | EventKind::Other)
+        || matches!(event.kind, EventKind::Access(notify::event::AccessKind::Close(notify::event::AccessMode::Write)));
+    if event.need_rescan() || matches!(event.kind, EventKind::Any | EventKind::Other) {
+        return ChangeGenerations { full: 1, refs: 0 };
+    }
+    if !mutation && !attempt_lifecycle {
+        return ChangeGenerations::default();
+    }
+    let mut full = attempt_lifecycle;
+    let mut refs = false;
+    let mut unknown = event.paths.is_empty();
+    for path in &event.paths {
+        if path == state || path == tasks
+            || path.parent() == Some(tasks) && path.extension().is_some_and(|extension| extension == "md") {
+            full = true;
+            continue;
+        }
+        let mut known = false;
+        for root in roots {
+            if path == root {
+                full = true;
+                known = true;
+                break;
+            }
+            if let Ok(relative) = path.strip_prefix(root) {
+                if relative == Path::new("refs") {
+                    full = true;
+                    known = true;
+                    break;
+                }
+                if relative == Path::new("HEAD") || relative == Path::new("packed-refs")
+                    || relative.starts_with("refs") && !relative.extension().is_some_and(|extension| extension == "lock") {
+                    if relative.starts_with("refs")
+                        && matches!(event.kind, EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_))) {
+                        match std::fs::symlink_metadata(path) {
+                            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {},
+                            _ => { full = true; known = true; break; }
+                        }
+                    }
+                    refs = true;
+                    known = true;
+                    break;
+                }
+                if relative.extension().is_some_and(|extension| extension == "lock")
+                    && (relative.starts_with("refs") || relative == Path::new("HEAD.lock") || relative == Path::new("packed-refs.lock")) {
+                    known = true;
+                    break;
+                }
+            }
+        }
+        unknown |= !known;
+    }
+    // Unrelated activity is filtered as before; ambiguity accompanying a
+    // relevant event must not be downgraded to ref-only.
+    full |= unknown && (refs || full || event.paths.is_empty());
+    ChangeGenerations { full: u64::from(full), refs: u64::from(refs) }
+}
+
+#[cfg(test)]
+pub(super) fn publish_test_event(changes: &watch::Sender<u64>, classified: &watch::Sender<ChangeGenerations>,
+    event: &notify::Event, state: &Path, tasks: &Path, roots: &BTreeSet<PathBuf>, attempt_lifecycle: bool) {
+    let causes = classify_event(event, state, tasks, roots, attempt_lifecycle);
+    publish(changes, classified, causes != ChangeGenerations::default(), causes);
+}
+
+#[cfg(test)]
+pub(super) fn publish_test_failure(changes: &watch::Sender<u64>,
+    classified: &watch::Sender<ChangeGenerations>, failure: &Mutex<Option<String>>) {
+    publish_failure(changes, classified, failure, "watch error".into());
+}
+
 /// Directory watches survive atomic state/task replacement. The receiver is
 /// subscribed before reading durable state, so a concurrent commit stays queued.
 pub(super) struct WaitNotifications {
     watcher: RecommendedWatcher,
     changes: watch::Sender<u64>,
+    classified: watch::Sender<ChangeGenerations>,
     failure: Arc<Mutex<Option<String>>>,
     cleanup_roots: Arc<Mutex<BTreeSet<PathBuf>>>,
     cleanup_watches: BTreeMap<PathBuf, RecursiveMode>,
@@ -21,6 +124,8 @@ pub(super) struct WaitNotifications {
 impl WaitNotifications {
     pub(super) fn open(base: &Path) -> Result<Self, InspectionError> {
         let (changes, _) = watch::channel(0u64);
+        let (classified, _) = watch::channel(ChangeGenerations::default());
+        let classified_sender = classified.clone();
         let sender = changes.clone();
         let failure = Arc::new(Mutex::new(None));
         let callback_failure = Arc::clone(&failure);
@@ -37,22 +142,21 @@ impl WaitNotifications {
         let watched_tasks = tasks_path.clone();
         let watched_base = base.to_owned();
         let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            let causes;
             let relevant = match event {
                 Ok(event) => {
                     if matches!(event.kind, EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_)))
                         && event.paths.iter().any(|path| path == &watched_tasks || path == &watched_base) {
-                        *callback_failure.lock().unwrap_or_else(|error| error.into_inner()) =
-                            Some("Watched orchestration directory was removed or renamed".into());
-                        sender.send_modify(|sequence| *sequence = sequence.wrapping_add(1));
+                        publish_failure(&sender, &classified_sender, &callback_failure,
+                            "Watched orchestration directory was removed or renamed".into());
                         return;
                     }
                     if matches!(event.kind, EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_)))
                         && event.paths.iter().any(|path| callback_roots.lock().unwrap_or_else(|error| error.into_inner()).iter().any(|common| {
                             path == common || path.strip_prefix(common).is_ok_and(|relative| relative == Path::new("refs"))
                         })) {
-                        *callback_failure.lock().unwrap_or_else(|error| error.into_inner()) =
-                            Some("Watched Git ref directory was removed or renamed".into());
-                        sender.send_modify(|sequence| *sequence = sequence.wrapping_add(1));
+                        publish_failure(&sender, &classified_sender, &callback_failure,
+                            "Watched Git ref directory was removed or renamed".into());
                         return;
                     }
                     let entry_lifecycle = matches!(event.kind, EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_)));
@@ -72,6 +176,8 @@ impl WaitNotifications {
                             }
                         }
                     }
+                    causes = classify_event(&event, &state_path, &watched_tasks,
+                        &callback_roots.lock().unwrap_or_else(|error| error.into_inner()), attempt_lifecycle);
                     // Access/open/close-read events must not feed our own reads
                     // back into the wake channel. Include write-close events.
                     let mutation = matches!(event.kind, EventKind::Any | EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) | EventKind::Other)
@@ -89,22 +195,24 @@ impl WaitNotifications {
                     })
                 }
                 Err(error) => {
-                    *callback_failure.lock().unwrap_or_else(|error| error.into_inner()) = Some(error.to_string());
-                    true
+                    publish_failure(&sender, &classified_sender, &callback_failure, error.to_string());
+                    return;
                 }
             };
-            if relevant {
-                sender.send_modify(|sequence| *sequence = sequence.wrapping_add(1));
-            }
+            publish(&sender, &classified_sender, relevant, causes);
         }).map_err(watch_error)?;
         watcher.watch(base, RecursiveMode::NonRecursive).map_err(watch_error)?;
         watcher.watch(&tasks_path, RecursiveMode::NonRecursive).map_err(watch_error)?;
-        Ok(Self { watcher, changes, failure, cleanup_roots, cleanup_watches: BTreeMap::new(),
+        Ok(Self { watcher, changes, classified, failure, cleanup_roots, cleanup_watches: BTreeMap::new(),
             attempts_path, attempt_dirs, invalidated })
     }
 
     pub(super) fn subscribe(&self) -> watch::Receiver<u64> {
         self.changes.subscribe()
+    }
+
+    pub(super) fn subscribe_classified(&self) -> watch::Receiver<ChangeGenerations> {
+        self.classified.subscribe()
     }
 
     /// Refresh scoped Git refs and shallow attempt-output directory watches.

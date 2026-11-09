@@ -163,19 +163,48 @@ struct DispatchPass {
     dispatch: Vec<Run>,
     retirements: Vec<Run>,
     observation_sessions: std::collections::BTreeSet<String>,
+    observation_runs: Vec<Run>,
+    schedules: Option<Vec<super::ScheduleCandidate>>,
+    revision: u64,
+    pending_recovery: bool,
+    has_hints: bool,
+    cleanup_ref_paths: Vec<PathBuf>,
+    cleanup_ref_noop: bool,
 }
 
 impl OrchestrationService {
-    fn dispatch_pass(&self) -> Result<DispatchPass, InspectionError> {
+    #[cfg(test)]
+    fn dispatch_pass(&self, max_parallel: u32, capacity_projects: &BTreeMap<String, (String, String)>) -> Result<DispatchPass, InspectionError> {
+        self.dispatch_pass_for(max_parallel, capacity_projects, false)
+    }
+
+    fn dispatch_pass_for(&self, max_parallel: u32, capacity_projects: &BTreeMap<String, (String, String)>,
+        ref_hint: bool) -> Result<DispatchPass, InspectionError> {
         let locked = self.store.lock()?;
         let state = locked.read_shared()?;
+        self.revision.send_if_modified(|revision| {
+            if *revision == state.revision { false } else { *revision = state.revision; true }
+        });
         let mut pass = DispatchPass {
             dispatch: Vec::new(),
             retirements: Vec::new(),
             observation_sessions: std::collections::BTreeSet::new(),
+            observation_runs: Vec::new(),
+            schedules: Some(Vec::new()),
+            revision: state.revision,
+            pending_recovery: state.assignment_intents.iter().any(|intent| intent.state == cockpit_protocol::orchestration::IntentState::Pending)
+                || state.scope_intents.iter().any(|intent| intent.state == cockpit_protocol::orchestration::IntentState::Pending)
+                || state.continue_intents.iter().any(|intent| intent.state == cockpit_protocol::orchestration::IntentState::Pending)
+                || state.task_intents.iter().any(|intent| intent.state == cockpit_protocol::orchestration::IntentState::Pending),
+            has_hints: state.inbox_hints.iter().any(|hint| hint.state == super::store::HintState::Submitting)
+                || state.runs.iter().any(|run| run.stage != RunStage::Closed
+                    && run.launch_config.inbox_prompt_hints && super::launch_receipt_coherent(run)),
+            cleanup_ref_paths: super::cleanup::cleanup_ref_paths(&state),
+            cleanup_ref_noop: false,
         };
         for run in &state.runs {
             if run.stage != RunStage::Closed {
+                pass.observation_runs.push(run.clone());
                 pass.observation_sessions.insert(run.session_id.clone());
                 if run.dispatch.is_some() { pass.dispatch.push(run.clone()); }
             }
@@ -184,18 +213,73 @@ impl OrchestrationService {
                 pass.retirements.push(run.clone());
             }
         }
+        for root in state.runs.iter().filter(|run| run.run_id == run.root_id && run.stage == RunStage::Active) {
+            let candidates = locked.tasks(&root.run_id).and_then(|document|
+                super::mutate::runs::schedule_candidates_for_root(&state, root, &document, max_parallel));
+            match (&mut pass.schedules, candidates) {
+                (Some(all), Ok(candidates)) => all.extend(candidates.into_iter().filter(|candidate|
+                    capacity_projects.get(&candidate.schedule.operation_id).is_none_or(|(key, _)|
+                        !super::mutate::runs::project_capacity_full(&state, &candidate.session_id, key, max_parallel)))),
+                (_, Err(_)) => { pass.schedules = None; break; }
+                (None, _) => break,
+            }
+        }
+        if ref_hint && !pass.pending_recovery && pass.schedules.as_ref().is_some_and(Vec::is_empty) {
+            pass.cleanup_ref_noop = super::cleanup::ref_cleanup_noop(&state);
+        }
+        for resource in super::cleanup::cleanup_candidate_resources(&state) {
+            match &resource.identity {
+                cockpit_protocol::orchestration::OwnedResourceIdentity::WorkerTerminal { identity } => { pass.observation_sessions.insert(identity.session_id.clone()); }
+                cockpit_protocol::orchestration::OwnedResourceIdentity::Space { identity } => { pass.observation_sessions.insert(identity.session_id.clone()); }
+                _ => {},
+            }
+        }
         Ok(pass)
     }
 }
 
 
-async fn filesystem_changed(receiver: &mut Option<tokio::sync::watch::Receiver<u64>>) {
-    match receiver {
-        Some(watch) => {
-            if watch.changed().await.is_err() { *receiver = None; }
-            else { watch.borrow_and_update(); }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum PassKind { Refs, Full }
+
+fn merge_file_generations(kind: PassKind, previous: super::wait_notifications::ChangeGenerations,
+    current: super::wait_notifications::ChangeGenerations) -> PassKind {
+    if current.full != previous.full { PassKind::Full } else { kind }
+}
+
+#[cfg(test)]
+struct DispatchProbe {
+    wakes: tokio::sync::watch::Sender<(super::wait_notifications::ChangeGenerations, bool)>,
+    events: tokio::sync::mpsc::UnboundedSender<(&'static str, PassKind)>,
+    ref_release: tokio::sync::Semaphore,
+    schedule_release: Option<tokio::sync::Semaphore>,
+}
+
+#[cfg(test)]
+type TestWake = Option<tokio::sync::watch::Receiver<(super::wait_notifications::ChangeGenerations, bool)>>;
+#[cfg(not(test))]
+type TestWake = ();
+
+async fn filesystem_changed(receiver: &mut Option<tokio::sync::watch::Receiver<super::wait_notifications::ChangeGenerations>>,
+    test_wake: &mut TestWake) {
+    async fn watched(receiver: &mut Option<tokio::sync::watch::Receiver<super::wait_notifications::ChangeGenerations>>) {
+        match receiver {
+            Some(watch) => { if watch.changed().await.is_err() { *receiver = None; } }
+            None => std::future::pending::<()>().await,
         }
-        None => std::future::pending::<()>().await,
+    }
+    #[cfg(test)]
+    tokio::select! {
+        _ = watched(receiver) => {},
+        _ = async {
+            if let Some(wake) = test_wake { let _ = wake.changed().await; }
+            else { std::future::pending::<()>().await; }
+        } => {},
+    }
+    #[cfg(not(test))]
+    {
+        let _ = test_wake;
+        watched(receiver).await;
     }
 }
 
@@ -234,6 +318,8 @@ async fn watch_session(
 pub struct Dispatcher {
     pub(super) service: Arc<OrchestrationService>,
     projects: Arc<ProjectService>,
+    #[cfg(test)]
+    test_probe: Option<Arc<DispatchProbe>>,
     library: Arc<LibraryService>,
     pub(super) herdr: Arc<dyn OrchestrationHerdr>,
     settings: DispatcherSettings,
@@ -252,6 +338,8 @@ impl Dispatcher {
         Self {
             service,
             projects,
+            #[cfg(test)]
+            test_probe: None,
             library,
             herdr,
             settings,
@@ -268,7 +356,14 @@ impl Dispatcher {
             // Install both subscriptions before the first durable read. Filesystem
             // notifications cover CLI commits and canonical Markdown edits.
             let mut changes = dispatcher.service.subscribe();
-            let mut files = dispatcher.service.changes().ok();
+            let mut files = dispatcher.service.classified_changes().ok();
+            let mut file_cursor = super::wait_notifications::ChangeGenerations::default();
+            #[cfg(test)]
+            let mut test_wakes = dispatcher.test_probe.as_ref().map(|probe| probe.wakes.subscribe());
+            #[cfg(not(test))]
+            let mut test_wakes: TestWake = ();
+            #[cfg(test)]
+            let mut test_cursor = super::wait_notifications::ChangeGenerations::default();
             let (events, mut pane_events) = tokio::sync::mpsc::channel(1);
             let (idle_tx, mut idle_rx) = tokio::sync::mpsc::unbounded_channel();
             let mut idle_deadline = None;
@@ -282,11 +377,18 @@ impl Dispatcher {
             let mut retirement_retries = BTreeMap::<String, tokio::time::Instant>::new();
             let mut watcher_retry = files.is_none().then(|| tokio::time::Instant::now() + Duration::from_millis(250));
             let mut watcher_backoff = Duration::from_millis(250);
+            let mut pass_kind = PassKind::Full;
+            let mut deferred_observe: Option<PassKind> = None;
+            let mut last_revision = None;
+            let mut stall_deadline = None;
+            let mut capacity_deadline = None;
             loop {
-                if dispatcher.service.notification_error().is_some() { files = None; }
+                if dispatcher.service.notification_error().is_some() { files = None; pass_kind = PassKind::Full; }
                 if files.is_none() {
-                    match dispatcher.service.changes() {
+                    match dispatcher.service.classified_changes() {
                         Ok(receiver) => {
+                            file_cursor = *receiver.borrow();
+                            pass_kind = PassKind::Full;
                             files = Some(receiver);
                             watcher_retry = None;
                             watcher_backoff = Duration::from_millis(250);
@@ -297,21 +399,84 @@ impl Dispatcher {
                         }
                     }
                 }
-                if let Ok(paths) = dispatcher.service.cleanup_ref_watch_paths()
-                    && dispatcher.service.watch_cleanup_refs(&paths).is_err() {
-                        files = None;
-                        watcher_retry = Some(tokio::time::Instant::now() + watcher_backoff);
+                while pane_events.try_recv().is_ok() { capacity_projects.clear(); pass_kind = PassKind::Full; }
+                while let Ok(next) = idle_rx.try_recv() { idle_deadline = next; }
+                if changes.has_changed().unwrap_or(true) {
+                    changes.borrow_and_update();
+                    pass_kind = PassKind::Full;
+                }
+                if let Some(receiver) = &mut files {
+                    if receiver.has_changed().is_err() { files = None; pass_kind = PassKind::Full; }
+                    else {
+                        let current = *receiver.borrow_and_update();
+                        pass_kind = merge_file_generations(pass_kind, file_cursor, current);
+                        file_cursor = current;
                     }
-                let _ = dispatcher.service.recover_intents();
-                let stall_deadline = dispatcher.service.resource_stall_delay().ok().flatten()
-                    .map(|delay| tokio::time::Instant::now() + delay);
-                dispatcher.schedule_ready(&mut capacity_projects).await;
-                let capacity_deadline = dispatcher.service.capacity_stalls(
-                    dispatcher.settings.max_parallel, &capacity_projects, &mut capacity_waits).ok().flatten();
-                let (queue, retirements, observation_sessions) = match dispatcher.service.dispatch_pass() {
-                    Ok(pass) => (Some(pass.dispatch), pass.retirements, Some(pass.observation_sessions)),
-                    Err(_) => (None, Vec::new(), None),
+                } else { pass_kind = PassKind::Full; }
+                #[cfg(test)]
+                if let Some(receiver) = &mut test_wakes {
+                    let (current, deadline_due) = *receiver.borrow_and_update();
+                    pass_kind = merge_file_generations(pass_kind, test_cursor, current);
+                    test_cursor = current;
+                    if deadline_due { stall_deadline = Some(tokio::time::Instant::now()); }
+                }
+                let now = tokio::time::Instant::now();
+                if deadlines.values().copied().chain(watcher_retry).chain(stall_deadline)
+                    .chain(idle_deadline).chain(capacity_deadline).any(|deadline| deadline <= now) {
+                    pass_kind = PassKind::Full;
+                }
+                let pass = dispatcher.service.dispatch_pass_for(dispatcher.settings.max_parallel, &capacity_projects,
+                    pass_kind == PassKind::Refs);
+                let (queue, retirements, observation_sessions, observation_runs, schedules, has_hints, cleanup_ref_noop) = match pass {
+                    Ok(pass) => {
+                        if last_revision.is_some_and(|revision| revision != pass.revision) || pass.pending_recovery {
+                            pass_kind = PassKind::Full;
+                        }
+                        last_revision = Some(pass.revision);
+                        if dispatcher.service.watch_cleanup_refs(&pass.cleanup_ref_paths).is_err() {
+                            files = None;
+                            pass_kind = PassKind::Full;
+                            watcher_retry = Some(tokio::time::Instant::now() + watcher_backoff);
+                        }
+                        if pass.pending_recovery { let _ = dispatcher.service.recover_intents(); }
+                        (Some(pass.dispatch), pass.retirements, Some(pass.observation_sessions),
+                            pass.observation_runs, pass.schedules, pass.has_hints, pass.cleanup_ref_noop)
+                    }
+                    Err(_) => {
+                        pass_kind = PassKind::Full;
+                        (None, Vec::new(), None, Vec::new(), None, false, false)
+                    }
                 };
+                // This hint only suppresses a ref observer; it never authorizes
+                // work. Full wakes, uncertain schedules and watch failures win.
+                let skip_ref_observer = pass_kind == PassKind::Refs && cleanup_ref_noop
+                    && schedules.as_ref().is_some_and(Vec::is_empty);
+                #[cfg(test)]
+                if let Some(probe) = &dispatcher.test_probe { let _ = probe.events.send(("pass", pass_kind)); }
+                if let Some(candidates) = schedules {
+                    #[cfg(test)]
+                    if let Some(probe) = &dispatcher.test_probe { let _ = probe.events.send(("schedule", pass_kind)); }
+                    dispatcher.schedule_ready(candidates, &mut capacity_projects).await;
+                    #[cfg(test)]
+                    if let Some(probe) = &dispatcher.test_probe
+                        && let Some(release) = &probe.schedule_release
+                        && pass_kind == PassKind::Refs {
+                            let _ = probe.events.send(("schedule_end", pass_kind));
+                            tokio::select! {
+                                _ = shutdown.cancelled() => {
+                                    for (_, task) in sessions { task.abort(); }
+                                    while workers.join_next().await.is_some() {}
+                                    return;
+                                }
+                                _ = release.acquire() => {}
+                            }
+                        }
+                }
+                if pass_kind == PassKind::Full {
+                stall_deadline = dispatcher.service.resource_stall_delay().ok().flatten()
+                    .map(|delay| tokio::time::Instant::now() + delay);
+                capacity_deadline = dispatcher.service.capacity_stalls(
+                    dispatcher.settings.max_parallel, &capacity_projects, &mut capacity_waits).ok().flatten();
                 if let Some(queue) = queue {
                     deadlines.clear();
                     for run in queue {
@@ -346,16 +511,7 @@ impl Dispatcher {
                 for run in retirements.iter().filter(|run| foreground_retirement_pending(run)) {
                     retirement_retries.insert(run.run_id.clone(), tokio::time::Instant::now() + RETIREMENT_RETRY_DELAY);
                 }
-                if let Some(mut needed) = observation_sessions {
-                    if let Ok(resources) = dispatcher.service.cleanup_queue() {
-                        for resource in resources {
-                            match resource.identity {
-                                cockpit_protocol::orchestration::OwnedResourceIdentity::WorkerTerminal { identity } => { needed.insert(identity.session_id); }
-                                cockpit_protocol::orchestration::OwnedResourceIdentity::Space { identity } => { needed.insert(identity.session_id); }
-                                _ => {},
-                            }
-                        }
-                    }
+                if let Some(needed) = observation_sessions {
                     sessions.retain(|session, task| {
                         if needed.contains(session) { true } else { task.abort(); false }
                     });
@@ -370,23 +526,44 @@ impl Dispatcher {
                         }));
                     }
                 }
-                if active.insert("observe".into()) {
+                }
+                if skip_ref_observer {
+                    #[cfg(test)]
+                    if let Some(probe) = &dispatcher.test_probe { let _ = probe.events.send(("observer_noop", PassKind::Refs)); }
+                } else if active.insert("observe".into()) {
                     let dispatcher = Arc::clone(&dispatcher);
                     let idle_tx = idle_tx.clone();
+                    let kind = pass_kind;
                     workers.spawn(async move {
-                        let deadline = dispatcher.observe().await;
-                        let _ = idle_tx.send(deadline);
+                        #[cfg(test)]
+                        if let Some(probe) = &dispatcher.test_probe {
+                            let _ = probe.events.send(("observer_start", kind));
+                            if kind == PassKind::Refs { let _ = probe.ref_release.acquire().await; }
+                        }
+                        if kind == PassKind::Full {
+                            let deadline = dispatcher.observe(observation_runs).await;
+                            let _ = idle_tx.send(deadline);
+                        } else {
+                            let _ = dispatcher.service.cleanup_owned_resources(&dispatcher.projects).await;
+                        }
+                        #[cfg(test)]
+                        if let Some(probe) = &dispatcher.test_probe { let _ = probe.events.send(("observer_end", kind)); }
                         "observe".into()
                     });
+                } else {
+                    deferred_observe = Some(deferred_observe.map_or(pass_kind, |old| old.max(pass_kind)));
+                    #[cfg(test)]
+                    if let Some(probe) = &dispatcher.test_probe { let _ = probe.events.send(("observer_deferred", pass_kind)); }
                 }
-                else { deferred.insert("observe".into()); }
+                if pass_kind == PassKind::Full {
                 for run in retirements {
                     let key = format!("retire:{}", run.run_id);
                     if !active.insert(key.clone()) { deferred.insert(key); continue; }
                     let dispatcher = Arc::clone(&dispatcher);
                     workers.spawn(async move { let _ = dispatcher.retire(&run).await; key });
                 }
-                let _ = dispatcher.hint_agents().await;
+                if has_hints { let _ = dispatcher.hint_agents().await; }
+                }
                 // Worker completion is not an invalidation: successful mutations
                 // publish their own changes. This avoids a self-sustaining idle
                 // observation loop when an unchanged observer completes.
@@ -398,11 +575,11 @@ impl Dispatcher {
                             while workers.join_next().await.is_some() {}
                             return;
                         },
-                        _ = changes.changed() => { changes.borrow_and_update(); break; },
-                        _ = filesystem_changed(&mut files) => { break; },
-                        _ = pane_events.recv() => { capacity_projects.clear(); break; },
+                        _ = changes.changed() => { pass_kind = PassKind::Full; break; },
+                        _ = filesystem_changed(&mut files, &mut test_wakes) => { pass_kind = if files.is_some() { PassKind::Refs } else { PassKind::Full }; break; },
+                        _ = pane_events.recv() => { capacity_projects.clear(); pass_kind = PassKind::Full; break; },
                         Some(next) = idle_rx.recv() => { idle_deadline = next; },
-                        _ = wait_deadline(deadline) => { idle_deadline = None; break; },
+                        _ = wait_deadline(deadline) => { idle_deadline = None; pass_kind = PassKind::Full; break; },
                         _ = wait_deadline(retirement_retries.values().copied().min()), if !retirement_retries.is_empty() => {
                             let queue = dispatcher.service.retirement_queue().unwrap_or_default();
                             let due = due_retirement_retries(&mut retirement_retries, queue, tokio::time::Instant::now());
@@ -419,7 +596,9 @@ impl Dispatcher {
                         Some(done) = workers.join_next(), if !workers.is_empty() => {
                             if let Ok(key) = done {
                                 active.remove(&key);
-                                if deferred.remove(&key) { break; }
+                                if key == "observe" {
+                                    if let Some(kind) = deferred_observe.take() { pass_kind = kind; break; }
+                                } else if deferred.remove(&key) { pass_kind = PassKind::Full; break; }
                             }
                         }
                     }
@@ -428,8 +607,7 @@ impl Dispatcher {
         })
     }
 
-    async fn schedule_ready(&self, projects: &mut BTreeMap<String, (String, String)>) {
-        let Ok(candidates) = self.service.schedule_candidates(self.settings.max_parallel) else { return };
+    async fn schedule_ready(&self, candidates: Vec<super::ScheduleCandidate>, projects: &mut BTreeMap<String, (String, String)>) {
         for candidate in candidates {
             if let Some((key, _)) = projects.get(&candidate.schedule.operation_id)
                 && self.service.capacity_full(&candidate.session_id, key, self.settings.max_parallel).unwrap_or(false) { continue; }
@@ -672,14 +850,13 @@ impl Dispatcher {
         Ok(Some(facts))
     }
 
-    async fn observe(&self) -> Option<tokio::time::Instant> {
+    async fn observe(&self, runs: Vec<Run>) -> Option<tokio::time::Instant> {
         // Queue reconciliation publishes only durable changes; unknown native
         // process evidence protects an existing holder rather than stealing it.
         let _ = self.service.reconcile_resource_queue().await;
         let _ = self.service.capture_owned_resources(&self.projects, self.herdr.as_ref()).await;
         let _ = self.service.cleanup_worker_scopes(self.herdr.as_ref()).await;
         let _ = self.service.cleanup_owned_resources(&self.projects).await;
-        let Ok(runs) = self.service.observation_runs() else { return None };
         let mut idle_deadline: Option<tokio::time::Instant> = None;
         let sessions: std::collections::BTreeSet<_> = runs.iter().map(|r| r.session_id.as_str()).collect();
         for session in sessions {

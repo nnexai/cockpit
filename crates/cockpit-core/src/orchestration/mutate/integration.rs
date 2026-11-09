@@ -486,23 +486,45 @@ fn automatic_record(run: &Run, receipt: &Integration) -> Option<IntegrationRecor
     })
 }
 
+// Conservative state-only gate for ref wakes. A matching receipt may require
+// fresh Git observation, even if a previous ref produced no integration.
+pub(in crate::orchestration) fn reconciliation_may_apply(state: &OrchestrationState) -> bool {
+    state.runs.iter().any(|run| run.kind == RunKind::Worker
+        && run.stage == RunStage::Closed && run.close_reason == Some(CloseReason::Accepted)
+        && run.integration == Integration::Pending
+        && run.result.as_ref().is_some_and(|result| result.outcome == Some(ReportOutcome::Succeeded))
+        && state.runs.iter().any(|checked| checked.root_id == run.root_id
+            && checked.session_id == run.session_id && matches!(checked.integration, Integration::Integrated { .. })))
+}
+
 impl OrchestrationService {
     /// Owner-only event reconciliation. No checks are executed or invented, and
     /// absent target attestations leave integration pending for the liaison.
+    #[cfg(test)]
     pub(in crate::orchestration) async fn reconcile_accepted_integrations(&self) -> Result<(), InspectionError> {
         let saved = self.store.lock()?.read_shared()?;
+        self.reconcile_accepted_integrations_from_snapshot(&saved).await.map(|_| ())
+    }
+
+    /// Returns whether any receipt could have led to a mutation. Callers must
+    /// reread after such an attempt, even if its locked validation refused it.
+    pub(in crate::orchestration) async fn reconcile_accepted_integrations_from_snapshot(
+        &self, saved: &OrchestrationState,
+    ) -> Result<bool, InspectionError> {
+        let mut potentially_mutating = false;
         for run in saved.runs.iter().filter(|run| run.kind == RunKind::Worker
             && run.stage == RunStage::Closed && run.close_reason == Some(CloseReason::Accepted)
             && run.integration == Integration::Pending
             && run.result.as_ref().is_some_and(|result| result.outcome == Some(ReportOutcome::Succeeded))) {
             let Some(source) = run.source_output.as_ref() else { continue };
             let Some(checkout) = run.checkout.as_ref() else { continue };
-            let Ok(binding) = source_binding(&saved, run, true) else { continue };
+            let Ok(binding) = source_binding(saved, run, true) else { continue };
             for checked_run in saved.runs.iter().filter(|checked| checked.root_id == run.root_id
                 && checked.session_id == run.session_id) {
                 let Some(record) = automatic_record(run, &checked_run.integration) else { continue };
+                potentially_mutating = true;
                 let Integration::Integrated { target_repository_key, .. } = &record.integration else { unreachable!() };
-                let Ok(target) = integration_target(&saved, &run.session_id, &run.root_id,
+                let Ok(target) = integration_target(saved, &run.session_id, &run.root_id,
                     target_repository_key, Some(&checkout.key), None).await else { continue };
                 let Ok(source_root) = verify_bound_source(run, source, &binding, Some(&target)).await else { continue };
                 let Ok(refs) = RefSnapshot::observe(&record, &target).await else { continue };
@@ -543,7 +565,7 @@ impl OrchestrationService {
                 break;
             }
         }
-        Ok(())
+        Ok(potentially_mutating)
     }
 }
 

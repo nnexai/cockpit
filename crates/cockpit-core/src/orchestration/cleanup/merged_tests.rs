@@ -224,7 +224,16 @@ async fn scope_hold_stays_stable_until_drain_then_rechecks_integration() {
     assert!(held.owned_resources.iter().all(|resource|
         resource.cleanup.state == CleanupState::Kept && resource.cleanup.reason.as_ref() == Some(&why)));
     std::fs::rename(&unavailable, &git_dir).unwrap();
-    fixture.mutate(|state| state.checkout_claims[0].state = claims::ClaimState::Released);
+    // A same-revision external update must not leave the negative hold cached.
+    let stale_snapshot = fixture.service.store.lock().unwrap().read_shared().unwrap();
+    let mut released = fixture.state();
+    released.checkout_claims[0].state = claims::ClaimState::Released;
+    {
+        let _locked = fixture.service.store.lock().unwrap();
+        std::fs::write(fixture.service.base().join("state.json"), serde_json::to_vec(&released).unwrap()).unwrap();
+    }
+    assert!(!fixture.service.reconcile_accepted_integrations_from_snapshot(&stale_snapshot).await.unwrap());
+    assert!(!ref_cleanup_noop(&released), "released claim must invalidate the negative hold");
     fixture.service.cleanup_owned_resources(&projects).await.unwrap();
     let state = fixture.state();
     assert!(state.revision > stable_revision);
@@ -554,12 +563,41 @@ async fn changed_retained_directory_only_skips_an_existing_exact_conflict() {
     std::fs::create_dir(&fixture.repository).unwrap();
     let state = fixture.state();
     assert!(cleanup_evaluation_candidates(&state).is_empty());
+    assert!(!ref_cleanup_noop(&state), "unreported holds require the normal observer");
     fixture.service.cleanup_owned_resources(&projects).await.unwrap();
     let reported = fixture.state();
+    assert!(ref_cleanup_noop(&reported));
+    let mut with_receipt = reported.clone();
+    let source = fixture.run.source_output.clone().unwrap();
+    let SourceOutput::Code { repository_key, result_message_id, task_revision, head_commit, .. } = &source else { unreachable!() };
+    with_receipt.runs[0].integration = Integration::Integrated {
+        operation_id: id(), accepted_result_message_id: result_message_id.clone(),
+        accepted_task_revision: task_revision.clone(), source: Box::new(source.clone()),
+        target_repository_key: repository_key.clone(), target_ref: "refs/heads/main".into(),
+        target_commit: head_commit.clone(), method: cockpit_protocol::orchestration::IntegrationMethod::Ancestor,
+        mappings: Vec::new().into(), checks: Vec::new(), integrator_run_id: fixture.run.root_id.clone(), verified_at: now(),
+    };
+    assert!(!ref_cleanup_noop(&with_receipt), "a target receipt requires ref-sensitive reconciliation");
     assert_eq!(reported.owned_resources, state.owned_resources);
     // The first pass can publish the existing holds to the root inbox.
     fixture.service.cleanup_owned_resources(&projects).await.unwrap();
     assert_eq!(fixture.state().revision, reported.revision);
+    // Even with the same revision, freshly read bytes can reveal that a hold
+    // was not delivered. The negative fast path must publish it again.
+    let mut edited = fixture.state();
+    let old_count = edited.messages.len();
+    edited.messages.retain(|message| !message.message_id.starts_with("cleanup:"));
+    assert!(edited.messages.len() < old_count);
+    let same_revision = edited.revision;
+    {
+        let _locked = fixture.service.store.lock().unwrap();
+        std::fs::write(fixture.service.base().join("state.json"), serde_json::to_vec(&edited).unwrap()).unwrap();
+    }
+    fixture.service.cleanup_owned_resources(&projects).await.unwrap();
+    let restored = fixture.state();
+    assert!(restored.revision > same_revision);
+    assert_eq!(restored.messages.len(), old_count);
+    assert_eq!(restored.owned_resources, edited.owned_resources);
     for resource in &state.owned_resources {
         assert!(fixture.service.begin_cleanup_effect(resource, &fixture.run, None).unwrap().is_none());
     }
@@ -573,6 +611,7 @@ async fn changed_retained_directory_only_skips_an_existing_exact_conflict() {
     std::fs::remove_dir(&fixture.repository).unwrap();
     std::fs::rename(&saved, &fixture.repository).unwrap();
     assert_eq!(cleanup_evaluation_candidates(&fixture.state()).len(), 2);
+    assert!(!ref_cleanup_noop(&fixture.state()), "restored physical identity must be reassessed");
     fixture.service.cleanup_owned_resources(&projects).await.unwrap();
     assert!(fixture.state().owned_resources.iter().all(|resource|
         resource.cleanup.reason.as_ref().is_none_or(|why| why.code != "owned_git_conflict")));
