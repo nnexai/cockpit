@@ -2055,6 +2055,27 @@ fn root_registration_pins_generic_conversation_without_physical_process_evidence
 
 
 #[test]
+fn dispatch_pass_uses_fresh_queue_hints_without_granting_effect_authority() {
+    let fixture = ReviewFixture::new(RunStage::Working);
+    let pass = fixture.service.dispatch_pass().unwrap();
+    assert_eq!(pass.dispatch.iter().map(|run| &run.run_id).collect::<Vec<_>>(),
+        fixture.service.dispatch_queue().unwrap().iter().map(|run| &run.run_id).collect::<Vec<_>>());
+    assert!(pass.observation_sessions.contains(&fixture.run.session_id));
+    assert!(pass.retirements.is_empty());
+
+    {
+        let locked = fixture.service.store.lock().unwrap();
+        let mut state = locked.read().unwrap();
+        state.runs[0].stage = RunStage::Closed;
+        locked.save(&mut state).unwrap();
+    }
+    let next = fixture.service.dispatch_pass().unwrap();
+    assert!(next.dispatch.is_empty());
+    assert!(next.observation_sessions.is_empty());
+    assert!(leased_run(&fixture.service, &pass.dispatch[0]).unwrap().is_none());
+}
+
+#[test]
 fn effect_lease_rereads_the_historical_start_marker_from_current_state() {
     let fixture = ReviewFixture::new(RunStage::Working);
     let mut queued = fixture.run.clone();

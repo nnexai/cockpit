@@ -177,14 +177,18 @@ pub(super) fn receipt_identity_matches(left: &RetirementIdentity, right: &Retire
         }
 }
 
+pub(super) fn retirement_candidate(run: &Run) -> bool {
+    run.retirement.as_ref().is_some_and(|r|
+        (!terminal(&r.state) || matches!(r.state, RetirementState::Unknown { .. }
+            | RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable | RetainReason::ObservationUnavailable | RetainReason::ForegroundProcess, .. }))
+            && run.kind == RunKind::Worker && run.stage == RunStage::Closed
+            && (run.close_reason == Some(CloseReason::Accepted)
+                || (run.close_reason == Some(CloseReason::Superseded) && r.trigger == RetirementTrigger::Replacement)))
+}
+
 impl OrchestrationService {
     pub(crate) fn retirement_queue(&self) -> Result<Vec<Run>, InspectionError> {
-        Ok(self.store.lock()?.read_shared()?.runs.iter().filter(|run| run.retirement.as_ref().is_some_and(|r|
-            (!terminal(&r.state) || matches!(r.state, RetirementState::Unknown { .. }
-                | RetirementState::Retained { reason: RetainReason::NativeProcessUnverifiable | RetainReason::ObservationUnavailable | RetainReason::ForegroundProcess, .. }))
-                && run.kind == RunKind::Worker && run.stage == RunStage::Closed
-                && (run.close_reason == Some(CloseReason::Accepted)
-                    || (run.close_reason == Some(CloseReason::Superseded) && r.trigger == RetirementTrigger::Replacement)))).cloned().collect())
+        Ok(self.store.lock()?.read_shared()?.runs.iter().filter(|run| retirement_candidate(run)).cloned().collect())
     }
 
     pub(crate) fn retirement_blockers(&self, run_id: &str) -> Result<Vec<RetirementBlocker>, InspectionError> {

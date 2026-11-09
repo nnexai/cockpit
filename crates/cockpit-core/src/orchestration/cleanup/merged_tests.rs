@@ -534,6 +534,52 @@ async fn merged_head_requires_exact_successful_accepted_result() {
 }
 
 #[tokio::test]
+async fn changed_retained_directory_only_skips_an_existing_exact_conflict() {
+    let fixture = Fixture::new(true).await;
+    fixture.mutate(|state| {
+        for resource in &mut state.owned_resources {
+            resource.cleanup.state = CleanupState::Kept;
+            resource.cleanup.reason = Some(reason(CleanupReasonClass::UserWork, "owned_git_conflict",
+                crate::project_adapter::owned_git::DIRECTORY_CHANGED));
+        }
+    });
+    let projects = ProjectService::new(
+        cockpit_protocol::projects::ProjectConfiguration::for_tests(&fixture.directory),
+        std::sync::Arc::new(NoEffectsAdapter),
+    ).unwrap();
+    let saved = fixture.directory.join("saved-repository");
+    std::fs::rename(&fixture.repository, &saved).unwrap();
+    // Missing or inaccessible identity is uncertain, not a negative proof.
+    assert_eq!(cleanup_evaluation_candidates(&fixture.state()).len(), 2);
+    std::fs::create_dir(&fixture.repository).unwrap();
+    let state = fixture.state();
+    assert!(cleanup_evaluation_candidates(&state).is_empty());
+    fixture.service.cleanup_owned_resources(&projects).await.unwrap();
+    let reported = fixture.state();
+    assert_eq!(reported.owned_resources, state.owned_resources);
+    // The first pass can publish the existing holds to the root inbox.
+    fixture.service.cleanup_owned_resources(&projects).await.unwrap();
+    assert_eq!(fixture.state().revision, reported.revision);
+    for resource in &state.owned_resources {
+        assert!(fixture.service.begin_cleanup_effect(resource, &fixture.run, None).unwrap().is_none());
+    }
+    let mut uncertain = state.clone();
+    let resource = &mut uncertain.owned_resources[0];
+    resource.cleanup.effects.push(CleanupEffectReceipt {
+        effect_id: id(), kind: resource.kind, identity_digest: resource.resource_id.clone(),
+        state: CleanupEffectState::Unknown, evidence: None, updated_at: now(),
+    });
+    assert_eq!(cleanup_evaluation_candidates(&uncertain).len(), 1);
+    std::fs::remove_dir(&fixture.repository).unwrap();
+    std::fs::rename(&saved, &fixture.repository).unwrap();
+    assert_eq!(cleanup_evaluation_candidates(&fixture.state()).len(), 2);
+    fixture.service.cleanup_owned_resources(&projects).await.unwrap();
+    assert!(fixture.state().owned_resources.iter().all(|resource|
+        resource.cleanup.reason.as_ref().is_none_or(|why| why.code != "owned_git_conflict")));
+    fixture.assert_git_preserved();
+}
+
+#[tokio::test]
 async fn linked_root_head_watch_retires_only_after_both_git_resources_are_removed() {
     let fixture = Fixture::new(true).await;
     let state = fixture.state();

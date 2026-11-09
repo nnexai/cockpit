@@ -157,6 +157,37 @@ async fn wait_deadline(deadline: Option<tokio::time::Instant>) {
         None => std::future::pending::<()>().await,
     }
 }
+// These are scheduling hints only. Effect handlers must reacquire their own
+// leases and fresh authority; the snapshot is never held across an await.
+struct DispatchPass {
+    dispatch: Vec<Run>,
+    retirements: Vec<Run>,
+    observation_sessions: std::collections::BTreeSet<String>,
+}
+
+impl OrchestrationService {
+    fn dispatch_pass(&self) -> Result<DispatchPass, InspectionError> {
+        let locked = self.store.lock()?;
+        let state = locked.read_shared()?;
+        let mut pass = DispatchPass {
+            dispatch: Vec::new(),
+            retirements: Vec::new(),
+            observation_sessions: std::collections::BTreeSet::new(),
+        };
+        for run in &state.runs {
+            if run.stage != RunStage::Closed {
+                pass.observation_sessions.insert(run.session_id.clone());
+                if run.dispatch.is_some() { pass.dispatch.push(run.clone()); }
+            }
+            if super::retirement::retirement_candidate(run) {
+                pass.observation_sessions.insert(run.session_id.clone());
+                pass.retirements.push(run.clone());
+            }
+        }
+        Ok(pass)
+    }
+}
+
 
 async fn filesystem_changed(receiver: &mut Option<tokio::sync::watch::Receiver<u64>>) {
     match receiver {
@@ -277,7 +308,11 @@ impl Dispatcher {
                 dispatcher.schedule_ready(&mut capacity_projects).await;
                 let capacity_deadline = dispatcher.service.capacity_stalls(
                     dispatcher.settings.max_parallel, &capacity_projects, &mut capacity_waits).ok().flatten();
-                if let Ok(queue) = dispatcher.service.dispatch_queue() {
+                let (queue, retirements, observation_sessions) = match dispatcher.service.dispatch_pass() {
+                    Ok(pass) => (Some(pass.dispatch), pass.retirements, Some(pass.observation_sessions)),
+                    Err(_) => (None, Vec::new(), None),
+                };
+                if let Some(queue) = queue {
                     deadlines.clear();
                     for run in queue {
                         if let Some(delay) = pending_operation_delay(&run, dispatcher.settings.start_timeout_ms) {
@@ -306,15 +341,12 @@ impl Dispatcher {
                         });
                     }
                 }
-                let retirements = dispatcher.service.retirement_queue().unwrap_or_default();
                 retirement_retries.retain(|run_id, _| retirements.iter().any(|run|
                     run.run_id == *run_id && foreground_retirement_pending(run)));
                 for run in retirements.iter().filter(|run| foreground_retirement_pending(run)) {
                     retirement_retries.insert(run.run_id.clone(), tokio::time::Instant::now() + RETIREMENT_RETRY_DELAY);
                 }
-                if let Ok(runs) = dispatcher.service.observation_runs() {
-                    let mut needed: std::collections::BTreeSet<_> = runs.iter().chain(retirements.iter())
-                        .map(|run| run.session_id.clone()).collect();
+                if let Some(mut needed) = observation_sessions {
                     if let Ok(resources) = dispatcher.service.cleanup_queue() {
                         for resource in resources {
                             match resource.identity {

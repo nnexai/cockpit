@@ -63,12 +63,28 @@ fn directory(path: &str) -> Result<(String, String, String), InspectionError> {
     Ok((canonical.to_str().ok_or_else(|| refusal("Owned directory is not UTF-8"))?.to_owned(),
         metadata.dev().to_string(), metadata.ino().to_string()))
 }
+pub(crate) const DIRECTORY_CHANGED: &str = "Owned directory physical identity changed";
 fn exact_directory(path: &str, device: &str, inode: &str) -> Result<(), InspectionError> {
     let (actual_path, actual_device, actual_inode) = directory(path)?;
     if actual_path != path || actual_device != device || actual_inode != inode {
-        return Err(refusal("Owned directory physical identity changed"));
+        return Err(refusal(DIRECTORY_CHANGED));
     }
     Ok(())
+}
+
+/// A negative-only check: unavailable paths and other uncertainty are not a
+/// mismatch and must go through normal inspection. This never grants authority.
+pub(crate) fn retained_directory_definitely_changed(identity: &OwnedGitIdentity) -> bool {
+    for (path, device, inode) in [
+        (&identity.repository_root, &identity.repository_device, &identity.repository_inode),
+        (&identity.common_dir, &identity.common_device, &identity.common_inode),
+    ] {
+        match exact_directory(path, device, inode) {
+            Ok(()) => {},
+            Err(why) => return why.message == DIRECTORY_CHANGED,
+        }
+    }
+    false
 }
 fn filesystem_present(path: &str) -> Result<bool, InspectionError> {
     match std::fs::symlink_metadata(path) {

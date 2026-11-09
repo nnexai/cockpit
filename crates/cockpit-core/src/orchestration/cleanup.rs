@@ -392,6 +392,23 @@ fn cleanup_candidates(state: &OrchestrationState) -> Vec<OwnedResourceRecord> {
 fn cleanup_evaluation_candidates(state: &OrchestrationState) -> Vec<OwnedResourceRecord> {
     cleanup_candidate_resources(state).filter(|resource| {
         let Some(run) = state.runs.iter().find(|run| run.run_id == resource.run_id) else { return true };
+        // A previous exact physical-identity conflict remains a hold only if
+        // that same mismatch is freshly observable. Keep its diagnostic ahead
+        // of integration_pending until restoration; this never proves absence
+        // or authorizes an effect. Missing/uncertain directories take the full
+        // path, as do resources with unresolved effect receipts.
+        if resource.cleanup.state == CleanupState::Kept
+            && resource.ownership == ResourceOwnership::Owned
+            && resource.authority == CleanupAuthority::OwnedWhenSafe
+            && run.close_reason == Some(CloseReason::Accepted)
+            && !git_integration_eligible(run)
+            && resource.cleanup.reason.as_ref().is_some_and(|why| why.code == "owned_git_conflict"
+                && why.message == crate::project_adapter::owned_git::DIRECTORY_CHANGED)
+            && !resource.cleanup.effects.iter().any(|effect| matches!(effect.state, CleanupEffectState::Intent | CleanupEffectState::Unknown))
+            && let OwnedResourceIdentity::Worktree { identity } | OwnedResourceIdentity::Branch { identity } = &resource.identity
+            && crate::project_adapter::owned_git::retained_directory_definitely_changed(identity) {
+            return false;
+        }
         if resource.cleanup.state != CleanupState::Kept
             || resource.ownership != ResourceOwnership::Owned
             || resource.authority != CleanupAuthority::OwnedWhenSafe
@@ -757,7 +774,8 @@ impl OrchestrationService {
     /// unless a fresh snapshot proves their existing scope hold is unchanged.
     pub async fn cleanup_owned_resources(&self, projects: &ProjectService) -> Result<(), InspectionError> {
         self.reconcile_accepted_integrations().await?;
-        let queue = cleanup_evaluation_candidates(self.store.lock()?.read_shared()?.as_ref());
+        let snapshot = { self.store.lock()?.read_shared()? };
+        let queue = cleanup_evaluation_candidates(&snapshot);
         for queued in queue {
             if queued.cleanup.state == CleanupState::Removed { continue; }
             let Some(_lease) = self.execution_lease(&queued.run_id)? else { continue };
