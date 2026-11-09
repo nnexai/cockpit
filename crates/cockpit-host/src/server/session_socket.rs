@@ -1,4 +1,5 @@
 use axum::{
+    Extension,
     extract::{
         Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -17,16 +18,22 @@ use crate::transport::{
 pub(super) async fn session_events(
     ws: WebSocketUpgrade,
     State(service): State<CockpitService>,
+    Extension(sockets): Extension<super::ListenerSockets>,
     Path(session_id): Path<String>,
 ) -> Response {
     if !valid_session_id(&session_id) {
         return OperationError::rejected("invalid_session_id", "Invalid session id")
             .into_response(StatusPolicy::Service);
     }
+    let token = sockets.tasks.token();
     ws.on_upgrade(move |socket| async move {
+        let _token = token;
         let (stream, first) = SessionStream::gateway(session_id);
         let mut sink = WebSocketSink { socket };
-        pump(service, stream, first, None, &mut sink).await;
+        tokio::select! {
+            _ = sockets.cancel.cancelled() => {}
+            _ = pump(service, stream, first, None, &mut sink) => {}
+        }
     })
     .into_response()
 }

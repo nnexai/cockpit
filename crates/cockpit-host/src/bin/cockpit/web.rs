@@ -1,22 +1,10 @@
 use super::*;
 use cockpit_host::{
-    backend,
-    lifecycle::HerdrEndpoint,
-    server::{ServerConfig, serve as serve_foreground, serve_managed},
+    backend::{self, BackendProbe},
+    server::{self, ServerConfig},
 };
-use fs2::FileExt;
 use serde::{Deserialize, Serialize};
-use std::{
-    ffi::OsString,
-    fs::{self, OpenOptions},
-    os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt},
-};
-use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::{UnixListener, UnixStream},
-    sync::oneshot,
-    time::{Instant, sleep, timeout},
-};
+use tokio::sync::{Mutex, oneshot};
 
 #[derive(Debug, Args)]
 pub struct WebArgs {
@@ -48,174 +36,322 @@ enum WebCommand {
         operator: bool,
     },
 }
-#[derive(Clone, Serialize, Deserialize)]
-pub(super) struct ManagedConfig {
-    pub root: PathBuf,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct WebConfig {
     pub bind: SocketAddr,
     pub static_dir: Option<PathBuf>,
-    pub config: Option<PathBuf>,
-    pub herdr: HerdrEndpoint,
+    pub config_file: Option<PathBuf>,
+}
+impl WebConfig {
+    pub fn new(
+        bind: SocketAddr,
+        static_dir: Option<PathBuf>,
+        config_file: Option<PathBuf>,
+    ) -> Result<Self, String> {
+        server::validate_bind(bind).map_err(|e| e.to_string())?;
+        let static_dir = static_dir
+            .map(|path| {
+                if path.is_absolute() {
+                    Ok(path)
+                } else {
+                    std::env::current_dir().map(|cwd| cwd.join(path))
+                }
+            })
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        let config_file = config_file
+            .map(|path| std::fs::canonicalize(path).map_err(|e| e.to_string()))
+            .transpose()?;
+        Ok(Self {
+            bind,
+            static_dir,
+            config_file,
+        })
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct WebInfo {
     instance_id: uuid::Uuid,
-    config: ManagedConfig,
+    config: WebConfig,
+}
+struct Running {
+    info: WebInfo,
+    requested: WebConfig,
+    stop: Option<oneshot::Sender<()>>,
+    task: tokio::task::JoinHandle<Result<(), server::ServerError>>,
 }
 
-fn root_dir(root: &Path) -> Result<PathBuf, String> {
-    let dir = root.join("web");
-    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let metadata = fs::symlink_metadata(&dir).map_err(|e| e.to_string())?;
-    if !metadata.is_dir() || metadata.uid() != nix::unistd::Uid::current().as_raw() {
-        return Err("unsafe web state directory".into());
-    }
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
-    Ok(dir)
+pub(super) struct Controller {
+    state: Mutex<(bool, Option<Running>)>,
+    service: CockpitService,
+    browser: Arc<BrowserRuntime>,
+    orchestration: Arc<cockpit_host::OrchestrationRuntime>,
+    root: PathBuf,
+    endpoint: cockpit_host::lifecycle::HerdrEndpoint,
+    config_path: Option<PathBuf>,
+    config_file: Option<PathBuf>,
 }
-fn lock(root: &Path) -> Result<Option<std::fs::File>, String> {
-    let path = root_dir(root)?.join("web.lock");
-    let file = OpenOptions::new()
-        .create(true)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
-        .open(path)
-        .map_err(|e| e.to_string())?;
-    let metadata = file.metadata().map_err(|e| e.to_string())?;
-    if !metadata.is_file() || metadata.uid() != nix::unistd::Uid::current().as_raw() {
-        return Err("unsafe web lock".into());
-    }
-    match file.try_lock_exclusive() {
-        Ok(()) => Ok(Some(file)),
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-        Err(e) => Err(e.to_string()),
-    }
-}
-async fn call(root: &Path, request: serde_json::Value) -> Result<serde_json::Value, String> {
-    timeout(Duration::from_secs(3), async {
-        let mut stream = UnixStream::connect(root.join("web/web.sock"))
-            .await
-            .map_err(|e| e.to_string())?;
-        if stream.peer_cred().map_err(|e| e.to_string())?.uid()
-            != nix::unistd::Uid::current().as_raw()
-        {
-            return Err("web socket owner mismatch".into());
+impl Controller {
+    pub fn new(
+        service: CockpitService,
+        browser: Arc<BrowserRuntime>,
+        orchestration: Arc<cockpit_host::OrchestrationRuntime>,
+        root: PathBuf,
+        endpoint: cockpit_host::lifecycle::HerdrEndpoint,
+        config_path: Option<PathBuf>,
+        config_file: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            state: Mutex::new((false, None)),
+            service,
+            browser,
+            orchestration,
+            root,
+            endpoint,
+            config_path,
+            config_file,
         }
-        let mut bytes = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-        bytes.push(b'\n');
-        stream.write_all(&bytes).await.map_err(|e| e.to_string())?;
-        let mut line = Vec::new();
-        BufReader::new(stream)
-            .take(1_048_577)
-            .read_until(b'\n', &mut line)
-            .await
-            .map_err(|e| e.to_string())?;
-        if line.len() > 1_048_576 {
-            return Err("web control frame too large".into());
-        }
-        serde_json::from_slice(&line).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|_| "web control timed out".to_string())?
-}
-async fn status(root: &Path) -> Result<Option<WebInfo>, String> {
-    match call(root, serde_json::json!({"op":"status"})).await {
-        Ok(value) => serde_json::from_value(value)
-            .map(Some)
-            .map_err(|e| e.to_string()),
-        Err(error) => {
-            if lock(root)?.is_some() {
-                Ok(None)
-            } else {
-                Err(format!("managed gateway unavailable: {error}"))
+    }
+    pub async fn handle(&self, request: serde_json::Value) -> serde_json::Value {
+        match self.dispatch(request).await {
+            Ok(info) => serde_json::json!({"ok":true, "info":info}),
+            Err(message) => {
+                serde_json::json!({"ok":false, "code":"web_unavailable", "message":message})
             }
         }
     }
-}
-async fn start(config: ManagedConfig) -> Result<WebInfo, String> {
-    if let Some(info) = status(&config.root).await? {
-        return Ok(info);
-    }
-    let mut args: Vec<OsString> = vec![
-        "serve".into(),
-        "--managed".into(),
-        "--bind".into(),
-        config.bind.to_string().into(),
-    ];
-    if let Some(path) = &config.static_dir {
-        args.extend(["--static-dir".into(), path.as_os_str().to_owned()]);
-    }
-    if let Some(path) = &config.config {
-        args.extend(["--config".into(), path.as_os_str().to_owned()]);
-    }
-    args.extend(config.herdr.to_args());
-    let mut env = backend::sanitized_environment(&std::env::vars().collect());
-    env.retain(|(key, _)| key != "COCKPIT_STATE_ROOT");
-    env.push((
-        "COCKPIT_STATE_ROOT".into(),
-        config.root.as_os_str().to_owned(),
-    ));
-    backend::spawn_detached(
-        &service_cli::cli_path()?,
-        &args,
-        &format!("cockpit-web-{}", uuid::Uuid::new_v4()),
-        &config.root.join("web/web.log"),
-        &env,
-    )
-    .map_err(|e| e.to_string())?;
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Ok(Some(info)) = status(&config.root).await {
-            return Ok(info);
+    async fn dispatch(&self, request: serde_json::Value) -> Result<Option<WebInfo>, String> {
+        let mut locked = self.state.lock().await;
+        if request["op"] == "web_freeze" {
+            if locked.0 {
+                return Err("backend restart already in progress".into());
+            }
+            locked.0 = true;
+            if locked
+                .1
+                .as_ref()
+                .is_some_and(|running| running.task.is_finished())
+            {
+                locked.1 = None;
+            }
+            return Ok(locked.1.as_ref().map(|running| running.info.clone()));
         }
-        if Instant::now() >= deadline {
-            return Err("managed gateway did not become ready".into());
+        if locked.0 && (request["op"] == "web_start" || request["op"] == "web_stop") {
+            return Err("backend restart in progress".into());
         }
-        sleep(Duration::from_millis(100)).await;
+        let state = &mut locked.1;
+        if state
+            .as_ref()
+            .is_some_and(|running| running.task.is_finished())
+        {
+            *state = None;
+        }
+        match request["op"].as_str() {
+            Some("web_status") => Ok(state.as_ref().map(|running| running.info.clone())),
+            Some("web_start") => {
+                let config: WebConfig = serde_json::from_value(request["payload"].clone())
+                    .map_err(|e| e.to_string())?;
+                let config = WebConfig::new(config.bind, config.static_dir, config.config_file)?;
+                if config.config_file != self.config_file {
+                    return Err("backend configuration file differs".into());
+                }
+                if let Some(running) = state.as_ref() {
+                    if running.stop.is_none() {
+                        return Err("web listener shutdown outcome is pending".into());
+                    }
+                    if running.requested != config && running.info.config != config {
+                        return Err(
+                            "web listener already running with different configuration".into()
+                        );
+                    }
+                    return Ok(Some(running.info.clone()));
+                }
+                let mut context = cockpit_host::transport::operations::backend::BackendContext::new(
+                    self.root.clone(),
+                    service_cli::cli_path()?,
+                    self.endpoint.clone(),
+                    cockpit_host::transport::Transport::Gateway,
+                    None,
+                );
+                context.set_config_path(self.config_path.clone());
+                let server_config = ServerConfig {
+                    bind: config.bind,
+                    static_dir: config.static_dir.clone(),
+                    service: self.service.clone(),
+                    browser_runtime: Some(self.browser.clone()),
+                    orchestration_runtime: Some(self.orchestration.clone()),
+                    backend_context: Some(context),
+                };
+                let (stop, stop_rx) = oneshot::channel();
+                let (ready, ready_rx) = oneshot::channel();
+                let mut task = tokio::spawn(server::serve_shared(
+                    server_config,
+                    async {
+                        let _ = stop_rx.await;
+                    },
+                    ready,
+                ));
+                let address = tokio::select! {
+                    result = &mut task => return Err(match result { Ok(Err(e)) => e.to_string(), Ok(Ok(())) => "web listener exited during startup".into(), Err(e) => e.to_string() }),
+                    result = ready_rx => result.map_err(|e| e.to_string())?,
+                };
+                let info = WebInfo {
+                    instance_id: uuid::Uuid::new_v4(),
+                    config: WebConfig {
+                        bind: address,
+                        static_dir: config.static_dir.clone(),
+                        config_file: config.config_file.clone(),
+                    },
+                };
+                *state = Some(Running {
+                    info: info.clone(),
+                    requested: config,
+                    stop: Some(stop),
+                    task,
+                });
+                Ok(Some(info))
+            }
+            Some("web_stop") => {
+                if let Some(running) = state.as_ref() {
+                    if request["payload"]["web_instance"].as_str()
+                        != Some(running.info.instance_id.to_string().as_str())
+                    {
+                        return Err("web listener instance changed".into());
+                    }
+                }
+                if let Some(running) = state.as_mut() {
+                    if let Some(stop) = running.stop.take() {
+                        let _ = stop.send(());
+                    }
+                    match tokio::time::timeout(Duration::from_secs(10), &mut running.task).await {
+                        Ok(result) => {
+                            let result = result
+                                .map_err(|e| e.to_string())?
+                                .map_err(|e| e.to_string());
+                            *state = None;
+                            result?;
+                        }
+                        Err(_) => {
+                            return Err(
+                                "web listener shutdown outcome is unknown; retry status or stop"
+                                    .into(),
+                            );
+                        }
+                    }
+                }
+                Ok(None)
+            }
+            _ => Err("unknown web operation".into()),
+        }
+    }
+    pub async fn shutdown(&self) -> Result<(), String> {
+        let mut state = self.state.lock().await;
+        state.0 = true;
+        if let Some(running) = state.1.as_mut() {
+            if let Some(stop) = running.stop.take() {
+                let _ = stop.send(());
+            }
+            match tokio::time::timeout(Duration::from_secs(10), &mut running.task).await {
+                Ok(result) => result
+                    .map_err(|e| e.to_string())?
+                    .map_err(|e| e.to_string())?,
+                Err(_) => return Err("web listener shutdown outcome is unknown".into()),
+            }
+            state.1 = None;
+        }
+        Ok(())
     }
 }
-async fn stop(root: &Path, info: &WebInfo) -> Result<(), String> {
-    let reply = call(
+
+fn check_image(owner: &cockpit_host::lifecycle::LifecycleInfo) -> Result<(), String> {
+    let (_, image) = cockpit_host::installation::startup_image().map_err(|e| e.to_string())?;
+    if owner.image != image {
+        return Err("backend executable image differs from this CLI".into());
+    }
+    Ok(())
+}
+pub(super) fn config_file(project: &ProjectArgs) -> Result<Option<PathBuf>, String> {
+    cockpit_core::config::configuration_path(project.config.as_deref())
+        .map_err(|e| e.to_string())?
+        .map(|path| std::fs::canonicalize(path).map_err(|e| e.to_string()))
+        .transpose()
+}
+
+async fn status(
+    root: &Path,
+    endpoint: &cockpit_host::lifecycle::HerdrEndpoint,
+) -> Result<Option<(uuid::Uuid, WebInfo)>, String> {
+    match backend::probe(root, endpoint).await {
+        BackendProbe::Stopped { .. } => Ok(None),
+        BackendProbe::Running(owner) => {
+            check_image(&owner)?;
+            let reply = backend::web_call(
+                root,
+                owner.instance_id,
+                "web_status",
+                serde_json::Value::Null,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            let info: Option<WebInfo> =
+                serde_json::from_value(reply["info"].clone()).map_err(|e| e.to_string())?;
+            Ok(info.map(|info| (owner.instance_id, info)))
+        }
+        other => Err(format!("backend is not available: {other:?}")),
+    }
+}
+pub(super) async fn start(
+    root: &Path,
+    endpoint: &cockpit_host::lifecycle::HerdrEndpoint,
+    project: &ProjectArgs,
+    config: WebConfig,
+) -> Result<(), String> {
+    let owner = backend::ensure_with_config(
         root,
-        serde_json::json!({"op":"stop", "instance_id":info.instance_id}),
+        &service_cli::cli_path()?,
+        endpoint,
+        project.config.as_deref(),
     )
-    .await?;
-    if reply["ok"] != true {
-        return Err("managed gateway identity changed".into());
-    }
-    let deadline = Instant::now() + Duration::from_secs(30);
-    loop {
-        if lock(root)?.is_some() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err("managed gateway did not stop".into());
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
+    .await
+    .map_err(|e| e.to_string())?;
+    check_image(&owner)?;
+    let response = backend::web_call(
+        root,
+        owner.instance_id,
+        "web_start",
+        serde_json::to_value(config).map_err(|e| e.to_string())?,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    println!("{}", response["info"]);
+    Ok(())
+}
+async fn stop(root: &Path, owner: uuid::Uuid, info: &WebInfo) -> Result<(), String> {
+    backend::web_call(
+        root,
+        owner,
+        "web_stop",
+        serde_json::json!({"web_instance":info.instance_id}),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 pub async fn run(args: WebArgs) -> Result<(), String> {
-    let projects = project_configuration(&args.project)?;
-    let root = PathBuf::from(projects.state_root);
+    let root = PathBuf::from(project_configuration(&args.project)?.state_root);
+    let endpoint = service_cli::endpoint(&args.herdr)?;
     match args.command {
         WebCommand::Start { bind, static_dir } => {
-            cockpit_host::server::validate_bind(bind).map_err(|e| e.to_string())?;
-            let info = start(ManagedConfig {
-                root,
-                bind,
-                static_dir,
-                config: args.project.config,
-                herdr: service_cli::endpoint(&args.herdr)?,
-            })
-            .await?;
-            println!(
-                "{}",
-                serde_json::to_string(&info).map_err(|e| e.to_string())?
-            );
+            start(
+                &root,
+                &endpoint,
+                &args.project,
+                WebConfig::new(bind, static_dir, config_file(&args.project)?)?,
+            )
+            .await?
         }
         WebCommand::Status { json } => {
-            let value = serde_json::json!({"managed":status(&root).await?, "notice":"unmanaged gateways are not tracked"});
+            let value = serde_json::json!({"managed":status(&root, &endpoint).await?.map(|(_, info)| info)});
             println!(
                 "{}",
                 if json {
@@ -228,107 +364,26 @@ pub async fn run(args: WebArgs) -> Result<(), String> {
         }
         WebCommand::Stop { operator } => {
             service_cli::operator_guard(operator)?;
-            if let Some(info) = status(&root).await? {
-                stop(&root, &info).await?;
+            if let Some((owner, info)) = status(&root, &endpoint).await? {
+                stop(&root, owner, &info).await?;
             }
         }
         WebCommand::Restart { operator } => {
             service_cli::operator_guard(operator)?;
-            let info = status(&root)
+            let (owner, info) = status(&root, &endpoint)
                 .await?
-                .ok_or("no managed web gateway is running")?;
-            stop(&root, &info).await?;
-            let info = start(info.config).await?;
-            println!(
-                "{}",
-                serde_json::to_string(&info).map_err(|e| e.to_string())?
-            );
+                .ok_or("no web listener is running")?;
+            stop(&root, owner, &info).await?;
+            let response = backend::web_call(
+                &root,
+                owner,
+                "web_start",
+                serde_json::to_value(info.config).map_err(|e| e.to_string())?,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+            println!("{}", response["info"]);
         }
     }
     Ok(())
-}
-
-pub(super) async fn serve(
-    config: ServerConfig,
-    managed: bool,
-    details: Option<ManagedConfig>,
-) -> Result<(), String> {
-    if !managed {
-        return serve_foreground(config).await.map_err(|e| e.to_string());
-    }
-    let mut details = details.ok_or("managed test-mode gateway is unsupported")?;
-    let lock = lock(&details.root)?.ok_or("managed gateway already running")?;
-    let path = root_dir(&details.root)?.join("web.sock");
-    match fs::symlink_metadata(&path) {
-        Ok(meta)
-            if meta.file_type().is_socket()
-                && meta.uid() == nix::unistd::Uid::current().as_raw() =>
-        {
-            fs::remove_file(&path).map_err(|e| e.to_string())?
-        }
-        Ok(_) => return Err("unsafe web socket path".into()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-        Err(e) => return Err(e.to_string()),
-    }
-    let listener = UnixListener::bind(&path).map_err(|e| e.to_string())?;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
-    let socket_meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-    let (stop_tx, stop_rx) = oneshot::channel::<()>();
-    let (ready_tx, ready_rx) = oneshot::channel();
-    let server = serve_managed(
-        config,
-        async move {
-            let _ = stop_rx.await;
-        },
-        ready_tx,
-    );
-    tokio::pin!(server);
-    let address = tokio::select! { result = &mut server => return result.map_err(|e| e.to_string()), address = ready_rx => address.map_err(|e| e.to_string())? };
-    details.bind = address;
-    let info = WebInfo {
-        instance_id: uuid::Uuid::new_v4(),
-        config: details,
-    };
-    let mut stop_tx = Some(stop_tx);
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|e| e.to_string())?;
-    loop {
-        tokio::select! {
-            result = &mut server => {
-                let exit = serde_json::json!({"instance_id":info.instance_id, "code":if result.is_ok() { "stopped" } else { "failed" }});
-                let tmp = info.config.root.join("web").join(format!(".last-exit-{}", uuid::Uuid::new_v4()));
-                if let Ok(mut file) = OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp) {
-                    use std::io::Write;
-                    if serde_json::to_writer(&mut file, &exit).is_ok() && file.flush().is_ok() {
-                        let _ = fs::rename(&tmp, info.config.root.join("web/last-exit.json"));
-                    }
-                }
-                cleanup(&path, &socket_meta); drop(lock); return result.map_err(|e| e.to_string());
-            }
-            _ = tokio::signal::ctrl_c() => { if let Some(tx) = stop_tx.take() { let _ = tx.send(()); } }
-            _ = term.recv() => { if let Some(tx) = stop_tx.take() { let _ = tx.send(()); } }
-            connection = listener.accept(), if stop_tx.is_some() => {
-                let (mut stream, _) = connection.map_err(|e| e.to_string())?;
-                if stream.peer_cred().map(|c| c.uid()).ok() != Some(nix::unistd::Uid::current().as_raw()) { continue; }
-                let mut line = Vec::new();
-                if timeout(Duration::from_secs(2), BufReader::new(&mut stream).take(1_048_577).read_until(b'\n', &mut line)).await.is_err() || line.len() > 1_048_576 { continue; }
-                let req: serde_json::Value = match serde_json::from_slice(&line) { Ok(v) => v, Err(_) => continue };
-                let stopping = req["op"] == "stop" && req["instance_id"] == info.instance_id.to_string();
-                let response = if req["op"] == "status" || req["op"] == "hello" { serde_json::to_value(&info).map_err(|e| e.to_string())? } else { serde_json::json!({"ok":stopping}) };
-                let mut bytes = serde_json::to_vec(&response).map_err(|e| e.to_string())?; bytes.push(b'\n');
-                let _ = stream.write_all(&bytes).await;
-                if stopping { if let Some(tx) = stop_tx.take() { let _ = tx.send(()); } }
-            }
-        }
-    }
-}
-fn cleanup(path: &Path, original: &fs::Metadata) {
-    if let Ok(current) = fs::symlink_metadata(path) {
-        if current.file_type().is_socket()
-            && current.dev() == original.dev()
-            && current.ino() == original.ino()
-        {
-            let _ = fs::remove_file(path);
-        }
-    }
 }

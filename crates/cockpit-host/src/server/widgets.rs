@@ -28,6 +28,7 @@ async fn events(
     ws: WebSocketUpgrade,
     headers: HeaderMap,
     Extension(owner): Extension<Option<Arc<BrowserRuntime>>>,
+    Extension(sockets): Extension<super::ListenerSockets>,
 ) -> Response {
     // This GET upgrades to a bidirectional window-report channel. The enclosing
     // authority guard validates the exact Origin; require its presence as well.
@@ -46,9 +47,16 @@ async fn events(
         Ok(value) => value,
         Err(error) => return OperationError::from(error).into_response(StatusPolicy::Service),
     };
+    let token = sockets.tasks.token();
     ws.max_message_size(WIDGET_BYTES)
         .max_frame_size(WIDGET_BYTES)
-        .on_upgrade(move |socket| relay(socket, owner, stream))
+        .on_upgrade(move |socket| async move {
+            let _token = token;
+            tokio::select! {
+                _ = sockets.cancel.cancelled() => {}
+                _ = relay(socket, owner, stream) => {}
+            }
+        })
         .into_response()
 }
 

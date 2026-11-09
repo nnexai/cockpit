@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -135,12 +136,6 @@ def wait_ready(child, log, description, seconds, probe):
         time.sleep(min(.1, remaining))
 
 
-def gateway_origin(text):
-    prefix = "listening http://127.0.0.1:"
-    for line in text.splitlines():
-        if line.startswith(prefix) and line[len(prefix):].isdigit():
-            return line.removeprefix("listening ")
-    return None
 
 
 def http_ok(origin):
@@ -217,8 +212,32 @@ def service_command(root, endpoint, *args):
                           text=True, check=True, timeout=40)
 
 
+
+
 def backend_status(root, endpoint):
     return json.loads(service_command(root, endpoint, "status", "--json").stdout)
+
+
+def start_web(root, instance_id, owner_pid):
+    request = {"op": "web_start", "expected_instance": instance_id,
+               "payload": {"bind": "127.0.0.1:0",
+                           "static_dir": str((REPO / "dist").resolve()),
+                           "config_file": str((root / "cockpit.toml").resolve())}}
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(30)
+        client.connect(str(root / "cockpit-state/backend/lifecycle.v1.sock"))
+        pid, uid, _ = struct.unpack("3i", client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        if pid != owner_pid or uid != os.getuid():
+            raise ValueError("lifecycle socket peer differs from the recorded fixture service")
+        client.sendall((json.dumps(request) + "\n").encode())
+        with client.makefile("rb") as response:
+            line = response.readline(1024 * 1024 + 1)
+        if len(line) > 1024 * 1024 or not line.endswith(b"\n"):
+            raise ValueError("invalid lifecycle response frame")
+        reply = json.loads(line)
+        if reply.get("ok") is not True or not isinstance(reply.get("info"), dict):
+            raise ValueError(f"web listener start rejected: {reply}")
+        return reply["info"]
 
 
 def running_backend(status, endpoint):
@@ -238,11 +257,15 @@ def record_backend(root, ledger, herdr_executable):
                 "session": ledger["session"], "socket": ledger["socket"]}
     with fixture_resources.locked(root):
         manifest = fixture_resources.load(root)
-        for name in ("gateway", "herdr"):
+        for name in ("service", "herdr"):
             entries = [item for item in manifest["processes"] if item["name"] == name]
             if len(entries) != 1 or fixture_resources.inspect_process(entries[0]["identity"], manifest)[0] != "live":
                 raise ValueError(f"fixture {name} ownership is unproven")
-        instance_id = running_backend(backend_status(root, endpoint), endpoint)
+        status = backend_status(root, endpoint)
+        instance_id = running_backend(status, endpoint)
+        service = next(item for item in manifest["processes"] if item["name"] == "service")
+        if status["instance"]["pid"] != service["identity"]["pid"]:
+            raise ValueError("backend PID differs from the recorded fixture service")
         ledger["backend"] = {
             "creation_id": manifest["creation_id"], "root": manifest["root"],
             "instance_id": instance_id, "herdr": endpoint,
@@ -270,7 +293,13 @@ def stop_backend(root):
                 or not Path(endpoint["executable"]).is_absolute()
                 or backend["config_sha256"] != hashlib.sha256((root / "cockpit.toml").read_bytes()).hexdigest()):
             raise ValueError("backend creation receipt does not match fixture identity")
-        instance_id = running_backend(backend_status(root, endpoint), endpoint)
+        status = backend_status(root, endpoint)
+        instance_id = running_backend(status, endpoint)
+        services = [item for item in manifest["processes"] if item["name"] == "service"]
+        if (len(services) != 1
+                or fixture_resources.inspect_process(services[0]["identity"], manifest)[0] != "live"
+                or status["instance"]["pid"] != services[0]["identity"]["pid"]):
+            raise ValueError("backend process ownership is unproven")
         if instance_id != backend["instance_id"]:
             raise ValueError("backend instance changed")
         service_command(root, endpoint, "stop", "--operator", "--expected-instance", instance_id)
@@ -345,15 +374,36 @@ def start(with_plugins=False, with_action_launcher=False, inherit_omp_auth=False
                    lambda: Path(ledger["socket"]).exists())
         result = rpc(root, "workspace.create", {"cwd": str(fixture), "label": "Polish sample", "focus": True})
         (root / "workspace.json").write_text(json.dumps(result, indent=2))
-        gateway = launch(root, "gateway", [str(REPO / "target/debug/cockpit"), "serve",
-            "--herdr", herdr_executable, "--herdr-session", session, "--herdr-socket", ledger["socket"],
-            "--config", str(root / "cockpit.toml"), "--static-dir", str(REPO / "dist")], env)
-        def gateway_ready():
-            origin = gateway_origin((root / "gateway.log").read_text(errors="replace"))
-            return origin if origin and http_ok(origin) else None
-        ledger["gateway_url"] = wait_ready(
-            gateway, root / "gateway.log", "Cockpit gateway", GATEWAY_READY_SECONDS, gateway_ready)
+        endpoint = {"executable": str(Path(herdr_executable).resolve()),
+                    "session": session, "socket": ledger["socket"]}
+        owner = launch(root, "service", [str(REPO / "target/debug/cockpit"), "service",
+            "--herdr", endpoint["executable"], "--herdr-session", session, "--herdr-socket", ledger["socket"],
+            "--config", str(root / "cockpit.toml"), "run"], env)
+        def owner_ready():
+            status = backend_status(root, endpoint)
+            running_backend(status, endpoint)
+            return status["instance"]["pid"] == owner.pid
+        wait_ready(owner, root / "service.log", "Cockpit service", GATEWAY_READY_SECONDS, owner_ready)
         record_backend(root, ledger, herdr_executable)
+        web = start_web(root, ledger["backend"]["instance_id"], owner.pid)
+        if (web["config"]["static_dir"] != str((REPO / "dist").resolve())
+                or web["config"]["config_file"] != str((root / "cockpit.toml").resolve())):
+            raise ValueError("web listener configuration differs from the fixture")
+        bind = web["config"]["bind"]
+        host, port = bind.rsplit(":", 1)
+        if host != "127.0.0.1" or not port.isdecimal() or not 0 < int(port) < 65536:
+            raise ValueError("web listener returned an invalid loopback address")
+        instance_id = web["instance_id"]
+        if not isinstance(instance_id, str) or str(uuid.UUID(instance_id)) != instance_id:
+            raise ValueError("web listener instance is not a canonical UUID")
+        origin = f"http://{bind}"
+        wait_ready(owner, root / "service.log", "Cockpit web listener", GATEWAY_READY_SECONDS,
+                   lambda: http_ok(origin))
+        # Recheck the owner after the listener probe before publishing its address.
+        record_backend(root, ledger, herdr_executable)
+        ledger["web"] = web
+        ledger["gateway_url"] = origin
+        fixture_resources.atomic_json(root / "runtime.json", ledger)
     except BaseException:
         print(f"fixture start failed; evidence retained at {root}; stop recorded processes with: "
               f"python3 {Path(__file__).resolve()} stop {root}", file=sys.stderr)

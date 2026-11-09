@@ -60,7 +60,9 @@ Agent launches receive an absolute selected `COCKPIT_CLI_PATH` and configuration
 
 The macOS native installer packages the matching CLI at `Cockpit.app/Contents/MacOS/cockpit-cli`. Native startup selects this sibling even with Finder/Spotlight's restricted PATH; installing a separate shell launcher is not a substitute for the bundled executable. Use `scripts/install-native.py` to build the paired bundle.
 
-The native app and browser gateway start or connect to a background Cockpit service for the configured state root. The service receives the resolved Herdr executable, session and socket explicitly; a different configured endpoint is not silently substituted. It runs independently of either surface until explicitly stopped. Development and disposable fixtures can select separate state roots and Herdr endpoints.
+The native app and web controls start or connect to a background Cockpit backend for the configured state root. The backend receives the resolved Herdr executable, session and socket explicitly; a different configured endpoint is not silently substituted. It owns the optional loopback web listener and shared runtime state. The native app is a separate client process; closing it does not stop the backend. Stopping the web listener disconnects browser clients but leaves the backend running; stopping the backend also closes the listener. The loopback surface is for the trusted local workstation and has no separate remote or multi-user authentication. Development and disposable fixtures can select separate state roots and Herdr endpoints.
+
+`cockpit serve` ensures a detached backend is running, enables its listener and exits. `cockpit service run` runs the backend in the foreground. The `cockpit web` commands start, inspect, stop and restart the listener; use their help for options. Listener shutdown interrupts browser connections without shutting down the shared backend. A backend restart necessarily interrupts the listener and its clients. Save unsaved work before either interruption.
 
 ## Quick terminal and agent discovery
 
@@ -422,7 +424,7 @@ Vault calls time out at 20 seconds and values are cached per process; edits in S
 
 ## Library synchronization and traversal values
 
-Jira/Confluence synchronization is enabled while native Cockpit or `cockpit serve` runs. `[library_sync]` is separate from `[limits]` and never raises existing page/item limits. Defaults:
+Jira/Confluence synchronization is enabled for the background backend's lifetime, independently of whether native or web clients are connected. `[library_sync]` is separate from `[limits]` and never raises existing page/item limits. Defaults:
 
 ```toml
 [library_sync]

@@ -201,115 +201,22 @@ pub(super) fn cli_path() -> Result<PathBuf, String> {
 }
 
 pub(super) async fn serve_gateway(args: ServeArgs) -> Result<(), String> {
+    let web = web_cli::WebConfig::new(args.bind, args.static_dir, web_cli::config_file(&args.project)?)?;
     if args.test_mode {
         let service = make_service(args.herdr, CockpitMode::Test, None)?;
-        return web_cli::serve(
-            ServerConfig {
-                bind: args.bind,
-                static_dir: args.static_dir,
-                service,
-                browser_runtime: None,
-                orchestration_runtime: None,
-                backend_context: None,
-            },
-            args.managed,
-            None,
-        )
-        .await;
-    }
-    let configuration =
-        ConfigurationFile::load(args.project.config.as_deref()).map_err(|e| e.to_string())?;
-    let projects = configuration
-        .project
-        .resolve(
-            (!args.project.repository_roots.is_empty())
-                .then_some(args.project.repository_roots.as_slice()),
-        )
-        .map_err(|e| e.to_string())?;
-    let state_root = PathBuf::from(&projects.state_root);
-    let endpoint = endpoint(&args.herdr)?;
-    let available = match backend::ensure_with_config(
-        &state_root,
-        &cli_path()?,
-        &endpoint,
-        args.project.config.as_deref(),
-    )
-    .await
-    {
-        Ok(_) => true,
-        Err(error) => {
-            eprintln!("background service unavailable: {error}");
-            error.code != "backend_endpoint_mismatch"
-        }
-    };
-    let adapter = Arc::new(HerdrCliAdapter::new(
-        HerdrCliConfig::from_options(
-            args.herdr.herdr.clone(),
-            args.herdr.herdr_session.clone(),
-            args.herdr.herdr_socket.clone(),
-        )
-        .map_err(|e| e.to_string())?,
-    ));
-    let browser = Arc::new(
-        BrowserService::new(
-            configuration.browser.resolve().map_err(|e| e.to_string())?,
-            state_root.clone(),
-            adapter.clone(),
-        )
-        .map_err(|e| e.to_string())?
-        .with_paste_adapter(adapter.paste_adapter()),
-    );
-    let browser_runtime =
-        available.then(|| Arc::new(BrowserRuntime::observer(state_root.clone(), browser)));
-    let service = make_service(
-        args.herdr.clone(),
-        CockpitMode::Normal,
-        Some(projects.clone()),
-    )?;
-    let quota = Arc::new(cockpit_core::quota::QuotaService::new(
-        configuration.quota.resolve().map_err(|e| e.to_string())?,
-        Path::new(&projects.cache_root),
-    ));
-    let service = service.with_quota(quota);
-    let orchestration = Arc::new(
-        cockpit_host::OrchestrationRuntime::new(
-            &projects,
-            adapter,
-            service.projects().map_err(|e| e.to_string())?.clone(),
-            service.library().map_err(|e| e.to_string())?.clone(),
-            args.project.config.clone(),
-            cockpit_host::orchestration_runtime::CliProcessRole::Host,
-        )
-        .map_err(|e| e.to_string())?,
-    );
-    let service = service.with_orchestration(orchestration.service.clone());
-    let mut context = cockpit_host::transport::operations::backend::BackendContext::new(
-        state_root.clone(),
-        cli_path()?,
-        endpoint.clone(),
-        cockpit_host::transport::Transport::Gateway,
-        None,
-    );
-    context.set_config_path(args.project.config.clone());
-    web_cli::serve(
-        ServerConfig {
-            bind: args.bind,
-            static_dir: args.static_dir.clone(),
+        return cockpit_host::server::serve(ServerConfig {
+            bind: web.bind,
+            static_dir: web.static_dir,
             service,
-            browser_runtime,
-            orchestration_runtime: Some(orchestration),
-            backend_context: Some(context),
-        },
-        args.managed,
-        Some(web_cli::ManagedConfig {
-            root: state_root,
-            bind: args.bind,
-            static_dir: args.static_dir,
-            config: args.project.config,
-            herdr: endpoint,
-        }),
-    )
-    .await
+            browser_runtime: None,
+            orchestration_runtime: None,
+            backend_context: None,
+        }).await.map_err(|e| e.to_string());
+    }
+    let projects = project_configuration(&args.project)?;
+    let root = PathBuf::from(projects.state_root);
+    let endpoint = endpoint(&args.herdr)?;
+    web_cli::start(&root, &endpoint, &args.project, web).await
 }
 
 pub async fn run(args: ServiceArgs) -> Result<u8, String> {
@@ -420,14 +327,13 @@ async fn run_owner(
             _ => Err("backend lock is held but the matching service is unavailable".into()),
         };
     };
-    let mut identity = backend::make_identity(&root, endpoint).map_err(|e| e.to_string())?;
+    let mut identity = backend::make_identity(&root, endpoint.clone()).map_err(|e| e.to_string())?;
     let mut browser = None;
     let result: Result<u8, String> = async {
         let configuration =
             ConfigurationFile::load(project.config.as_deref()).map_err(|e| e.to_string())?;
-        let omp_executable = voice_executable(
-            configuration.quota.resolve().map_err(|e| e.to_string())?.omp_executable,
-        );
+        let quota_config = configuration.quota.resolve().map_err(|e| e.to_string())?;
+        let omp_executable = voice_executable(quota_config.omp_executable.clone());
         let projects = configuration
             .project
             .resolve(
@@ -458,7 +364,7 @@ async fn run_owner(
                 adapter.clone(),
                 service.projects().map_err(|e| e.to_string())?.clone(),
                 service.library().map_err(|e| e.to_string())?.clone(),
-                project.config,
+                project.config.clone(),
                 cockpit_host::orchestration_runtime::CliProcessRole::Host,
             )
             .map_err(|e| e.to_string())?,
@@ -469,6 +375,14 @@ async fn run_owner(
             std::env::var_os("PI_CODING_AGENT_DIR"),
             PathBuf::from(&projects.cache_root),
             voice_validator(orchestration.clone(), adapter),
+        ));
+        let service = service.with_quota(Arc::new(cockpit_core::quota::QuotaService::new(
+            quota_config,
+            Path::new(&projects.cache_root),
+        ))).with_orchestration(orchestration.service.clone());
+        let web = Arc::new(web_cli::Controller::new(
+            service.clone(), runtime.clone(), orchestration.clone(), root.clone(), endpoint,
+            project.config.clone(), web_cli::config_file(&project)?,
         ));
         let sync = service
             .library()
@@ -491,6 +405,13 @@ async fn run_owner(
                 return Err(error.to_string());
             }
         };
+        {
+            let web = web.clone();
+            server.set_web_handler(Arc::new(move |request| {
+                let web = web.clone();
+                Box::pin(async move { web.handle(request).await })
+            }));
+        }
         let voice_server = match VoiceServer::bind(&root, {
             let voice = voice.clone();
             move |request| {
@@ -505,12 +426,14 @@ async fn run_owner(
             }
         };
         let outcome = server.run().await.map_err(|e| e.to_string());
+        let web_outcome = web.shutdown().await;
         voice_server.shutdown().await;
         voice.shutdown().await;
         orchestration.shutdown().await;
         drop(sync);
         runtime.shutdown().await.map_err(|e| e.to_string())?;
         browser = None;
+        let outcome = outcome.and_then(|reason| web_outcome.map(|()| reason));
         let code = match outcome.as_ref() {
             Ok(StopReason::Explicit) => "explicit",
             Ok(StopReason::Signal) => "signal",

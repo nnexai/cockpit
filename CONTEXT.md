@@ -27,10 +27,10 @@ The Rust core owns application rules and durable state independently of transpor
 | Herdr adapter | Supported schema/socket protocol, snapshots, ordered events, attachment and Herdr identifiers. |
 | Provider adapters | Configured HTTP/CLI reads and canonical normalized snapshots. |
 | Vault adapter | OS credential storage behind the core credential-vault trait. |
-| Hosts | A background Cockpit service, CLI, independently controlled loopback browser gateway and native application composition. |
+| Hosts | A background Cockpit backend with a dynamically controlled loopback web listener, CLI and separate native application composition. |
 | Client adapters | Shared typed requests, ordered streams and boundary decoding. |
 
-The shared frontend runs in a Tauri v2 native host or through `cockpit serve` at a loopback origin. The native app and gateway connect to a background Cockpit service for shared Browser, widget and dispatcher ownership; closing either surface does not stop that service. Native requests use IPC and ordered channels; browser requests use HTTP and ordered WebSocket streams. UI components consume one `CockpitClient` contract. The gateway remains loopback-only; remote access and multi-user authorization are outside the current product.
+The shared frontend runs in a separate Tauri v2 native process or at a loopback origin served by the background backend. The backend owns the web listener as well as shared Browser, widget and dispatcher state; enabling or disabling the listener does not start or stop a separate gateway process. Closing the native window does not stop the backend. Native requests use IPC and ordered channels; browser requests use HTTP and ordered WebSocket streams. UI components consume one `CockpitClient` contract. The web listener is loopback-only, not a remote or multi-user authentication boundary.
 
 The Herdr socket carries persistent newline-delimited JSON interaction and subscriptions. Its CLI remains useful for bootstrap, documented wrappers and human debugging. A selected session supplies an authoritative snapshot followed by ordered events; switching sessions replaces subscriptions and stale selection state. Multiple windows still share Herdr's focus and writable-control authority.
 

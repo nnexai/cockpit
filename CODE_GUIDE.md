@@ -400,7 +400,7 @@ For focused HTTP pacing scenarios use `cargo test -p cockpit-providers site_http
 
 ### Disposable UI smoke
 
-Use the owned disposable fixture recipe, never the default session or manual gateway:
+Use the owned disposable fixture recipe, never the default session or manually managed web listener:
 
 ```sh
 ROOT=$(python3 scripts/verify/ui_polish_runtime.py start)
@@ -414,7 +414,7 @@ python3 scripts/verify/ui_polish_runtime.py stop "$ROOT"
 
 For a real model-backed smoke, only with explicit user permission, `start --inherit-omp-auth` points the fixture at the owner's existing default-profile OMP agent directory and its **shared writable** `agent.db`; this is not isolated authentication. It does not copy credentials or use an auth broker. HOME, XDG roots, native cache and sessions remain fixture-private; a fixture-only OMP overlay sets `autoResume: false` and disables extensions, skills, rules and context files for the launch. No global settings are changed. Without this opt-in, the fixture uses its private OMP agent directory.
 
-`start` prints only the root after its own gateway serves HTTP. `runtime.json` records `gateway_url` as the exact loopback origin without a trailing slash, suitable for the browser URL and `Origin` header; `fixture_url` instead addresses the separate annotation test page. Startup failure exits nonzero, retains the root and logs, and prints the explicit `stop` command without automatically stopping any process.
+The fixture launches a foreground backend owner and enables its ephemeral loopback web listener with an instance-fenced request and peer PID/UID verification. `start` prints only the root after HTTP readiness and an owner recheck. `runtime.json` records the listener identity under `web` and `gateway_url` as the exact loopback origin without a trailing slash, suitable for the browser URL and `Origin` header; `fixture_url` instead addresses the separate annotation test page. Startup failure exits nonzero, retains the root and logs, and prints the explicit `stop` command without automatically stopping any process.
 
 ### Changed-scope quality
 

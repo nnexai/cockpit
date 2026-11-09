@@ -23,6 +23,15 @@ import urllib.error
 import urllib.request
 import uuid
 
+try:
+    from . import ui_polish_runtime
+except ImportError:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "cockpit_ui_polish_runtime", Path(__file__).with_name("ui_polish_runtime.py"))
+    ui_polish_runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ui_polish_runtime)
+
 REPO = Path(__file__).resolve().parents[2]
 
 
@@ -564,7 +573,7 @@ def main():
                COCKPIT_HERDR_EXECUTABLE=bins["herdr"])
     helper_path = root / "browser-helper-trace.mjs"
     override_trace_path = root / "browser-cdp-overrides.jsonl"
-    children, driver, frontend = [], None, None
+    children, driver, frontend, gateway, backend_instance = [], None, None, None, None
     result = {"session": session, "space": space_label, "fixture_url": fixture_url, "root": str(root),
               "failure": None, "geometries": {}, "paints": {}, "cleanup": []}
     result["image_quality"] = {
@@ -588,6 +597,23 @@ def main():
                                  stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
         children.append((label, child))
         return child
+
+    endpoint = {"executable": bins["herdr"], "session": session, "socket": str(session_socket)}
+    service_args = [bins["gateway"], "service", "--herdr", endpoint["executable"],
+                    "--herdr-session", session, "--herdr-socket", endpoint["socket"],
+                    "--config", str(root / "cockpit.toml")]
+
+    def service_command(*args):
+        return subprocess.run([*service_args, *args], cwd=REPO, env=env,
+                              capture_output=True, text=True, check=True, timeout=10)
+
+    def owner_instance():
+        status = json.loads(service_command("status", "--json").stdout)
+        instance = ui_polish_runtime.running_backend(status, endpoint)
+        if status["instance"]["pid"] != gateway.pid:
+            raise ValueError("backend PID differs from the owned foreground service")
+        return instance
+
 
     try:
         if args.trace_cdp_overrides:
@@ -630,19 +656,27 @@ def main():
             raise RuntimeError(f"Herdr workspace create omitted workspace_id: {space_result.stdout}")
         result["space_id"] = space_id
 
-        gateway = launch("gateway", [bins["gateway"], "serve", "--herdr-session", session,
-            "--herdr-socket", str(session_socket), "--config", str(root / "cockpit.toml"),
-            "--bind", "127.0.0.1:0", "--static-dir", str(REPO / "dist")], env)
-        def gateway_ready():
-            text = (root / "gateway.log").read_text(errors="replace")
-            for line in text.splitlines():
-                if "listening http://" in line:
-                    return line.split("listening http://", 1)[1].strip().rstrip("/")
-            return None
-        gateway_hostport = wait_until(gateway_ready, "private gateway bind readiness", args.timeout, [("gateway", gateway)])
-        gateway_url = "http://" + gateway_hostport
+        gateway = launch("gateway", [*service_args, "run"], env)
+        backend_instance = wait_until(owner_instance, "private foreground backend readiness",
+                                      args.timeout, [("backend", gateway)])
+        result["backend"] = {"pid": gateway.pid, "instance_id": backend_instance}
+        web = ui_polish_runtime.start_web(root, backend_instance, gateway.pid)
+        if (web["config"]["static_dir"] != str((REPO / "dist").resolve())
+                or web["config"]["config_file"] != str((root / "cockpit.toml").resolve())):
+            raise ValueError("web listener configuration differs from the fixture")
+        bind = web["config"]["bind"]
+        host, port = bind.rsplit(":", 1)
+        if host != "127.0.0.1" or not port.isdecimal() or not 0 < int(port) < 65536:
+            raise ValueError("web listener returned an invalid loopback address")
+        web_instance = web["instance_id"]
+        if not isinstance(web_instance, str) or str(uuid.UUID(web_instance)) != web_instance:
+            raise ValueError("web listener instance is not a canonical UUID")
+        gateway_url = "http://" + bind
         wait_until(lambda: urllib.request.urlopen(gateway_url, timeout=1).status == 200,
-                   "private gateway HTTP readiness", args.timeout, [("gateway", gateway)])
+                   "private gateway HTTP readiness", args.timeout, [("backend", gateway)])
+        if owner_instance() != backend_instance:
+            raise ValueError("backend instance changed after web listener readiness")
+        result["backend"]["web"] = web
         action = {"target": {"session_id": session, "space_id": space_id, "pane_id": None,
                              "endpoint_path": str(session_socket)}, "action": {"kind": "open", "url": fixture_url}}
         if not args.native_only_open:
@@ -1485,6 +1519,18 @@ def main():
             result["cleanup"].append({"name": "built-frontend-http-server", "stopped": True})
         fixture.shutdown()
         fixture.server_close()
+        if gateway and gateway.poll() is None and backend_instance:
+            try:
+                if owner_instance() != backend_instance:
+                    raise ValueError("backend instance changed before shutdown")
+                service_command("stop", "--operator", "--expected-instance", backend_instance)
+                gateway.wait(timeout=10)
+                result["cleanup"].append({"name": "backend-graceful-stop",
+                                          "instance_id": backend_instance, "stopped": True})
+            except Exception as error:
+                result["cleanup"].append({"name": "backend-graceful-stop", "stopped": False,
+                                          "error": f"{type(error).__name__}: {error}"})
+                result["ok"] = False
         result["cleanup"].extend(terminate_owned(children))
         result["cleanup"].append({"name": "fixture-http-server", "stopped": True})
         if args.trace_cdp_overrides:

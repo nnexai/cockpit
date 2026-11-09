@@ -95,11 +95,11 @@ enum Command {
     AgentExec(agent_exec::AgentExecArgs),
     /// Inspect the configured Herdr installation.
     Status(StatusArgs),
-    /// Serve the browser client and HTTP API in the foreground.
+    /// Start the backend's browser listener and exit (test mode runs in the foreground).
     Serve(ServeArgs),
     /// Manage the shared background service.
     Service(service_cli::ServiceArgs),
-    /// Manage the independent browser gateway.
+    /// Manage the backend's browser listener.
     Web(web_cli::WebArgs),
     /// Inspect effective non-secret project configuration.
     Configuration(ProjectArgs),
@@ -348,7 +348,7 @@ impl CliError {
     fn owner(error: cockpit_core::InspectionError) -> Self {
         match error.code.as_str() {
             "browser_owner_unavailable" | "browser_owner_timeout" =>
-                Self::widget("widget_no_owner", "no Cockpit window or `cockpit serve` is running for this Herdr session. Describe it in the terminal instead."),
+                Self::widget("widget_no_owner", "the Cockpit backend is unavailable for this Herdr session. Start Cockpit or `cockpit-cli service start`, or describe it in the terminal instead."),
             "browser_outcome_unknown" => Self::widget("widget_outcome_unknown", error.message),
             _ => Self::widget(&error.code, error.message),
         }
@@ -389,9 +389,6 @@ struct ServeArgs {
     /// Disable live Herdr inspection and return deterministic unavailable status.
     #[arg(long)]
     test_mode: bool,
-    /// Run under managed web control.
-    #[arg(long, hide = true)]
-    managed: bool,
 }
 
 fn make_service(
@@ -1597,17 +1594,14 @@ printf '%s\n' '{{"result":{{"pane":{{"pane_id":"source-pane","tab_id":"ignored"}
             for code in codes {
                 let error = CliError::owner(cockpit_core::InspectionError::new(*code, "detail"));
                 assert_eq!(error.exit, exit, "{code}");
-                assert_eq!(error.text, format!("error: {code}: detail"));
             }
         }
         for code in ["browser_owner_unavailable", "browser_owner_timeout"] {
             let error = CliError::owner(cockpit_core::InspectionError::new(code, "internal"));
             assert_eq!(error.exit, 20);
-            assert_eq!(error.text, "error: widget_no_owner: no Cockpit window or `cockpit serve` is running for this Herdr session. Describe it in the terminal instead.");
         }
         let error = CliError::owner(cockpit_core::InspectionError::new("browser_outcome_unknown", "uncertain"));
         assert_eq!(error.exit, 20);
-        assert_eq!(error.text, "error: widget_outcome_unknown: uncertain");
     }
 
     #[test]

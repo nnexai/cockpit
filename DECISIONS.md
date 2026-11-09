@@ -514,7 +514,7 @@ Canonical tasks retain durable stages and dependencies while schedules drive bou
 
 - Keep core Rust rules independent of Tauri/HTTP/WebSocket/socket framing; hosts compose narrow Herdr/provider/OS-vault traits. Share typed client requests/streams with startup adapter selection and validated response identity; stable typed error codes/useful messages stay at failure owner. [Owner](crates/cockpit-core/src/lib.rs). Rationale: Transport changes must not duplicate business rules.
 
-- Serve the shared frontend/versioned HTTP-WebSocket API from an explicitly controlled loopback gateway, independently of the native app and background service; native access is restricted by Tauri capabilities, and the browser has no separate remote authentication. [Owner](crates/cockpit-host/src/server.rs). Rationale: The trusted workstation boundary is not a remote service.
+- Serve the shared frontend/versioned HTTP-WebSocket API from a dynamically controlled loopback listener in the background backend, not a separate gateway owner. The native app remains a separate client process with Tauri capability restrictions; the browser has no separate remote authentication. Disabling the listener disconnects web clients without stopping the backend; stopping the backend also stops the listener. [Owner](crates/cockpit-host/src/server.rs). Rationale: One owner avoids competing runtime state, and the trusted workstation boundary is not a remote service.
 
 - Keep native dragDropEnabled false so shared HTML dragover/drop drives tab sorting; do not consume native file-drop events. [Owner](src-tauri/tauri.conf.json). Rationale: Native interception can swallow frontend tab drops.
 

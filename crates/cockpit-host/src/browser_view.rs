@@ -73,6 +73,23 @@ async fn release_view_connection(
     let _ = runtime.browser_view_detach(view_id).await;
 }
 
+// The upgrade future can fail or be dropped before its callback runs. Keep the
+// listener tracked until the asynchronous final lease release has completed.
+struct ViewLease {
+    inner: Option<(Arc<crate::browser_runtime::BrowserRuntime>, String, tokio_util::task::task_tracker::TaskTrackerToken)>,
+}
+
+impl Drop for ViewLease {
+    fn drop(&mut self) {
+        if let Some((runtime, view_id, token)) = self.inner.take() {
+            tokio::spawn(async move {
+                let _token = token;
+                release_view_connection(&runtime, &view_id).await;
+            });
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FrameGrantMessage {
@@ -97,6 +114,7 @@ pub(super) fn routes() -> Router<CockpitService> {
 async fn events(
     ws: WebSocketUpgrade,
     Extension(runtime): Extension<Option<Arc<crate::browser_runtime::BrowserRuntime>>>,
+    Extension(sockets): Extension<super::ListenerSockets>,
     AxumPath(view_id): AxumPath<String>,
 ) -> Response {
     if !valid_id(&view_id) {
@@ -110,15 +128,22 @@ async fn events(
     // Lease the view before taking the snapshot. A final release from an older
     // stream must not remove it between lookup and WebSocket upgrade.
     retain_view_connection(&runtime, &view_id).await;
+    let lease = ViewLease {
+        inner: Some((runtime.clone(), view_id.clone(), sockets.tasks.token())),
+    };
     let events = match runtime.browser_view_events(&view_id).await {
         Ok(events) => events,
         Err(error) => {
-            release_view_connection(&runtime, &view_id).await;
             return OperationError::from(error).into_response(StatusPolicy::BadRequest);
         }
     };
-    ws.on_upgrade(move |socket| {
-        run_events(socket, runtime, events.snapshot, events.events, view_id)
+    ws.on_upgrade(move |socket| async move {
+        let _lease = lease;
+        tokio::select! {
+            _ = sockets.cancel.cancelled() => {}
+            _ = run_events(socket, events.snapshot, events.events) => {}
+        }
+        drop(_lease);
     })
     .into_response()
 }
@@ -126,6 +151,7 @@ async fn events(
 async fn frame(
     ws: WebSocketUpgrade,
     Extension(runtime): Extension<Option<Arc<crate::browser_runtime::BrowserRuntime>>>,
+    Extension(sockets): Extension<super::ListenerSockets>,
     AxumPath(view_id): AxumPath<String>,
 ) -> Response {
     if !valid_id(&view_id) {
@@ -139,17 +165,22 @@ async fn frame(
     // Hold the lease before validating the grant so event/frame upgrade order
     // cannot let the final older stream detach this view.
     retain_view_connection(&runtime, &view_id).await;
+    let lease = ViewLease {
+        inner: Some((runtime.clone(), view_id.clone(), sockets.tasks.token())),
+    };
     ws.max_message_size(BROWSER_VIEW_JSON_BYTES)
-        .on_upgrade(move |socket| run_frame(socket, runtime, view_id))
+        .on_upgrade(move |socket| async move {
+            let _lease = lease;
+            run_frame(socket, runtime.clone(), view_id.clone(), sockets.cancel).await;
+            drop(_lease);
+        })
         .into_response()
 }
 
 async fn run_events(
     mut socket: WebSocket,
-    runtime: Arc<crate::browser_runtime::BrowserRuntime>,
     snapshot: BrowserViewSnapshot,
     mut events: tokio::sync::broadcast::Receiver<BrowserViewEvent>,
-    view_id: String,
 ) {
     let metadata = BrowserViewEventMetadata {
         view_id: snapshot.identity.view_id.clone(),
@@ -162,7 +193,6 @@ async fn run_events(
     )
     .await
     {
-        release_view_connection(&runtime, &view_id).await;
         return;
     }
     loop {
@@ -179,19 +209,19 @@ async fn run_events(
             }
         }
     }
-    release_view_connection(&runtime, &view_id).await;
 }
 
 async fn run_frame(
     mut socket: WebSocket,
     runtime: Arc<crate::browser_runtime::BrowserRuntime>,
     view_id: String,
+    cancel: tokio_util::sync::CancellationToken,
 ) {
+    let setup = async {
     let Ok(Some(first)) =
         tokio::time::timeout(std::time::Duration::from_secs(5), socket.recv()).await
     else {
-        release_view_connection(&runtime, &view_id).await;
-        return;
+        return None;
     };
     let grant = match first {
         Ok(Message::Text(text)) if text.len() <= BROWSER_VIEW_JSON_BYTES => {
@@ -199,45 +229,52 @@ async fn run_frame(
                 Ok(message) if message.grant.view_id == view_id => message.grant,
                 _ => {
                     close_ws(&mut socket, 1008, "invalid browser frame grant").await;
-                    release_view_connection(&runtime, &view_id).await;
-                    return;
+                    return None;
                 }
             }
         }
         _ => {
             close_ws(&mut socket, 1008, "frame grant required").await;
-            release_view_connection(&runtime, &view_id).await;
-            return;
+            return None;
         }
     };
     let endpoint = match runtime.browser_view_frame_endpoint(&grant).await {
         Ok(endpoint) => endpoint,
         Err(error) => {
             close_ws(&mut socket, 1008, &error.message).await;
-            release_view_connection(&runtime, &view_id).await;
-            return;
+            return None;
         }
     };
-    let mut helper = match FrameConnection::connect(&endpoint, &grant.grant).await {
+    let helper = match FrameConnection::connect(&endpoint, &grant.grant).await {
         Ok(connection) => connection,
         Err(_) => {
             close_ws(&mut socket, 1011, "browser frame transport unavailable").await;
-            release_view_connection(&runtime, &view_id).await;
-            return;
+            return None;
         }
     };
-    let (mut metadata_events, mut target_id) = match runtime.browser_view_events(&view_id).await {
+    let (metadata_events, target_id) = match runtime.browser_view_events(&view_id).await {
         Ok(events) => (
             events.events,
             events.snapshot.displayed_target_id.unwrap_or_default(),
         ),
         Err(_) => {
             close_ws(&mut socket, 1011, "browser metadata unavailable").await;
-            release_view_connection(&runtime, &view_id).await;
-            return;
+            return None;
         }
     };
+    Some((grant, helper, metadata_events, target_id))
+    };
+    let (grant, mut helper, mut metadata_events, mut target_id) = tokio::select! {
+        _ = cancel.cancelled() => return,
+        result = setup => match result {
+            Some(result) => result,
+            None => return,
+        },
+    };
     let mut outstanding: Option<u64> = None;
+    tokio::select! {
+        _ = cancel.cancelled() => {}
+        _ = async {
     loop {
         tokio::select! {
             incoming = socket.recv() => match incoming {
@@ -282,10 +319,14 @@ async fn run_frame(
             }
         }
     }
-    if let Some(sequence) = outstanding {
-        let _ = helper.send_credit("discard", sequence).await;
+        } => {}
     }
-    release_view_connection(&runtime, &view_id).await;
+    if let Some(sequence) = outstanding {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            helper.send_credit("discard", sequence),
+        ).await;
+    }
 }
 
 async fn send_frame(socket: &mut WebSocket, payload: Vec<u8>) -> Result<(), axum::Error> {

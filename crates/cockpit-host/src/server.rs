@@ -42,6 +42,13 @@ use cockpit_protocol::v1::{
 use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use tokio::net::TcpListener;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
+
+#[derive(Clone, Default)]
+struct ListenerSockets {
+    cancel: CancellationToken,
+    tasks: TaskTracker,
+}
 use tower_http::services::{ServeDir, ServeFile};
 
 mod operations;
@@ -192,6 +199,7 @@ pub fn build_router(
         None,
         None,
         None,
+        ListenerSockets::default(),
     ))
 }
 
@@ -202,6 +210,7 @@ fn build_router_with_validated_root(
     browser_runtime: Option<Arc<BrowserRuntime>>,
     orchestration_runtime: Option<Arc<OrchestrationRuntime>>,
     backend_context: Option<Arc<crate::transport::operations::backend::BackendContext>>,
+    sockets: ListenerSockets,
 ) -> Router {
     let expected_authority = expected_authority.to_string();
     let expected_origin = format!("http://{expected_authority}");
@@ -239,7 +248,8 @@ fn build_router_with_validated_root(
         .fallback_service(static_service)
         .with_state(service)
         .layer(Extension(browser_runtime))
-        .layer(Extension(orchestration_runtime));
+        .layer(Extension(orchestration_runtime))
+        .layer(Extension(sockets));
     let router = match backend_context {
         Some(context) => router.layer(Extension(context)),
         None => router,
@@ -309,6 +319,7 @@ struct TerminalQuery {
 async fn terminal_ws(
     ws: WebSocketUpgrade,
     State(service): State<CockpitService>,
+    Extension(sockets): Extension<ListenerSockets>,
     AxumPath((session_id, pane_id)): AxumPath<(String, String)>,
     Query(query): Query<TerminalQuery>,
 ) -> Response {
@@ -338,8 +349,23 @@ async fn terminal_ws(
         Ok(session) => session,
         Err(error) => return OperationError::from(error).into_response(StatusPolicy::Service),
     };
+    let token = sockets.tasks.token();
+    let failed_token = sockets.tasks.token();
+    let failed_commands = session.commands.clone();
     ws.max_message_size(TERMINAL_COMMAND_BYTES)
-        .on_upgrade(move |socket| run_terminal_socket(socket, session, request))
+        .on_failed_upgrade(move |_error| {
+            tokio::spawn(async move {
+                let _token = failed_token;
+                let _ = tokio::time::timeout(
+                    Duration::from_millis(250),
+                    failed_commands.send(TerminalCommand::Release),
+                ).await;
+            });
+        })
+        .on_upgrade(move |socket| async move {
+            let _token = token;
+            run_terminal_socket(socket, session, request, sockets.cancel).await;
+        })
         .into_response()
 }
 
@@ -427,12 +453,16 @@ async fn run_terminal_socket(
     mut socket: WebSocket,
     session: TerminalSession,
     request: TerminalOpenRequest,
+    cancel: CancellationToken,
 ) {
     let stream_id = session.stream_id.clone();
     let mut messages = session.messages;
     let commands = session.commands;
     let mut last_seq: Option<u64> = None;
 
+    tokio::select! {
+        _ = cancel.cancelled() => {}
+        _ = async {
     loop {
         tokio::select! {
             incoming = socket.recv() => {
@@ -530,6 +560,8 @@ async fn run_terminal_socket(
             }
         }
     }
+        } => {}
+    }
     let _ = tokio::time::timeout(
         Duration::from_millis(250),
         commands.send(TerminalCommand::Release),
@@ -567,22 +599,23 @@ pub async fn serve_until(
     config: ServerConfig,
     stop: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), ServerError> {
-    serve_inner(config, stop, None).await
+    serve_inner(config, stop, None, false).await
 }
 
-/// Run a managed gateway, reporting the bound address once startup succeeds.
-pub async fn serve_managed(
+/// Run a listener using backend-owned services without shutting those services down.
+pub async fn serve_shared(
     config: ServerConfig,
     stop: impl Future<Output = ()> + Send + 'static,
     ready: tokio::sync::oneshot::Sender<SocketAddr>,
 ) -> Result<(), ServerError> {
-    serve_inner(config, stop, Some(ready)).await
+    serve_inner(config, stop, Some(ready), true).await
 }
 
 async fn serve_inner(
     config: ServerConfig,
     stop: impl Future<Output = ()> + Send + 'static,
     ready: Option<tokio::sync::oneshot::Sender<SocketAddr>>,
+    shared: bool,
 ) -> Result<(), ServerError> {
     validate_bind(config.bind)?;
     let assets = WebAssets::resolve(config.static_dir.as_deref())?;
@@ -597,6 +630,7 @@ async fn serve_inner(
     let projects = config.service.projects().ok().cloned();
     let browser_runtime = config.browser_runtime.clone();
     let orchestration_runtime = config.orchestration_runtime.clone();
+    let sockets = ListenerSockets::default();
     let router = build_router_with_validated_root(
         config.service,
         assets,
@@ -604,6 +638,7 @@ async fn serve_inner(
         browser_runtime.clone(),
         orchestration_runtime.clone(),
         backend_context,
+        sockets.clone(),
     );
     println!("listening http://{actual}");
     std::io::stdout().flush().map_err(ServerError::Serve)?;
@@ -611,14 +646,20 @@ async fn serve_inner(
         let _ = ready.send(actual);
     }
     let shutdown = HostShutdown::new(None, projects, browser_runtime);
-    let graceful_shutdown = shutdown.clone();
+    let stopping_sockets = sockets.clone();
     let result = axum::serve(listener, router)
         .with_graceful_shutdown(async move {
             stop.await;
-            graceful_shutdown.run(ShutdownPolicy::Gateway).await;
+            stopping_sockets.cancel.cancel();
         })
         .await
         .map_err(ServerError::Serve);
+    sockets.cancel.cancel();
+    sockets.tasks.close();
+    sockets.tasks.wait().await;
+    if !shared {
+        shutdown.run(ShutdownPolicy::Gateway).await;
+    }
     result
 }
 

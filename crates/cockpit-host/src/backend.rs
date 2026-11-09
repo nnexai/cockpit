@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     ffi::OsString,
+    future::Future,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     os::unix::{
@@ -14,6 +15,7 @@ use std::{
         process::CommandExt,
     },
     path::{Path, PathBuf},
+    pin::Pin,
     process::{Command, Stdio},
     sync::Arc,
     time::Duration,
@@ -181,6 +183,10 @@ async fn call(root: &Path, request: Value, deadline: Duration) -> Result<Value, 
         let mut stream = UnixStream::connect(socket(root))
             .await
             .map_err(|e| err("backend_unavailable", e))?;
+        let peer = stream.peer_cred().map_err(|e| err("backend_unavailable", e))?;
+        if peer.uid() != nix::unistd::Uid::current().as_raw() {
+            return Err(err("backend_unavailable", "lifecycle socket peer is not owned"));
+        }
         let mut b = serde_json::to_vec(&request).map_err(|e| err("backend_unavailable", e))?;
         b.push(b'\n');
         stream
@@ -208,6 +214,23 @@ async fn call(root: &Path, request: Value, deadline: Duration) -> Result<Value, 
     .await
     .map_err(|_| err("backend_unresponsive", "lifecycle request timed out"))?
 }
+
+pub async fn web_call(
+    root: &Path,
+    expected_instance: Uuid,
+    op: &str,
+    payload: Value,
+) -> Result<Value, InspectionError> {
+    call(
+        root,
+        json!({"op": op, "expected_instance": expected_instance, "payload": payload}),
+        Duration::from_secs(30),
+    )
+    .await
+}
+
+type WebHandler =
+    Arc<dyn Fn(Value) -> Pin<Box<dyn Future<Output = Value> + Send>> + Send + Sync>;
 use tokio::io::AsyncReadExt;
 pub struct BackendServer {
     listener: UnixListener,
@@ -216,6 +239,7 @@ pub struct BackendServer {
     dev: u64,
     ino: u64,
     status: LifecycleInfo,
+    web_handler: Option<WebHandler>,
 }
 impl BackendServer {
     pub fn try_lock(root: &Path) -> Result<Option<File>, InspectionError> {
@@ -250,7 +274,11 @@ impl BackendServer {
             dev: m.dev(),
             ino: m.ino(),
             status,
+            web_handler: None,
         })
+    }
+    pub fn set_web_handler(&mut self, handler: WebHandler) {
+        self.web_handler = Some(handler);
     }
     pub async fn run(&mut self) -> Result<StopReason, InspectionError> {
         let peers = Arc::new(Semaphore::new(32));
@@ -263,7 +291,72 @@ impl BackendServer {
                 _ = tokio::signal::ctrl_c() => return Ok(StopReason::Signal),
                 _ = term.recv() => return Ok(StopReason::Signal),
                 Some(()) = rx.recv() => return Ok(StopReason::Explicit),
-                accepted = self.listener.accept() => { let (stream,_) = accepted.map_err(|e|err("backend_unavailable",e))?; if stream.peer_cred().map(|c| c.uid()).ok()!=Some(nix::unistd::Uid::current().as_raw()) { continue; } let Ok(permit)=peers.clone().try_acquire_owned() else { continue }; let status=self.status.clone(); let tx=tx.clone(); tokio::spawn(async move { let _permit=permit; let (r,mut w)=stream.into_split(); let mut line=Vec::new(); let mut reader=BufReader::new(r).take((MAX_FRAME+1) as u64); if reader.read_until(b'\n',&mut line).await.is_err() || line.len()>MAX_FRAME { return; } let req: Value=match serde_json::from_slice(&line) { Ok(v)=>v,Err(_)=>return }; let mut stopping=false; let response=match req["op"].as_str() { Some("hello") | Some("status")=>json!({"ok":true,"info":status}), Some("stop") => { if req["expected_instance"].as_str()==Some(status.instance_id.to_string().as_str()) { stopping=true; json!({"ok":true,"stopping":true}) } else { json!({"ok":false,"code":"instance_changed","message":"backend instance changed"}) } }, _=>json!({"ok":false,"code":"unsupported_op","message":"unknown lifecycle operation"}) }; if let Ok(mut bytes)=serde_json::to_vec(&response) { bytes.push(b'\n'); if w.write_all(&bytes).await.is_ok() && stopping { let _=tx.send(()).await; } } }); }
+                accepted = self.listener.accept() => {
+                    let (stream, _) = accepted.map_err(|e| err("backend_unavailable", e))?;
+                    if stream.peer_cred().map(|c| c.uid()).ok() != Some(nix::unistd::Uid::current().as_raw()) {
+                        continue;
+                    }
+                    let Ok(permit) = peers.clone().try_acquire_owned() else { continue };
+                    let status = self.status.clone();
+                    let handler = self.web_handler.clone();
+                    let tx = tx.clone();
+                    tokio::spawn(async move {
+                        let _permit = permit;
+                        let (r, mut w) = stream.into_split();
+                        let mut line = Vec::new();
+                        let mut reader = BufReader::new(r).take((MAX_FRAME + 1) as u64);
+                        if reader.read_until(b'\n', &mut line).await.is_err() || line.len() > MAX_FRAME {
+                            return;
+                        }
+                        let req: Value = match serde_json::from_slice(&line) {
+                            Ok(v) => v,
+                            Err(_) => return,
+                        };
+                        let mut stopping = false;
+                        let mut frozen = false;
+                        let response = match req["op"].as_str() {
+                            Some("hello") | Some("status") => json!({"ok": true, "info": status}),
+                            Some("stop") | Some("restart_stop") | Some("web_status") | Some("web_start") | Some("web_stop")
+                                if req["expected_instance"].as_str() != Some(status.instance_id.to_string().as_str()) =>
+                            {
+                                json!({"ok": false, "code": "instance_changed", "message": "backend instance changed"})
+                            }
+                            Some("stop") => {
+                                stopping = true;
+                                json!({"ok": true, "stopping": true})
+                            }
+                            Some("restart_stop") => {
+                                match handler {
+                                    Some(handler) => {
+                                        let mut freeze = req;
+                                        freeze["op"] = json!("web_freeze");
+                                        let response = handler(freeze).await;
+                                        frozen = response["ok"] == Value::Bool(true);
+                                        stopping = frozen;
+                                        response
+                                    }
+                                    None => json!({"ok": false, "code": "unsupported_op", "message": "web handler is unavailable"}),
+                                }
+                            }
+                            Some("web_status") | Some("web_start") | Some("web_stop") => {
+                                match handler {
+                                    Some(handler) => handler(req).await,
+                                    None => json!({"ok": false, "code": "unsupported_op", "message": "web handler is unavailable"}),
+                                }
+                            }
+                            _ => json!({"ok": false, "code": "unsupported_op", "message": "unknown lifecycle operation"}),
+                        };
+                        if let Ok(mut bytes) = serde_json::to_vec(&response) {
+                            bytes.push(b'\n');
+                            let written = timeout(Duration::from_secs(2), w.write_all(&bytes)).await;
+                            if stopping && (frozen || matches!(written, Ok(Ok(())))) {
+                                let _ = tx.send(()).await;
+                            }
+                        } else if frozen {
+                            let _ = tx.send(()).await;
+                        }
+                    });
+                }
             }
         }
     }
@@ -532,6 +625,17 @@ pub async fn stop(root: &Path, expected: Uuid) -> Result<(), InspectionError> {
         deadline,
     )
     .await?;
+    wait_for_owner_release(root, deadline).await?;
+    let exit: LastExit = fs::read(dir(root).join("last-exit.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .ok_or_else(|| err("backend_outcome_unknown", "backend exit receipt is unavailable"))?;
+    if exit.instance_id != expected || exit.code != "explicit" {
+        return Err(err("backend_outcome_unknown", "backend shutdown did not complete cleanly; inspect before retrying"));
+    }
+    Ok(())
+}
+async fn wait_for_owner_release(root: &Path, deadline: Duration) -> Result<(), InspectionError> {
     let end = Instant::now() + deadline;
     loop {
         if let Some(lock) = BackendServer::try_lock(root)? {
@@ -731,7 +835,38 @@ async fn run_restart_helper_with_paths(
         };
         record.step = RestartStep::Stop;
         atomic_json(&dir(root).join("restart.json"), &record)?;
-        stop(root, instance).await?;
+        let web_status = call(
+            root,
+            json!({"op":"restart_stop","expected_instance":instance}),
+            Duration::from_secs(30),
+        )
+        .await
+        .map_err(|e| {
+            if matches!(e.code.as_str(), "backend_unavailable" | "backend_unresponsive") {
+                err("restart_outcome_unknown", format!("restart stop outcome is unknown: {}; inspect the backend before retrying", e.message))
+            } else {
+                e
+            }
+        })?;
+        if web_status.get("ok") != Some(&Value::Bool(true)) {
+            return Err(err("restart_outcome_unknown", "invalid restart stop response; inspect the backend before retrying"));
+        }
+        wait_for_owner_release(root, Duration::from_secs(30)).await.map_err(|e| {
+            err("restart_outcome_unknown", format!("backend was frozen but owner release was not confirmed: {}; inspect the backend before retrying", e.message))
+        })?;
+        let exit: LastExit = fs::read(dir(root).join("last-exit.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .ok_or_else(|| err("restart_outcome_unknown", "backend exit receipt is unavailable"))?;
+        if exit.instance_id != instance || exit.code != "explicit" {
+            return Err(err("restart_outcome_unknown", "backend shutdown did not complete cleanly; inspect before retrying"));
+        }
+        let web_config = match web_status.get("info") {
+            Some(Value::Null) => None,
+            Some(info) => Some(info.get("config").filter(|config| config.is_object()).cloned()
+                .ok_or_else(|| err("restart_outcome_unknown", "restart stop snapshot has no config; backend has stopped"))?),
+            None => return Err(err("restart_outcome_unknown", "restart stop response has no snapshot; backend has stopped")),
+        };
         record.step = RestartStep::Start;
         atomic_json(&dir(root).join("restart.json"), &record)?;
         let expected_image = image(&cli)?;
@@ -742,6 +877,9 @@ async fn run_restart_helper_with_paths(
                 "successor_not_installed",
                 "backend image differs from installed CLI",
             ));
+        }
+        if let Some(config) = web_config {
+            web_call(root, identity.instance_id, "web_start", config).await?;
         }
         if relaunch_app {
             record.step = RestartStep::RelaunchApp;

@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "bunx --bun vite",
-    "browser": "bun run build && cargo run -p cockpit-host --bin cockpit -- serve --bind 127.0.0.1:4173 --static-dir dist",
+    "browser": "bun run build && cargo run -p cockpit-host --bin cockpit -- serve --bind 127.0.0.1:4173 --static-dir dist && echo 'Browser: http://127.0.0.1:4173 (listener remains active; stop with cargo run -p cockpit-host --bin cockpit -- web stop)'",
     "build": "tsc --noEmit && bunx --bun vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
