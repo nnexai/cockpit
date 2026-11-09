@@ -58,7 +58,7 @@ Project setup is plan-driven: repository discovery, artifact validation, Herdr c
 | Space Notes | Durable UUID-scoped Markdown, separate from Library and checkouts. |
 | Supervisor task Markdown | Canonical task title, description, relationships, checklist and checked state, outside checkouts; current task/document revisions fence scope changes. |
 | Orchestration machine document | Jobs, attachments, operation/effect journals, messages, source outcomes, integration and cleanup receipts, not live Herdr status or another task store. |
-| Runtime pane state | Browser profiles/work, viewer comments/paste receipts and Review caches, cleared when the owning background-service session ends. |
+| Runtime pane state | Browser profiles/work, viewer comments/paste receipts and Review caches are session-scoped; a new owner refuses saved or unknown state rather than deleting it. |
 | Widget memory | Trusted content, selections and user-removal tombstones for one background-service session. |
 
 Agents read selected Library paths and existing repository paths directly. Space relevance is not filesystem access control. A Library refresh becomes visible on the next read without a per-Space copy, update or follow phase. Removing a selection is distinct from removing content. Resource teardown and pane-state reset do not own Library, Notes or unrelated user files.

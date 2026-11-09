@@ -22,7 +22,7 @@ Current rules are grouped by behavioral contract: conditions, limits and caveats
 
 - Follow changed external Space/tab/pane focus unless it echoes current local intent, restoring zoom if needed; unchanged focus never steals viewer selection. Viewer selection sends no Herdr focus request; leaf selection, server focus, control ownership and DOM focus remain distinct. [Owner](src/app/layout/reconcile.ts). Rationale: Repeated observations must not override local intent.
 
-- Only confirmed tab/final-real-terminal loss retires layouts and local viewers/Browser/widgets; loading, stale or disconnected state is not loss. Browser association work is discarded, while viewer batches remain run-local until owner reset. [Owner](src/app/layout/browserLifecycle.ts). Rationale: Uncertain observation grants no cleanup authority.
+- Only confirmed tab/final-real-terminal loss retires layouts and local viewers/Browser/widgets; loading, stale or disconnected state is not loss. Browser association work is discarded, while viewer batches remain run-local; leftover saved state blocks a new owner rather than being cleared. [Owner](src/app/layout/browserLifecycle.ts). Rationale: Uncertain observation grants no cleanup authority.
 
 - Order the Agents queue Blocked, unseen Done (including Working with an earlier unseen completion), Working, acknowledged Done, then Unknown; within each tier use newest store epoch and state-change sequence, then focused, then pane ID. Ordinary idle agents without unseen completion are automatically excluded. The quick switcher retains Herdr-priority ordering. [Owner](src/app/sidebar/agentAttentionModel.ts). Rationale: Queue attention is Cockpit presentation, not Herdr API order or agent state.
 
@@ -272,7 +272,7 @@ Canonical tasks retain durable stages and dependencies while schedules drive bou
 
 - Stream Git revision output into digests under normal process timeout instead of retaining large diffs; malformed current Review caches remain errors. [Owner](crates/cockpit-core/src/process.rs). Rationale: Bounded computation cannot hide current-format corruption.
 
-- Viewer-owned whole-file/selected-line comments across files retain immutable source/line identity and authorization for saves, reattachment and delivery. Batches/paste receipts survive view changes only within owner run; stale/unknown outcomes retain drafts/receipts, and owner startup clears them. [Owner](crates/cockpit-core/src/comments/mod.rs). Rationale: Detached presentation must not erase current-run work.
+- Viewer-owned whole-file/selected-line comments across files retain immutable source/line identity and authorization for saves, reattachment and delivery. Batches/paste receipts survive view changes within an owner run; stale/unknown outcomes retain drafts/receipts, and leftover files block owner startup rather than being cleared. [Owner](crates/cockpit-core/src/comments/mod.rs). Rationale: Detached presentation must not erase current-run work.
 
 - Paste only a revalidated prepared payload/source to explicitly selected eligible same-actual-tab agent, retaining real paths/original lines; preview is optional, submission is forbidden, and pending/rejected/unknown outcomes remain distinct for receipt reconciliation. [Owner](crates/cockpit-core/src/comments/paste.rs). Rationale: Paste is not automatic command execution.
 
@@ -342,7 +342,7 @@ Canonical tasks retain durable stages and dependencies while schedules drive bou
 
 - Leaf creation/reopening uses OpenFresh: stop/clean surviving session, never adopt, then start configured validated URL/default about:blank; CLI Open and existing-leaf Reconnect retain attach/new-page semantics rather than restoring a closed leaf. [Owner](crates/cockpit-core/src/browser/service.rs). Rationale: Fresh opening means a new disposable association.
 
-- Browser profiles/work, viewer batches/paste receipts and Review caches last one background-service owner run. Only the exclusive browser owner resets before socket/dependent services; GUI and web observers clear nothing when they close. Stop proven leftovers, clear browser except owner.lock/owner.sock plus comments/review, with stable lock inode/no-follow/same-device deletion; uncertain shutdown fails startup without wiping. [Owner](crates/cockpit-core/src/ephemeral.rs). Rationale: Reset authority belongs only to the proven owner.
+- Browser profiles/work, viewer batches/paste receipts and Review caches are run-local, but the exclusive owner refuses startup when saved or unknown entries remain in their trees rather than clearing them or stopping leftover sessions. Empty directories are allowed; owner.lock and owner.sock retain their separately validated ownership behavior. GUI and web observers clear nothing when they close. The generated Browser helper can itself remain and block restart. [Owner](crates/cockpit-core/src/ephemeral.rs). Rationale: No startup scan authorizes deleting work that may appear concurrently.
 
 - Never reset Library/Notes/vault/config/project operations/real Herdr resources; close/fresh-open/retirement/shutdown discard outgoing association drafts/captures/feedback/receipts, with current tab/current CLI targeting and no detached saved-work guard/recovery surface. [Owner](crates/cockpit-core/src/ephemeral.rs). Rationale: Ephemeral cleanup is not durable-content teardown.
 

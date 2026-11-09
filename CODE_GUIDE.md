@@ -122,7 +122,7 @@ Use [CONTEXT](CONTEXT.md) for the mental model, [DECISIONS](DECISIONS.md) for cu
 | Browser facade/service/CDP | `crates/cockpit-core/src/browser/mod.rs`; `crates/cockpit-core/src/browser/service.rs`; `crates/cockpit-core/src/browser/cdp.rs` |
 | Browser process/receipt/cleanup | `crates/cockpit-core/src/browser/process.rs`; `crates/cockpit-core/src/browser/receipts.rs`; `crates/cockpit-core/src/browser/cleanup.rs` |
 | Browser delivery/drafts | `crates/cockpit-core/src/browser/delivery.rs`; `crates/cockpit-core/src/browser/drafts.rs`; `crates/cockpit-core/src/browser/drafts/service.rs` |
-| Ephemeral owner reset/feedback | `crates/cockpit-core/src/ephemeral.rs`; `crates/cockpit-core/src/browser_feedback.rs` |
+| Owner startup state guard/feedback | `crates/cockpit-core/src/ephemeral.rs`; `crates/cockpit-core/src/browser_feedback.rs` |
 | Git status/actions | `crates/cockpit-core/src/space_git.rs`; `crates/cockpit-core/src/space_git_action.rs` |
 | Plugin service status | `crates/cockpit-core/src/space_services.rs`; reads `nnex.action-launcher`'s `persistent-panes.json` from Herdr's plugin state dir (`$XDG_STATE_HOME/herdr/plugins/…`, else `~/.local/state/herdr/plugins/…`, else the temporary directory's `herdr-state/plugins/…`; requires the same state-root environment as the Herdr server), caches unchanged registries, drops panes absent from the caller's live set and probes loopback health targets only |
 | Quota cache/services and display | `crates/cockpit-core/src/quota.rs`; `crates/cockpit-core/src/quota/`; `src/app/limits/` |
@@ -466,6 +466,6 @@ These are verification recipes, not exercised results. Select affected checks an
 | Markdown/media | Source mapping, hostile input, byte/pixel caps and browser/native rendering |
 | Host composition | Equivalent DTOs and real native startup |
 | Library UI | Selection/live-repository actions, refresh visibility, real-path comments and disposable browser/native smoke |
-| Browser lifecycle | Independent tabs, fresh open, discard-on-close, owner-only startup reset and observer isolation |
+| Browser lifecycle | Independent tabs, fresh open, discard-on-close, owner-only startup preservation guard and observer isolation |
 | Widget owner/CLI | Source/target identity, same-ID replace, Remove/reopen, limits, pull/wait cancellation and owner lifetime |
 | Widget transport/dock | Native/browser content/select/remove streams, stale revision/source rejection, multi-ID dock and DOM focus/shortcut routing |

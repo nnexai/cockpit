@@ -330,7 +330,7 @@ impl BrowserRuntime {
         verify_lock(&lock)?;
         match lock.try_lock_exclusive() {
             Ok(()) => {
-                cockpit_core::ephemeral::reset_owner_state(&owner_state_root, &service).await?;
+                cockpit_core::ephemeral::inspect_owner_state(&owner_state_root, &service).await?;
                 match fs::symlink_metadata(&socket) {
                     Ok(metadata)
                         if metadata.file_type().is_socket()
@@ -375,7 +375,7 @@ impl BrowserRuntime {
                 );
                 let mut endpoint_probe = tokio::time::interval(Duration::from_millis(250));
                 endpoint_probe.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                let helper = Arc::new(BrowserHelperSupervisor::new(state_root.clone()));
+                let helper = Arc::new(BrowserHelperSupervisor::new(owner_state_root.clone()));
                 let mut retired = helper.take_retired_receiver().await.expect("retirement receiver available");
                 let task_helper = Arc::clone(&helper);
                 let mut last_peer_limit_log: Option<Instant> = None;
@@ -1994,48 +1994,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_start_resets_work_but_observers_preserve_it_until_replacement() {
+    async fn observers_preserve_work_and_replacement_refuses_to_discard_it() {
         let fixture = RuntimeFixture::new();
-        let service = fixture.service();
+        let owner = BrowserRuntime::start(fixture.0.clone(), fixture.service(), fixture.widgets()).await.unwrap();
+        assert!(owner.is_owner().await);
         let work_dirs = ["browser", "comments", "review"];
         for dir in work_dirs {
             fs::create_dir_all(fixture.0.join(dir)).unwrap();
-            fs::write(fixture.0.join(dir).join("previous-run"), b"old work").unwrap();
-        }
-        let project = fixture.0.join("project.json");
-        fs::write(&project, b"project state").unwrap();
-        let owner = BrowserRuntime::start(fixture.0.clone(), service, fixture.widgets()).await.unwrap();
-        let lock_inode = fs::metadata(fixture.0.join("browser/owner.lock")).unwrap().ino();
-        assert!(owner.is_owner().await);
-        for dir in work_dirs {
-            assert!(!fixture.0.join(dir).join("previous-run").exists());
             fs::write(fixture.0.join(dir).join("current-run"), b"live work").unwrap();
         }
-
         let observer = BrowserRuntime::connect(fixture.0.clone(), fixture.service()).await.unwrap();
-        assert!(!observer.is_owner().await);
-        for dir in work_dirs {
-            assert_eq!(fs::read(fixture.0.join(dir).join("current-run")).unwrap(), b"live work");
-        }
         observer.shutdown().await.unwrap();
-        // Closing an observer must not relinquish ownership or discard in-run work.
-        let next_window = BrowserRuntime::start(fixture.0.clone(), fixture.service(), fixture.widgets()).await.unwrap();
-        assert!(!next_window.is_owner().await);
-        assert!(next_window.cleanup_status().await.unwrap().failures.is_empty());
         for dir in work_dirs {
             assert_eq!(fs::read(fixture.0.join(dir).join("current-run")).unwrap(), b"live work");
         }
-        next_window.shutdown().await.unwrap();
-
         owner.shutdown().await.unwrap();
-        let replacement = BrowserRuntime::start(fixture.0.clone(), fixture.service(), fixture.widgets()).await.unwrap();
-        assert!(replacement.is_owner().await);
+        assert!(BrowserRuntime::start(fixture.0.clone(), fixture.service(), fixture.widgets()).await.is_err());
         for dir in work_dirs {
-            assert!(!fixture.0.join(dir).join("current-run").exists());
+            assert_eq!(fs::read(fixture.0.join(dir).join("current-run")).unwrap(), b"live work");
         }
-        assert_eq!(fs::metadata(fixture.0.join("browser/owner.lock")).unwrap().ino(), lock_inode);
-        assert_eq!(fs::read(project).unwrap(), b"project state");
-        replacement.shutdown().await.unwrap();
     }
 
     #[tokio::test]

@@ -425,3 +425,203 @@ async fn restart_stop_fences_stale_owner_snapshots_web_and_shuts_down_cleanly() 
     assert_eq!(exit.code, "explicit");
     assert!(TcpStream::connect(bind).await.is_err());
 }
+
+#[tokio::test]
+async fn web_start_expected_instance_attaches_without_starting_an_owner() {
+    let mut f = Fixture::new();
+    f.spawn(&["service", "run"]);
+    let owner = f.ready().await;
+    let owner_arg = owner.to_string();
+    let stale_arg = Uuid::new_v4().to_string();
+    let assets = f.assets.to_str().unwrap().to_owned();
+
+    let run_start = |expected: &str| {
+        f.command()
+            .args([
+                "web",
+                "start",
+                "--bind",
+                "127.0.0.1:0",
+                "--static-dir",
+                &assets,
+                "--expected-instance",
+                expected,
+                "--require-stopped",
+            ])
+            .output()
+            .unwrap()
+    };
+    let stale = run_start(&stale_arg);
+    assert!(!stale.status.success());
+    assert!(String::from_utf8_lossy(&stale.stderr).contains("instance changed"));
+    assert!(
+        backend::web_call(&f.state, owner, "web_status", Value::Null)
+            .await
+            .unwrap()["info"]
+            .is_null()
+    );
+
+    let attached = run_start(&owner_arg);
+    assert!(
+        attached.status.success(),
+        "{}",
+        String::from_utf8_lossy(&attached.stderr)
+    );
+    let info: Value = serde_json::from_slice(&attached.stdout).unwrap();
+    let bind = info["config"]["bind"].as_str().unwrap();
+    let web_id = info["instance_id"].as_str().unwrap().to_owned();
+    let duplicate = run_start(&owner_arg);
+    assert!(!duplicate.status.success());
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already running"));
+    assert_eq!(
+        backend::web_call(&f.state, owner, "web_status", Value::Null)
+            .await
+            .unwrap()["info"],
+        info
+    );
+    assert!(fetch(bind).await.contains("web lifecycle fixture"));
+    assert!(matches!(
+        backend::probe(&f.state, &f.endpoint).await,
+        BackendProbe::Running(info) if info.instance_id == owner
+    ));
+
+    for operation in ["stop", "restart"] {
+        let stale = f
+            .command()
+            .args(["web", operation, "--expected-instance", &stale_arg])
+            .output()
+            .unwrap();
+        assert!(!stale.status.success());
+        assert!(String::from_utf8_lossy(&stale.stderr).contains("instance changed"));
+        assert_eq!(
+            backend::web_call(&f.state, owner, "web_status", Value::Null)
+                .await
+                .unwrap()["info"],
+            info
+        );
+        assert!(fetch(bind).await.contains("web lifecycle fixture"));
+    }
+    let stopped = f
+        .command()
+        .args([
+            "web",
+            "stop",
+            "--expected-instance",
+            &owner_arg,
+            "--expected-web-instance",
+            &web_id,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        stopped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    assert!(
+        backend::web_call(&f.state, owner, "web_status", Value::Null)
+            .await
+            .unwrap()["info"]
+            .is_null()
+    );
+    let replacement = run_start(&owner_arg);
+    assert!(
+        replacement.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replacement.stderr)
+    );
+    let replacement: Value = serde_json::from_slice(&replacement.stdout).unwrap();
+    let replacement_id = replacement["instance_id"].as_str().unwrap();
+    assert_ne!(replacement_id, web_id);
+    for operation in ["stop", "restart"] {
+        let stale = f
+            .command()
+            .args([
+                "web",
+                operation,
+                "--expected-instance",
+                &owner_arg,
+                "--expected-web-instance",
+                &web_id,
+            ])
+            .output()
+            .unwrap();
+        assert!(!stale.status.success());
+        assert!(String::from_utf8_lossy(&stale.stderr).contains("web listener instance changed"));
+        assert_eq!(
+            backend::web_call(&f.state, owner, "web_status", Value::Null)
+                .await
+                .unwrap()["info"],
+            replacement
+        );
+    }
+    let stopped = f
+        .command()
+        .args([
+            "web",
+            "stop",
+            "--expected-instance",
+            &owner_arg,
+            "--expected-web-instance",
+            replacement_id,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        stopped.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stopped.stderr)
+    );
+    for operation in ["stop", "restart"] {
+        let missing = f
+            .command()
+            .args([
+                "web",
+                operation,
+                "--expected-instance",
+                &owner_arg,
+                "--expected-web-instance",
+                replacement_id,
+            ])
+            .output()
+            .unwrap();
+        assert!(!missing.status.success());
+    }
+    assert!(matches!(
+        backend::probe(&f.state, &f.endpoint).await,
+        BackendProbe::Running(info) if info.instance_id == owner
+    ));
+
+    f.stop_owner(owner).await;
+    let marker = f.state.join("preserved-marker");
+    std::fs::write(&marker, "preserved").unwrap();
+    let missing = f
+        .command()
+        .args([
+            "web",
+            "start",
+            "--bind",
+            "127.0.0.1:0",
+            "--static-dir",
+            &assets,
+            "--expected-instance",
+            &owner_arg,
+        ])
+        .output()
+        .unwrap();
+    assert!(!missing.status.success());
+    for operation in ["stop", "restart"] {
+        let missing = f
+            .command()
+            .args(["web", operation, "--expected-instance", &owner_arg])
+            .output()
+            .unwrap();
+        assert!(!missing.status.success());
+    }
+    sleep(Duration::from_millis(300)).await;
+    assert!(matches!(
+        backend::probe(&f.state, &f.endpoint).await,
+        BackendProbe::Stopped { .. }
+    ));
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "preserved");
+}

@@ -4,9 +4,10 @@ use cap_std::fs::{Dir, MetadataExt};
 use std::{io, path::Path};
 
 /// Called only by the browser runtime holding owner.lock, before publishing IPC.
-pub async fn reset_owner_state(state_root: &Path, browser: &BrowserService) -> Result<(), InspectionError> {
-    let error = |path: &Path, error: io::Error| {
-        InspectionError::new("ephemeral_reset_failed", format!("{}: {error}", path.display()))
+/// Existing pane data is never reset implicitly: an operator must inspect it first.
+pub async fn inspect_owner_state(state_root: &Path, browser: &BrowserService) -> Result<(), InspectionError> {
+    let error = |path: &Path, cause: io::Error| {
+        InspectionError::new("owner_state_inspection_failed", format!("{}: {cause}", path.display()))
     };
     let root = crate::project_store::open_dir_nofollow_absolute(state_root)
         .map_err(|cause| error(state_root, cause))?;
@@ -18,31 +19,43 @@ pub async fn reset_owner_state(state_root: &Path, browser: &BrowserService) -> R
             Err(cause) if cause.kind() == io::ErrorKind::NotFound && name != "browser" => continue,
             Err(cause) => return Err(error(&path, cause)),
         };
-        if metadata.file_type().is_symlink() && name != "browser" {
-            root.remove_file(name).map_err(|cause| error(&path, cause))?;
-            continue;
-        }
-        if !metadata.is_dir() || metadata.dev() != device {
-            return Err(error(&path, io::Error::new(io::ErrorKind::InvalidInput, "scratch root is not a same-device directory")));
+        if metadata.file_type().is_symlink() || !metadata.is_dir() || metadata.dev() != device {
+            return Err(error(&path, io::Error::new(io::ErrorKind::InvalidInput, "saved state root is not a same-device directory; inspect and preserve it before starting")));
         }
         let dir = root.open_dir_nofollow(name).map_err(|cause| error(&path, cause))?;
         let opened = dir.dir_metadata().map_err(|cause| error(&path, cause))?;
         if opened.dev() != device || opened.ino() != metadata.ino() {
-            return Err(error(&path, io::Error::new(io::ErrorKind::InvalidInput, "scratch root identity changed")));
-        }
-        if name == "browser" {
-            // Validate the scratch root first; stop must be confirmed before
-            // deleting any profile or other pane-local state.
-            browser.stop_previous_sessions().await.map_err(|cause| {
-                InspectionError::new("ephemeral_reset_failed", format!("{}: {}", path.display(), cause.message))
-            })?;
+            return Err(error(&path, io::Error::new(io::ErrorKind::InvalidInput, "saved state root identity changed")));
         }
         let keep: &[&str] = if name == "browser" { &["owner.lock", "owner.sock"] } else { &[] };
-        empty_dir_contents(&dir, keep).map_err(|cause| error(&path, cause))?;
+        ensure_empty_tree(&dir, &path, device, 0, keep).map_err(|(path, cause)| error(&path, cause))?;
     }
     browser.prepare_state_dirs().map_err(|cause| {
-        InspectionError::new("ephemeral_reset_failed", format!("{}: {}", state_root.join("browser").display(), cause.message))
+        InspectionError::new("owner_state_inspection_failed", format!("{}: {}", state_root.join("browser").display(), cause.message))
     })
+}
+
+fn ensure_empty_tree(dir: &Dir, path: &Path, device: u64, depth: usize, keep: &[&str]) -> Result<(), (std::path::PathBuf, io::Error)> {
+    let fail = |path: &Path, message| (path.to_owned(), io::Error::new(io::ErrorKind::InvalidInput, message));
+    if depth >= 128 {
+        return Err(fail(path, "saved state nesting exceeds inspection bound"));
+    }
+    for entry in dir.entries().map_err(|cause| (path.to_owned(), cause))? {
+        let name = entry.map_err(|cause| (path.to_owned(), cause))?.file_name();
+        if keep.iter().any(|keep| name == std::ffi::OsStr::new(keep)) { continue; }
+        let child_path = path.join(&name);
+        let metadata = dir.symlink_metadata(&name).map_err(|cause| (child_path.clone(), cause))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() || metadata.dev() != device {
+            return Err(fail(&child_path, "saved or unknown state found; inspect and preserve it before starting"));
+        }
+        let child = dir.open_dir_nofollow(&name).map_err(|cause| (child_path.clone(), cause))?;
+        let opened = child.dir_metadata().map_err(|cause| (child_path.clone(), cause))?;
+        if opened.dev() != device || opened.ino() != metadata.ino() {
+            return Err(fail(&child_path, "saved state directory identity changed"));
+        }
+        ensure_empty_tree(&child, &child_path, device, depth + 1, &[])?;
+    }
+    Ok(())
 }
 
 /// Capability-relative deletion: never follow links, cross devices, or recurse without a bound.
@@ -94,7 +107,7 @@ mod tests {
     #[async_trait::async_trait]
     impl BrowserHerdrAdapter for Offline {
         async fn browser_snapshot(&self, _: &str) -> Result<BrowserHerdrSnapshot, InspectionError> {
-            panic!("scratch reset must not call Herdr");
+            panic!("owner startup inspection must not call Herdr");
         }
     }
     struct Fixture(PathBuf);
@@ -110,43 +123,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn owner_reset_clears_only_pane_scratch_and_unlinks_nested_symlinks() {
-        let fixture = Fixture(std::env::temp_dir().join(format!("cockpit-ephemeral-{}", Uuid::new_v4())));
-        fs::create_dir(&fixture.0).unwrap();
-        let service = service(&fixture.0);
-        for name in ["browser/scratch-extra/work.json", "browser/profiles/old/cookies", "comments/batch.json", "review/snapshot-old.json"] {
+    async fn owner_start_preserves_saved_files_in_each_root() {
+        for name in ["browser/profiles/old/cookies", "browser/scratch-extra/work.json", "comments/batch.json", "review/snapshot-old.json"] {
+            let fixture = Fixture(std::env::temp_dir().join(format!("cockpit-ephemeral-{}", Uuid::new_v4())));
+            fs::create_dir(&fixture.0).unwrap();
+            let service = service(&fixture.0);
             let path = fixture.0.join(name);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, b"old work").unwrap();
+            fs::write(&path, b"saved work").unwrap();
+            let error = inspect_owner_state(&fixture.0, &service).await.unwrap_err();
+            assert_eq!(error.code, "owner_state_inspection_failed");
+            assert!(error.message.contains(&path.display().to_string()));
+            assert_eq!(fs::read(path).unwrap(), b"saved work");
         }
-        for name in ["project.json", "Library/page.md", "vault/token", "config/settings.json", "outside/sentinel", "browser/owner.lock", "browser/owner.sock", "space-tags/space-tags.json", "agent-attention/agent-attention.json"] {
-            let path = fixture.0.join(name);
-            fs::create_dir_all(path.parent().unwrap()).unwrap();
-            fs::write(path, name).unwrap();
-        }
-        symlink(fixture.0.join("outside"), fixture.0.join("browser/profiles/link")).unwrap();
-        reset_owner_state(&fixture.0, &service).await.unwrap();
-        for name in ["project.json", "Library/page.md", "vault/token", "config/settings.json", "outside/sentinel", "browser/owner.lock", "browser/owner.sock", "space-tags/space-tags.json", "agent-attention/agent-attention.json"] {
-            assert_eq!(fs::read(fixture.0.join(name)).unwrap(), name.as_bytes());
-        }
-        for name in STATE_DIRS {
-            assert_eq!(fs::read_dir(fixture.0.join("browser").join(name)).unwrap().count(), 0);
-        }
-        assert!(!fixture.0.join("browser/scratch-extra").exists());
-        for name in ["comments", "review"] { assert_eq!(fs::read_dir(fixture.0.join(name)).unwrap().count(), 0); }
     }
 
     #[tokio::test]
-    async fn root_symlink_is_unlinked_without_following_comment_or_review_targets() {
+    async fn owner_start_allows_empty_trees_and_preserves_owner_entries() {
         let fixture = Fixture(std::env::temp_dir().join(format!("cockpit-ephemeral-{}", Uuid::new_v4())));
         fs::create_dir(&fixture.0).unwrap();
         let service = service(&fixture.0);
-        fs::create_dir(fixture.0.join("outside")).unwrap();
-        fs::write(fixture.0.join("outside/keep"), b"safe").unwrap();
-        for name in ["comments", "review"] { symlink(fixture.0.join("outside"), fixture.0.join(name)).unwrap(); }
-        reset_owner_state(&fixture.0, &service).await.unwrap();
-        assert_eq!(fs::read(fixture.0.join("outside/keep")).unwrap(), b"safe");
-        for name in ["comments", "review"] { assert!(fs::symlink_metadata(fixture.0.join(name)).is_err()); }
+        for name in ["browser/extra/nested", "comments/nested", "review/nested"] {
+            fs::create_dir_all(fixture.0.join(name)).unwrap();
+        }
+        fs::write(fixture.0.join("browser/owner.lock"), b"lock").unwrap();
+        let _socket = std::os::unix::net::UnixListener::bind(fixture.0.join("browser/owner.sock")).unwrap();
+        inspect_owner_state(&fixture.0, &service).await.unwrap();
+        assert_eq!(fs::read(fixture.0.join("browser/owner.lock")).unwrap(), b"lock");
+        assert!(fixture.0.join("browser/owner.sock").exists());
+        for name in STATE_DIRS {
+            assert!(fixture.0.join("browser").join(name).is_dir());
+        }
+        assert!(fixture.0.join("comments/nested").is_dir());
+    }
+
+    #[tokio::test]
+    async fn owner_start_rejects_symlinks_and_unknown_sockets_without_unlinking() {
+        for name in ["browser/profiles/link", "comments", "review", "review/nested/link"] {
+            let fixture = Fixture(std::env::temp_dir().join(format!("cockpit-ephemeral-{}", Uuid::new_v4())));
+            fs::create_dir(&fixture.0).unwrap();
+            let service = service(&fixture.0);
+            fs::create_dir(fixture.0.join("outside")).unwrap();
+            fs::write(fixture.0.join("outside/keep"), b"safe").unwrap();
+            let path = fixture.0.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            symlink(fixture.0.join("outside"), &path).unwrap();
+            assert_eq!(inspect_owner_state(&fixture.0, &service).await.unwrap_err().code, "owner_state_inspection_failed");
+            assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+            assert_eq!(fs::read(fixture.0.join("outside/keep")).unwrap(), b"safe");
+        }
+        let fixture = Fixture(std::env::temp_dir().join(format!("cockpit-ephemeral-{}", Uuid::new_v4())));
+        fs::create_dir(&fixture.0).unwrap();
+        let service = service(&fixture.0);
+        let path = fixture.0.join("browser/profiles/unknown.sock");
+        let _socket = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        assert_eq!(inspect_owner_state(&fixture.0, &service).await.unwrap_err().code, "owner_state_inspection_failed");
+        assert!(fs::symlink_metadata(path).is_ok());
     }
 
     #[test]

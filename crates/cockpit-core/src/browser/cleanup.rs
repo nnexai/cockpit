@@ -20,9 +20,6 @@ fn identity(metadata: &Metadata) -> ArtifactIdentity {
 fn io_error(error: io::Error) -> InspectionError {
     InspectionError::new("browser_cleanup_failed", error.to_string())
 }
-pub(super) fn valid_key(key: &str) -> bool {
-    key.len() == 24 && key.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
 pub(super) fn derived_paths(root: &Path, key: &str) -> [(PathBuf, bool); 3] {
     [(root.join("profiles").join(key), true), (root.join("workspaces").join(key), true), (root.join("configs").join(format!("{key}.json")), false)]
 }

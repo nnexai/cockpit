@@ -22,6 +22,12 @@ enum WebCommand {
         bind: SocketAddr,
         #[arg(long)]
         static_dir: Option<PathBuf>,
+        /// Attach only to this existing backend instance; never start a backend.
+        #[arg(long)]
+        expected_instance: Option<uuid::Uuid>,
+        /// Fail if a listener is already present, rather than attaching to it.
+        #[arg(long, requires = "expected_instance")]
+        require_stopped: bool,
     },
     Status {
         #[arg(long)]
@@ -30,10 +36,22 @@ enum WebCommand {
     Stop {
         #[arg(long)]
         operator: bool,
+        /// Only stop the listener belonging to this backend instance.
+        #[arg(long)]
+        expected_instance: Option<uuid::Uuid>,
+        /// Only stop this exact listener instance.
+        #[arg(long)]
+        expected_web_instance: Option<uuid::Uuid>,
     },
     Restart {
         #[arg(long)]
         operator: bool,
+        /// Only restart the listener belonging to this backend instance.
+        #[arg(long)]
+        expected_instance: Option<uuid::Uuid>,
+        /// Only restart this exact listener instance.
+        #[arg(long)]
+        expected_web_instance: Option<uuid::Uuid>,
     },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +86,14 @@ impl WebConfig {
             config_file,
         })
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct WebStartRequest {
+    #[serde(flatten)]
+    config: WebConfig,
+    #[serde(default)]
+    require_stopped: bool,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct WebInfo {
@@ -149,13 +175,17 @@ impl Controller {
         match request["op"].as_str() {
             Some("web_status") => Ok(state.as_ref().map(|running| running.info.clone())),
             Some("web_start") => {
-                let config: WebConfig = serde_json::from_value(request["payload"].clone())
+                let start: WebStartRequest = serde_json::from_value(request["payload"].clone())
                     .map_err(|e| e.to_string())?;
+                let config = start.config;
                 let config = WebConfig::new(config.bind, config.static_dir, config.config_file)?;
                 if config.config_file != self.config_file {
                     return Err("backend configuration file differs".into());
                 }
                 if let Some(running) = state.as_ref() {
+                    if start.require_stopped {
+                        return Err("web listener already running".into());
+                    }
                     if running.stop.is_none() {
                         return Err("web listener shutdown outcome is pending".into());
                     }
@@ -280,10 +310,14 @@ pub(super) fn config_file(project: &ProjectArgs) -> Result<Option<PathBuf>, Stri
 async fn status(
     root: &Path,
     endpoint: &cockpit_host::lifecycle::HerdrEndpoint,
+    expected_instance: Option<uuid::Uuid>,
 ) -> Result<Option<(uuid::Uuid, WebInfo)>, String> {
     match backend::probe(root, endpoint).await {
-        BackendProbe::Stopped { .. } => Ok(None),
+        BackendProbe::Stopped { .. } if expected_instance.is_none() => Ok(None),
         BackendProbe::Running(owner) => {
+            if expected_instance.is_some_and(|expected| expected != owner.instance_id) {
+                return Err("backend instance changed".into());
+            }
             check_image(&owner)?;
             let reply = backend::web_call(
                 root,
@@ -314,16 +348,48 @@ pub(super) async fn start(
     )
     .await
     .map_err(|e| e.to_string())?;
-    check_image(&owner)?;
+    start_on_owner(root, &owner, config, false).await
+}
+async fn attach(
+    root: &Path,
+    endpoint: &cockpit_host::lifecycle::HerdrEndpoint,
+    expected_instance: uuid::Uuid,
+    config: WebConfig,
+    require_stopped: bool,
+) -> Result<(), String> {
+    let owner = match backend::probe(root, endpoint).await {
+        BackendProbe::Running(owner) if owner.instance_id == expected_instance => owner,
+        BackendProbe::Running(_) => return Err("backend instance changed".into()),
+        other => return Err(format!("backend is not available: {other:?}")),
+    };
+    start_on_owner(root, &owner, config, require_stopped).await
+}
+async fn start_on_owner(
+    root: &Path,
+    owner: &cockpit_host::lifecycle::LifecycleInfo,
+    config: WebConfig,
+    require_stopped: bool,
+) -> Result<(), String> {
+    check_image(owner)?;
     let response = backend::web_call(
         root,
         owner.instance_id,
         "web_start",
-        serde_json::to_value(config).map_err(|e| e.to_string())?,
+        serde_json::to_value(WebStartRequest {
+            config,
+            require_stopped,
+        })
+        .map_err(|e| e.to_string())?,
     )
     .await
     .map_err(|e| e.to_string())?;
     println!("{}", response["info"]);
+    Ok(())
+}
+fn check_web_instance(info: &WebInfo, expected: Option<uuid::Uuid>) -> Result<(), String> {
+    if expected.is_some_and(|id| id != info.instance_id) {
+        return Err("web listener instance changed".into());
+    }
     Ok(())
 }
 async fn stop(root: &Path, owner: uuid::Uuid, info: &WebInfo) -> Result<(), String> {
@@ -341,17 +407,21 @@ pub async fn run(args: WebArgs) -> Result<(), String> {
     let root = PathBuf::from(project_configuration(&args.project)?.state_root);
     let endpoint = service_cli::endpoint(&args.herdr)?;
     match args.command {
-        WebCommand::Start { bind, static_dir } => {
-            start(
-                &root,
-                &endpoint,
-                &args.project,
-                WebConfig::new(bind, static_dir, config_file(&args.project)?)?,
-            )
-            .await?
+        WebCommand::Start {
+            bind,
+            static_dir,
+            expected_instance,
+            require_stopped,
+        } => {
+            let config = WebConfig::new(bind, static_dir, config_file(&args.project)?)?;
+            if let Some(expected_instance) = expected_instance {
+                attach(&root, &endpoint, expected_instance, config, require_stopped).await?
+            } else {
+                start(&root, &endpoint, &args.project, config).await?
+            }
         }
         WebCommand::Status { json } => {
-            let value = serde_json::json!({"managed":status(&root, &endpoint).await?.map(|(_, info)| info)});
+            let value = serde_json::json!({"managed":status(&root, &endpoint, None).await?.map(|(_, info)| info)});
             println!(
                 "{}",
                 if json {
@@ -362,23 +432,43 @@ pub async fn run(args: WebArgs) -> Result<(), String> {
                 .map_err(|e| e.to_string())?
             );
         }
-        WebCommand::Stop { operator } => {
+        WebCommand::Stop {
+            operator,
+            expected_instance,
+            expected_web_instance,
+        } => {
             service_cli::operator_guard(operator)?;
-            if let Some((owner, info)) = status(&root, &endpoint).await? {
-                stop(&root, owner, &info).await?;
+            match status(&root, &endpoint, expected_instance).await? {
+                Some((owner, info)) => {
+                    check_web_instance(&info, expected_web_instance)?;
+                    stop(&root, owner, &info).await?;
+                }
+                None if expected_web_instance.is_some() => {
+                    return Err("no web listener is running".into());
+                }
+                None => {}
             }
         }
-        WebCommand::Restart { operator } => {
+        WebCommand::Restart {
+            operator,
+            expected_instance,
+            expected_web_instance,
+        } => {
             service_cli::operator_guard(operator)?;
-            let (owner, info) = status(&root, &endpoint)
+            let (owner, info) = status(&root, &endpoint, expected_instance)
                 .await?
                 .ok_or("no web listener is running")?;
+            check_web_instance(&info, expected_web_instance)?;
             stop(&root, owner, &info).await?;
             let response = backend::web_call(
                 &root,
                 owner,
                 "web_start",
-                serde_json::to_value(info.config).map_err(|e| e.to_string())?,
+                serde_json::to_value(WebStartRequest {
+                    config: info.config,
+                    require_stopped: expected_web_instance.is_some(),
+                })
+                .map_err(|e| e.to_string())?,
             )
             .await
             .map_err(|e| e.to_string())?;

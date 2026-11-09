@@ -228,8 +228,7 @@ async fn closing_one_of_two_live_tab_sessions_keeps_the_other_open_and_byte_iden
     assert_eq!(fs::read(Path::new(&b.profile_path).join("cookies")).unwrap(), b"tab b login");
 }
 
-/// A separate test process owns this listener, so startup stop must prove that
-/// daemon generation exited rather than mistake the test runner for a daemon.
+/// A separate process owns the listener so inspection can prove it remains live.
 struct StartupDaemonFixture {
     child: std::process::Child,
     daemon_dir: PathBuf,
@@ -256,10 +255,6 @@ impl StartupDaemonFixture {
         let stream = tokio::net::UnixStream::connect(&self.socket_path).await.unwrap();
         assert_eq!(stream.peer_cred().unwrap().pid(), Some(self.child.id() as i32));
     }
-    fn assert_stopped(&mut self) {
-        assert!(self.child.try_wait().unwrap().is_some(), "daemon child did not exit");
-        assert!(!self.socket_path.exists(), "close must remove the daemon socket");
-    }
 }
 async fn seed_startup_daemon(f: &Fixture, receipt: &mut BrowserReceipt) -> StartupDaemonFixture {
     let daemon_path = daemon_session_path(Path::new(&receipt.working_directory), &receipt.playwright_session).unwrap();
@@ -270,7 +265,7 @@ async fn seed_startup_daemon(f: &Fixture, receipt: &mut BrowserReceipt) -> Start
     let ready_path = socket_path.with_extension("ready");
     let stop_path = socket_path.with_extension("stop");
     let child = std::process::Command::new(env::current_exe().unwrap())
-        .args(["--exact", "browser::lifecycle_tests::owner_reset_stops_recorded_managed_session_before_discarding_profile"])
+        .args(["--exact", "browser::lifecycle_tests::owner_start_refuses_saved_session_without_stopping_it"])
         .env("COCKPIT_TEST_STARTUP_DAEMON_SOCKET", &socket_path)
         .current_dir(&receipt.working_directory)
         .stdin(std::process::Stdio::null())
@@ -304,7 +299,7 @@ async fn seed_startup_daemon(f: &Fixture, receipt: &mut BrowserReceipt) -> Start
 }
 
 #[tokio::test]
-async fn owner_reset_stops_recorded_managed_session_before_discarding_profile() {
+async fn owner_start_refuses_saved_session_without_stopping_it() {
     // Re-enter this real test in an isolated child instead of adding an ignored
     // helper test or depending on an external daemon executable.
     if let Some(socket_path) = env::var_os("COCKPIT_TEST_STARTUP_DAEMON_SOCKET") {
@@ -323,43 +318,43 @@ async fn owner_reset_stops_recorded_managed_session_before_discarding_profile() 
     let mut receipt = f.receipt("w1:t1").await;
     let mut live = seed_startup_daemon(&f, &mut receipt).await;
     let metadata = fs::read(&live.daemon_path).unwrap();
-    crate::ephemeral::reset_owner_state(&f.root, &f.service).await.unwrap();
-    live.assert_stopped();
-    assert_eq!(fs::read(&live.daemon_path).unwrap(), metadata, "Playwright close retains session metadata");
-    assert!(!Path::new(&receipt.profile_path).exists());
-    assert!(!f.service.tab_association_path(&receipt.association_key).exists());
+    let before = fs::read(f.service.tab_association_path(&receipt.association_key)).unwrap();
+    assert_eq!(crate::ephemeral::inspect_owner_state(&f.root, &f.service).await.unwrap_err().code, "owner_state_inspection_failed");
+    live.assert_running().await;
+    assert_eq!(fs::read(&live.daemon_path).unwrap(), metadata);
+    assert!(Path::new(&receipt.profile_path).exists());
+    assert_eq!(fs::read(f.service.tab_association_path(&receipt.association_key)).unwrap(), before);
 }
 
 #[tokio::test]
-async fn owner_reset_retained_metadata_requires_profile_cdp_port_to_be_closed() {
+async fn owner_start_refuses_saved_session_even_after_cdp_port_closes() {
     let f = Fixture::new();
     let mut receipt = f.receipt("w1:t1").await;
     let mut live = seed_startup_daemon(&f, &mut receipt).await;
     let metadata = fs::read(&live.daemon_path).unwrap();
-    f.service.stop_previous_sessions().await.unwrap();
-    live.assert_stopped();
-    assert_eq!(fs::read(&live.daemon_path).unwrap(), metadata);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     fs::write(Path::new(&receipt.profile_path).join("DevToolsActivePort"), format!("{port}\n/devtools/browser/fixture\n")).unwrap();
     fs::write(Path::new(&receipt.profile_path).join("cookies"), b"still active").unwrap();
     let before = fs::read(f.service.tab_association_path(&receipt.association_key)).unwrap();
-    let error = crate::ephemeral::reset_owner_state(&f.root, &f.service).await.unwrap_err();
-    assert_eq!(error.code, "ephemeral_reset_failed");
+    let error = crate::ephemeral::inspect_owner_state(&f.root, &f.service).await.unwrap_err();
+    assert_eq!(error.code, "owner_state_inspection_failed");
+    live.assert_running().await;
     assert_eq!(fs::read(Path::new(&receipt.profile_path).join("cookies")).unwrap(), b"still active");
     assert_eq!(fs::read(f.service.tab_association_path(&receipt.association_key)).unwrap(), before);
     assert_eq!(fs::read(&live.daemon_path).unwrap(), metadata);
 
     drop(listener);
-    crate::ephemeral::reset_owner_state(&f.root, &f.service).await.unwrap();
+    assert_eq!(crate::ephemeral::inspect_owner_state(&f.root, &f.service).await.unwrap_err().code, "owner_state_inspection_failed");
+    live.assert_running().await;
     assert_eq!(fs::read(&live.daemon_path).unwrap(), metadata);
-    assert!(!Path::new(&receipt.profile_path).exists());
-    assert!(!f.service.tab_association_path(&receipt.association_key).exists());
+    assert_eq!(fs::read(Path::new(&receipt.profile_path).join("cookies")).unwrap(), b"still active");
+    assert_eq!(fs::read(f.service.tab_association_path(&receipt.association_key)).unwrap(), before);
 }
 
 #[tokio::test]
-async fn unconfirmed_startup_stop_preserves_all_scratch_and_fails_reset() {
+async fn owner_inspection_preserves_all_scratch_and_live_session() {
     let f = Fixture::new();
     let mut receipt = f.receipt("w1:t1").await;
     let mut live = seed_startup_daemon(&f, &mut receipt).await;
@@ -372,8 +367,8 @@ async fn unconfirmed_startup_stop_preserves_all_scratch_and_fails_reset() {
         fs::write(path, b"not wiped").unwrap();
     }
     let before = fs::read(f.service.tab_association_path(&receipt.association_key)).unwrap();
-    let error = crate::ephemeral::reset_owner_state(&f.root, &f.service).await.unwrap_err();
-    assert_eq!(error.code, "ephemeral_reset_failed");
+    let error = crate::ephemeral::inspect_owner_state(&f.root, &f.service).await.unwrap_err();
+    assert_eq!(error.code, "owner_state_inspection_failed");
     live.assert_running().await;
     assert_eq!(fs::read(&live.daemon_path).unwrap(), metadata);
     assert_eq!(fs::read(Path::new(&receipt.profile_path).join("cookies")).unwrap(), b"still active");
@@ -383,27 +378,3 @@ async fn unconfirmed_startup_stop_preserves_all_scratch_and_fails_reset() {
     }
 }
 
-#[tokio::test]
-async fn startup_stop_uses_recorded_keys_not_receipt_paths_or_unrecorded_sessions() {
-    let f = Fixture::new();
-    let mut a = f.receipt("w1:t1").await;
-    let mut live_a = seed_startup_daemon(&f, &mut a).await;
-    let metadata_a = fs::read(&live_a.daemon_path).unwrap();
-    let mut b = f.receipt("w1:t2").await;
-    let mut live_b = seed_startup_daemon(&f, &mut b).await;
-    let metadata_b = fs::read(&live_b.daemon_path).unwrap();
-    fs::remove_file(f.service.tab_association_path(&b.association_key)).unwrap();
-    // Neither malformed receipt contents nor an unrelated filename supplies a
-    // stop command or cwd: only the regular, valid key stem is used.
-    fs::write(f.service.tab_association_path(&a.association_key), br#"{"working_directory":"/","playwright_session":"user-session"}"#).unwrap();
-    fs::write(f.service.root.join("tab-associations/user-session.json"), b"unrelated").unwrap();
-    let linked_key = "111111111111111111111111";
-    symlink(f.service.tab_association_path(&a.association_key), f.service.tab_association_path(linked_key)).unwrap();
-    f.service.stop_previous_sessions().await.unwrap();
-    live_a.assert_stopped();
-    assert_eq!(fs::read(&live_a.daemon_path).unwrap(), metadata_a);
-    live_b.assert_running().await;
-    assert_eq!(fs::read(&live_b.daemon_path).unwrap(), metadata_b);
-    assert!(Path::new(&a.profile_path).exists(), "stopping alone never deletes profiles");
-    assert!(Path::new(&b.profile_path).exists());
-}

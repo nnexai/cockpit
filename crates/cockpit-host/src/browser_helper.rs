@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
-    fs,
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Weak},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -17,7 +19,14 @@ use cockpit_protocol::browser_view::{
     BrowserViewEventMetadata, BrowserViewFrameDescriptor, BrowserViewFrameEnvelopeV2,
     BrowserViewFrameGrant, BrowserViewOpenRequest, BrowserViewSnapshot,
 };
+use nix::{
+    errno::Errno,
+    fcntl::{OFlag, openat},
+    sys::stat::{Mode, mkdirat},
+    unistd::Uid,
+};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, Command},
@@ -61,7 +70,7 @@ pub(crate) struct BrowserHelperSupervisor {
     /// Serializes only opens for the same verified browser incarnation. The
     /// helper itself remains unregistered until its first frame is ready.
     admission_gates: AdmissionGates,
-    /// The packaged file has one publication path across all incarnations.
+    /// Serializes publication of the packaged helper within this owner.
     materialization: Mutex<()>,
     views: Mutex<HashMap<String, ManagedView>>,
     native_connections: Mutex<HashMap<String, usize>>,
@@ -1032,95 +1041,65 @@ impl BrowserHelperSupervisor {
     }
 
     fn materialize_helper(&self) -> Result<PathBuf, InspectionError> {
-        let directory = self.state_root.join("helpers");
-        match fs::symlink_metadata(&directory) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                return Err(InspectionError::new(
-                    "unsafe_path",
-                    "Browser helper directory is not an owned regular directory",
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&directory).map_err(|_| {
-                    InspectionError::new(
-                        "browser_helper_materialization_failed",
-                        "Cannot create the owned browser helper directory; repair the configured state root",
-                    )
-                })?;
-            }
-            Err(_) => {
-                return Err(InspectionError::new(
-                    "browser_helper_materialization_failed",
-                    "Cannot inspect the owned browser helper directory",
-                ));
-            }
+        let failed = || InspectionError::new(
+            "browser_helper_materialization_failed",
+            "Cannot materialize the packaged browser helper in the owned state root",
+        );
+        let unsafe_path = || InspectionError::new(
+            "unsafe_path",
+            "Browser helper directory or file is not private, owned, and safe",
+        );
+        let root = self.state_root.canonicalize().map_err(|_| failed())?;
+        let root_fd = OpenOptions::new().read(true)
+            .custom_flags(nix::libc::O_DIRECTORY | nix::libc::O_NOFOLLOW | nix::libc::O_CLOEXEC)
+            .open(&root).map_err(|_| failed())?;
+        let directory_name = "browser-helpers";
+        match mkdirat(&root_fd, directory_name, Mode::from_bits_truncate(0o700)) {
+            Ok(()) | Err(Errno::EEXIST) => {}
+            Err(_) => return Err(failed()),
         }
-        let root = self.state_root.canonicalize().map_err(|_| {
-            InspectionError::new(
-                "browser_helper_materialization_failed",
-                "Cannot resolve the owned browser state root",
-            )
-        })?;
-        let directory = directory.canonicalize().map_err(|_| {
-            InspectionError::new(
-                "browser_helper_materialization_failed",
-                "Cannot resolve the owned browser helper directory",
-            )
-        })?;
-        if !directory.starts_with(&root) {
-            return Err(InspectionError::new(
-                "unsafe_path",
-                "Browser helper directory escapes the owned state root",
-            ));
+        let directory = File::from(openat(
+            &root_fd, directory_name,
+            OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        ).map_err(|_| unsafe_path())?);
+        let private = |metadata: &fs::Metadata| {
+            metadata.uid() == Uid::current().as_raw() && metadata.mode() & 0o077 == 0
+        };
+        if !private(&directory.metadata().map_err(|_| failed())?) {
+            return Err(unsafe_path());
         }
-        set_private_permissions(&directory, false)?;
-        let path = directory.join("browser-helper.mjs");
-        let temporary = directory.join("browser-helper.mjs.tmp");
-        for candidate in [&path, &temporary] {
-            if let Ok(metadata) = fs::symlink_metadata(candidate)
-                && (metadata.file_type().is_symlink() || !metadata.is_file())
-            {
-                return Err(InspectionError::new(
-                    "unsafe_path",
-                    "Browser helper materialization path is not a regular file",
-                ));
+
+        let bytes = include_bytes!("../../../browser-runtime/browser-helper.mjs");
+        let name = format!("browser-helper-{:x}.mjs", Sha256::digest(bytes));
+        let flags = OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC | OFlag::O_NONBLOCK;
+        match openat(
+            &directory, name.as_str(),
+            flags | OFlag::O_WRONLY | OFlag::O_CREAT | OFlag::O_EXCL,
+            Mode::from_bits_truncate(0o600),
+        ) {
+            Ok(fd) => {
+                let mut file = File::from(fd);
+                file.write_all(bytes).map_err(|_| failed())?;
             }
+            Err(Errno::EEXIST) => {
+                let file = File::from(openat(
+                    &directory, name.as_str(), flags | OFlag::O_RDONLY, Mode::empty(),
+                ).map_err(|_| unsafe_path())?);
+                let metadata = file.metadata().map_err(|_| failed())?;
+                if !metadata.is_file() || !private(&metadata) || metadata.len() != bytes.len() as u64 {
+                    return Err(unsafe_path());
+                }
+                let mut actual = Vec::with_capacity(bytes.len());
+                file.take(bytes.len() as u64 + 1).read_to_end(&mut actual).map_err(|_| failed())?;
+                if actual.as_slice() != bytes.as_slice() {
+                    return Err(unsafe_path());
+                }
+            }
+            Err(_) => return Err(failed()),
         }
-        if fs::write(
-            &temporary,
-            include_str!("../../../browser-runtime/browser-helper.mjs"),
-        )
-        .is_err()
-            || set_private_permissions(&temporary, true).is_err()
-            || fs::rename(&temporary, &path).is_err()
-        {
-            let _ = fs::remove_file(&temporary);
-            return Err(InspectionError::new(
-                "browser_helper_materialization_failed",
-                "Cannot materialize the packaged browser helper in the owned state root; repair state-root permissions",
-            ));
-        }
-        Ok(path)
+        Ok(root.join(directory_name).join(name))
     }
-}
-fn set_private_permissions(path: &Path, file: bool) -> Result<(), InspectionError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = if file { 0o600 } else { 0o700 };
-        fs::set_permissions(path, fs::Permissions::from_mode(mode)).map_err(|_| {
-            InspectionError::new(
-                "browser_helper_materialization_failed",
-                "Cannot restrict permissions on the packaged browser helper",
-            )
-        })?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (path, file);
-    }
-    Ok(())
 }
 
 struct HelperProcess {
@@ -1621,5 +1600,49 @@ fn replace_event_metadata(
             message,
         },
         BrowserViewEvent::Closed { reason, .. } => BrowserViewEvent::Closed { metadata, reason },
+    }
+}
+
+#[cfg(test)]
+mod materialization_tests {
+    use super::*;
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    fn fixture() -> PathBuf {
+        let root = std::env::temp_dir().join(format!("browser-helper-test-{}", Uuid::new_v4()));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        root
+    }
+
+    #[test]
+    fn helper_is_reused_outside_browser_state_and_preserves_legacy_files() {
+        let root = fixture();
+        let legacy = root.join("browser/helpers/browser-helper.mjs");
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, b"saved state").unwrap();
+        let helper = BrowserHelperSupervisor::new(root.clone());
+        let path = helper.materialize_helper().unwrap();
+        assert_eq!(helper.materialize_helper().unwrap(), path);
+        assert_eq!(fs::read(&legacy).unwrap(), b"saved state");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn conflicting_or_symlinked_helper_is_never_replaced() {
+        let root = fixture();
+        let helper = BrowserHelperSupervisor::new(root.clone());
+        let path = helper.materialize_helper().unwrap();
+        fs::write(&path, b"unknown").unwrap();
+        assert!(helper.materialize_helper().is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"unknown");
+        fs::remove_file(&path).unwrap();
+        let target = root.join("other");
+        fs::write(&target, b"untouched").unwrap();
+        symlink(&target, &path).unwrap();
+        assert!(helper.materialize_helper().is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"untouched");
+        assert!(fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+        fs::remove_dir_all(root).unwrap();
     }
 }
