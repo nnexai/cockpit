@@ -131,7 +131,30 @@ fn revision_fence(revision: Option<String>) -> Result<String, CliError> {
 }
 
 #[derive(Debug, Subcommand)]
+pub(super) enum ArchiveCommand {
+    /// Inspect whether a task can be archived and obtain its revision fence.
+    Plan { task: String },
+    /// Archive a task using the exact revision returned by the plan.
+    Apply {
+        task: String,
+        #[arg(long)]
+        revision: u64,
+    },
+    /// List local archives.
+    List,
+    /// Inspect a local archive by its UUID.
+    Show { archive_id: String },
+    /// Restore a local archive by its UUID.
+    Restore { archive_id: String },
+}
+
+#[derive(Debug, Subcommand)]
 pub(super) enum TaskCommand {
+    /// Local-operator-only archival and restoration; IDs must be exact.
+    Archive {
+        #[command(subcommand)]
+        command: ArchiveCommand,
+    },
     /// List canonical tasks, dependency state, step progress and exact document revision.
     List,
     /// Append follow-up work to a task, reopening completed work when needed.
@@ -508,7 +531,7 @@ impl TaskCommand {
                 root_id,
                 expected_doc_revision: doc_revision,
             },
-            Self::List | Self::Show { .. } | Self::Inputs { .. } | Self::Schedule { .. } | Self::Restart { .. } | Self::Continue { .. } => {
+            Self::Archive { .. } | Self::List | Self::Show { .. } | Self::Inputs { .. } | Self::Schedule { .. } | Self::Restart { .. } | Self::Continue { .. } => {
                 return Err(CliError::usage(
                     "read-only task command has no mutation action",
                 ));

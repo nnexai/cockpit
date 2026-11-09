@@ -16,6 +16,10 @@ mod escalation;
 mod messages;
 mod images;
 mod artifacts;
+mod archive;
+mod archive_eligibility;
+#[cfg(test)]
+mod archive_tests;
 #[cfg(test)]
 mod image_visibility_tests;
 mod projection;

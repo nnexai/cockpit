@@ -58,6 +58,8 @@ pub(crate) struct OrchestrationState {
     pub directives: Vec<cockpit_protocol::orchestration::Directive>,
     #[serde(default)]
     pub continue_intents: Vec<super::mutate::continuation::ContinueIntent>,
+    #[serde(default)]
+    pub archives: Vec<super::archive::ArchiveRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -176,6 +178,7 @@ impl Default for OrchestrationState {
             thread_reads: Vec::new(),
             widget_publications: Vec::new(),
             directives: Vec::new(),
+            archives: Vec::new(),
             continue_intents: Vec::new(),
         }
     }
@@ -374,6 +377,15 @@ impl LockedStore<'_> {
             .as_ref().filter(|cached| cached.bytes == bytes)
             .map(|cached| Arc::clone(&cached.state))
     }
+    /// The state bytes identify the cached generation; referenced segment bytes
+    /// must also still match their durable content digests before it is used.
+    fn cached_validated(&self, bytes: &[u8]) -> Result<Option<Arc<OrchestrationState>>, InspectionError> {
+        let state = self.cached(bytes);
+        if let Some(state) = &state {
+            super::archive::validate_refs(self, state)?;
+        }
+        Ok(state)
+    }
     fn header(&self, bytes: &[u8]) -> Result<StateHeader, InspectionError> {
         if let Some(state) = self.cached(bytes) {
             return Ok(StateHeader { schema: state.schema, revision: state.revision });
@@ -400,9 +412,11 @@ impl LockedStore<'_> {
             schema: u32,
             revision: u64,
             messages: Vec<super::messages::InboxMessage>,
+            #[serde(default)]
+            archives: Vec<super::archive::ArchiveRef>,
         }
         let bytes = self.exact_bytes()?;
-        if let Some(state) = self.cached(&bytes) {
+        if let Some(state) = self.cached_validated(&bytes)? {
             return Ok(super::messages::inbox_counts(&state.messages, run_id, after));
         }
         let state: InboxState = serde_json::from_slice(&bytes)
@@ -411,17 +425,23 @@ impl LockedStore<'_> {
             return Err(InspectionError::new("orchestration_state_incompatible", "Orchestration state uses an incompatible schema"));
         }
         super::safe_counter(state.revision)?;
+        if !state.archives.is_empty() {
+            let state = self.read_shared()?;
+            return Ok(super::messages::inbox_counts(&state.messages, run_id, after));
+        }
         Ok(super::messages::saved_inbox_counts(&state.messages, run_id, after))
     }
     pub(crate) fn read(&self) -> Result<OrchestrationState, InspectionError> {
         let state = match self.state_dir().symlink_metadata("state.json") {
             Ok(_) => {
                 let bytes = self.exact_bytes()?;
-                match self.cached(&bytes) {
+                match self.cached_validated(&bytes)? {
                     Some(state) => (*state).clone(),
-                    // Cold mutators need only the owned decode. Memoizing it
-                    // here would require an otherwise unnecessary deep clone.
-                    None => decode_state(&bytes)?,
+                    None => {
+                        let mut state = decode_state(&bytes)?;
+                        super::archive::hydrate(self, &mut state)?;
+                        state
+                    }
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => OrchestrationState::default(),
@@ -437,10 +457,14 @@ impl LockedStore<'_> {
         let state = match self.state_dir().symlink_metadata("state.json") {
             Ok(_) => {
                 let bytes = self.exact_bytes()?;
-                if let Some(state) = self.cached(&bytes) {
+                if let Some(state) = self.cached_validated(&bytes)? {
                     state
                 } else {
-                    let state = Arc::new(decode_state(&bytes)?);
+                    let mut state = decode_state(&bytes)?;
+                    if !state.archives.is_empty() {
+                        super::archive::hydrate(self, &mut state)?;
+                    }
+                    let state = Arc::new(state);
                     *self.store.decoded.lock().unwrap_or_else(|error| error.into_inner()) =
                         Some(DecodedState { bytes, state: Arc::clone(&state) });
                     state
@@ -494,7 +518,12 @@ impl LockedStore<'_> {
                 )
             })?;
         state.revision = next;
-        let result = encode_state(state).and_then(|encoded| {
+        let encoded = if state.archives.is_empty() {
+            encode_state(state)
+        } else {
+            super::archive::compact(self, state).and_then(|compact| encode_state(&compact))
+        };
+        let result = encoded.and_then(|encoded| {
             atomic_write_bytes(self.state_dir(), "state.json", &encoded)
                 .map_err(|error| io_error("orchestration_state_write", error))
         });
@@ -966,6 +995,62 @@ mod tests {
             std::fs::remove_file(&path).unwrap();
             let outside = fixture.0.join("outside");
             std::fs::write(&outside, encode_state(&state).unwrap()).unwrap();
+            std::os::unix::fs::symlink(&outside, &path).unwrap();
+            assert_eq!(lock.read_shared().unwrap_err().code, "unsafe_path");
+        }
+    }
+
+    #[test]
+    fn archived_cache_revalidates_segment_bytes_without_rehydrating() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut archived = message("archived".into());
+        archived.stage = DeliveryStage::Stored;
+        archived.acked_at = None;
+        let recipient = archived.to_run_id.clone();
+        let reference = super::super::archive::test_segment(&lock, vec![(0, archived)]);
+        let reference_json = serde_json::to_value(&reference).unwrap();
+        let name = format!("archive-{}.json", reference_json["id"].as_str().unwrap());
+        let mut state = OrchestrationState::default();
+        state.archives.push(reference);
+        lock.state_dir().write("state.json", encode_state(&state).unwrap()).unwrap();
+
+        let mut cold_owned = lock.read().unwrap();
+        assert_eq!(cold_owned.messages.len(), 1);
+        assert!(store.decoded.lock().unwrap().is_none());
+        cold_owned.messages.clear();
+
+        let first = lock.read_shared().unwrap();
+        let second = lock.read_shared().unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        let mut owned = lock.read().unwrap();
+        assert_eq!(owned.messages.len(), 1);
+        owned.messages.clear();
+        assert_eq!(first.messages.len(), 1);
+        assert!(lock.inbox_counts(&recipient, 0).unwrap().pending);
+
+        let path = store.base().join(&name);
+        let metadata = std::fs::metadata(&path).unwrap();
+        let valid = std::fs::read(&path).unwrap();
+        let mut changed = valid.clone();
+        changed[0] ^= 1;
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.write_all(&changed).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(metadata.modified().unwrap())).unwrap();
+        assert_eq!(lock.read_shared().unwrap_err().code, "archive_corrupt");
+        assert_eq!(lock.read().unwrap_err().code, "archive_corrupt");
+        assert_eq!(lock.inbox_counts(&recipient, 0).err().unwrap().code, "archive_corrupt");
+        assert_eq!(lock.wait_revision().unwrap(), state.revision);
+        lock.state_dir().write(&name, &valid).unwrap();
+        assert!(Arc::ptr_eq(&first, &lock.read_shared().unwrap()));
+
+        std::fs::remove_file(&path).unwrap();
+        assert!(lock.read_shared().is_err());
+        #[cfg(unix)]
+        {
+            let outside = fixture.0.join("archive-outside");
+            std::fs::write(&outside, &valid).unwrap();
             std::os::unix::fs::symlink(&outside, &path).unwrap();
             assert_eq!(lock.read_shared().unwrap_err().code, "unsafe_path");
         }

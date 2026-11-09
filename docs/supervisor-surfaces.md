@@ -10,6 +10,28 @@ Batch completion leaves the session's personal liaison Active for later work acr
 
 The orchestration state document is bounded to 64 MiB on both reads and writes. If a write would exceed that limit it fails with `orchestration_state_full` without discarding durable records or replacing the prior document. This extends capacity rather than providing unlimited retention; a backend with the older 8 MiB limit cannot read a larger document, so do not roll back to that version after the state has grown past its limit.
 
+### Local operator orchestration archive
+
+Archival is an explicit local-operator operation, not an agent capability or an automatic retention policy. It moves eligible task history out of the active orchestration state for later inspection or restoration; it is not a worker cleanup, integration, acceptance, or authority to modify a terminal, checkout, Space, or external artifact. The archive contains operational history and should be protected like the orchestration state itself.
+
+The local operator service exposes `archive_plan(root_id, task_id)` to inspect a candidate and its current state revision, then `archive_apply(root_id, task_id, expected_revision)` to request the move against that revision. Review the plan and any refusal before applying; a stale revision must not authorize a move against changed state. `archive_list()` lists archives, `archive_show(archive_id)` inspects one, and `archive_restore(archive_id)` requests its restoration. Archive IDs are UUIDs. These methods return JSON or an inspection error and are not exposed to agent callers.
+
+The CLI requires explicit `--operator`; use exact root, task, and archive IDs:
+
+```sh
+cockpit-cli task archive plan TASK_ID --operator --root ROOT_ID
+cockpit-cli task archive apply TASK_ID --revision REVISION --operator --root ROOT_ID
+cockpit-cli task archive list --operator
+cockpit-cli task archive show ARCHIVE_ID --operator
+cockpit-cli task archive restore ARCHIVE_ID --operator
+```
+
+Safety takes precedence over reclaiming space: unsafe or ambiguous candidates and conflicting restores must be refused rather than discarding evidence. Archival and restoration must preserve task history, durable replay identities and ordering, sequence allocation, and references; a restored record must not silently overwrite current work. If a crash or error leaves an operation's outcome uncertain, inspect the current state and archive before taking further action; do not assume the operation succeeded or blindly repeat a mutation. Preserve any surviving archive and state evidence for recovery.
+
+The task document remains canonical; archiving moves eligible machine records into an immutable segment and makes them available to normal reads. A task must be checked, its attempts closed and related messages acknowledged. A recorded owner is eligible only when it matches the closed accepted run and assignment generation; schedules, intents, active credentials or claims, and unsettled resource or lifecycle work block the operation. Kept resources also block archival because cleanup can still change them. Apply rechecks eligibility under the state lock. Records shared with other work may remain in the active state.
+
+Archive segment files live alongside `state.json` under the orchestration state root: back them up and restore them together with `state.json` and the task documents. Do not delete or edit segment files. Restore can be refused if the active state no longer has enough capacity; resolve capacity before retrying. Binaries without archive support cannot safely operate on archived state: upgrade every host and CLI using that state before archiving, and do not silently roll back.
+
 ### Voice screen contract
 
 Voice is a dedicated, integrated screen alongside Workbench and Inbox, including a same-window native surface, not a detached window or a dictation control. The user explicitly starts a real OMP live voice call; phone keyboard dictation remains the user's choice and Cockpit adds no dictation integration. Browser and native Voice share the webview WebRTC implementation; the native app uses a separate Voice webview. Native device behavior, packaging and macOS support require platform verification.

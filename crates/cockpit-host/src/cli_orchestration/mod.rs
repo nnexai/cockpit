@@ -38,6 +38,9 @@ a Space ID or unique label. Omitted targets use a private general-work directory
 Update, scope-update and checklist revisions are read when omitted; explicit
 fences are honored. Generated operation and task IDs are printed to stderr.
 After an uncertain mutation inspect the same ID before retrying.
+Archive commands are local-operator-only and require exact IDs: use task archive
+plan TASK --operator --root ROOT, then apply TASK --revision REVISION with the
+same operator and root. Show and restore take archive UUIDs; list needs none.
 Examples:
   cockpit-cli task create --title "Fix the build"
   cockpit-cli task schedule "Fix the build" --space-worktree "Project"
@@ -421,6 +424,27 @@ impl DirectiveArgs {
 
 impl TaskArgs {
     pub async fn run(mut self) -> Result<(), CliError> {
+        if let TaskCommand::Archive { command } = &self.command {
+            use args::ArchiveCommand;
+            if !self.common.operator {
+                return Err(CliError::new("actor_forbidden", "task archive requires explicit --operator"));
+            }
+            let service = cockpit_core::orchestration::OrchestrationService::open(&self.common.configuration()?)?;
+            let result = match command {
+                ArchiveCommand::Plan { task } => {
+                    let root = self.common.root.as_deref().ok_or_else(|| CliError::usage("task archive plan requires --root"))?;
+                    service.archive_plan(root, task)?
+                }
+                ArchiveCommand::Apply { task, revision } => {
+                    let root = self.common.root.as_deref().ok_or_else(|| CliError::usage("task archive apply requires --root"))?;
+                    service.archive_apply(root, task, *revision)?
+                }
+                ArchiveCommand::List => service.archive_list()?,
+                ArchiveCommand::Show { archive_id } => service.archive_show(archive_id)?,
+                ArchiveCommand::Restore { archive_id } => service.archive_restore(archive_id)?,
+            };
+            return emit(&result, self.common.json);
+        }
         if matches!(&self.command, TaskCommand::Show { self_task: true, .. }
             | TaskCommand::Inputs { self_task: true, .. } | TaskCommand::Inputs { task: None, .. }) {
             context::require_job(&self.common)?;
