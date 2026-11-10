@@ -81,10 +81,13 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
   const [observing, setObserving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshDelayed, setRefreshDelayed] = useState(false);
   const [observedServer, setObservedServer] = useState<string | null>(null);
   const view: InboxView | null = storedView && (!observing || !current || snapshot?.session_id !== sessionId || snapshot.server_instance !== observedServer) && storedView.observation.status === "fresh"
     ? { ...storedView, observation: { status: "unavailable", error: { code: "stream_unavailable", message: loadError || "Inbox observation is not current" } } }
     : storedView;
+  const showUnavailable = view?.observation.status === "unavailable" && !(refreshing && !refreshDelayed && storedView?.observation.status === "fresh" && current && snapshot?.session_id === sessionId && snapshot.server_instance === observedServer && !loadError);
   const [selected, setSelected] = useState<string | null>(null);
   const [mobileDetail, setMobileDetail] = useState(false);
   const [wideDetail, setWideDetail] = useState(false);
@@ -143,6 +146,11 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   runtimeIdentityRef.current = runtimeIdentity;
   const [observedRuntimeIdentity, setObservedRuntimeIdentity] = useState<string | null>(null);
   const newOwners = view?.owners.filter(candidate => (candidate.kind === "supervisor" || candidate.kind === "adopted") && candidate.stage !== "closed" && candidate.availability !== "absent") ?? [];
+  useEffect(() => {
+    if (!refreshing) { setRefreshDelayed(false); return; }
+    const timer = setTimeout(() => setRefreshDelayed(true), 1000);
+    return () => clearTimeout(timer);
+  }, [refreshing]);
   const newOwner = newOwners.find(candidate => candidate.root_id === selectedOwner)?.root_id ?? newOwners.find(candidate => candidate.availability === "available")?.root_id ?? newOwners.find(candidate => candidate.root_id === preferredOwner)?.root_id ?? newOwners[0]?.root_id ?? "";
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
@@ -158,11 +166,11 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
   useEffect(() => { if (!current) { selectionVersion.current++; setDirectOutcome(null); } }, [current]);
   const serverInstance = snapshot?.session_id === sessionId ? snapshot.server_instance : null;
   useEffect(() => {
-    setObserving(false);
+    setObserving(false); setRefreshing(false);
     if (!current || !serverInstance) return;
     let live = true, store = view?.state_store_id;
     const read = async (valid: () => boolean, authoritative: boolean) => {
-      if (authoritative && live && valid()) { liveScope.current.observing = false; setObserving(false); }
+      if (authoritative && live && valid()) { liveScope.current.observing = false; setObserving(false); setRefreshing(true); }
       const started = refreshVersion.current;
       const readRuntimeIdentity = runtimeIdentityRef.current;
       const next = await client.orchestrationInbox({ session_id: sessionId });
@@ -171,14 +179,14 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
       store ??= next.state_store_id;
       if (started !== refreshVersion.current) return;
       revisionFloor.current = next.revision; setView(next); setObservedRuntimeIdentity(readRuntimeIdentity);
-      if (authoritative) { setLoadError(""); setObservedServer(serverInstance); setObserving(true); }
+      if (authoritative) { setLoadError(""); setObservedServer(serverInstance); setObserving(true); setRefreshing(false); }
     };
     const changes = orchestrationChanges(client, async () => {
       await read(() => live, false);
       if (!live || !store) throw new Error("Inbox observation cancelled");
       return { kind: "orchestration", session_id: sessionId, server_instance: serverInstance, state_store_id: store, root_id: null };
     }, valid => read(valid, true), error => {
-      if (live) { liveScope.current.observing = false; setObserving(false); setLoadError(error instanceof Error ? error.message : "Inbox unavailable"); }
+      if (live) { liveScope.current.observing = false; setObserving(false); setRefreshing(false); setLoadError(error instanceof Error ? error.message : "Inbox unavailable"); }
     });
     const refresh = () => { void changes.refresh().catch(() => {}); };
     wake.current = refresh;
@@ -529,7 +537,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
         </div>}
         {error && <p role="alert" className="inbox-note" data-tone="error" title={error}><UiIcon name="alert" />{error}</p>}
         {direct && (directUncertain[direct.pane_id] ? <p role="status" className="inbox-note">Delivery is uncertain. Open the session to inspect it; no automatic retry is safe.</p> : directStale ? <p role="status" className="inbox-note">Agent identity changed or is unavailable. Review and reselect the agent; your draft is preserved.</p> : visibleOutcome ? <p role="status" className="inbox-note">{visibleOutcome.kind === "busy" ? `Not sent. ${visibleOutcome.name} is busy. Your draft is kept; reselect the agent when it is ready.` : `Submitted to ${visibleOutcome.name}’s terminal. Not confirmed read. To send another, reselect the agent once it is ready.`}</p> : !directReady && <p role="status" className="inbox-note">{!direct.expected_target ? "Agent identity is unavailable. Your draft is preserved; reselect when available." : !directTargetMatches || !liveDirect ? "Agent identity changed or is unavailable. Review and reselect the agent; your draft is preserved." : "Direct messages are available only when this agent is ready."}</p>)}
-        {view && view.observation.status !== "fresh" && mode !== "direct" && <p role="status" className="inbox-note"><UiIcon name="alert" />Can’t see live sessions right now. Replies are paused; your draft is kept.</p>}
+        {showUnavailable && mode !== "direct" && <p role="status" className="inbox-note"><UiIcon name="alert" />Can’t see live sessions right now. Replies are paused; your draft is kept.</p>}
         {mode === "answer" && !!carried[draftKey] && !!text.trim() && <p role="status" className="inbox-note"><UiIcon name="edit" />Draft carried over from the earlier version of this question. Review it before sending.</p>}
         {stranded && <div className="inbox-note inbox-stranded" role="status"><UiIcon name="edit" /><div><p>Unsent answer to a question that is no longer open:</p><blockquote>{stranded.text}</blockquote><div className="inbox-replace-acts"><button type="button" className="inbox-btn" onClick={() => reuseStranded(stranded)}>Use as follow-up</button><button type="button" className="inbox-btn" onClick={() => setDrafts(d => { const next = { ...d }; delete next[stranded.key]; return next; })}>Discard</button></div></div></div>}
         {mode === "answer" && choiceConfirm?.key === draftKey && <ReplaceChoice choice={choiceConfirm.choice} onReplace={() => resolveChoice("replace")} onAdd={() => resolveChoice("add")} onKeep={() => resolveChoice("keep")} />}
@@ -560,7 +568,7 @@ function SessionInbox({ client, sessionId, visible, current, currentSpace, onOpe
     }}><header><div className="inbox-list-title"><h1>Inbox</h1>{count > 0 && <span className="inbox-count">{count} need you</span>}</div><button ref={newRef} type="button" className="inbox-new" onClick={() => select(null)}><UiIcon name="plus" /> New work</button></header>
       {!view && !loadError && <><p role="status" className="inbox-empty">Loading inbox…</p><div className="inbox-skeleton" aria-hidden="true">{[0, 1, 2, 3].map(i => <div key={i}><span /><div><i /><i /></div></div>)}</div></>}
       {loadError && <div role="status" className="inbox-note" data-tone="error"><UiIcon name="alert" /><div><strong>Inbox unavailable.</strong>{view && <> Showing the last loaded items.</>}<div>{loadError}</div><small>Retrying automatically.</small></div></div>}
-      {view?.observation.status === "unavailable" && <p role="status" className="inbox-note" title={view.observation.error.message}><UiIcon name="alert" />Can’t see live sessions right now. Replies are paused; your draft is kept.</p>}
+      {showUnavailable && view?.observation.status === "unavailable" && <p role="status" className="inbox-note" title={view.observation.error.message}><UiIcon name="alert" />Can’t see live sessions right now. Replies are paused; your draft is kept.</p>}
       {attention.availability === "unavailable" && <p role="status" className="inbox-note"><UiIcon name="alert" />Agent attention unavailable.</p>}
       {!!view?.stalls?.length && (() => { const stall = view.stalls[0]!; const location = view.owners.find(owner => owner.root_id === stall.root_id)?.location ?? null; return <div className="inbox-stall" role="status"><span>Supervisor idle with open work since <Time value={stall.since} /></span><button type="button" className="inbox-link" disabled={!location || view.observation.status !== "fresh"} onClick={() => open(location, true)}>Open supervisor</button></div>; })()}
       {view && !view.threads.some(t => t.state === "needs_you") && !view.unmanaged_agents.some(relevant) && <p className="inbox-empty"><UiIcon name="check-circle" />Nothing needs you right now.</p>}

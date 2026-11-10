@@ -123,6 +123,37 @@ describe("Inbox", () => {
     expect(client.orchestrationMutate).not.toHaveBeenCalled();
     expect(host.querySelector<HTMLButtonElement>(".inbox-send")!.disabled).toBe(true);
   });
+  it("keeps refreshes quiet while fencing replies, and reports a stalled or failed observer", async () => {
+    vi.useFakeTimers();
+    const { client, waits, errors } = fixture(), app = setup(client);
+    try {
+      await flush(() => app.render());
+      await flush(() => text("Keep this draft"));
+      const deferred = deferredFocus();
+      vi.mocked(client.orchestrationInbox).mockReturnValueOnce(deferred.promise.then(() => view("a")));
+      await flush(() => waits[0]!({} as OrchestrationWaitResponse));
+      expect(host.textContent).not.toContain("Can’t see live sessions right now");
+      expect(host.querySelector<HTMLButtonElement>(".inbox-send")!.disabled).toBe(true);
+      await flush(submit);
+      expect(client.orchestrationMutate).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(host.textContent).toContain("Can’t see live sessions right now");
+      await flush(() => deferred.resolve());
+      expect(host.textContent).not.toContain("Can’t see live sessions right now");
+      expect((host.querySelector("textarea") as HTMLTextAreaElement).value).toBe("Keep this draft");
+      const second = deferredFocus();
+      vi.mocked(client.orchestrationInbox).mockReturnValueOnce(second.promise.then(() => view("a")));
+      await flush(() => waits[0]!({} as OrchestrationWaitResponse));
+      await flush(() => errors[0]!(new CockpitClientError("stream_error", "Disconnected")));
+      expect(host.textContent).toContain("Can’t see live sessions right now");
+      await flush(() => second.resolve());
+      expect(host.textContent).toContain("Can’t see live sessions right now");
+      expect(host.querySelector<HTMLButtonElement>(".inbox-send")!.disabled).toBe(true);
+    } finally {
+      await flush(() => root!.unmount()); root = null;
+      vi.useRealTimers();
+    }
+  });
   it("refreshes runtime-only changes without reopening the durable stream", async () => {
     const f = directFixture();
     await flush(() => f.app.render());
