@@ -196,7 +196,7 @@ mod tests {
         run.assignment_generation = Some(7);
         state.runs.push(run);
         state.task_ownership.push(TaskOwnership {
-            root_id: "root".into(), task_id: "task".into(), generation: 7,
+            root_id: "root".into(), task_id: "task".into(), generation: 7, disposition: None, disposition_history: Vec::new(),
             owner: Some(TaskOwner { run_id: "root-task".into(), conversation: None, claim_operation_id: "claim".into() }),
             schedule: None, reopened_after_attempt: None,
         });

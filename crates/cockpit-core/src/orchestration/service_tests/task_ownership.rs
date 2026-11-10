@@ -1938,3 +1938,110 @@ fn resumed_worker_missing_space_rebinds_exact_epoch_without_promoting_borrowed_c
         }
     }
 }
+
+#[test]
+fn set_aside_fences_scheduling_and_preserves_unchecked_dependencies_until_reopen() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Unresolved");
+    let dependent = related_task(&fixture, &root, &[task.task_id.clone()], None);
+    let supervisor = fixture.root_actor(&root);
+    fixture.apply(&supervisor, schedule_action(&root, &task)).unwrap();
+    fixture.apply(&supervisor, schedule_action(&root, &dependent)).unwrap();
+    let candidate = fixture.service.schedule_candidates(4).unwrap().into_iter().find(|c| c.task_id == task.task_id).unwrap();
+    let action = OrchestrationAction::TaskDispositionSet {
+        root_id: root.clone(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision.clone(),
+        expected_assignment_generation: 0, expected_owner_run_id: None, kind: TaskDispositionKind::Abandoned,
+        reason: "User declined this work".into(), evidence: Some("decision reference".into()), successor_task_id: None,
+        expected_successor_task_revision: None, expected_successor_run_id: None,
+    };
+    fixture.apply(&supervisor, action).unwrap();
+    assert!(!fixture.task(&root, &task.task_id).checked);
+    assert!(fixture.service.schedule_candidates(4).unwrap().is_empty());
+    assert!(fixture.service.scheduled_start(&candidate, &ResolvedMutationInput {
+        project: Some(fixture.project()), ..Default::default()
+    }).unwrap().is_none());
+    assert_code(fixture.apply(&supervisor, schedule_action(&root, &task)), "task_set_aside");
+    let saved = ownership(&fixture, &root, &task);
+    assert!(saved.schedule.is_some());
+    let disposition = saved.disposition.unwrap();
+    assert_eq!(disposition.evidence.as_deref(), Some("decision reference"));
+    assert_code(fixture.apply(&supervisor, OrchestrationAction::TaskDispositionReopen {
+        root_id: root.clone(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision.clone(),
+        expected_disposition_id: "stale".into(),
+    }), "task_disposition_conflict");
+    fixture.apply(&supervisor, OrchestrationAction::TaskDispositionReopen {
+        root_id: root.clone(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision.clone(),
+        expected_disposition_id: disposition.disposition_id,
+    }).unwrap();
+    let reopened = ownership(&fixture, &root, &task);
+    assert!(reopened.disposition.is_none());
+    assert_eq!(reopened.disposition_history.len(), 1);
+    assert!(reopened.disposition_history[0].reopened_at.is_some());
+    let candidates = fixture.service.schedule_candidates(4).unwrap();
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].task_id, task.task_id);
+}
+
+#[test]
+fn set_aside_keeps_failed_result_and_rejects_worker_and_stale_owner() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (task, run_id, worker) = fixture.working(&root);
+    let supervisor = fixture.root_actor(&root);
+    let make = |generation, owner| OrchestrationAction::TaskDispositionSet {
+        root_id: root.clone(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision.clone(),
+        expected_assignment_generation: generation, expected_owner_run_id: owner,
+        kind: TaskDispositionKind::Abandoned, reason: "No longer wanted".into(), evidence: None, successor_task_id: None,
+        expected_successor_task_revision: None, expected_successor_run_id: None,
+    };
+    let owned = ownership(&fixture, &root, &task);
+    assert_code(fixture.apply(&supervisor, make(owned.generation, Some(run_id.clone()))), "task_active");
+    fixture.apply(&worker, report(ReportKind::Result, Some(ReportOutcome::Failed), None)).unwrap();
+    let before = fixture.state();
+    let resources = serde_json::to_value((&before.owned_resources, &before.checkout_claims, &before.resource_requests)).unwrap();
+    let bytes = fixture.state_bytes();
+    assert_code(fixture.apply(&worker, make(owned.generation, Some(run_id.clone()))), "actor_forbidden");
+    assert_code(fixture.apply(&supervisor, make(owned.generation + 1, Some(run_id.clone()))), "assignment_conflict");
+    assert_eq!(fixture.state_bytes(), bytes);
+    fixture.apply(&supervisor, make(owned.generation, Some(run_id.clone()))).unwrap();
+    let state = fixture.state();
+    assert_eq!(serde_json::to_value((&state.owned_resources, &state.checkout_claims, &state.resource_requests)).unwrap(), resources);
+    let after = fixture.run(&run_id);
+    assert_eq!(after.stage, RunStage::Reported);
+    assert_eq!(after.result.unwrap().outcome, Some(ReportOutcome::Failed));
+    assert!(!fixture.task(&root, &task.task_id).checked);
+    let current = ownership(&fixture, &root, &task);
+    assert_eq!(current.generation, owned.generation);
+    assert_eq!(current.owner.unwrap().run_id, run_id);
+}
+
+#[test]
+fn completed_elsewhere_requires_and_records_accepted_successor() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let task = fixture.create_task(&root, "Original");
+    let successor = fixture.create_task(&root, "Independent successor");
+    let supervisor = fixture.root_actor(&root);
+    let action = |revision: Option<String>, run: Option<String>| OrchestrationAction::TaskDispositionSet {
+        root_id: root.clone(), task_id: task.task_id.clone(), expected_task_revision: task.task_revision.clone(),
+        expected_assignment_generation: 0, expected_owner_run_id: None,
+        kind: TaskDispositionKind::CompletedElsewhere, reason: "Finished in the follow-up".into(),
+        evidence: Some("accepted follow-up".into()), successor_task_id: Some(successor.task_id.clone()),
+        expected_successor_task_revision: revision, expected_successor_run_id: run,
+    };
+    assert_code(fixture.apply(&supervisor, action(None, None)), "successor_not_accepted");
+    let (run_id, worker) = execute_task(&fixture, &root, &successor);
+    fixture.apply(&worker, fixture.successful_result(&worker)).unwrap();
+    fixture.operator(OrchestrationAction::Accept { run_id: run_id.clone(), expected_task_revision: successor.task_revision.clone() });
+    let accepted_revision = fixture.task(&root, &successor.task_id).task_revision;
+    assert_code(fixture.apply(&supervisor, action(Some("stale".into()), Some(run_id.clone()))), "successor_changed");
+    assert_code(fixture.apply(&supervisor, action(Some(accepted_revision.clone()), Some("stale".into()))), "successor_changed");
+    fixture.apply(&supervisor, action(Some(accepted_revision), Some(run_id.clone()))).unwrap();
+    let disposition = ownership(&fixture, &root, &task).disposition.unwrap();
+    assert_eq!(disposition.successor_task_id.as_deref(), Some(successor.task_id.as_str()));
+    assert_eq!(disposition.successor_run_id.as_deref(), Some(run_id.as_str()));
+    assert_eq!(disposition.successor_result_message_id.as_deref(), fixture.run(&run_id).result.as_ref().map(|result| result.message_id.as_str()));
+    assert_eq!(disposition.successor_task_revision.as_deref(), Some(fixture.task(&root, &successor.task_id).task_revision.as_str()));
+    assert!(!fixture.task(&root, &task.task_id).checked);
+}

@@ -215,7 +215,7 @@ const snapshot: OrchestrationSnapshot = {
     created_at: at, updated_at: at,
   }],
   messages: [message],
-  task_ownership: [{ root_id: "root", task_id: "task", generation: 1, owner: { run_id: "run", conversation: attachment.conversation!, claim_operation_id: prerequisiteId }, schedule: null, reopened_after_attempt: null }],
+  task_ownership: [{ root_id: "root", task_id: "task", generation: 1, owner: { run_id: "run", conversation: attachment.conversation!, claim_operation_id: prerequisiteId }, schedule: null, reopened_after_attempt: null, disposition: null, disposition_history: [] }],
   intents: [{ intent_id: "intent", root_id: "root", task_id: "task", run_id: "run", expected_task_revision: hash, state: "pending",
     origin: null, supervisor_run_id: null, conversation: null, result_message_id: null }],
   assignment_intents: [{ root_id: "root", task_id: assignmentTaskId, state: "conflict" }],

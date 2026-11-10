@@ -98,6 +98,7 @@ pub(super) fn apply(
         OrchestrationAction::RunAdopt { label, location } => runs::adopt(ctx, label, location),
         action @ OrchestrationAction::WorkerStart { .. } => runs::worker_start(ctx, action),
         action @ (OrchestrationAction::TaskSchedule { .. } | OrchestrationAction::TaskScheduleCancel { .. }) => runs::schedule(ctx, action),
+        action @ (OrchestrationAction::TaskDispositionSet { .. } | OrchestrationAction::TaskDispositionReopen { .. }) => tasks::disposition(ctx, action),
         action @ OrchestrationAction::WorkerReplace { .. } => runs::worker_replace(ctx, action),
         action @ OrchestrationAction::TaskScopeUpdate { .. } => tasks::scope_update(ctx, action),
         action @ OrchestrationAction::TaskContinue { .. } => continuation::apply(ctx, action),

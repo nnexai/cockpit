@@ -602,7 +602,7 @@ impl ReviewFixture {
         worker.assignment_generation = Some(1);
         state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
             root_id: worker.root_id.clone(), task_id: worker.task_id.clone().unwrap(),
-            generation: 0, owner: None, schedule: None, reopened_after_attempt: None,
+            generation: 0, disposition: None, disposition_history: Vec::new(), owner: None, schedule: None, reopened_after_attempt: None,
         });
         state.runs.push(root);
         locked.save(&mut state).unwrap();
@@ -652,7 +652,7 @@ impl ReviewFixture {
         worker.assignment_generation = Some(1);
         state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
             root_id: worker.root_id.clone(), task_id: worker.task_id.clone().unwrap(),
-            generation: 0, owner: None, schedule: None, reopened_after_attempt: None,
+            generation: 0, disposition: None, disposition_history: Vec::new(), owner: None, schedule: None, reopened_after_attempt: None,
         });
         state.runs.extend([root, worker.clone()]);
         locked.save(&mut state).unwrap();
@@ -1399,7 +1399,7 @@ async fn blocked_consumer_does_not_prevent_independent_worker_in_same_root_from_
         independent.assignment_generation = Some(1);
         state.task_ownership.push(cockpit_protocol::orchestration::TaskOwnership {
             root_id: independent.root_id.clone(), task_id: independent_task.clone(),
-            generation: 0, owner: None, schedule: None, reopened_after_attempt: None,
+            generation: 0, disposition: None, disposition_history: Vec::new(), owner: None, schedule: None, reopened_after_attempt: None,
         });
         state.runs.push(independent.clone());
         locked.save(&mut state).unwrap();
@@ -3346,7 +3346,7 @@ async fn path_schedule_fixture(mode: &str) -> (ReviewFixture, Arc<Dispatcher>) {
             result: Some(OrchestrationActionResult::TaskScheduled { operation_id, task_id: task_id.clone(), duplicate: false }),
             effect_receipts: vec![], created_at: now(), updated_at: now() });
         state.task_ownership.push(TaskOwnership { root_id: fixture.run.run_id.clone(), task_id,
-            generation: 0, owner: None, schedule: Some(schedule), reopened_after_attempt: None });
+            generation: 0, disposition: None, disposition_history: Vec::new(), owner: None, schedule: Some(schedule), reopened_after_attempt: None });
     }
     fixture.service.store.tasks_dir().write(
         super::super::tasks_md::root_filename(&fixture.run.run_id).unwrap(), document.as_bytes(),
@@ -3424,7 +3424,7 @@ async fn ref_wake_starts_schedule_after_accepted_code_is_materialized() {
             summary: "accepted".into(), plan: None, source_output: Some(source), card: None, at: now() });
         state.runs.push(parent);
         state.task_ownership.push(TaskOwnership { root_id: root_id.clone(), task_id: prerequisite, generation: 1,
-            owner: Some(TaskOwner { run_id: parent_run_id, conversation: None, claim_operation_id: uuid::Uuid::new_v4().to_string() }),
+            disposition: None, disposition_history: Vec::new(), owner: Some(TaskOwner { run_id: parent_run_id, conversation: None, claim_operation_id: uuid::Uuid::new_v4().to_string() }),
             schedule: None, reopened_after_attempt: None });
         locked.save(&mut state).unwrap();
     }

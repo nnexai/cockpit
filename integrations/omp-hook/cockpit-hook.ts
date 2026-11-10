@@ -21,7 +21,7 @@ type API = {
 type Envelope = { message_id: string; seq: number; kind: string; report?: { kind: string } | null; [key: string]: unknown };
 type Board = { key: string; text: string };
 type Capture = { messages: Envelope[]; board?: Board };
-const RECONCILE_CHECKLIST = "Reconcile: for each open row decide one action — review an awaiting Result (accept/send back), answer or escalate a pending question, replace a gone or idle-no-report worker (task restart), schedule or cancel unscheduled/queued work, decide kept resources. Do not ping working workers. If nothing can progress without the user, ask once on the relevant thread and stop.";
+const RECONCILE_CHECKLIST = "Reconcile: for each open row decide one action — review an awaiting Result (accept/send back), answer or escalate a pending question, replace a gone or idle-no-report worker (task restart), schedule or cancel unscheduled/queued work, or explicitly disposition a task completed elsewhere or abandoned when appropriate. Disposition is not acceptance, dependency satisfaction, a physical stop or cleanup authority; decide kept resources separately. Do not ping working workers. If nothing can progress without the user, ask once on the relevant thread and stop.";
 type Command = (args: string[], env: NodeJS.ProcessEnv, cwd: string, signal: AbortSignal) => Promise<unknown>;
 const BOOTSTRAP_START_FALLBACK_MS = 20_000;
 

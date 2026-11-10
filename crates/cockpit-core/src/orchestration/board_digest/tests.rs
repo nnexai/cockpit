@@ -82,7 +82,7 @@ fn maps_task_and_runtime_states() {
     let mut s = snapshot();
     let rt = runtime();
     assert_eq!(digest_at(&s, None, NOW).tasks[0].worker, WorkerState::Unscheduled);
-    s.task_ownership.push(TaskOwnership { root_id: "root".into(), task_id: "task".into(), generation: 0,
+    s.task_ownership.push(TaskOwnership { root_id: "root".into(), task_id: "task".into(), generation: 0, disposition: None, disposition_history: Vec::new(),
         owner: None, reopened_after_attempt: None, schedule: Some(TaskSchedule {
             operation_id: "op".into(), principal_key: "principal".into(), target: None,
             brief: String::new(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
@@ -143,7 +143,7 @@ fn closed_attempt_uses_schedule_not_stale_dispatch_or_runtime_status() {
             assert_eq!(digest.open_work, 1);
         }
     }
-    s.task_ownership.push(TaskOwnership { root_id: "root".into(), task_id: "task".into(), generation: 0,
+    s.task_ownership.push(TaskOwnership { root_id: "root".into(), task_id: "task".into(), generation: 0, disposition: None, disposition_history: Vec::new(),
         owner: None, reopened_after_attempt: None, schedule: Some(TaskSchedule {
             operation_id: "op".into(), principal_key: "principal".into(), target: None,
             brief: String::new(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
@@ -337,4 +337,20 @@ fn retained_resources_alone_are_not_open_work_and_are_summarized() {
     assert_eq!(d.retained.len(), 7);
     assert_eq!(d.text.lines().filter(|line| line.starts_with("Retained: worktree")).count(), 5);
     assert!(d.text.contains("Retained: 2 more"), "{}", d.text);
+}
+
+#[test]
+fn set_aside_task_does_not_trigger_reconcile_until_reopened() {
+    let mut s = snapshot();
+    s.task_ownership.push(TaskOwnership {
+        root_id: "root".into(), task_id: "task".into(), generation: 1, owner: None, schedule: None,
+        reopened_after_attempt: None, disposition_history: Vec::new(),
+        disposition: Some(TaskDisposition { disposition_id: "disposition".into(), kind: TaskDispositionKind::Abandoned, reason: "not wanted".into(),
+            evidence: None, successor_task_id: None, successor_run_id: None, successor_task_revision: None,
+            successor_result_message_id: None, successor_accepted_task_revision: None,
+            at: NOW.into(), by: ActorRef::Operator, reopened_at: None, reopened_by: None }),
+    });
+    assert_eq!(digest_at(&s, None, NOW).open_work, 0);
+    s.task_ownership[0].disposition = None;
+    assert_eq!(digest_at(&s, None, NOW).open_work, 1);
 }

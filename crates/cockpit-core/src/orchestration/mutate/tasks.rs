@@ -1,5 +1,102 @@
 use super::{Applied, MutationCtx};
 use super::super::*;
+pub(in crate::orchestration) fn disposition(
+    ctx: &mut MutationCtx<'_>, action: OrchestrationAction,
+) -> Result<Applied, InspectionError> {
+    let (root_id, task_id, revision) = match &action {
+        OrchestrationAction::TaskDispositionSet { root_id, task_id, expected_task_revision, .. }
+        | OrchestrationAction::TaskDispositionReopen { root_id, task_id, expected_task_revision, .. } =>
+            (root_id, task_id, expected_task_revision),
+        _ => unreachable!(),
+    };
+    task_root_authority(ctx.state, ctx.actor, ctx.caller, ctx.session_id, root_id)?;
+    let document = ctx.locked.tasks(root_id)?;
+    let task = document.task(task_id)?;
+    if task.task_revision != *revision {
+        return Err(error("task_revision_conflict", "Canonical task changed"));
+    }
+    if task.checked || accepted_blocks(ctx.state, root_id, task_id) {
+        return Err(error("task_checked", "Accepted canonical tasks cannot be set aside"));
+    }
+    let result_task = task.clone();
+    let mut successor = None;
+    if let OrchestrationAction::TaskDispositionSet { kind, successor_task_id, expected_successor_task_revision, expected_successor_run_id, expected_assignment_generation, expected_owner_run_id, .. } = &action {
+        let ownership = ctx.state.task_ownership.iter().find(|owner| owner.root_id == *root_id && owner.task_id == *task_id);
+        if ownership.map_or(0, |owner| owner.generation) != *expected_assignment_generation
+            || ownership.and_then(|owner| owner.owner.as_ref()).map(|owner| &owner.run_id) != expected_owner_run_id.as_ref() {
+            return Err(error("assignment_conflict", "Task ownership changed"));
+        }
+        match (kind, successor_task_id) {
+            (TaskDispositionKind::Abandoned, None) if expected_successor_task_revision.is_none() && expected_successor_run_id.is_none() => {}
+            (TaskDispositionKind::CompletedElsewhere, Some(id)) if id != task_id => {
+                let target = document.task(id)?;
+                if !target.checked || !accepted_blocks(ctx.state, root_id, id) {
+                    return Err(error("successor_not_accepted", "Completed elsewhere requires an accepted task in this root"));
+                }
+                let run = ctx.state.runs.iter().filter(|run| run.root_id == *root_id
+                    && run.task_id.as_deref() == Some(id.as_str())
+                    && run.stage == RunStage::Closed && run.close_reason == Some(CloseReason::Accepted))
+                    .max_by_key(|run| run.attempt)
+                    .ok_or_else(|| error("successor_not_accepted", "Accepted successor run not found"))?;
+                if expected_successor_task_revision.as_deref() != Some(target.task_revision.as_str())
+                    || expected_successor_run_id.as_deref() != Some(run.run_id.as_str()) {
+                    return Err(error("successor_changed", "Accepted successor task or run changed"));
+                }
+                let result = run.result.as_ref().filter(|result| result.outcome == Some(ReportOutcome::Succeeded))
+                    .ok_or_else(|| error("successor_not_accepted", "Accepted successor successful Result is missing"))?;
+                let accepted_revision = run.retirement.as_ref().and_then(|receipt| receipt.task_revision.clone());
+                if run.retirement.as_ref().and_then(|receipt| receipt.result_message_id.as_deref())
+                    .is_some_and(|message_id| message_id != result.message_id) {
+                    return Err(error("successor_not_accepted", "Accepted successor Result receipt does not match"));
+                }
+                successor = Some((id.clone(), run.run_id.clone(), target.task_revision.clone(), result.message_id.clone(), accepted_revision));
+            }
+            _ => return Err(error("invalid_task", "Completed elsewhere requires an accepted successor; abandoned must not name one")),
+        }
+    }
+    if matches!(action, OrchestrationAction::TaskDispositionSet { .. }) {
+        mutable_task(ctx.state, root_id, task_id, &document)?;
+        if ctx.state.runs.iter().any(|run| run.root_id == *root_id
+            && run.task_id.as_deref() == Some(task_id.as_str())
+            && !matches!(run.stage, RunStage::Reported | RunStage::Closed)) {
+            return Err(error("task_active", "Set aside requires all attempts to be reported or closed; no worker is stopped or revoked"));
+        }
+    }
+    let by = actor_ref(ctx.actor, ctx.caller, ctx.state);
+    let index = super::runs::ownership_index(ctx.state, root_id, task_id);
+    let owner = &mut ctx.state.task_ownership[index];
+    match action {
+        OrchestrationAction::TaskDispositionSet { kind, reason, evidence, .. } => {
+            bounded(&reason, 16 * 1024)?;
+            if reason.trim().is_empty() { return Err(error("invalid_task", "A nonempty disposition reason is required")); }
+            if let Some(value) = &evidence { bounded(value, 16 * 1024)?; }
+            if owner.disposition.is_some() { return Err(error("task_disposition_conflict", "Task is already set aside; reopen first")); }
+            let (successor_task_id, successor_run_id, successor_task_revision, successor_result_message_id, successor_accepted_task_revision) = successor
+                .map(|(task, run, revision, result, accepted_revision)| (Some(task), Some(run), Some(revision), Some(result), accepted_revision))
+                .unwrap_or((None, None, None, None, None));
+            owner.disposition = Some(TaskDisposition { disposition_id: id(), kind, reason, evidence, successor_task_id,
+                successor_run_id, successor_task_revision, successor_result_message_id, successor_accepted_task_revision,
+                at: now(), by, reopened_at: None, reopened_by: None });
+        }
+        OrchestrationAction::TaskDispositionReopen { expected_disposition_id, .. } => {
+            let current = owner.disposition.as_ref().ok_or_else(|| error("task_disposition_conflict", "Task is not set aside"))?;
+            if current.disposition_id != expected_disposition_id {
+                return Err(error("task_disposition_conflict", "Task disposition changed"));
+            }
+            let mut previous = owner.disposition.take().expect("checked above");
+            previous.reopened_at = Some(now());
+            previous.reopened_by = Some(by);
+            owner.disposition_history.push(previous);
+        }
+        _ => unreachable!(),
+    }
+    Ok(Applied::Machine(OrchestrationActionResult::Task { task: result_task }))
+}
+
+pub(in crate::orchestration) fn is_dispositioned(state: &OrchestrationState, root_id: &str, task_id: &str) -> bool {
+    state.task_ownership.iter().any(|owner| owner.root_id == root_id && owner.task_id == task_id && owner.disposition.is_some())
+}
+
 
 pub(in crate::orchestration) fn assign(
     ctx: &mut MutationCtx<'_>,
@@ -399,6 +496,9 @@ pub(super) fn mutable_task<'a>(
     if task.checked || accepted_blocks(state, root_id, task_id) {
         return Err(error("task_checked", "Accepted canonical tasks are read-only"));
     }
+    if is_dispositioned(state, root_id, task_id) {
+        return Err(error("task_set_aside", "Reopen the task before modifying or starting it"));
+    }
     if state.task_intents.iter().any(|intent| intent.root_id == root_id && intent.task_id == task.task_id) {
         return Err(error("intent_conflict", "Resolve the existing acceptance intent first"));
     }
@@ -524,7 +624,7 @@ mod tests {
             };
             let mut state = OrchestrationState::default();
             state.task_ownership.push(TaskOwnership {
-                root_id: root_id.clone(), task_id: task.task_id.clone(), generation: 1,
+                root_id: root_id.clone(), task_id: task.task_id.clone(), generation: 1, disposition: None, disposition_history: Vec::new(),
                 owner: Some(TaskOwner {
                     run_id: worker.run_id.clone(),
                     conversation: Some(worker.attachment.as_ref().unwrap().conversation.clone().unwrap()),

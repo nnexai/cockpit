@@ -240,11 +240,11 @@ pub(in crate::orchestration) fn check_binding(
     Ok(())
 }
 
-fn ownership_index(state: &mut OrchestrationState, root_id: &str, task_id: &str) -> usize {
+pub(super) fn ownership_index(state: &mut OrchestrationState, root_id: &str, task_id: &str) -> usize {
     if let Some(index) = state.task_ownership.iter().position(|record|
         record.root_id == root_id && record.task_id == task_id) { return index; }
     state.task_ownership.push(TaskOwnership { root_id: root_id.into(), task_id: task_id.into(),
-        generation: 0, owner: None, schedule: None, reopened_after_attempt: None });
+        generation: 0, owner: None, schedule: None, reopened_after_attempt: None, disposition: None, disposition_history: Vec::new() });
     state.task_ownership.len() - 1
 }
 
@@ -341,6 +341,9 @@ pub(super) fn schedule(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -
     let document = ctx.locked.tasks(root_id)?;
     let task = document.task(task_id)?;
     if task.checked { return Err(error("task_accepted", "Accepted tasks cannot be scheduled")); }
+    if matches!(action, OrchestrationAction::TaskSchedule { .. }) && super::tasks::is_dispositioned(ctx.state, root_id, task_id) {
+        return Err(error("task_set_aside", "Reopen the task before scheduling"));
+    }
     let mut corrected_attempt = false;
     let schedule = if let OrchestrationAction::TaskSchedule {
         target, brief, cleanup_policy, label, expected_task_revision, expected_doc_revision, ..
@@ -416,6 +419,9 @@ pub(super) fn worker_replace(ctx: &mut MutationCtx<'_>, action: OrchestrationAct
     let OrchestrationAction::WorkerReplace { operation_id, root_id, task_id,
         expected_run_id, expected_assignment_generation, reason } = &action else { unreachable!() };
     root_authority(ctx, root_id)?;
+    if super::tasks::is_dispositioned(ctx.state, root_id, task_id) {
+        return Err(error("task_set_aside", "Reopen the task before replacing its worker"));
+    }
     if let Some(result) = super::resume::replay(ctx, operation_id, DurableOperationKind::WorkerReplace, &action)? {
         return Ok(Applied::Document(result));
     }
@@ -632,6 +638,7 @@ pub(in crate::orchestration) fn project_capacity_full(state: &OrchestrationState
 pub(in crate::orchestration) fn schedule_ready(state: &OrchestrationState, root: &Run, task: &Task,
     graph: &dependencies::DependencyGraph<'_>) -> bool {
     !task.checked && matches!(graph.evaluate(task).state, TaskDependencyState::None | TaskDependencyState::Satisfied)
+        && !super::tasks::is_dispositioned(state, &root.run_id, &task.task_id)
         && !state.continue_intents.iter().any(|intent| intent.root_id == root.run_id && intent.task_id == task.task_id)
         && !state.task_ownership.iter().any(|ownership| ownership.root_id == root.run_id
             && ownership.task_id == task.task_id && ownership.owner.is_some())

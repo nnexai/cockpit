@@ -572,6 +572,37 @@ pub struct TaskOwnership {
     pub schedule: Option<TaskSchedule>,
     #[serde(default)]
     pub reopened_after_attempt: Option<u32>,
+    #[serde(default)]
+    pub disposition: Option<TaskDisposition>,
+    #[serde(default)]
+    pub disposition_history: Vec<TaskDisposition>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
+pub struct TaskDisposition {
+    pub disposition_id: String,
+    pub kind: TaskDispositionKind,
+    pub reason: String,
+    pub evidence: Option<String>,
+    pub successor_task_id: Option<String>,
+    pub successor_run_id: Option<String>,
+    pub successor_task_revision: Option<String>,
+    pub successor_result_message_id: Option<String>,
+    pub successor_accepted_task_revision: Option<String>,
+    pub at: String,
+    pub by: ActorRef,
+    #[serde(default)]
+    pub reopened_at: Option<String>,
+    #[serde(default)]
+    pub reopened_by: Option<ActorRef>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskDispositionKind {
+    CompletedElsewhere,
+    Abandoned,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1866,6 +1897,9 @@ pub struct InboxTaskLink {
     pub evidence: Option<InboxTaskEvidence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub disposition: Option<TaskDisposition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub worker_waiting: Option<TaskWait>,
 }
 
@@ -2139,6 +2173,21 @@ pub enum OrchestrationAction {
         expected_doc_revision: Option<String>,
     },
     TaskScheduleCancel { operation_id: String, root_id: String, task_id: String },
+    TaskDispositionSet {
+        root_id: String,
+        task_id: String,
+        expected_task_revision: String,
+        #[ts(type = "number")]
+        expected_assignment_generation: u64,
+        expected_owner_run_id: Option<String>,
+        kind: TaskDispositionKind,
+        reason: String,
+        evidence: Option<String>,
+        successor_task_id: Option<String>,
+        expected_successor_task_revision: Option<String>,
+        expected_successor_run_id: Option<String>,
+    },
+    TaskDispositionReopen { root_id: String, task_id: String, expected_task_revision: String, expected_disposition_id: String },
     WorkerReplace {
         operation_id: String,
         root_id: String,

@@ -118,6 +118,7 @@ impl Fixture {
             root_id: worker.root_id.clone(),
             task_id: worker.task_id.clone().unwrap(),
             generation: worker.assignment_generation.unwrap(),
+            disposition: None, disposition_history: Vec::new(),
             owner: Some(TaskOwner {
                 run_id: worker.run_id.clone(),
                 conversation: Some(worker.attachment.as_ref().unwrap().conversation.clone().unwrap()),

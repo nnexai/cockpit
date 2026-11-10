@@ -75,6 +75,8 @@ section!(
         TaskStepScope,
         TaskDependencies,
         TaskOwnership,
+        TaskDisposition,
+        TaskDispositionKind,
         TaskOwner,
         TaskSchedule,
         ScheduleHold,

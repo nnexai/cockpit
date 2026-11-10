@@ -470,10 +470,10 @@ impl TaskArgs {
                 let board = snapshot
                     .board
                     .ok_or_else(|| CliError::new("root_not_found", "task board does not exist"))?;
-                return emit_task_board(board, self.common.json);
+                return emit_task_board(board, &snapshot.task_ownership, self.common.json);
             }
             TaskCommand::Show { task, self_task } => {
-                let snapshot = context.snapshot(Some(root)).await?;
+                let snapshot = context.snapshot(Some(root.clone())).await?;
                 let task = if self_task {
                     context.own_run(&snapshot)?.task_id.clone()
                         .ok_or_else(|| CliError::new("task_not_assigned", "The caller has no assigned canonical task"))?
@@ -485,7 +485,11 @@ impl TaskArgs {
                     .ok_or_else(|| {
                         CliError::new("task_not_found", "task is not in the selected root")
                     })?;
-                return emit(&view, self.common.json);
+                let record = snapshot.task_ownership.iter().find(|owner| owner.root_id == root && owner.task_id == task);
+                let mut value = serde_json::to_value(&view).map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+                value["disposition"] = serde_json::to_value(record.and_then(|owner| owner.disposition.as_ref())).map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+                value["disposition_history"] = serde_json::to_value(record.map(|owner| &owner.disposition_history)).map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+                return emit(&value, self.common.json);
             }
             TaskCommand::Inputs { task, self_task } => {
                 let snapshot = context.snapshot(Some(root.clone())).await?;
@@ -539,6 +543,39 @@ impl TaskArgs {
                 eprintln!("Route: {route}");
                 let result = context.mutate(action).await?;
                 return emit(&serde_json::json!({ "route": route, "response": result }), self.common.json);
+            },
+            TaskCommand::DispositionSet { task, kind, reason, evidence, successor_task } => {
+                let snapshot = context.snapshot(Some(root.clone())).await?;
+                let view = snapshot.board.as_ref().and_then(|board| board.tasks.iter().find(|view| view.task.task_id == task))
+                    .ok_or_else(|| CliError::new("task_not_found", "Task is not in the selected root"))?;
+                let owner = snapshot.task_ownership.iter().find(|owner| owner.root_id == root && owner.task_id == task);
+                let expected_successor_task_revision = successor_task.as_ref().and_then(|id| snapshot.board.as_ref()
+                    .and_then(|board| board.tasks.iter().find(|view| &view.task.task_id == id))
+                    .map(|view| view.task.task_revision.clone()));
+                let expected_successor_run_id = successor_task.as_ref().and_then(|id| snapshot.runs.iter()
+                    .filter(|run| run.root_id == root && run.task_id.as_ref() == Some(id)
+                        && run.stage == cockpit_protocol::orchestration::RunStage::Closed
+                        && run.close_reason == Some(cockpit_protocol::orchestration::CloseReason::Accepted))
+                    .max_by_key(|run| run.attempt).map(|run| run.run_id.clone()));
+                OrchestrationAction::TaskDispositionSet {
+                    root_id: root, task_id: task, expected_task_revision: view.task.task_revision.clone(),
+                    expected_assignment_generation: owner.map_or(0, |owner| owner.generation),
+                    expected_owner_run_id: owner.and_then(|owner| owner.owner.as_ref()).map(|owner| owner.run_id.clone()),
+                    kind: match kind {
+                        args::DispositionKindArg::CompletedElsewhere => cockpit_protocol::orchestration::TaskDispositionKind::CompletedElsewhere,
+                        args::DispositionKindArg::Abandoned => cockpit_protocol::orchestration::TaskDispositionKind::Abandoned,
+                    },
+                    reason, evidence, successor_task_id: successor_task, expected_successor_task_revision, expected_successor_run_id,
+                }
+            },
+            TaskCommand::DispositionReopen { task } => {
+                let snapshot = context.snapshot(Some(root.clone())).await?;
+                let view = snapshot.board.as_ref().and_then(|board| board.tasks.iter().find(|view| view.task.task_id == task))
+                    .ok_or_else(|| CliError::new("task_not_found", "Task is not in the selected root"))?;
+                let disposition = snapshot.task_ownership.iter().find(|owner| owner.root_id == root && owner.task_id == task)
+                    .and_then(|owner| owner.disposition.as_ref()).ok_or_else(|| CliError::new("task_disposition_conflict", "Task is not set aside"))?;
+                OrchestrationAction::TaskDispositionReopen { root_id: root, task_id: task,
+                    expected_task_revision: view.task.task_revision.clone(), expected_disposition_id: disposition.disposition_id.clone() }
             },
             TaskCommand::Schedule { task, operation_id, task_revision, doc_revision, launch } => {
                 let launch = launch.read()?;
@@ -894,9 +931,6 @@ impl InboxArgs {
         match &self.command {
             InboxCommand::Board => {}
             InboxCommand::Close { thread } => {
-                if !self.common.operator {
-                    return Err(CliError::new("actor_forbidden", "inbox close requires explicit --operator authority"));
-                }
                 if !uuid::Uuid::parse_str(thread)
                     .is_ok_and(|id| id.hyphenated().to_string().eq_ignore_ascii_case(thread))
                 {

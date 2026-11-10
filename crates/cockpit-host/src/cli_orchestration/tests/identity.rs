@@ -216,6 +216,27 @@ async fn neutral_cli_environment_child() {
         Err(error) => error,
     };
     assert_eq!(conflict.code, "job_unauthorized");
+    use cockpit_core::orchestration::{Actor, ResolvedMutationInput};
+    use cockpit_protocol::orchestration::{HandoffRecipient, InboxRequest, InboxState, OperatorOrigin,
+        OrchestrationAction, OrchestrationMutationRequest};
+    let thread = uuid::Uuid::new_v4().to_string();
+    second.service.mutate_resolved(&Actor::Operator(OperatorOrigin::Native), OrchestrationMutationRequest {
+        session_id: "physical".into(), expected_revision: None,
+        action: OrchestrationAction::ThreadHandoff {
+            message_id: uuid::Uuid::new_v4().to_string(), thread_id: thread.clone(),
+            to_run_id: run_id, text: "CLI close fixture".into(), recipient: HandoffRecipient::Owner,
+            images: vec![], task_id: None, expected_task_revision: None, binding: None,
+        },
+    }, &ResolvedMutationInput::default()).unwrap();
+    let TestCommand::Inbox(close) = TestCli::try_parse_from([
+        "test", "inbox", "--harness", "other", "--session-id", "actual/session",
+        "close", "--thread", &thread,
+    ]).unwrap().command else { panic!("expected inbox") };
+    Box::pin(close.run()).await.unwrap();
+    let view = second.service.inbox(second.adapter.as_ref(), &InboxRequest { session_id: "physical".into() }).await.unwrap();
+    let closed = view.threads.iter().find(|item| item.thread_id == thread).unwrap();
+    assert_eq!(closed.state, InboxState::Handled);
+    assert!(closed.closed_at.is_some());
 }
 
 #[tokio::test]

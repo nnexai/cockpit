@@ -142,6 +142,8 @@
 .inbox-lane{width:8px;height:8px;border-radius:50%;background:var(--done)}
 .inbox-task[data-lane=working] .inbox-lane{background:var(--working)}
 .inbox-task[data-lane=blocked] .inbox-lane{background:var(--blocked)}
+.inbox-task[data-lane=set-aside] .inbox-lane{background:transparent;border:1.5px solid var(--text-secondary)}
+.inbox-task[data-lane=set-aside] .inbox-task-status{white-space:normal;overflow-wrap:anywhere;color:var(--text-secondary)}
 .inbox-task-title{font-size:var(--font-size-xs);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .inbox-task-status{grid-column:2;display:flex;align-items:center;gap:5px;font-size:var(--font-size-2xs);color:var(--text-muted);white-space:nowrap;overflow:hidden}
 .inbox-task-status .ui-icon{width:12px;height:12px;flex-basis:12px}

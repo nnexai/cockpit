@@ -75,6 +75,9 @@ pub fn digest(snapshot: &OrchestrationSnapshot, root_id: &str, runtime: Option<&
     for view in &board.tasks {
         if view.lane == TaskLane::Accepted { continue; }
         let id = &view.task.task_id;
+        // Set-aside tasks remain unchecked and visible on the board, but are not
+        // actionable reconcile work until an explicit reopen.
+        if snapshot.task_ownership.iter().any(|o| o.root_id == root_id && o.task_id == *id && o.disposition.is_some()) { continue; }
         let run = view.current_run_id.as_deref().and_then(|id| snapshot.runs.iter().find(|r| r.run_id == id));
         let schedule = snapshot.task_ownership.iter().find(|o| o.root_id == root_id && o.task_id == *id).and_then(|o| o.schedule.as_ref());
         let mut threads: Vec<String> = snapshot.thread_links.iter().filter(|link| link.root_id == root_id && link.task_id == *id).map(|link| link.thread_id.clone()).chain(snapshot.messages.iter().filter(|m| m.handoff.as_ref().is_some_and(|h| h.task_id.as_deref() == Some(id))).filter_map(|m| m.thread_id.clone())).collect();

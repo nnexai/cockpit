@@ -75,6 +75,8 @@ export interface WireTypes {
   "TaskStepScope": V1.TaskStepScope;
   "TaskDependencies": V1.TaskDependencies;
   "TaskOwnership": V1.TaskOwnership;
+  "TaskDisposition": V1.TaskDisposition;
+  "TaskDispositionKind": V1.TaskDispositionKind;
   "TaskOwner": V1.TaskOwner;
   "TaskSchedule": V1.TaskSchedule;
   "ScheduleHold": V1.ScheduleHold;
@@ -130,9 +132,6 @@ export interface WireTypes {
   "RunAttachResult": V1.RunAttachResult;
   "RunLocation": V1.RunLocation;
   "NativeProcessIdentity": V1.NativeProcessIdentity;
-  "AttachmentReference": V1.AttachmentReference;
-  "CheckStatus": V1.CheckStatus;
-  "CheckOutcome": V1.CheckOutcome;
 }
 
 export interface WireOwners {
@@ -210,6 +209,7 @@ export interface WireOwners {
   "TaskStepProgress": V1.TaskStepProgress;
   "TaskDependencies": V1.TaskDependencies;
   "TaskOwnership": V1.TaskOwnership;
+  "TaskDisposition": V1.TaskDisposition;
   "TaskOwner": V1.TaskOwner;
   "TaskSchedule": V1.TaskSchedule;
   "ScheduleHold": V1.ScheduleHold;
@@ -254,8 +254,6 @@ export interface WireOwners {
   "RunAttachResult": V1.RunAttachResult;
   "RunLocation": V1.RunLocation;
   "NativeProcessIdentity": V1.NativeProcessIdentity;
-  "AttachmentReference": V1.AttachmentReference;
-  "CheckOutcome": V1.CheckOutcome;
 }
 
 export interface WireFields {
@@ -434,6 +432,7 @@ export interface WireFields {
   "InboxTaskLink.lane": (V1.InboxTaskLink)["lane"];
   "InboxTaskLink.run": (V1.InboxTaskLink)["run"];
   "InboxTaskLink.evidence": (V1.InboxTaskLink)["evidence"];
+  "InboxTaskLink.disposition": (V1.InboxTaskLink)["disposition"];
   "InboxTaskLink.worker_waiting": (V1.InboxTaskLink)["worker_waiting"];
   "InboxThread.thread_id": (V1.InboxThread)["thread_id"];
   "InboxThread.state": (V1.InboxThread)["state"];
@@ -630,6 +629,21 @@ export interface WireFields {
   "TaskOwnership.owner": (V1.TaskOwnership)["owner"];
   "TaskOwnership.schedule": (V1.TaskOwnership)["schedule"];
   "TaskOwnership.reopened_after_attempt": (V1.TaskOwnership)["reopened_after_attempt"];
+  "TaskOwnership.disposition": (V1.TaskOwnership)["disposition"];
+  "TaskOwnership.disposition_history": (V1.TaskOwnership)["disposition_history"];
+  "TaskDisposition.disposition_id": (V1.TaskDisposition)["disposition_id"];
+  "TaskDisposition.kind": (V1.TaskDisposition)["kind"];
+  "TaskDisposition.reason": (V1.TaskDisposition)["reason"];
+  "TaskDisposition.evidence": (V1.TaskDisposition)["evidence"];
+  "TaskDisposition.successor_task_id": (V1.TaskDisposition)["successor_task_id"];
+  "TaskDisposition.successor_run_id": (V1.TaskDisposition)["successor_run_id"];
+  "TaskDisposition.successor_task_revision": (V1.TaskDisposition)["successor_task_revision"];
+  "TaskDisposition.successor_result_message_id": (V1.TaskDisposition)["successor_result_message_id"];
+  "TaskDisposition.successor_accepted_task_revision": (V1.TaskDisposition)["successor_accepted_task_revision"];
+  "TaskDisposition.at": (V1.TaskDisposition)["at"];
+  "TaskDisposition.by": (V1.TaskDisposition)["by"];
+  "TaskDisposition.reopened_at": (V1.TaskDisposition)["reopened_at"];
+  "TaskDisposition.reopened_by": (V1.TaskDisposition)["reopened_by"];
   "TaskOwner.run_id": (V1.TaskOwner)["run_id"];
   "TaskOwner.conversation": (V1.TaskOwner)["conversation"];
   "TaskOwner.claim_operation_id": (V1.TaskOwner)["claim_operation_id"];
@@ -793,14 +807,6 @@ export interface WireFields {
   "NativeProcessIdentity.pid": (V1.NativeProcessIdentity)["pid"];
   "NativeProcessIdentity.start_ticks": (V1.NativeProcessIdentity)["start_ticks"];
   "NativeProcessIdentity.kernel_boot_id": (V1.NativeProcessIdentity)["kernel_boot_id"];
-  "AttachmentReference.run_id": (V1.AttachmentReference)["run_id"];
-  "AttachmentReference.attachment_id": (V1.AttachmentReference)["attachment_id"];
-  "AttachmentReference.attachment_epoch": (V1.AttachmentReference)["attachment_epoch"];
-  "CheckOutcome.contract": (V1.CheckOutcome)["contract"];
-  "CheckOutcome.command_or_scenario": (V1.CheckOutcome)["command_or_scenario"];
-  "CheckOutcome.outcome": (V1.CheckOutcome)["outcome"];
-  "CheckOutcome.evidence": (V1.CheckOutcome)["evidence"];
-  "CheckOutcome.limitation": (V1.CheckOutcome)["limitation"];
 }
 
 export interface WireFieldNames {
@@ -842,7 +848,7 @@ export interface WireFieldNames {
   "InboxTaskResult": "summary" | "outcome" | "at";
   "InboxTaskIntegration": "target" | "commit";
   "InboxTaskEvidence": "run_id" | "attempt" | "attempts" | "result" | "checks" | "commits" | "head_commit" | "integration" | "artifacts" | "images" | "decisions";
-  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence" | "worker_waiting";
+  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence" | "disposition" | "worker_waiting";
   "InboxThread": "thread_id" | "state" | "need" | "closed_at" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "unread_interims" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
   "Directive": "directive_id" | "root_id" | "scope" | "text" | "source" | "thread_id" | "message_id" | "created_by" | "created_at" | "removed_at";
   "DirectiveScope": never;
@@ -877,7 +883,8 @@ export interface WireFieldNames {
   "TaskStep": "step_id" | "parent_step_id" | "depth" | "title" | "checked" | "status" | "line" | "source_offset" | "diagnostic";
   "TaskStepProgress": "done" | "total";
   "TaskDependencies": "state" | "unmet" | "problems";
-  "TaskOwnership": "root_id" | "task_id" | "generation" | "owner" | "schedule" | "reopened_after_attempt";
+  "TaskOwnership": "root_id" | "task_id" | "generation" | "owner" | "schedule" | "reopened_after_attempt" | "disposition" | "disposition_history";
+  "TaskDisposition": "disposition_id" | "kind" | "reason" | "evidence" | "successor_task_id" | "successor_run_id" | "successor_task_revision" | "successor_result_message_id" | "successor_accepted_task_revision" | "at" | "by" | "reopened_at" | "reopened_by";
   "TaskOwner": "run_id" | "conversation" | "claim_operation_id";
   "TaskSchedule": "operation_id" | "principal_key" | "target" | "brief" | "cleanup_policy" | "label" | "scheduled_at" | "hold";
   "ScheduleHold": "code" | "at" | "dependency_task_id";
@@ -922,8 +929,6 @@ export interface WireFieldNames {
   "RunAttachResult": "run_id" | "attachment" | "duplicate";
   "RunLocation": "boot_id" | "peer_process" | "terminal_id" | "native_session_id" | "endpoint_identity" | "session_id" | "workspace_id" | "tab_id" | "pane_id" | "launch_tag";
   "NativeProcessIdentity": "pid" | "start_ticks" | "kernel_boot_id";
-  "AttachmentReference": "run_id" | "attachment_id" | "attachment_epoch";
-  "CheckOutcome": "contract" | "command_or_scenario" | "outcome" | "evidence" | "limitation";
 }
 
 export interface WireChildNames {
@@ -950,6 +955,7 @@ export interface WireChildNames {
   "InboxTaskLink.project": "TaskProject";
   "InboxTaskLink.run": "InboxRun";
   "InboxTaskLink.evidence": "InboxTaskEvidence";
+  "InboxTaskLink.disposition": "TaskDisposition";
   "InboxTaskLink.worker_waiting": "TaskWait";
   "InboxThread.title": "InboxText";
   "InboxThread.next": "InboxText";
@@ -978,6 +984,9 @@ export interface WireChildNames {
   "Task.step_progress": "TaskStepProgress";
   "TaskOwnership.owner": "TaskOwner";
   "TaskOwnership.schedule": "TaskSchedule";
+  "TaskOwnership.disposition": "TaskDisposition";
+  "TaskDisposition.by": "ActorRef";
+  "TaskDisposition.reopened_by": "ActorRef";
   "TaskOwner.conversation": "ConversationIdentity";
   "TaskSchedule.target": "DispatchTarget";
   "TaskSchedule.hold": "ScheduleHold";
@@ -1081,7 +1090,7 @@ export interface WireCheckpointFieldNames {
   "InboxTaskResult": "summary" | "outcome" | "at";
   "InboxTaskIntegration": "target" | "commit";
   "InboxTaskEvidence": "run_id" | "attempt" | "attempts" | "result" | "checks" | "commits" | "head_commit" | "integration" | "artifacts" | "images" | "decisions";
-  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence" | "worker_waiting";
+  "InboxTaskLink": "root_id" | "task_id" | "title" | "project" | "lane" | "run" | "evidence" | "disposition" | "worker_waiting";
   "InboxThread": "thread_id" | "state" | "need" | "closed_at" | "owner_root_ids" | "title" | "next" | "project" | "request" | "follow_ups" | "questions" | "recommendation" | "reply" | "unread_result_message_id" | "unread_interims" | "tasks" | "receipts" | "facts" | "timeline" | "timeline_omitted" | "earlier_widgets" | "earlier_widgets_omitted" | "updated_at";
   "Directive": "directive_id" | "root_id" | "scope" | "text" | "source" | "thread_id" | "message_id" | "created_by" | "created_at" | "removed_at";
   "DirectiveScope": "project_key" | "scope" | "task_id";
@@ -1116,7 +1125,8 @@ export interface WireCheckpointFieldNames {
   "TaskStep": "step_id" | "parent_step_id" | "depth" | "title" | "checked" | "status" | "line" | "source_offset" | "diagnostic";
   "TaskStepProgress": "done" | "total";
   "TaskDependencies": "state" | "unmet" | "problems";
-  "TaskOwnership": "root_id" | "task_id" | "generation" | "owner" | "schedule" | "reopened_after_attempt";
+  "TaskOwnership": "root_id" | "task_id" | "generation" | "owner" | "schedule" | "reopened_after_attempt" | "disposition" | "disposition_history";
+  "TaskDisposition": "disposition_id" | "kind" | "reason" | "evidence" | "successor_task_id" | "successor_run_id" | "successor_task_revision" | "successor_result_message_id" | "successor_accepted_task_revision" | "at" | "by" | "reopened_at" | "reopened_by";
   "TaskOwner": "run_id" | "conversation" | "claim_operation_id";
   "TaskSchedule": "operation_id" | "principal_key" | "target" | "brief" | "cleanup_policy" | "label" | "scheduled_at" | "hold";
   "ScheduleHold": "code" | "at" | "dependency_task_id";
@@ -1161,8 +1171,6 @@ export interface WireCheckpointFieldNames {
   "RunAttachResult": "run_id" | "attachment" | "duplicate";
   "RunLocation": "boot_id" | "peer_process" | "terminal_id" | "native_session_id" | "endpoint_identity" | "session_id" | "workspace_id" | "tab_id" | "pane_id" | "launch_tag";
   "NativeProcessIdentity": "pid" | "start_ticks" | "kernel_boot_id";
-  "AttachmentReference": "run_id" | "attachment_id" | "attachment_epoch";
-  "CheckOutcome": "contract" | "command_or_scenario" | "outcome" | "evidence" | "limitation";
 }
 
 export type WireOmittableField =
@@ -1197,6 +1205,7 @@ export type WireOmittableField =
   | "InboxTaskLink.project"
   | "InboxTaskLink.run"
   | "InboxTaskLink.evidence"
+  | "InboxTaskLink.disposition"
   | "InboxTaskLink.worker_waiting"
   | "InboxThread.need"
   | "InboxThread.closed_at"
@@ -1259,6 +1268,16 @@ export type WireOmittableField =
   | "TaskOwnership.owner"
   | "TaskOwnership.schedule"
   | "TaskOwnership.reopened_after_attempt"
+  | "TaskOwnership.disposition"
+  | "TaskOwnership.disposition_history"
+  | "TaskDisposition.evidence"
+  | "TaskDisposition.successor_task_id"
+  | "TaskDisposition.successor_run_id"
+  | "TaskDisposition.successor_task_revision"
+  | "TaskDisposition.successor_result_message_id"
+  | "TaskDisposition.successor_accepted_task_revision"
+  | "TaskDisposition.reopened_at"
+  | "TaskDisposition.reopened_by"
   | "TaskOwner.conversation"
   | "TaskSchedule.target"
   | "TaskSchedule.label"
@@ -1315,8 +1334,6 @@ export type WireOmittableField =
   | "RunLocation.terminal_id"
   | "RunLocation.native_session_id"
   | "NativeProcessIdentity.kernel_boot_id"
-  | "CheckOutcome.evidence"
-  | "CheckOutcome.limitation"
   | never;
 
 export type WireOptionalField =
@@ -1324,6 +1341,7 @@ export type WireOptionalField =
   | "InboxEntry.interim"
   | "InboxEntry.task_title"
   | "InboxEntry.widget"
+  | "InboxTaskLink.disposition"
   | "InboxTaskLink.worker_waiting"
   | "InboxThread.closed_at"
   | "InboxThread.earlier_widgets"
@@ -1404,6 +1422,7 @@ export type WireListField =
   | "Task.depends_on"
   | "TaskDependencies.unmet"
   | "TaskDependencies.problems"
+  | "TaskOwnership.disposition_history"
   | "TaskWait.held_by"
   | "SetupSummary.effects"
   | "SetupSummary.warnings"

@@ -147,6 +147,12 @@ pub(super) enum ArchiveCommand {
     /// Restore a local archive by its UUID.
     Restore { archive_id: String },
 }
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(super) enum DispositionKindArg {
+    CompletedElsewhere,
+    Abandoned,
+}
+
 
 #[derive(Debug, Subcommand)]
 pub(super) enum TaskCommand {
@@ -207,6 +213,21 @@ pub(super) enum TaskCommand {
         #[arg(long)]
         operation_id: Option<String>,
     },
+    /// Set aside unresolved work without accepting it or satisfying dependencies.
+    DispositionSet {
+        task: String,
+        #[arg(long, value_enum)]
+        kind: DispositionKindArg,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        evidence: Option<String>,
+        /// Accepted same-root task required for completed-elsewhere.
+        #[arg(long)]
+        successor_task: Option<String>,
+    },
+    /// Reopen a set-aside task; preserves its disposition history.
+    DispositionReopen { task: String },
     /// Replace the current or pending attempt with internal generation/run fencing.
     Restart {
         task: String,
@@ -531,7 +552,7 @@ impl TaskCommand {
                 root_id,
                 expected_doc_revision: doc_revision,
             },
-            Self::Archive { .. } | Self::List | Self::Show { .. } | Self::Inputs { .. } | Self::Schedule { .. } | Self::Restart { .. } | Self::Continue { .. } => {
+            Self::Archive { .. } | Self::List | Self::Show { .. } | Self::Inputs { .. } | Self::Schedule { .. } | Self::Restart { .. } | Self::Continue { .. } | Self::DispositionSet { .. } | Self::DispositionReopen { .. } => {
                 return Err(CliError::usage(
                     "read-only task command has no mutation action",
                 ));
@@ -1088,7 +1109,7 @@ pub(crate) struct InboxArgs {
 pub(super) enum InboxCommand {
     /// Show the supervisor's current board digest.
     Board,
-    /// Operator only: close an Underway thread without a Result or task acceptance.
+    /// Close an inactive thread as its sole owning root or a local operator; attention remains actionable.
     Close {
         /// Exact, hyphenated Inbox thread UUID.
         #[arg(long)]

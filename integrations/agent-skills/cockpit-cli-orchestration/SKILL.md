@@ -84,10 +84,13 @@ IDs and backlog-only tasks.
 
 The board digest delivered with each wake, or obtained with `inbox board`, is
 your memory; trust it over recollection, especially after restart or compaction.
-On start, resume or a Reconcile wake, walk the board and act on every row that
-can progress. Leave working workers alone, resolve routine choices yourself and
-ask the user only when nothing can progress without them. Answer status from
-the board in a few plain lines; never ping a working worker for status.
+On start, resume or a Reconcile wake, inspect the board and current user
+instructions before acting. For existing work, inspect the canonical task,
+relevant attempts and Results, and actual integration/check evidence before
+scheduling, continuing or replacing anything; the digest alone is not proof
+that work is incomplete. Leave working workers alone, resolve routine choices
+yourself and ask the user only when nothing can progress without them. Answer
+status from the board in a few plain lines; never ping a working worker for status.
 
 Orient with `where`: live projects, their Spaces, agents (including ones the
 user started, marked unmanaged), tasks per project and repository catalog
@@ -119,6 +122,38 @@ the open tasks. For existing work, send its worker a follow-up or use
 `task continue` for a reported or accepted task; small related follow-ups may
 go to an idle worker in the same Space. Review each Result against the
 definition of done, then accept, send back or ask the user.
+
+An explicit request to close rather than resume work governs the response. If
+the requested outcome is already complete, report the actual Result and
+integration evidence without reopening it or repeating checks just for
+paperwork. If incomplete or evidence is insufficient, state what remains or is
+unknown; do not portray it as complete or start more work contrary to the
+request. Review and accept a qualifying successful current worker Result only
+under the normal acceptance rules. A thread response or closure is not task
+acceptance, and acceptance is not evidence of integration. The owning liaison
+or local operator may use `inbox close` to close an Underway thread without a
+Result or task acceptance. NeedsYou and unread Results must be answered or
+acknowledged first; never bypass those attention gates or another owner's
+authority. Closing an already Handled thread is a no-op.
+
+When an outcome was completed elsewhere or deliberately abandoned, record the
+decision rather than accepting an unsuccessful Result or restarting work:
+
+```sh
+"${COCKPIT_CLI_PATH:-cockpit-cli}" task disposition-set "$TASK_ID" --kind completed-elsewhere --reason "Scope completed by successor" --successor-task "$SUCCESSOR_TASK_ID" --evidence "Relevant evidence"
+"${COCKPIT_CLI_PATH:-cockpit-cli}" task disposition-set "$TASK_ID" --kind abandoned --reason "Why this outcome was abandoned"
+"${COCKPIT_CLI_PATH:-cockpit-cli}" task disposition-reopen "$TASK_ID"
+```
+
+The owning root or local operator records a reason; evidence is optional.
+Completed elsewhere requires a distinct, same-root checked successor with a
+genuine successful accepted Result. Explain the scope in the reason; the
+record pins the successor task, run and Result and relevant task revisions.
+Set fences the task revision and owner run/generation; reopen fences the task
+revision and unique disposition ID and retains history. Disposition leaves
+the task unchecked and does not satisfy dependencies, physically stop a
+worker, release ownership or authorize cleanup. Scheduling and quiet-board
+reconciliation pause for the disposed task until explicit reopening.
 
 Placement follows need: omit the target for general work without a project;
 use `--space SPACE` for read-only, service or intentional in-place work; use

@@ -1107,7 +1107,7 @@ mod tests {
         let mut state = OrchestrationState {
             runs: vec![root, run],
             task_ownership: vec![TaskOwnership {
-                root_id: ROOT.into(), task_id: TASK.into(), generation: 1,
+                root_id: ROOT.into(), task_id: TASK.into(), generation: 1, disposition: None, disposition_history: Vec::new(),
                 owner: Some(TaskOwner {
                     run_id: WORKER.into(), conversation: Some(conversation()),
                     claim_operation_id: "claim".into(),
@@ -2458,7 +2458,7 @@ mod tests {
         durable.runs.push(foreign);
         durable.task_ownership.push(TaskOwnership {
             root_id: "foreign-root".into(), task_id: "foreign-task".into(),
-            generation: 8, owner: None, schedule: None,
+            generation: 8, disposition: None, disposition_history: Vec::new(), owner: None, schedule: None,
             reopened_after_attempt: None,
         });
         let mut foreign_message = brief(MessageKind::SupervisorBrief, DeliveryStage::Stored);

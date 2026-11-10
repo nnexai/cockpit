@@ -127,7 +127,7 @@ pub(super) fn close_marker(session: &str, thread_id: &str, messages: usize, widg
 }
 
 pub(super) fn parse_close_marker(read: &ThreadReadRecord) -> Option<(String, String, usize, usize)> {
-    if !read.thread_id.is_empty() || !matches!(read.origin, ActorRef::Operator) { return None; }
+    if !read.thread_id.is_empty() { return None; }
     serde_json::from_str(read.through_message_id.strip_prefix(CLOSE_PREFIX)?).ok()
 }
 
@@ -312,9 +312,19 @@ pub(super) fn mark_read(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) 
 }
 
 pub(super) fn close(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
-    if operator(ctx.actor)? != OperatorOrigin::Native {
-        return Err(error("actor_forbidden", "Thread close requires a local native operator"));
-    }
+    let origin = match ctx.actor {
+        Actor::Operator(OperatorOrigin::Native) => ActorRef::Operator,
+        Actor::Operator(_) => return Err(error("actor_forbidden", "Thread close requires a local native operator or its authenticated root")),
+        Actor::Agent(agent) => {
+            let job = credentials::validate_caller(ctx.state, agent)?;
+            if Some(job.run_index) != ctx.caller || job.role != JobRole::Root {
+                return Err(error("actor_forbidden", "Thread close requires an authenticated root"));
+            }
+            let root_id = ctx.state.runs[job.run_index].run_id.clone();
+            mutate::tasks::task_root_authority(ctx.state, ctx.actor, ctx.caller, ctx.session_id, &root_id)?;
+            ActorRef::Run { run_id: root_id }
+        }
+    };
     let OrchestrationAction::ThreadClose { thread_id } = action else { unreachable!() };
     validate_thread_id(&thread_id)?;
     let view = inbox_view::project_uncapped(
@@ -322,6 +332,19 @@ pub(super) fn close(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> R
         Err(error("offline", "Runtime observation unavailable")), &now(), "")?;
     let thread = view.threads.iter().find(|thread| thread.thread_id == thread_id)
         .ok_or_else(|| error("thread_close_invalid", "Thread is not in this session's Inbox"))?;
+    if let ActorRef::Run { run_id } = &origin {
+        let foreign_link = ctx.state.thread_links.iter().any(|link|
+            link.thread_id == thread_id && link.root_id != *run_id);
+        let foreign_handoff = ctx.state.messages.iter().filter(|message|
+            message_in_thread(message, &thread_id)
+                && matches!(message.from, ActorRef::Operator) && message.handoff.is_some())
+            .any(|message| ctx.state.runs.iter().find(|run| run.run_id == message.to_run_id)
+                .is_none_or(|run| run.root_id != *run_id || run.session_id != ctx.session_id));
+        if thread.owner_root_ids.len() != 1 || thread.owner_root_ids[0] != *run_id
+            || foreign_link || foreign_handoff {
+            return Err(error("actor_forbidden", "Thread close requires the sole owning root"));
+        }
+    }
     // Projection displays only the latest owner report, but a later Progress
     // does not supersede a Result for mark_read. Do not close over it.
     let unread_result = ctx.state.messages.iter().enumerate().any(|(index, message)| {
@@ -347,7 +370,7 @@ pub(super) fn close(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> R
     ctx.state.thread_reads.retain(|read| !parse_close_marker(read).is_some_and(|(session, id, _, _)|
         session == ctx.session_id && id == thread_id));
     ctx.state.thread_reads.push(ThreadReadRecord {
-        thread_id: String::new(), through_message_id: marker, origin: ActorRef::Operator, at: now(),
+        thread_id: String::new(), through_message_id: marker, origin, at: now(),
     });
     Ok(Applied::Machine(OrchestrationActionResult::Done))
 }

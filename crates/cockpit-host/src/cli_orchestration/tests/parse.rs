@@ -7,7 +7,7 @@ use cockpit_protocol::orchestration::{
 
 use super::super::{
     CliError,
-    args::{MAX_TEXT_BYTES, AgentArgs, AgentCommand, DirectiveArgs, DirectiveCommand, RecoveryArg, RunCommand, RunOperation, TaskCommand, InboxCommand},
+    args::{MAX_TEXT_BYTES, AgentArgs, AgentCommand, DirectiveArgs, DirectiveCommand, DispositionKindArg, RecoveryArg, RunCommand, RunOperation, TaskCommand, InboxCommand},
     context::read_bounded,
     task_submission_error,
 };
@@ -1359,7 +1359,7 @@ fn inbox_next_wait_and_capture_options_are_bounded() {
 }
 
 #[tokio::test]
-async fn inbox_close_requires_explicit_operator_and_exact_thread_uuid() {
+async fn inbox_close_accepts_root_or_operator_and_requires_exact_thread_uuid() {
     let thread = "01234567-89ab-4cde-8fab-0123456789ab";
     for flags in [
         vec!["--operator", "close", "--thread", thread],
@@ -1375,7 +1375,8 @@ async fn inbox_close_requires_explicit_operator_and_exact_thread_uuid() {
     let TestCommand::Inbox(args) = TestCli::try_parse_from([
         "test", "inbox", "close", "--thread", thread,
     ]).unwrap().command else { panic!("expected inbox") };
-    assert_eq!(args.run().await.unwrap_err().code, "actor_forbidden");
+    assert!(!args.common.operator);
+    assert!(matches!(args.command, InboxCommand::Close { thread: id } if id == thread));
     for invalid in ["01234567", "0123456789ab4cde8fab0123456789ab", "not-a-uuid"] {
         let TestCommand::Inbox(args) = TestCli::try_parse_from([
             "test", "inbox", "--operator", "close", "--thread", invalid,
@@ -1574,4 +1575,18 @@ fn unreflected_accept_notice_names_stages_and_order_without_bodies() {
     assert!(notice.contains("run show worker --json"));
     assert!(notice.contains("Do not replay automatically"));
     assert!(notice.contains("task continue"));
+}
+
+#[test]
+fn task_disposition_commands_require_kind_and_reason() {
+    let TestCommand::Task(args) = TestCli::try_parse_from([
+        "test", "task", "disposition-set", "original", "--kind", "completed-elsewhere",
+        "--reason", "done elsewhere", "--successor-task", "successor", "--evidence", "receipt",
+    ]).unwrap().command else { panic!("expected task") };
+    assert!(matches!(args.command, TaskCommand::DispositionSet {
+        task, kind: DispositionKindArg::CompletedElsewhere, reason, evidence: Some(evidence),
+        successor_task: Some(successor)
+    } if task == "original" && reason == "done elsewhere" && evidence == "receipt" && successor == "successor"));
+    assert!(TestCli::try_parse_from(["test", "task", "disposition-set", "task", "--kind", "abandoned"]).is_err());
+    assert!(TestCli::try_parse_from(["test", "task", "disposition-reopen", "task"]).is_ok());
 }

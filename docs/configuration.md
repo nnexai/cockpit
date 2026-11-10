@@ -238,6 +238,16 @@ Use `directive add` with `--task TASK` or `--standing` (optionally `--project`) 
 
 Use `task continue TASK --text TEXT` for related follow-up: unstarted tasks update their scope, Working tasks coordinate the current worker, Reported tasks return to that worker, and Accepted tasks reopen with a revision bump and a successor attempt. Accepted Code continuations use the accepted head as the new worktree base where applicable rather than reviving the closed attempt. Earlier Results cannot be accepted against the new revision.
 
+The owning root or local operator can record an explicit disposition instead of treating a superseded or abandoned task as accepted:
+
+```sh
+cockpit-cli task disposition-set TASK --kind completed-elsewhere --reason "Scope completed by successor" --successor-task SUCCESSOR --evidence "Relevant evidence"
+cockpit-cli task disposition-set TASK --kind abandoned --reason "Why this outcome was abandoned"
+cockpit-cli task disposition-reopen TASK
+```
+
+`--evidence` is optional; completed elsewhere requires a distinct, same-root checked successor with a genuine successful accepted Result. The reason explains the decision and its scope; the stored record pins successor task, run and Result IDs plus checked and retained accepted revisions. Set is fenced by the task revision, owner run and generation; reopen is fenced by the task revision and unique disposition ID and retains disposition history. A disposed task stays unchecked and does not satisfy dependencies. Scheduling and quiet-board reconciliation pause until reopening; disposition neither physically stops workers nor releases ownership or authorizes cleanup. Failed Results and resource evidence remain intact.
+
 The following commands illustrate the actual thread contract; IDs and content must come from the real request and owner, not invented consumption:
 
 ```sh

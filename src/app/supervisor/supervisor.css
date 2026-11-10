@@ -28,6 +28,9 @@
 .lane-working { --task-color:var(--working); }
 .lane-review { --task-color:var(--warning); }
 .lane-accepted { --task-color:var(--done); }
+.lane-set-aside { --task-color:var(--text-secondary); }
+.lane-set-aside .liaison-task-dot { background:transparent; border:1.5px solid var(--text-secondary); }
+.liaison-task-row.lane-set-aside .liaison-task-stage { white-space:normal; overflow-wrap:anywhere; color:var(--text-secondary); }
 .attempt-starting { --task-color:var(--accent); }
 .attempt-stalled { --task-color:var(--blocked); }
 .lane-blocked .liaison-task-dot { background:transparent; border:1.5px solid var(--text-muted); }

@@ -1,7 +1,8 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { OwnedResourceKind, TaskView } from "../../protocol/generated/v1";
 import { formatEventTime, formatGap, type HistoryEvent, type HistoryFact, type TaskHistory } from "./taskHistory";
 import type { TaskActivity } from "./taskActivity";
+import { dispositionActor, dispositionLabel, type TaskDisposition } from "./taskDisposition";
 
 const resourceLabels: Record<OwnedResourceKind, string> = { worker_terminal: "Worker terminal", worktree: "Worktree", branch: "Branch", space: "Space", scratch: "Scratch files", fixture_set: "Test fixtures", attempt_directory: "Attempt folder" };
 
@@ -71,7 +72,7 @@ export const waitCopy = {
   question: ["A worker question needs an answer.", "The question is answered.", "Answer through the liaison"],
   worker_waiting: ["Worker says it is waiting.", "The worker explicitly resumes or the attempt ends.", "The liaison follows up with the worker"],
   review: ["The result is waiting for review.", "The liaison accepts or returns the result.", "The liaison reviews it"],
-  prerequisites: ["Prerequisite tasks aren't done yet.", "Those tasks are done.", "Starts automatically"],
+  prerequisites: ["Prerequisite tasks aren't done yet.", "The prerequisite tasks are checked.", "Starts automatically"],
   dependency_input: ["A prerequisite's output isn't in the target branch yet.", "That output is integrated into the target branch.", "The liaison integrates the prerequisite"],
   capacity: ["All worker slots for this project are in use.", "A worker slot frees up.", "Starts automatically"],
   resource: ["Waiting for a shared resource.", "The current holder releases it.", "Continues automatically"],
@@ -89,13 +90,14 @@ function TaskProgress({ view, history }: { view: TaskView; history: TaskHistory 
     </li>)}</ol>;
 }
 
-function WaitingDetail({ waiting }: { waiting: NonNullable<TaskView["waiting"]> }) {
-  const [headline, clears, next] = waitCopy[waiting.cause];
+function WaitingDetail({ waiting, setAsidePrerequisites = [] }: { waiting: NonNullable<TaskView["waiting"]>; setAsidePrerequisites?: string[] }) {
+  const [headline, clears, next] = waiting.cause === "prerequisites" && setAsidePrerequisites.length ? ["Prerequisite not satisfied.", "The prerequisite tasks are checked.", "The liaison needs to resolve this prerequisite"] : waitCopy[waiting.cause];
   // Raw codes only explain generic holds; named causes already say what is wrong.
   const code = waiting.cause === "schedule_hold" || waiting.cause === "recovery_blocked" ? waiting.code : null;
   return <section className="liaison-wait-detail" aria-label={waiting.cause === "worker_waiting" ? "Worker-stated wait" : "Why is this waiting"}>
     <p className="liaison-wait-heading">{waiting.cause === "worker_waiting" ? "Worker says it is waiting" : "Why is this waiting?"}</p>
     <p className="liaison-wait-headline">{headline}</p>
+    {waiting.cause === "prerequisites" && setAsidePrerequisites.length ? <p className="liaison-wait-description">{setAsidePrerequisites.map(title => `“${title}”`).join(", ")} {setAsidePrerequisites.length === 1 ? "is" : "are"} set aside but remain unchecked. This prerequisite is not satisfied.</p> : null}
     {waiting.detail ? <p className="liaison-wait-description">{waiting.detail}</p> : null}
     {waiting.cause === "worker_waiting" ? <p className="liaison-wait-description">Worker claim · Cockpit has not verified it.</p> : null}
     <dl className="liaison-wait-facts">
@@ -108,20 +110,31 @@ function WaitingDetail({ waiting }: { waiting: NonNullable<TaskView["waiting"]> 
   </section>;
 }
 
-export function TaskHistoryDetail({ view, history, activity = null, historyTransfer }: { view: TaskView; history: TaskHistory | null; activity?: TaskActivity | null; historyTransfer?: { data: unknown | null; pending: boolean; error: boolean; retrying: boolean; disconnected: boolean; retry(): void } }) {
+export function TaskHistoryDetail({ view, history, activity = null, disposition = null, dispositionHistory = [], setAsidePrerequisites = [], historyTransfer }: { view: TaskView; history: TaskHistory | null; activity?: TaskActivity | null; disposition?: TaskDisposition | null; dispositionHistory?: TaskDisposition[]; setAsidePrerequisites?: string[]; historyTransfer?: { data: unknown | null; pending: boolean; error: boolean; retrying: boolean; disconnected: boolean; retry(): void } }) {
+  const previousDisposition = useRef(disposition?.kind ?? null);
+  const [dispositionAnnouncement, setDispositionAnnouncement] = useState("");
+  useEffect(() => {
+    const current = disposition?.kind ?? null;
+    if (current !== previousDisposition.current) {
+      setDispositionAnnouncement(current && disposition ? `${view.task.title}: ${dispositionLabel(disposition)}.` : `${view.task.title}: no longer set aside.`);
+      previousDisposition.current = current;
+    }
+  }, [disposition, view.task.title]);
   const outcome = history?.outcome;
-  const rawStage = outcome?.stage ?? (view.task.checked ? "done" : view.lane);
-  const stage = view.lane === "working" ? "assigned" : rawStage === "working" ? "assigned" : rawStage;
+  const rawStage = disposition ? dispositionLabel(disposition) : outcome?.stage ?? (view.task.checked ? "done" : view.lane);
+  const stage = !disposition && (view.lane === "working" || rawStage === "working") ? "assigned" : rawStage;
   const sub = history?.sub;
   const subText = sub?.kind === "integrated" ? `Integrated into ${sub.target}` : sub?.kind === "non_code" ? "Non-code result · no Git integration needed" : sub?.kind === "integration_not_recorded" ? "Integration not recorded" : sub?.kind === "after" ? sub.text : sub?.kind === "reconnecting" ? `Reconnecting worker · ${sub.phase}` : sub?.kind === "not_started" ? "No worker has started yet" : null;
   return <section className="liaison-detail" aria-label={`History of ${view.task.title}`}>
-    <div className={`liaison-detail-summary lane-${view.lane}${view.attempt ? ` attempt-${view.attempt.state}` : ""}${activity ? ` activity-${activity.kind}` : ""}`}>
+    <span className="sr-only" aria-live="polite" aria-atomic="true">{dispositionAnnouncement}</span>
+    <div className={`liaison-detail-summary lane-${disposition ? "set-aside" : view.lane}${!disposition && view.attempt ? ` attempt-${view.attempt.state}` : ""}${!disposition && activity ? ` activity-${activity.kind}` : ""}`}>
       <span className="liaison-task-dot" aria-hidden="true" /><h2>{view.task.title}</h2>
-      <p className="liaison-detail-outcome"><span className={outcome?.stalled ? "stalled" : undefined}>{stage[0].toUpperCase() + stage.slice(1)}</span>{activity ? ` · ${activity.word}` : view.lane === "working" ? " · unconfirmed" : ""}{outcome?.scheduled ? " · scheduled" : ""}{outcome?.accepted ? " · accepted" : ""}{outcome?.attempt ? ` · attempt ${outcome.attempt}` : ""}{outcome?.kept ? <> · <span className="kept">{outcome.kept} resource{outcome.kept === 1 ? "" : "s"} kept</span></> : null}</p>
+      <p className="liaison-detail-outcome"><span className={!disposition && outcome?.stalled ? "stalled" : undefined}>{stage[0].toUpperCase() + stage.slice(1)}</span>{!disposition && activity ? ` · ${activity.word}` : !disposition && view.lane === "working" ? " · unconfirmed" : ""}{!disposition && outcome?.scheduled ? " · scheduled" : ""}{!disposition && outcome?.accepted ? " · accepted" : ""}{outcome?.attempt ? ` · attempt ${outcome.attempt}` : ""}{outcome?.kept ? <> · <span className="kept">{outcome.kept} resource{outcome.kept === 1 ? "" : "s"} kept</span></> : null}</p>
       {!view.waiting && !view.worker_waiting && subText ? <p className="liaison-detail-sub">{subText}</p> : null}
     </div>
-    <TaskProgress view={view} history={history} />
-    {view.waiting ? <WaitingDetail waiting={view.waiting} /> : null}
+    {disposition ? <div className="liaison-history-notice"><p>Reason: {disposition.reason || "Details unavailable"}</p>{disposition.evidence ? <p>Evidence: {disposition.evidence}</p> : null}<p>Recorded by {dispositionActor(disposition.by)} · <EventTime at={disposition.at} /></p><p>This task was not accepted here. Setting a task aside does not stop workers or clean up resources.</p>{activity ? <p>Worker: {activity.word} · {activity.detail}</p> : null}</div> : <TaskProgress view={view} history={history} />}
+    {dispositionHistory.length ? <section className="liaison-history-notice" aria-label="Earlier dispositions"><strong>Earlier dispositions</strong>{dispositionHistory.map((item, index) => <div key={`${item.at}:${index}`}><p>{dispositionLabel(item)} · <EventTime at={item.at} /> · {dispositionActor(item.by)}</p><p>Reason: {item.reason}</p>{item.evidence ? <p>Evidence: {item.evidence}</p> : null}{item.reopened_at ? <p>Reopened · <EventTime at={item.reopened_at} />{item.reopened_by ? ` · ${dispositionActor(item.reopened_by)}` : ""}</p> : null}</div>)}</section> : null}
+    {view.waiting ? <WaitingDetail waiting={view.waiting} setAsidePrerequisites={setAsidePrerequisites} /> : null}
     {view.worker_waiting && view.waiting?.cause !== "worker_waiting" ? <WaitingDetail waiting={view.worker_waiting} /> : null}
     {activity && (activity.kind === "hold" || activity.kind === "idle" || activity.kind === "not-observed" || activity.kind === "runtime-blocked") ? <p className="liaison-history-notice">{activity.detail}</p> : null}
     {history?.liveUnavailable ? <p className="liaison-history-notice" role="status">Live worker state unavailable — showing recorded history.</p> : null}
@@ -132,7 +145,7 @@ export function TaskHistoryDetail({ view, history, activity = null, historyTrans
       </p>
     </> : null}
     {!history ? historyTransfer ? null : <p className="liaison-empty">History unavailable — no task snapshot is available.</p> : history.identity === "ambiguous" ? <p className="liaison-empty">History unavailable — this task's ID appears more than once in the task file.</p> : <>
-      {!history.attempts.length && !history.scheduledAt ? <p className="liaison-empty"><strong>{view.task.checked ? "No history to show" : "No attempts yet"}</strong>{view.task.checked ? "Only the task's checked state was found; no attempts or results are recorded for it." : "History appears here once a worker starts."}</p> : <>
+      {!history.attempts.length && !history.scheduledAt ? <p className="liaison-empty"><strong>{disposition ? "No attempts recorded." : view.task.checked ? "No history to show" : "No attempts yet"}</strong>{disposition ? null : view.task.checked ? "Only the task's checked state was found; no attempts or results are recorded for it." : "History appears here once a worker starts."}</p> : <>
         <h3>History</h3>
         {history.attempts.map((attempt, i) => {
           const events = <ol className="liaison-history" aria-label={`Attempt ${attempt.attempt} events`}>{attempt.events.map((event, j) => <HistoryEventRow key={event.kind === "unreflected_input" ? `input:${event.messageId}` : `event:${j}`} event={event} />)}</ol>;

@@ -26,6 +26,25 @@ it("opens the board with Conversation focused, changes to a task-only graph and 
   await act(async () => graph.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
   expect(close).toHaveBeenCalledOnce();
 });
+it("shows a set-aside task separately and keeps its dependent blocked", async () => {
+  const task = taskFixture("Prerequisite");
+  const dependent = taskFixture("Dependent", { lane: "blocked", dependencies: { state: "blocked", unmet: [{ task_id: "Prerequisite", reason: "unchecked" }], problems: [] }, waiting: { cause: "prerequisites", since: null, held_by: [], code: null, detail: null, next_automatic: false } });
+  const snapshot = orchestrationFixture([task, dependent]);
+  const disposition = { kind: "completed_elsewhere" as const, reason: "Done in another task", evidence: "commit", at: "2026-10-07T12:00:00Z", by: { type: "operator" as const } };
+  snapshot.task_ownership = [{ root_id: "root", task_id: "Prerequisite", generation: 1, owner: null, schedule: null, reopened_after_attempt: null, disposition } as typeof snapshot.task_ownership[number]];
+  await render([task, dependent], { snapshot });
+  const aside = host.querySelector('[aria-label="Set aside tasks"]')!;
+  expect(aside.textContent).toContain("Set aside · completed elsewhere");
+  expect(host.querySelector('[aria-label="Blocked tasks"]')?.textContent).toContain("Prerequisite not satisfied");
+  expect(host.querySelector('[aria-label="Done tasks"]')?.textContent).not.toContain("Prerequisite");
+  await act(async () => aside.querySelector<HTMLButtonElement>("button")!.click());
+  expect(host.querySelector(".liaison-detail")?.textContent).toContain("Done in another task");
+  expect(host.querySelector(".liaison-detail")?.textContent).toContain("does not stop workers");
+  expect(host.querySelector('[aria-label="Task progress"]')).toBeNull();
+  await act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Close task history"]')!.click());
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-row-key="Dependent:1"]')!.click());
+  expect(host.querySelector(".liaison-detail")?.textContent).toContain("The liaison needs to resolve this prerequisite");
+});
 
 it("opens full snapshot history from a board card and restores origin focus and scroll on nested Escape", async () => {
   const task = taskFixture("Work"), close = vi.fn();

@@ -58,6 +58,7 @@ pub(super) async fn task_command(context: &Context, root: &str, command: &mut Ta
     let id = match &mut *command {
         TaskCommand::Show { task: Some(id), .. } | TaskCommand::Inputs { task: Some(id), .. }
         | TaskCommand::Link { task: id, .. } | TaskCommand::Schedule { task: id, .. } | TaskCommand::ScheduleCancel { task: id, .. }
+        | TaskCommand::DispositionSet { task: id, .. } | TaskCommand::DispositionReopen { task: id }
         | TaskCommand::Restart { task: id, .. } | TaskCommand::Unassign { task: id, .. }
         | TaskCommand::Update { task: id, .. } | TaskCommand::ScopeUpdate { task: id, .. } => Some(id),
         TaskCommand::DependenciesSet { task, .. } | TaskCommand::StepAdd { task, .. }
@@ -67,6 +68,7 @@ pub(super) async fn task_command(context: &Context, root: &str, command: &mut Ta
     };
     if let Some(id) = id { *id = task(&snapshot, id)?; }
     match command {
+        TaskCommand::DispositionSet { successor_task: Some(id), .. } => { *id = task(&snapshot, id)?; }
         TaskCommand::Create { depends_on, follow_up_of, doc_revision, .. } => {
             for id in depends_on.iter_mut() { *id = task(&snapshot, id)?; }
             if let Some(id) = follow_up_of.as_mut() { *id = task(&snapshot, id)?; }

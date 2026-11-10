@@ -3,13 +3,14 @@ import type { TaskView } from "../../protocol/generated/v1";
 import type { SupervisorOverview } from "./useSupervisor";
 import type { CockpitClient } from "../../client/CockpitClient";
 import { useTaskHistoryMessages } from "./useTaskHistoryMessages";
-import { SupervisorTasks, taskLanes } from "./SupervisorTasks";
+import { SupervisorTasks, setAsidePrerequisites, taskLanes } from "./SupervisorTasks";
 import { SupervisorGraph } from "./SupervisorGraph";
 import { TaskHistoryDetail, waitCopy } from "./TaskHistoryDetail";
 import { taskHistory, unreflectedInputLabel } from "./taskHistory";
 import { dependencySummary, uniqueTask } from "./dependencies";
 import { groupTasks } from "./taskProjects";
 import { taskActivity } from "./taskActivity";
+import { dispositionHistory, taskDisposition } from "./taskDisposition";
 import "./supervisor.css";
 
 const attentionLabels = {
@@ -134,9 +135,9 @@ export function SupervisorView({ client, tasks, runs, waiting, status, onClose, 
     setSelected(null);
   };
   const summary = taskLanes.filter(({ lane }) => lane !== "accepted").flatMap(({ lane, label }) => {
-    const count = tasks.filter(view => view.lane === lane).length;
+    const count = tasks.filter(view => view.lane === lane && !taskDisposition(snapshot, rootId, view, tasks)).length;
     return count ? [`${count} ${label.toLowerCase()}`] : [];
-  }).join(" · ");
+  }).concat(tasks.some(view => taskDisposition(snapshot, rootId, view, tasks)) ? [`${tasks.filter(view => taskDisposition(snapshot, rootId, view, tasks)).length} set aside`] : []).join(" · ");
   return <section ref={overview} className="liaison-task-overview" aria-label="Task overview" onFocusCapture={event => { lastFocused.current = event.target as HTMLElement; }}
     onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (selected) goBack(); else onClose(); } }}>
     <header><button type="button" className="liaison-conversation" ref={conversation} onClick={onClose}>‹ Conversation</button><h1>Overview</h1><div role="group" aria-label="Overview view"><button type="button" aria-pressed={mode === "tasks"} onClick={() => setMode("tasks")}>Board</button><button type="button" aria-pressed={mode === "graph"} onClick={() => setMode("graph")}>Graph</button></div>{onFreshConversation ? <button type="button" title={freshConversationReason ?? "New supervisor conversation"} disabled={!!freshConversationReason} onClick={onFreshConversation}>New conversation</button> : null}<span className={waiting ? "liaison-waiting" : "liaison-task-status"}>{waiting ? "● waiting for you" : status ?? summary}</span></header>
@@ -160,7 +161,7 @@ export function SupervisorView({ client, tasks, runs, waiting, status, onClose, 
       </div>
       {selected && view ? <aside className="liaison-overview-detail" aria-label="Task history">
         <header><button type="button" className="liaison-detail-back" ref={closeDetail} aria-label="Close task history" onClick={goBack}>✕ Close</button></header>
-        <TaskHistoryDetail view={view} history={history} activity={taskActivity(view, snapshot, rootId, fresh)} historyTransfer={snapshot && rootId ? historyMessages : undefined} />
+        <TaskHistoryDetail view={view} history={history} activity={taskActivity(view, snapshot, rootId, fresh)} disposition={taskDisposition(snapshot, rootId, view, tasks)} dispositionHistory={dispositionHistory(snapshot, rootId, view, tasks)} setAsidePrerequisites={setAsidePrerequisites(view, tasks, snapshot, rootId)} historyTransfer={snapshot && rootId ? historyMessages : undefined} />
       </aside> : null}
     </div>
   </section>;

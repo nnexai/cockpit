@@ -22,7 +22,12 @@ use crate::{
 };
 
 pub(crate) const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
-pub(crate) const SCHEMA: u32 = 4;
+pub(crate) const SCHEMA: u32 = 5;
+const PREVIOUS_SCHEMA: u32 = 4;
+
+fn supported_schema(schema: u32) -> bool {
+    matches!(schema, PREVIOUS_SCHEMA | SCHEMA)
+}
 
 /// Canonical machine records and temporary transaction journals. Task content
 /// lives in tasks/*.md; assignment payloads exist only until durable delivery.
@@ -387,7 +392,7 @@ pub(crate) fn encode_state(state: &OrchestrationState) -> Result<Vec<u8>, Inspec
 fn decode_state(bytes: &[u8]) -> Result<OrchestrationState, InspectionError> {
     let header: StateHeader = serde_json::from_slice(bytes)
         .map_err(|_| InspectionError::new("state_corrupt", "invalid orchestration state header"))?;
-    if header.schema != SCHEMA {
+    if !supported_schema(header.schema) {
         return Err(InspectionError::new("orchestration_state_incompatible", "Orchestration state uses an incompatible schema; select a fresh state root. No migration or reset was performed"));
     }
     let state: OrchestrationState = serde_json::from_slice(bytes)
@@ -429,7 +434,7 @@ impl LockedStore<'_> {
             Err(error) if error.kind() == io::ErrorKind::NotFound => StateHeader { schema: SCHEMA, revision: 0 },
             Err(error) => return Err(io_error("orchestration_state_read", error)),
         };
-        if header.schema != SCHEMA {
+        if !supported_schema(header.schema) {
             return Err(InspectionError::new("orchestration_state_incompatible", "Orchestration state uses an incompatible schema"));
         }
         super::safe_counter(header.revision)?;
@@ -448,9 +453,12 @@ impl LockedStore<'_> {
         if let Some(state) = self.cached_validated(&bytes)? {
             return Ok(super::messages::inbox_counts(&state.messages, run_id, after));
         }
+        if !supported_schema(self.header(&bytes)?.schema) {
+            return Err(InspectionError::new("orchestration_state_incompatible", "Orchestration state uses an incompatible schema"));
+        }
         let state: InboxState = serde_json::from_slice(&bytes)
             .map_err(|error| InspectionError::new("state_corrupt", error.to_string()))?;
-        if state.schema != SCHEMA {
+        if !supported_schema(state.schema) {
             return Err(InspectionError::new("orchestration_state_incompatible", "Orchestration state uses an incompatible schema"));
         }
         super::safe_counter(state.revision)?;
@@ -536,7 +544,7 @@ impl LockedStore<'_> {
                 return Err(InspectionError::new("orchestration_revision_conflict", "on-disk state revision changed"));
             }
         }
-        if state.schema != SCHEMA {
+        if !supported_schema(source_schema) || state.schema != source_schema {
             return Err(InspectionError::new(
                 "state_corrupt",
                 "unsupported orchestration state schema",
@@ -558,6 +566,9 @@ impl LockedStore<'_> {
                     "JSON-safe state revision exhausted",
                 )
             })?;
+        // Publish the upgrade together with the mutation under the same lock.
+        // Read-only access leaves schema 4 bytes untouched.
+        state.schema = SCHEMA;
         state.revision = next;
         let encoded = if state.archives.is_empty() {
             encode_state(state)
@@ -569,6 +580,7 @@ impl LockedStore<'_> {
                 .map_err(|error| io_error("orchestration_state_write", error))
         });
         if let Err(error) = result {
+            state.schema = source_schema;
             state.revision = current;
             return Err(error);
         }
@@ -797,6 +809,89 @@ mod tests {
             lock.save(&mut stale).unwrap_err().code,
             "orchestration_revision_conflict"
         );
+    }
+
+    #[test]
+    fn schema_four_is_read_without_writes_and_upgraded_on_save() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut legacy = serde_json::to_value(OrchestrationState::default()).unwrap();
+        legacy["schema"] = serde_json::json!(4);
+        legacy["revision"] = serde_json::json!(7);
+        legacy["messages"] = serde_json::json!([message("keep receipt".into())]);
+        legacy["task_ownership"] = serde_json::json!([{
+            "root_id": "root", "task_id": "task", "generation": 3,
+            "owner": { "run_id": "worker", "conversation": null, "claim_operation_id": "claim" },
+            "schedule": null, "reopened_after_attempt": null
+        }]);
+        let source = serde_json::to_vec_pretty(&legacy).unwrap();
+        lock.state_dir().write("state.json", &source).unwrap();
+
+        assert_eq!(lock.wait_revision().unwrap(), 7);
+        assert!(lock.inbox_counts("worker", 0).is_ok());
+        let shared = lock.read_shared().unwrap();
+        assert_eq!(shared.schema, 4);
+        assert!(shared.task_ownership[0].disposition.is_none());
+        assert!(shared.task_ownership[0].disposition_history.is_empty());
+        assert_eq!(lock.exact_bytes().unwrap(), source);
+        let mut state = lock.into_owned_state(shared);
+        assert_eq!(lock.save(&mut state).unwrap(), 8);
+        assert_eq!(state.schema, SCHEMA);
+
+        let mut persisted: serde_json::Value = serde_json::from_slice(&lock.exact_bytes().unwrap()).unwrap();
+        assert_eq!(persisted["schema"], 5);
+        assert_eq!(persisted["revision"], 8);
+        let ownership = persisted["task_ownership"][0].as_object_mut().unwrap();
+        ownership.remove("disposition");
+        ownership.remove("disposition_history");
+        persisted["schema"] = serde_json::json!(4);
+        persisted["revision"] = serde_json::json!(7);
+        assert_eq!(persisted, legacy);
+        drop(lock);
+        drop(store);
+        let reopened = fixture.open();
+        let lock = reopened.lock().unwrap();
+        let state = lock.read().unwrap();
+        assert_eq!(state.schema, SCHEMA);
+        assert_eq!(state.revision, 8);
+        assert_eq!(state.messages[0].text, "keep receipt");
+        assert_eq!(state.task_ownership[0].generation, 3);
+    }
+
+    #[test]
+    fn failed_schema_upgrade_retains_legacy_bytes_and_in_memory_schema() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut legacy = OrchestrationState::default();
+        legacy.schema = PREVIOUS_SCHEMA;
+        let source = encode_state(&legacy).unwrap();
+        lock.state_dir().write("state.json", &source).unwrap();
+        let mut state = lock.read().unwrap();
+        state.messages.push(message("x".repeat(MAX_STATE_BYTES)));
+        assert_eq!(lock.save(&mut state).unwrap_err().code, "orchestration_state_full");
+        assert_eq!(state.schema, PREVIOUS_SCHEMA);
+        assert_eq!(state.revision, 0);
+        assert_eq!(lock.exact_bytes().unwrap(), source);
+    }
+
+    #[test]
+    fn future_schema_is_rejected_without_changing_bytes() {
+        let fixture = Fixture::new();
+        let store = fixture.open();
+        let lock = store.lock().unwrap();
+        let mut future = serde_json::to_value(OrchestrationState::default()).unwrap();
+        future["schema"] = serde_json::json!(SCHEMA + 1);
+        future["future_field"] = serde_json::json!({"opaque": [1, 2, 3]});
+        let source = serde_json::to_vec_pretty(&future).unwrap();
+        lock.state_dir().write("state.json", &source).unwrap();
+        assert_eq!(lock.wait_revision().unwrap_err().code, "orchestration_state_incompatible");
+        assert_eq!(lock.inbox_counts("worker", 0).err().unwrap().code, "orchestration_state_incompatible");
+        assert_eq!(lock.read().unwrap_err().code, "orchestration_state_incompatible");
+        assert_eq!(lock.read_shared().unwrap_err().code, "orchestration_state_incompatible");
+        assert_eq!(lock.save(&mut OrchestrationState::default()).unwrap_err().code, "orchestration_state_incompatible");
+        assert_eq!(lock.exact_bytes().unwrap(), source);
     }
 
     #[test]

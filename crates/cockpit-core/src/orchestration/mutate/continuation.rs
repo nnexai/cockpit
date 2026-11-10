@@ -24,6 +24,9 @@ pub(crate) struct ContinueIntent {
 pub(super) fn apply(ctx: &mut MutationCtx<'_>, action: OrchestrationAction) -> Result<Applied, InspectionError> {
     let OrchestrationAction::TaskContinue { operation_id, root_id, task_id, expected_task_revision, text } = &action else { unreachable!() };
     super::tasks::task_root_authority(ctx.state, ctx.actor, ctx.caller, ctx.session_id, root_id)?;
+    if super::tasks::is_dispositioned(ctx.state, root_id, task_id) {
+        return Err(error("task_set_aside", "Reopen the task before continuing it"));
+    }
     let principal = super::resume::principal_key(ctx)?;
     if let Some(mut result) = super::resume::replay(ctx, operation_id, DurableOperationKind::TaskContinue, &action)? {
         if ctx.state.continue_intents.iter().any(|i| i.operation_id == *operation_id && i.principal_key == principal) {

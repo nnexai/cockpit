@@ -1,4 +1,4 @@
-use cockpit_protocol::orchestration::{OrchestrationSnapshot, Run, RuntimeObservation, TaskBoard};
+use cockpit_protocol::orchestration::{OrchestrationSnapshot, Run, RuntimeObservation, TaskBoard, TaskOwnership};
 use serde::Serialize;
 
 use super::CliError;
@@ -144,9 +144,17 @@ pub(super) fn task_inputs(
     })
 }
 
-pub(super) fn emit_task_board(board: TaskBoard, json: bool) -> Result<(), CliError> {
+pub(super) fn emit_task_board(board: TaskBoard, ownership: &[TaskOwnership], json: bool) -> Result<(), CliError> {
     if json {
-        return emit(&board, true);
+        let mut value = serde_json::to_value(&board).map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+        if let Some(tasks) = value["tasks"].as_array_mut() {
+            for (row, view) in tasks.iter_mut().zip(&board.tasks) {
+                let record = ownership.iter().find(|owner| owner.root_id == board.root_id && owner.task_id == view.task.task_id);
+                row["disposition"] = serde_json::to_value(record.and_then(|owner| owner.disposition.as_ref())).map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+                row["disposition_history"] = serde_json::to_value(record.map(|owner| &owner.disposition_history)).map_err(|error| CliError::new("orchestration_output", error.to_string()))?;
+            }
+        }
+        return emit(&value, true);
     }
     println!("{} (revision {})", board.path, board.doc_revision);
     for view in board.tasks {
@@ -164,6 +172,9 @@ pub(super) fn emit_task_board(board: TaskBoard, json: bool) -> Result<(), CliErr
                 .map(|progress| format!("{}/{}", progress.done, progress.total))
                 .unwrap_or_else(|| "unavailable".into()),
         );
+        if let Some(disposition) = ownership.iter().find(|owner| owner.root_id == board.root_id && owner.task_id == view.task.task_id).and_then(|owner| owner.disposition.as_ref()) {
+            println!("  set aside: {:?}: {}", disposition.kind, disposition.reason);
+        }
         if let Some(waiting) = &view.waiting {
             print_waiting(waiting);
         }

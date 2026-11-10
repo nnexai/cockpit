@@ -110,7 +110,7 @@ async fn operator_cli_closes_exact_inbox_thread_without_accepting_or_notifying()
     let original = std::fs::read(&state_path).unwrap();
     let denied = fixture.cli(false, &thread, SESSION);
     assert!(!denied.status.success());
-    assert!(String::from_utf8_lossy(&denied.stderr).contains("actor_forbidden"));
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("credential_required"));
     assert_eq!(std::fs::read(&state_path).unwrap(), original);
     let foreign = fixture.cli(true, &thread, "foreign-session");
     assert!(!foreign.status.success());

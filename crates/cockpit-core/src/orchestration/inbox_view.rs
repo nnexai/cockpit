@@ -27,6 +27,13 @@ fn task_lane_label(lane: TaskLane) -> &'static str {
         TaskLane::Accepted => "Accepted",
     }
 }
+fn inbox_task_label(task: &InboxTaskLink) -> &'static str {
+    match task.disposition.as_ref().map(|disposition| disposition.kind) {
+        Some(TaskDispositionKind::CompletedElsewhere) => "Set aside · completed elsewhere",
+        Some(TaskDispositionKind::Abandoned) => "Set aside · abandoned",
+        None => task_lane_label(task.lane),
+    }
+}
 fn integration_fact(run: &Run) -> Option<InboxText> {
     let (value, source) = match (&run.integration, &run.source_output) {
         (Integration::Integrated { .. }, _) => ("Integration: Integrated", InboxSource::Recorded),
@@ -360,7 +367,8 @@ fn project_inner(request: &InboxRequest, state: &OrchestrationState, boards: Vec
                 InboxRun { run_id: r.run_id.clone(), attempt: r.attempt, stage: r.stage, harness: r.launch_config.harness_kind.clone(), session_id: r.session_id.clone(), attachment_id: r.attachment.as_ref().map(|a| a.attachment_id.clone()), attachment_epoch: r.attachment.as_ref().map(|a| a.epoch), presence: o.map_or(Presence::Unobserved, |o| o.presence), agent_status: o.and_then(|o| o.agent_status.clone()), location: location(o), cleanup: cleanups.iter().find(|c| c.run_id == r.run_id).map(|c| c.items.clone()).unwrap_or_default(), report_images }
             });
             let worker_waiting = if view.task.checked { None } else { current.and_then(|run| projection::worker_waiting(state, run)) };
-            tasks.push(InboxTaskLink { root_id: root_id.into(), task_id: task_id.into(), title: view.task.title.clone(), project: task_projects.get(&(root_id, task_id)).cloned().flatten(), lane, run, worker_waiting, evidence: task_evidence(state, root_id, task_id, current) });
+            let disposition = state.task_ownership.iter().find(|owner| owner.root_id == root_id && owner.task_id == task_id).and_then(|owner| owner.disposition.clone());
+            tasks.push(InboxTaskLink { root_id: root_id.into(), task_id: task_id.into(), title: view.task.title.clone(), project: task_projects.get(&(root_id, task_id)).cloned().flatten(), lane, run, worker_waiting, disposition, evidence: task_evidence(state, root_id, task_id, current) });
         }
         let unread = latest_report.filter(|(m, _)| m.report.as_ref().is_some_and(|r| r.kind == ReportKind::Result))
             .filter(|(m, _)| !super::threads::is_read(state, &request.session_id, id, m))
@@ -430,7 +438,7 @@ fn project_inner(request: &InboxRequest, state: &OrchestrationState, boards: Vec
             else { text(id.to_owned(), InboxSource::Recorded, None) };
         let next = if let Some((m, root)) = latest_card { Some(text(m.report.as_ref().unwrap().card.as_ref().unwrap().next.clone(), owner_source(root, true), Some(m))) }
             else if let Some(receipt) = receipts.last() { let label = root_map.get(receipt.to_run_id.as_str()).map_or(receipt.to_run_id.as_str(), |r| r.label.as_str()); Some(text(if receipt.stage == DeliveryStage::Stored { format!("Waiting for {label} to pick up") } else { format!("With {label}") }, InboxSource::Recorded, None)) }
-            else if tasks.len() == 1 { Some(text(format!("{} · {}", task_lane_label(tasks[0].lane), tasks[0].title), InboxSource::Recorded, None)) } else { None };
+            else if tasks.len() == 1 { Some(text(format!("{} · {}", inbox_task_label(&tasks[0]), tasks[0].title), InboxSource::Recorded, None)) } else { None };
         // A question's recommendation belongs to that decision, not to the
         // thread forever. Use the same owner-scoped current-question receipts
         // as the decision UI, including answers still awaiting delivery.
@@ -459,7 +467,7 @@ fn project_inner(request: &InboxRequest, state: &OrchestrationState, boards: Vec
         let mut facts = Vec::new();
         for r in &receipts { facts.push(text(format!("Delivery {:?}", r.stage), InboxSource::Recorded, messages.iter().copied().find(|m| m.message_id == r.message_id && m.to_run_id == r.to_run_id && matches!(m.from, ActorRef::Operator)))); }
         for t in &tasks {
-            facts.push(text(format!("{} · {}", task_lane_label(t.lane), t.title), InboxSource::Recorded, None));
+            facts.push(text(format!("{} · {}", inbox_task_label(t), t.title), InboxSource::Recorded, None));
             if let Some(run) = &t.run {
                 for item in &run.cleanup { if matches!(item.cleanup.state, CleanupState::Removed | CleanupState::Kept) { facts.push(text(format!("Cleanup {:?}: {}", item.cleanup.state, item.cleanup.reason.as_ref().map_or("", |r| r.message.as_str())), InboxSource::Recorded, None)); } }
                 if let Some(worker) = state.runs.iter().find(|r| r.run_id == run.run_id) {
@@ -854,6 +862,28 @@ mod tests {
         assert_eq!(result.image_limits.mime_types, vec!["image/png", "image/jpeg"]);
     }
     #[test]
+    fn inbox_projects_only_the_linked_tasks_disposition() {
+        let mut state = OrchestrationState { runs: vec![root("r"), root("other")], ..Default::default() };
+        let disposition = TaskDisposition {
+            disposition_id: "disposition".into(), kind: TaskDispositionKind::Abandoned, reason: "No longer needed".into(), evidence: Some("Decision".into()),
+            successor_task_id: None, successor_run_id: None, successor_task_revision: None, successor_result_message_id: None, successor_accepted_task_revision: None,
+            at: NOW.into(), by: ActorRef::Operator, reopened_at: None, reopened_by: None,
+        };
+        state.task_ownership.push(TaskOwnership { root_id: "other".into(), task_id: "task".into(), generation: 1, disposition: Some(disposition.clone()), disposition_history: Vec::new(), owner: None, schedule: None, reopened_after_attempt: None });
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, disposition: None, disposition_history: Vec::new(), owner: None, schedule: None, reopened_after_attempt: None });
+        state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
+        state.messages.push(report("root-progress", "r", 1, Some("t"), ReportKind::Progress));
+        assert!(view(&state, vec![board("r", "task")]).threads[0].tasks[0].disposition.is_none());
+        state.task_ownership[1].disposition = Some(disposition);
+        let projected = view(&state, vec![board("r", "task")]);
+        let actual = projected.threads[0].tasks[0].disposition.as_ref().unwrap();
+        assert_eq!(actual.kind, TaskDispositionKind::Abandoned);
+        assert_eq!(actual.reason, "No longer needed");
+        assert_eq!(actual.evidence.as_deref(), Some("Decision"));
+        state.task_ownership[1].disposition = None;
+        assert!(view(&state, vec![board("r", "task")]).threads[0].tasks[0].disposition.is_none());
+    }
+    #[test]
     fn worker_images_use_latest_non_stale_image_report() {
         let mut worker = root("worker");
         worker.kind = RunKind::Worker;
@@ -867,7 +897,7 @@ mod tests {
             machine_id: None, process_scope: None, launch_attempt: 1, updated_at: NOW.into(),
         });
         let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
-        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, schedule: None, reopened_after_attempt: None,
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, disposition: None, disposition_history: Vec::new(), schedule: None, reopened_after_attempt: None,
             owner: Some(TaskOwner { run_id: "worker".into(), conversation: None, claim_operation_id: "claim".into() }) });
         state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
         state.messages.push(report("root-progress", "r", 1, Some("t"), ReportKind::Progress));
@@ -901,7 +931,7 @@ mod tests {
         worker.assignment_generation = Some(1);
         worker.stage = RunStage::Working;
         let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
-        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1,
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, disposition: None, disposition_history: Vec::new(),
             schedule: None, reopened_after_attempt: None, owner: Some(TaskOwner { run_id: "worker".into(),
                 conversation: None, claim_operation_id: "claim".into() }) });
         state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(),
@@ -944,7 +974,7 @@ mod tests {
         foreign.run_id = "foreign".into();
         foreign.root_id = "other-root".into();
         let mut state = OrchestrationState { runs: vec![root("r"), root("other-root"), worker, old, unrelated, foreign], ..Default::default() };
-        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 2,
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 2, disposition: None, disposition_history: Vec::new(),
             schedule: None, reopened_after_attempt: None, owner: Some(TaskOwner { run_id: "worker".into(),
                 conversation: None, claim_operation_id: "claim".into() }) });
         state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
@@ -1004,7 +1034,7 @@ mod tests {
         worker.kind = RunKind::Worker; worker.root_id = "r".into(); worker.parent_run_id = Some("r".into());
         worker.task_id = Some("task".into()); worker.assignment_generation = Some(1); worker.stage = RunStage::Working;
         let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
-        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1,
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, disposition: None, disposition_history: Vec::new(),
             schedule: None, reopened_after_attempt: None, owner: Some(TaskOwner { run_id: "worker".into(), conversation: None, claim_operation_id: "claim".into() }) });
         state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
         let mut interim = report("same", "worker", 1, None, ReportKind::Progress);
@@ -1028,7 +1058,7 @@ mod tests {
         second.run_id = "second".into(); second.task_id = Some("task2".into());
         let mut state = OrchestrationState { runs: vec![root("r"), first, second], ..Default::default() };
         for (task, worker) in [("task", "first"), ("task2", "second")] {
-            state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: task.into(), generation: 1,
+            state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: task.into(), generation: 1, disposition: None, disposition_history: Vec::new(),
                 schedule: None, reopened_after_attempt: None, owner: Some(TaskOwner { run_id: worker.into(), conversation: None, claim_operation_id: "claim".into() }) });
             state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: task.into(), linked_by: ActorRef::Operator, at: NOW.into() });
             let mut m = report("shared", worker, 1, None, ReportKind::Progress);
@@ -1062,7 +1092,7 @@ mod tests {
         worker.result = report("worker-result", "worker", 1, None, ReportKind::Result).report;
         worker.result.as_mut().unwrap().summary = summary.clone();
         let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
-        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, schedule: None, reopened_after_attempt: None,
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, disposition: None, disposition_history: Vec::new(), schedule: None, reopened_after_attempt: None,
             owner: Some(TaskOwner { run_id: "worker".into(), conversation: None, claim_operation_id: "claim".into() }) });
         state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });
         for seq in 1..=10 {
@@ -1123,7 +1153,7 @@ mod tests {
         worker.assignment_generation = Some(1);
         worker.stage = RunStage::Working;
         let mut state = OrchestrationState { runs: vec![root("r"), worker], ..Default::default() };
-        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1,
+        state.task_ownership.push(TaskOwnership { root_id: "r".into(), task_id: "task".into(), generation: 1, disposition: None, disposition_history: Vec::new(),
             schedule: None, reopened_after_attempt: None,
             owner: Some(TaskOwner { run_id: "worker".into(), conversation: None, claim_operation_id: "claim".into() }) });
         state.thread_links.push(ThreadLinkRecord { thread_id: "t".into(), root_id: "r".into(), task_id: "task".into(), linked_by: ActorRef::Operator, at: NOW.into() });

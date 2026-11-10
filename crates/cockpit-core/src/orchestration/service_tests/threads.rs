@@ -370,14 +370,11 @@ fn read_marks_require_operator_and_root_result_in_the_same_thread() {
 fn operator_close_is_durable_idempotent_and_reopens_without_accepting_work() {
     let fixture = Fixture::new();
     let root = fixture.root();
-    let actor = fixture.root_actor(&root);
     let thread = id();
     fixture.operator(handoff(&root, &thread));
     let close = || OrchestrationAction::ThreadClose { thread_id: thread.clone() };
     let operator = Actor::Operator(OperatorOrigin::Native);
     let before = fixture.state_bytes();
-    assert_code(fixture.apply(&actor, close()), "actor_forbidden");
-    assert_eq!(fixture.state_bytes(), before);
     assert_code(fixture.apply(&Actor::Operator(OperatorOrigin::Browser), close()), "actor_forbidden");
     assert_eq!(fixture.state_bytes(), before);
     assert_code(fixture.apply(&operator, OrchestrationAction::ThreadClose { thread_id: id() }), "thread_close_invalid");
@@ -426,6 +423,92 @@ fn operator_close_is_durable_idempotent_and_reopens_without_accepting_work() {
     assert_eq!(fixture.state().thread_reads.iter().filter(|record|
         super::super::threads::parse_close_marker(record).is_some()).count(), 1);
 }
+#[test]
+fn owning_root_close_is_scoped_durable_and_reopens_on_activity() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let (_, _, worker) = fixture.working(&root);
+    let actor = fixture.root_actor(&root);
+    let other = fixture.root();
+    let outsider = fixture.root_actor(&other);
+    let thread = id();
+    let shared = id();
+    fixture.operator(handoff(&root, &thread));
+    fixture.operator(handoff(&root, &shared));
+    fixture.operator(handoff(&other, &shared));
+    let close = |thread: &str| OrchestrationAction::ThreadClose { thread_id: thread.into() };
+    let before = fixture.state_bytes();
+    for denied in [&worker, &outsider] {
+        assert_code(fixture.apply(denied, close(&thread)), "actor_forbidden");
+        assert_eq!(fixture.state_bytes(), before);
+    }
+    for denied in [&actor, &outsider] {
+        assert_code(fixture.apply(denied, close(&shared)), "actor_forbidden");
+        assert_eq!(fixture.state_bytes(), before);
+    }
+    let mut stale = actor.clone();
+    caller_mut(&mut stale).conversation.as_mut().unwrap().session_id = "different-conversation".into();
+    assert_code(fixture.apply(&stale, close(&thread)), "job_unauthorized");
+    assert_eq!(fixture.state_bytes(), before);
+    fixture.apply(&actor, close(&thread)).unwrap();
+    let state = fixture.state();
+    let marker = state.thread_reads.iter().find(|record| super::super::threads::parse_close_marker(record).is_some()).unwrap();
+    assert!(matches!(&marker.origin, ActorRef::Run { run_id } if run_id == &root));
+    let project = |state: &store::OrchestrationState| super::super::inbox_view::project(
+        &InboxRequest { session_id: SESSION.into() }, state, vec![],
+        Err(InspectionError::new("offline", "unavailable")), "2026-10-05T12:00:00Z", "store").unwrap();
+    assert!(project(&state).threads.iter().find(|item| item.thread_id == thread).unwrap().closed_at.is_some());
+    let closed = fixture.state_bytes();
+    fixture.apply(&actor, close(&thread)).unwrap();
+    assert_eq!(fixture.state_bytes(), closed);
+    fixture.operator(handoff(&root, &thread));
+    assert!(project(&fixture.state()).threads.iter().find(|item| item.thread_id == thread).unwrap().closed_at.is_none());
+    fixture.apply(&actor, close(&thread)).unwrap();
+    assert!(project(&fixture.state()).threads.iter().find(|item| item.thread_id == thread).unwrap().closed_at.is_some());
+    fixture.apply(&Actor::Operator(OperatorOrigin::Native), close(&shared)).unwrap();
+}
+
+#[test]
+fn root_close_rejects_foreign_worker_handoff_and_durable_link_owners() {
+    let fixture = Fixture::new();
+    let root = fixture.root();
+    let actor = fixture.root_actor(&root);
+    let other = fixture.root();
+    let (task, worker, _) = fixture.working(&other);
+    let worker_thread = id();
+    let link_thread = id();
+    fixture.operator(handoff(&root, &worker_thread));
+    fixture.operator(handoff(&root, &link_thread));
+    let mut worker_handoff = handoff(&other, &worker_thread);
+    if let OrchestrationAction::ThreadHandoff { recipient, task_id, expected_task_revision, .. } = &mut worker_handoff {
+        *recipient = HandoffRecipient::TaskWorker;
+        *task_id = Some(task.task_id.clone());
+        *expected_task_revision = Some(task.task_revision.clone());
+    }
+    fixture.operator(worker_handoff);
+    fixture.seed_state(|state| {
+        // Test the worker-addressed handoff independently of its normal task link.
+        state.thread_links.retain(|link| link.thread_id != worker_thread);
+        state.thread_links.push(ThreadLinkRecord {
+            thread_id: link_thread.clone(), root_id: other.clone(), task_id: task.task_id.clone(),
+            linked_by: ActorRef::Operator, at: now(),
+        });
+    });
+    let state = fixture.state();
+    assert!(state.messages.iter().any(|message| message.thread_id.as_deref() == Some(worker_thread.as_str())
+        && message.to_run_id == worker && message.handoff.is_some()));
+    let view = super::super::inbox_view::project(
+        &InboxRequest { session_id: SESSION.into() }, &state, vec![],
+        Err(InspectionError::new("offline", "unavailable")), "2026-10-05T12:00:00Z", "store").unwrap();
+    for thread in [&worker_thread, &link_thread] {
+        assert_eq!(view.threads.iter().find(|item| item.thread_id == *thread).unwrap().owner_root_ids, vec![root.clone()]);
+        let before = fixture.state_bytes();
+        assert_code(fixture.apply(&actor, OrchestrationAction::ThreadClose { thread_id: thread.clone() }), "actor_forbidden");
+        assert_eq!(fixture.state_bytes(), before);
+        fixture.apply(&Actor::Operator(OperatorOrigin::Native), OrchestrationAction::ThreadClose { thread_id: thread.clone() }).unwrap();
+    }
+}
+
 
 #[test]
 fn close_refuses_attention_and_never_marks_a_later_result_read() {
@@ -443,8 +526,10 @@ fn close_refuses_attention_and_never_marks_a_later_result_read() {
         if let OrchestrationAction::Report { thread_id, .. } = &mut action { *thread_id = Some(thread.clone()); }
         fixture.apply(&actor, action).unwrap();
         let before = fixture.state_bytes();
-        assert_code(fixture.apply(&operator, close(thread)), "thread_close_invalid");
-        assert_eq!(fixture.state_bytes(), before);
+        for closer in [&operator, &actor] {
+            assert_code(fixture.apply(closer, close(thread)), "thread_close_invalid");
+            assert_eq!(fixture.state_bytes(), before);
+        }
     }
     let state = fixture.state();
     let view = super::super::inbox_view::project(&InboxRequest { session_id: SESSION.into() },
@@ -457,8 +542,10 @@ fn close_refuses_attention_and_never_marks_a_later_result_read() {
     if let OrchestrationAction::Report { thread_id, .. } = &mut progress { *thread_id = Some(result_thread.clone()); }
     fixture.apply(&actor, progress).unwrap();
     let before = fixture.state_bytes();
-    assert_code(fixture.apply(&operator, close(&result_thread)), "thread_close_invalid");
-    assert_eq!(fixture.state_bytes(), before);
+    for closer in [&operator, &actor] {
+        assert_code(fixture.apply(closer, close(&result_thread)), "thread_close_invalid");
+        assert_eq!(fixture.state_bytes(), before);
+    }
     fixture.apply(&operator, OrchestrationAction::ThreadMarkRead {
         thread_id: result_thread.clone(), through_message_id: result_id, run_id: None,
     }).unwrap();

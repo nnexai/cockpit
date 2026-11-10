@@ -852,7 +852,7 @@ async fn scheduled_inputs_keep_git_ref_wakes_after_predecessor_resources_are_rem
         state.runs[0].integration = Integration::NotApplicable { reason: "test completed".into(), result_message_id: "result".into() };
         state.owned_resources[0].cleanup.state = CleanupState::Removed;
         state.task_ownership.push(TaskOwnership { root_id: fixture.run.root_id.clone(), task_id: id(),
-            generation: 0, owner: None, reopened_after_attempt: None, schedule: Some(TaskSchedule { operation_id: id(), principal_key: "root".into(),
+            generation: 0, disposition: None, disposition_history: Vec::new(), owner: None, reopened_after_attempt: None, schedule: Some(TaskSchedule { operation_id: id(), principal_key: "root".into(),
                 target: None, brief: "waiting on actual integrated input".into(), cleanup_policy: WorkerCleanupPolicy::OwnedWhenSafe,
                 label: None, scheduled_at: now(), hold: None }) });
         locked.save(&mut state).unwrap();
@@ -929,7 +929,7 @@ async fn terminal_capture_defers_preexec_and_stale_cache_then_preserves_exact_po
     let mut state = OrchestrationState::default();
     state.credentials.push(credentials::test_job_credential(&run, JobRole::Worker).0);
     state.task_ownership.push(TaskOwnership { root_id: run.root_id.clone(), task_id: run.task_id.clone().unwrap(),
-        generation: 1, owner: Some(TaskOwner { run_id: run.run_id.clone(), conversation: None,
+        generation: 1, disposition: None, disposition_history: Vec::new(), owner: Some(TaskOwner { run_id: run.run_id.clone(), conversation: None,
             claim_operation_id: state.credentials[0].credential_id.clone() }), schedule: None, reopened_after_attempt: None });
     assert!(retirement::identity_for(&run).is_some(), "the old ungated path could freeze the latch fingerprint");
     assert!(OrchestrationService::terminal_capture_identity(&state, &run).is_none());
