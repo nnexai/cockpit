@@ -23,7 +23,6 @@ pub mod sources;
 pub mod typescript;
 pub mod v1;
 pub mod viewer;
-pub mod voice;
 pub mod widget;
 
 pub use viewer::{ViewerContext, ViewerKind, ViewerOpenRequest, ViewerSourceOptions, ViewerSourceSelector};

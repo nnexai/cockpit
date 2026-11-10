@@ -4,7 +4,6 @@ mod power;
 mod startup;
 mod streams;
 mod update;
-mod voice_child;
 
 use std::sync::Arc;
 
@@ -56,7 +55,6 @@ pub fn run() {
         .manage(clipboard::TerminalFilesState::default())
         .manage(power::PowerState::default())
         .manage(StreamRegistry::new())
-        .manage(voice_child::VoiceViewState::<tauri::Wry>::default())
         .on_permission_request(|_, kind| match kind {
             tauri::webview::PermissionKind::Microphone
             | tauri::webview::PermissionKind::Camera

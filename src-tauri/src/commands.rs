@@ -68,9 +68,6 @@ macro_rules! native_commands {
         {
             tauri::generate_handler![
                 $($command,)*
-                crate::voice_child::cockpit_voice_view_open,
-                crate::voice_child::cockpit_voice_view_close,
-                crate::voice_child::cockpit_voice_view_context,
                 crate::update::cockpit_update_and_relaunch,
                 crate::power::cockpit_power_status,
                 crate::power::cockpit_power_set_stay_awake,

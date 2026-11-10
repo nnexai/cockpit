@@ -3,7 +3,6 @@ export type { LocalChangeEvent, LocalChangeScope, LocalChangeTopic } from "../pr
 import * as Wire from "../protocol/generated/validate";
 import { parseWire, tryParseWire } from "./wire";
 import { CLIENT } from "./clientPolicy";
-import type { VoiceConnectRequest, VoiceConnectResponse, VoiceEventsRequest, VoiceEventsResponse, VoiceControlRequest } from "./voiceProtocol";
 import type { QuickAskAvailability, QuickAskLocation, QuickAskRequest } from "../protocol/generated/v1";
 export type { QuickAskAvailability, QuickAskLocation, QuickAskRequest } from "../protocol/generated/v1";
 import type { SpaceServiceStatusRequest, SpaceServiceStatusResponse, SpaceTagsResponse, SpaceTagChangeRequest } from "../protocol/generated/v1";
@@ -379,9 +378,6 @@ export type BackendSurfaceStatus = {
 
 
 export interface CockpitClient {
-  voiceConnect(request: VoiceConnectRequest): Promise<VoiceConnectResponse>;
-  voiceEvents(request: VoiceEventsRequest, signal: AbortSignal): Promise<VoiceEventsResponse>;
-  voiceControl(request: VoiceControlRequest): Promise<void>;
   status(): Promise<StatusResponse>;
   backendStatus(): Promise<BackendSurfaceStatus>;
   backendStart(): Promise<BackendSurfaceStatus>;

@@ -23,7 +23,7 @@
       }
     ],
     "security": {
-      "capabilities": ["default", "voice"]
+      "capabilities": ["default"]
     }
   },
   "bundle": {

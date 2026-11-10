@@ -1,12 +1,6 @@
 fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
-            "cockpit_voice_connect",
-            "cockpit_voice_events",
-            "cockpit_voice_control",
-            "cockpit_voice_view_open",
-            "cockpit_voice_view_close",
-            "cockpit_voice_view_context",
             "cockpit_status",
             "cockpit_backend_status",
             "cockpit_backend_start",

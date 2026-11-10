@@ -1,4 +1,3 @@
-import { parseVoiceConnectRequest, parseVoiceConnectResponse, parseVoiceEventsRequest, parseVoiceEventsResponse, parseVoiceControlRequest } from "./voiceProtocol";
 import { parseNotesRequest, parseNotesResponse, matchNotesResponse } from "./notesProtocol";
 import {
   matchOrchestrationOverview, matchTaskHistoryMessages, parseTaskHistoryRequest, parseOrchestrationSnapshotRequest, parseOrchestrationMutationRequest,
@@ -107,31 +106,6 @@ type OperationTable = { [K in OperationName]: OperationRow<K> };
 // Encoding, parser normalization, and identity matching are separate phases:
 // matches outside a transport parser must not acquire its normalization/status.
 const operations: OperationTable = {
-  voiceConnect: {
-    encode(_backend, value) {
-      const body = parseVoiceConnectRequest(value);
-      return { operation: "voice connect", http: { method: "POST", route: () => "/api/v1/voice/connect", json: () => body },
-        tauri: { command: "cockpit_voice_connect", args: () => ({ request: body }) }, parse: parseVoiceConnectResponse };
-    },
-  },
-  voiceEvents: { nativeAbort: "read",
-    encode(_backend, value, signal) {
-      signal.throwIfAborted();
-      const body = parseVoiceEventsRequest(value);
-      return { operation: "voice events", http: { method: "POST", route: () => "/api/v1/voice/events", json: () => body, signal: () => signal },
-        tauri: { command: "cockpit_voice_events", args: () => ({ request: body }) }, parse: parseVoiceEventsResponse,
-        matchIdentity: response => { signal.throwIfAborted(); return response; } };
-    },
-  },
-  voiceControl: {
-    encode(_backend, value) {
-      const body = parseVoiceControlRequest(value);
-      return { operation: "voice control", http: { method: "POST", route: () => "/api/v1/voice/control", json: () => body },
-        tauri: { command: "cockpit_voice_control", args: () => ({ request: body }) }, parse: response => {
-          if (!response || typeof response !== "object" || !("ok" in response) || response.ok !== true) throw new CockpitClientError("malformed_response", "Invalid voice control response");
-        } };
-    },
-  },
   backendStatus: {
     encode() {
       return { operation: "background service status", http: { method: "GET", route: () => "/api/v1/backend/status" }, tauri: { command: "cockpit_backend_status", args: () => undefined }, parse: parseBackendSurfaceStatus };

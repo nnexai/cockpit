@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Cockpit uses the microphone for live voice conversations when you start a voice session.</string>
+  <string>Cockpit uses the microphone when you choose to capture audio.</string>
 </dict>
 </plist>

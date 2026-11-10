@@ -12,8 +12,6 @@ pub mod lifecycle;
 pub mod orchestration_runtime;
 pub mod server;
 pub mod transport;
-pub mod voice;
-pub mod voice_rpc;
 
 pub use browser_runtime::BrowserRuntime;
 pub use orchestration_runtime::OrchestrationRuntime;

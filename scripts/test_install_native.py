@@ -556,25 +556,6 @@ class NativeInstallTests(unittest.TestCase):
         with self.assertRaisesRegex(installer.InstallError, "private regular file"):
             installer.install(self.paths, self.binary, self.cli_binary, self.icon)
 
-    def test_reuse_does_not_require_voice_plugin_probes(self) -> None:
-        root = self.root / "checkout"
-        target = root / "target" / "release"
-        target.mkdir(parents=True)
-        for name in ("cockpit", "cockpit-tauri"):
-            binary = target / name
-            binary.write_bytes(b"existing executable")
-            binary.chmod(0o755)
-        icon = root / "src-tauri" / "icons" / "icon.png"
-        icon.parent.mkdir(parents=True)
-        icon.write_bytes(b"icon")
-        prefix = self.root / "installed"
-        with mock.patch.object(installer, "PROJECT_ROOT", root), \
-             mock.patch.object(installer.sys, "platform", "linux"), \
-             mock.patch.dict(os.environ, {"PATH": str(self.root)}), \
-             contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(installer.main(["--reuse", "--prefix", str(prefix)]), 0)
-        self.assertTrue((prefix / "bin" / "cockpit").is_symlink())
-
     def test_build_embeds_frontend_in_host_on_both_platforms(self) -> None:
         for platform in ("linux", "darwin"):
             with self.subTest(platform=platform), mock.patch.object(installer.sys, "platform", platform), mock.patch.object(installer.subprocess, "run") as run:

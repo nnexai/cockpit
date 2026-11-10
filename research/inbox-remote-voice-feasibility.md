@@ -1,6 +1,6 @@
-# Remote live voice: feasibility and intended integration
+# Remote live voice: historical feasibility investigation
 
-The initial investigation on 2026-11-08 was feasibility-only; the installed binary then reported `omp/18.18.1`, and no real microphone, user session, provider credential or live gateway was accessed. The product direction has since changed to an integrated real Voice screen alongside Workbench and Inbox. The architecture below describes the intended contract as implementation evolves, not evidence of a successful native or live-provider run.
+This is a historical research record, not current product direction or a description of supported Cockpit functionality. Cockpit Voice has been removed; the proposed integration and acceptance experiments below are obsolete. The initial investigation on 2026-11-08 was feasibility-only; the installed binary then reported `omp/18.18.1`, and no real microphone, user session, provider credential or live gateway was accessed. It is not evidence of a successful native or live-provider run.
 
 ## Answer and recommended direction
 

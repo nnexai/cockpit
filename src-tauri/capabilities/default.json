@@ -8,7 +8,6 @@
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "allow-cockpit-voice-view-open",
     "allow-cockpit-status",
     "allow-cockpit-backend-status",
     "allow-cockpit-backend-start",

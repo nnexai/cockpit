@@ -3,112 +3,6 @@ use cockpit_host::{
     backend::{self, BackendProbe, BackendServer, StopReason},
     lifecycle::HerdrEndpoint,
 };
-use cockpit_core::ProjectHerdrAdapter;
-use cockpit_host::voice::{owner::{ScopeIdentity, SessionValidator, VoiceOwner}, socket::Server as VoiceServer};
-use cockpit_protocol::orchestration::{HandoffRecipient, OrchestrationAction, OrchestrationMutationRequest};
-
-fn voice_executable(path: PathBuf) -> PathBuf {
-    if path.is_absolute() {
-        return path;
-    }
-    if path.components().count() == 1 {
-        if let Some(paths) = std::env::var_os("PATH") {
-            for directory in std::env::split_paths(&paths).filter(|p| !p.as_os_str().is_empty()) {
-                let directory = if directory.is_absolute() {
-                    directory
-                } else if let Ok(cwd) = std::env::current_dir() {
-                    cwd.join(directory)
-                } else {
-                    continue;
-                };
-                let candidate = directory.join(&path);
-                use std::os::unix::fs::PermissionsExt;
-                if std::fs::metadata(&candidate)
-                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-                {
-                    return candidate;
-                }
-            }
-        }
-    }
-    // VoiceRpc requires an absolute executable; preserve the configured relative
-    // path against the service's cwd rather than its isolated child directory.
-    std::env::current_dir().map(|cwd| cwd.join(&path)).unwrap_or(path)
-}
-
-fn voice_boot_proven(boot: Option<&str>, peer: &cockpit_protocol::orchestration::NativeProcessIdentity) -> bool {
-    let valid = |value: &str| !value.is_empty() && value.len() <= 4096 && !value.chars().any(char::is_control);
-    boot.is_none_or(valid)
-        && peer.kernel_boot_id.as_deref().is_none_or(valid)
-        && (boot.is_some_and(valid) || peer.kernel_boot_id.as_deref().is_some_and(valid))
-}
-
-fn voice_validator(
-    orchestration: Arc<cockpit_host::OrchestrationRuntime>,
-    adapter: Arc<HerdrCliAdapter>,
-) -> SessionValidator {
-    Arc::new(move |session, root, binding, origin| {
-        let orchestration = orchestration.clone();
-        let adapter = adapter.clone();
-        Box::pin(async move {
-            let endpoint = adapter.project_endpoint_identity(&session).await.map_err(|e| e.to_string())?;
-            let snapshot = adapter.project_snapshot_at_endpoint(&session, &endpoint).await.map_err(|e| e.to_string())?;
-            if endpoint.is_empty() || snapshot.endpoint_identity != endpoint
-                || snapshot.snapshot.session_id != session || snapshot.snapshot.server_instance.is_empty()
-            {
-                return Err("Herdr session or endpoint identity is unavailable or changed".into());
-            }
-            let scope = if let Some(binding) = binding {
-                let request = OrchestrationMutationRequest {
-                    session_id: session.clone(),
-                    expected_revision: None,
-                    action: OrchestrationAction::ThreadHandoff {
-                        message_id: "voice-preflight".into(),
-                        thread_id: "voice-preflight".into(),
-                        to_run_id: root,
-                        text: "voice preflight".into(),
-                        recipient: HandoffRecipient::Owner,
-                        images: vec![],
-                        task_id: None,
-                        expected_task_revision: None,
-                        binding: Some(binding),
-                    },
-                };
-                Some(orchestration.resolve_handoff_binding(origin, &request).await
-                    .map_err(|e| e.to_string())?
-                    .ok_or("canonical handoff binding is unavailable")?)
-            } else {
-                None
-            };
-            if scope.is_some() {
-                let after = adapter.project_snapshot_at_endpoint(&session, &endpoint).await.map_err(|e| e.to_string())?;
-                if after.endpoint_identity != endpoint || after.snapshot.session_id != session
-                    || after.snapshot.server_instance != snapshot.snapshot.server_instance
-                    || after.boot_id != snapshot.boot_id || after.peer_process != snapshot.peer_process
-                {
-                    return Err("Herdr session or endpoint identity is unavailable or changed".into());
-                }
-            }
-            if adapter.project_endpoint_identity(&session).await.map_err(|e| e.to_string())? != endpoint {
-                return Err("Herdr session or endpoint identity is unavailable or changed".into());
-            }
-            let boot_id = snapshot.boot_id;
-            let peer_process = snapshot.peer_process.filter(|p| p.pid != 0 && p.start_ticks != 0)
-                .ok_or("Herdr peer identity is unavailable")?;
-            if !voice_boot_proven(boot_id.as_deref(), &peer_process) {
-                return Err("Herdr boot identity is unavailable".into());
-            }
-            Ok(ScopeIdentity {
-                session,
-                server_instance: snapshot.snapshot.server_instance,
-                endpoint_identity: endpoint,
-                boot_id,
-                peer_process,
-                scope,
-            })
-        })
-    })
-}
 
 #[derive(Debug, Args)]
 pub struct ServiceArgs {
@@ -333,7 +227,6 @@ async fn run_owner(
         let configuration =
             ConfigurationFile::load(project.config.as_deref()).map_err(|e| e.to_string())?;
         let quota_config = configuration.quota.resolve().map_err(|e| e.to_string())?;
-        let omp_executable = voice_executable(quota_config.omp_executable.clone());
         let projects = configuration
             .project
             .resolve(
@@ -361,7 +254,7 @@ async fn run_owner(
         let orchestration = Arc::new(
             cockpit_host::OrchestrationRuntime::new(
                 &projects,
-                adapter.clone(),
+                adapter,
                 service.projects().map_err(|e| e.to_string())?.clone(),
                 service.library().map_err(|e| e.to_string())?.clone(),
                 project.config.clone(),
@@ -369,13 +262,6 @@ async fn run_owner(
             )
             .map_err(|e| e.to_string())?,
         );
-        let voice = Arc::new(VoiceOwner::new(
-            orchestration.clone(),
-            omp_executable,
-            std::env::var_os("PI_CODING_AGENT_DIR"),
-            PathBuf::from(&projects.cache_root),
-            voice_validator(orchestration.clone(), adapter),
-        ));
         let service = service.with_quota(Arc::new(cockpit_core::quota::QuotaService::new(
             quota_config,
             Path::new(&projects.cache_root),
@@ -412,23 +298,8 @@ async fn run_owner(
                 Box::pin(async move { web.handle(request).await })
             }));
         }
-        let voice_server = match VoiceServer::bind(&root, {
-            let voice = voice.clone();
-            move |request| {
-                let voice = voice.clone();
-                async move { voice.handle(request).await }
-            }
-        }) {
-            Ok(server) => server,
-            Err(error) => {
-                orchestration.shutdown().await;
-                return Err(error.to_string());
-            }
-        };
         let outcome = server.run().await.map_err(|e| e.to_string());
         let web_outcome = web.shutdown().await;
-        voice_server.shutdown().await;
-        voice.shutdown().await;
         orchestration.shutdown().await;
         drop(sync);
         runtime.shutdown().await.map_err(|e| e.to_string())?;
